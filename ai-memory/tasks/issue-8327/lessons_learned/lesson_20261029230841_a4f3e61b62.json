@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-29T23:08:41Z",
+  "issue_number": 8327,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=agents.d/:1-1; cited_path=agents.d/; files_touched=.github/workflows/test-and-mark-stable.yml, tests/**, changelog.d/*.md.",
+  "phase": "review_autofix",
+  "pr_number": 8361,
+  "record_id": "lesson_20261029230841_a4f3e61b62",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.d/",
+    ".github/workflows/test-and-mark-stable.yml",
+    "tests/**",
+    "changelog.d/*.md"
+  ]
+}

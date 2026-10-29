@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-29T23:08:41Z",
+  "issue_number": 8327,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=.github/workflows/cancel_on_pr_close.yml:1-1; cited_path=.github/workflows/cancel_on_pr_close.yml; files_touched=.github/workflows/test-and-mark-stable.yml, tests/**, changelog.d/*.md.",
+  "phase": "review_autofix",
+  "pr_number": 8361,
+  "record_id": "lesson_20261029230841_2ac35caf67",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/cancel_on_pr_close.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    "tests/**",
+    "changelog.d/*.md"
+  ]
+}
