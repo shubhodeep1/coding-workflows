@@ -38,10 +38,13 @@ the prompts, and the headless pipelines run in `dontAsk` /
   same command creates (`FINDING_UNRESOLVED_REF`). The reason tells the
   session to create the branch and commit in their own command, run `stamp`,
   fix failures this change caused, push again as its own plain command, and
-  stop and tell the user if the stamp cannot be written. A failing stamp, a
-  bulk or tag push, and push options or a destination the hook cannot
-  resolve (`FINDING_NEEDS_HUMAN`), alone or next to another finding, still
-  ask. `evaluate_hook()` keeps its `(ask reason, system message)` contract.
+  stop and tell the user if the stamp cannot be written. A stamp with status
+  `fail` (`FINDING_STAMP_FAILURES`) never holds the push: alone it returns
+  `DECISION_CONTEXT_ONLY`; next to another finding its text joins that
+  finding's reason. A bulk or tag push, push options or a destination the
+  hook cannot resolve, and a stamp with a missing or unknown status
+  (`FINDING_NEEDS_HUMAN`), alone or next to another finding, still ask.
+  `evaluate_hook()` keeps its `(ask reason, system message)` contract.
 
 <!-- agents: section="Isolated Codex agents" -->
 - **Merged-PR guard in Auto mode (#8180).** In `_evaluate_bash` of both
