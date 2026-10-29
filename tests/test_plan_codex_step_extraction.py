@@ -30,11 +30,13 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # Issue #8260 replaced the 3-line "already loaded" IMPORTANT paragraph with a
 # 6-line one that allows reading indexed agents.md sections (256 -> 259 lines,
 # 16_738 -> 16_978 bytes).
+# Issue #8339 added the one-line "no prose paragraphs, no placeholder path"
+# rule to item 1 (259 -> 260 lines, 16_978 -> 17_144 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"fc04b3d4bf537375a6222366916a566f0c97503ef9c0bde8b567bad012b3455a"
+	"744aff0d0ff99b0f17c72f779e3c6f7ff1945d5639e9a9e617ee9a651228d465"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 17_147
-PRE_EXTRACTION_PROMPT_LINES = 261
+PRE_EXTRACTION_PROMPT_BYTES = 17_144
+PRE_EXTRACTION_PROMPT_LINES = 260
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
@@ -136,8 +138,8 @@ def test_plan_prompts_keep_prose_and_placeholders_out_of_files_section() -> None
 	sys.path.insert(0, str(REPO_ROOT / "scripts"))
 	import files_touched_scope_guard as guard  # noqa: E402
 
-	rule = ("Keep the section to those bullets: no prose paragraphs, and no placeholder path such as\n"
-		"   `scripts/<helper>`, which the gate reads as the bare directory `scripts/`.")
+	rule = ("Keep the section to those bullets: no prose paragraphs, and no placeholder path such as "
+		"`scripts/<helper>`, which the gate reads as the bare directory `scripts/`.")
 	for prompt in (PLAN_RUNNER, REPO_ROOT / "prompts" / "mode-plan.txt",
 			REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
 		assert rule in prompt.read_text(encoding="utf-8"), prompt
