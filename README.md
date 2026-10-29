@@ -1508,10 +1508,11 @@ not delete wrappers that are already present in `.github/workflows/`.
 > origin and asks unless it is origin.
 
 > **Safe URL fetch helper delivered by the `.claude/` sync:** the same step
-> ships `scripts/safe_fetch_url.py` to `.claude/scripts/safe_fetch_url.py` in
+> ships `workflow-templates/.claude/scripts/safe_fetch_url.py` to
+> `.claude/scripts/safe_fetch_url.py` in
 > every consumer. `/investigate-issue`, `/analyze-log` and `/apply-url` download
-> external URLs with `(cd .claude && python scripts/safe_fetch_url.py --url <url>
-> --output <absolute path>)` instead of raw `curl`. The helper allows only
+> external URLs by running that helper with `python` from inside `.claude/`
+> (`--url <url> --output <absolute path>`) instead of raw `curl`. The helper allows only
 > `https://`, refuses any host (redirect targets included) that resolves to a
 > private, loopback, link-local, multicast or reserved address, pins the
 > connection to the IP it checked, follows at most 5 redirects, caps a download
