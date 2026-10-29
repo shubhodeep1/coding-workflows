@@ -37,11 +37,14 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # 17_307 -> 17_390 bytes). The rule was then cut to two lines to keep
 # prompts/mode-plan.txt within its 250-line budget (264 -> 260 lines,
 # 17_390 -> 17_142 bytes).
+# PR #8335 added the 9-line rule that implement only writes files and that a
+# plan whose work an open PR already delivers emits a PLAN_SELF_CHECK BLOCKER
+# (tele-funtoken-msg-scoring#4992; 260 -> 269 lines, 17_142 -> 17_830 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"5ba866e8296478a5abe5a06cb62a077848f20cf9a665dc28801411280e001c39"
+	"f257fe8eb977d753ed4f9e08f8a37d22f73fbdb3745128ad62561529070c07d8"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 17_142
-PRE_EXTRACTION_PROMPT_LINES = 260
+PRE_EXTRACTION_PROMPT_BYTES = 17_830
+PRE_EXTRACTION_PROMPT_LINES = 269
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
