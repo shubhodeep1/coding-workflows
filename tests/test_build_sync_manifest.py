@@ -167,7 +167,7 @@ def test_non_boolean_seed_only_is_rejected(tmp_path):
 	_git(repo, "add", "-A")
 	_git(repo, "commit", "-q", "-m", "bad seed-only")
 	sha = _git(repo, "rev-parse", "HEAD")
-	for mode in ("managed-paths", "managed-digests"):
+	for mode in ("allowed-paths", "managed-paths", "managed-digests"):
 		assert run_builder(mode, "--repo-root", str(repo), "--commit", sha).returncode != 0
 
 
