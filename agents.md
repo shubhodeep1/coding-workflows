@@ -4809,7 +4809,10 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   `PREPUSH_TEST_GATE_SHARDS` (4) threads within
   `PREPUSH_TEST_GATE_TIMEOUT_MINUTES` (15); unfinished units are
   `unverified timeout`. Failures re-run on `--baseline-tree`; those that also
-  fail there are `inherited`. Result schema `prepush_test_gate.v1`
+  fail there are `inherited`. `ruff` and `shellcheck` failures are compared by
+  finding instead (file, code, message, without line numbers, from their JSON
+  output on both trees): a static unit with no added finding is `inherited`,
+  and one with added findings lists only those in its tail. Result schema `prepush_test_gate.v1`
   (`status` pass | fail | unverified | skipped). The Markdown summary carries
   test names and paths only, never output tails, and neutralises `::` lines.
   The module makes no GitHub API call.
@@ -4831,8 +4834,10 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   resolves each pushed source ref (the guard's `_push_targets` tip, `HEAD`
   for a bare push) to a commit and asks when that commit's stamp is missing,
   the ref does not resolve, the guard cannot resolve the push options or
-  destination (an abbreviated or unknown option such as `--follow-tag`), or
-  the stamp records failures this change caused. A bulk push (`--all`, `--mirror`, `--branches`, a pattern) and a
+  destination (an abbreviated or unknown option such as `--follow-tag`). A
+  stamp that records failures this change caused never holds the push: alone
+  it gives no permission decision and returns the failures as
+  `additionalContext` plus a `systemMessage`. A bulk push (`--all`, `--mirror`, `--branches`, a pattern) and a
   push that includes tags or other non-branch refs (`--tags`, a
   `refs/tags/` refspec or `--follow-tags`, also next to a branch) always ask. A `pass`,
   `unverified` or `skipped` stamp, a non-push command and
