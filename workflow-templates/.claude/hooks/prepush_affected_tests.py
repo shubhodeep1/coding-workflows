@@ -120,6 +120,11 @@ GIT_SAFE = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
 RUFF_CHECK_ARGS = ("check", "--select", "E,F", "--ignore", "E501")
 SHELLCHECK_ARGS = ("--severity=error",)
 MAX_NEW_STATIC_FINDINGS_LISTED = 20
+# Lint messages that cite another line (ruff F811 "from line 12", F402) are
+# normalised so a finding that only moved still matches the baseline.
+_STATIC_MESSAGE_LINE_RE = re.compile(r"\bline \d+\b")
+# Dropped from a failing-stamp reason when another finding holds the push.
+STAMP_FAILURES_NOT_HELD = " The push was not held for this."
 
 _TEST_JS_RE = re.compile(r".+\.(?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs)$")
 _ASSERTION_RE = re.compile(r"\bassert\b|self\.assert\w*\(|\bexpect\(|pytest\.raises|\bxfail\b|\bskip\b")
@@ -736,10 +741,14 @@ def _static_findings(tool: str, files: list[str], cwd: Path, deadline: float) ->
 	for entry in entries:
 		if not isinstance(entry, dict):
 			return None
-		name = str(entry.get("filename") if tool == "ruff" else entry.get("file") or "")
+		name = str((entry.get("filename") if tool == "ruff" else entry.get("file")) or "")
+		if not name:
+			return None
 		if os.path.isabs(name):
 			name = os.path.relpath(os.path.realpath(name), root)
-		findings.append((PurePosixPath(name).as_posix(), str(entry.get("code")), str(entry.get("message"))))
+		code = "" if entry.get("code") is None else str(entry.get("code"))
+		message = _STATIC_MESSAGE_LINE_RE.sub("line N", str(entry.get("message")))
+		findings.append((PurePosixPath(name).as_posix(), code, message))
 	return findings
 
 
@@ -1229,13 +1238,24 @@ def _hook_findings(payload: object) -> tuple[list[tuple[str, str]], str]:
 		status = stamp.get("status")
 		if status in PASSING_STAMP_STATUSES:
 			continue
+		if status != "fail":
+			# A stamp with a missing or unknown status records no gate result,
+			# so it holds the push like before instead of passing as failures.
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"The pre-push test stamp for {head[:12]} has no valid status, so it records no gate result. "
+					f"Run `{STAMP_COMMAND}` again, or confirm to push anyway."
+				),
+			))
+			continue
 		failures = stamp.get("failures") if isinstance(stamp.get("failures"), list) else []
 		listed = ", ".join(_sanitize_name(str(f.get("test"))) for f in failures[:MAX_HOOK_FAILURES_LISTED] if isinstance(f, dict))
 		reasons.append((
 			FINDING_STAMP_FAILURES,
 			(
 				f"The pre-push test stamp for {head[:12]} records {len(failures)} failure(s) this change caused"
-				+ (f": {listed}" if listed else "") + ". The push was not held for this. Fix them and push again, "
+				+ (f": {listed}" if listed else "") + "." + STAMP_FAILURES_NOT_HELD + " Fix them and push again, "
 				"or tell the user why they are not this change's to fix."
 			),
 		))
@@ -1276,6 +1296,8 @@ def hook_decision(payload: object) -> tuple[str, str, str]:
 	reason = "\n\n".join(text for _kind, text in all_findings)
 	if not findings:
 		return DECISION_CONTEXT_ONLY, reason, warning
+	# Another finding holds (or stops) the push, so do not say it was not held.
+	reason = reason.replace(STAMP_FAILURES_NOT_HELD, "")
 	if is_auto_permission_mode(payload) and all(kind in SESSION_FIXABLE_FINDINGS for kind, _text in findings):
 		return "deny", (
 			reason.replace(" " + GATE_OFF_HINT, "") + "\n\nAuto mode: nothing ran (any branch or commit in this command was not "

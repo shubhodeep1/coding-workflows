@@ -403,6 +403,18 @@ def test_run_gate_counts_every_lint_finding_in_a_new_file(tmp_path):
 	assert result["status"] == "fail" and result["failures"][0]["tail"].startswith("2 finding(s) added")
 
 
+@pytest.mark.skipif(gate.shutil.which("ruff") is None, reason="ruff not installed")
+def test_run_gate_matches_moved_findings_whose_message_cites_a_line(tmp_path):
+	# F811 says "from line N"; lines added above it must not make it new.
+	old = "def f():\n\tpass\n\n\ndef f():\n\tpass\n"
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\nY = 2\n" + old})
+	baseline = _repo(tmp_path, {"lib/a.py": old}, name="baseline")
+	selection = {"changed_files": ["lib/a.py"], "affected_tests": [], "static_checks": [
+		{"tool": "ruff", "files": ["lib/a.py"], "argv": ["ruff", *gate.RUFF_CHECK_ARGS, "lib/a.py"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and [i["test"] for i in result["inherited"]] == ["ruff"]
+
+
 def test_static_failure_stays_caused_by_the_change_when_findings_cannot_be_read(tmp_path, monkeypatch):
 	baseline = tmp_path / "baseline"
 	baseline.mkdir()
@@ -940,6 +952,16 @@ def test_hook_auto_mode_a_failing_stamp_next_to_a_missing_one_still_denies(tmp_p
 	assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 	reason = out["hookSpecificOutput"]["permissionDecisionReason"]
 	assert "No pre-push test stamp" in reason and "tests/test_broken.py" in reason
+	assert "not held" not in reason
+
+
+@pytest.mark.parametrize("status", [None, "garbled"])
+def test_hook_asks_for_a_stamp_without_a_valid_status(tmp_path, status):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, status)
+	out = _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "no valid status" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_hook_auto_mode_off_switch_still_allows(tmp_path):
