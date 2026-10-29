@@ -68,7 +68,7 @@ Related plan: `docs/plans/heal-issues-self-resolve-plan.md`. Its non-goals ("let
   1. Its id was found in a failed job's log of a verified run. This is the existing `linked-runs` discovery.
   2. `repository.full_name` equals the source repository, case-insensitive. This is the existing check.
   3. `conclusion` is one of `failure`, `cancelled` or `timed_out`.
-  4. `created_at` lies within the `[started_at, completed_at]` window of at least one failed job of the verified parent run whose log mentioned it.
+  4. `created_at` lies within the `[started_at, completed_at]` window of a failed job of the verified parent run whose own log mentioned it. The window is that job's, not the union of the parent run's failed jobs, so discovery records the job id per link (P1 step 3).
   5. `triggering_actor.login` equals the parent run's `triggering_actor.login`, case-insensitive. A missing value on either side fails the check.
   6. The heal is self-repo (`repo == SELF_REPO`).
 - **§6 naming.** No identifier is renamed or removed.
@@ -82,7 +82,7 @@ Related plan: `docs/plans/heal-issues-self-resolve-plan.md`. Its non-goals ("let
 - **§18 automation.** No new script or supervisor. All work extends existing scripts on existing triggers. Nothing is added to `docs/scripts-pending-removal.md`.
 - **§19.** Replacement bodies use `Refs #N` / `Re-issued from #N`, never a closing keyword.
 - **§20 / §30.** Each phase ships its own `changelog.d/<N>-<slug>.md` and an `agents.d/<N>-<slug>.md` fragment. `agents.md` is never edited directly.
-- **§27.** No workflow file grows. Any workflow edit is limited to env switch plumbing.
+- **§27.** Workflow edits are limited to env switch plumbing (a few `env:` lines), which P3 and P4 need so their switches are readable. No workflow file may reach the 480,000-byte guard; check with `wc -c` after each edit.
 
 ## Approach
 
@@ -103,7 +103,7 @@ Related plan: `docs/plans/heal-issues-self-resolve-plan.md`. Its non-goals ("let
 | `WORKFLOW_HEAL scope_closure seeds=<n> matched=<n> paths=<n> reserved=<n> truncated=<n>` and `WORKFLOW_HEAL scope_closure_seed_skipped run=<id> reason=<token>` | log lines | n/a | P2 |
 | `WORKFLOW_HEAL heal_rescope issue=<n> outcome=<o> reason=<r>` | log line | n/a | P3 |
 
-The P1 rejection reasons are `conclusion`, `outside_window`, `actor_mismatch`, `actor_missing`, `consumer_heal`, `switch_off` and `malformed`.
+The P1 rejection reasons are `conclusion`, `outside_window`, `actor_mismatch`, `actor_missing`, `consumer_heal`, `switch_off`, `run_cap` and `malformed`.
 
 ### `linked_scope.json` format
 
@@ -143,9 +143,10 @@ This rule is shared by the parent run (P2) and linked runs (P1 records it). With
 
 ### Reference extraction (Q3: A)
 
-- **Shell or YAML text.** Every match of `(?<![A-Za-z0-9_.-])([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:sh|py))(?![A-Za-z0-9_])` names a candidate `scripts/<group1>`.
+- **Shell or YAML text.** Every match of `(?<![A-Za-z0-9_.-])([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:sh|py))(?![A-Za-z0-9_])` names a candidate `scripts/<group1>`, subject to the prefix rule below.
+- **Prefix rule.** Look at the path text directly before the basename: the longest run ending at the match, without whitespace or quotes, that ends in `/`. Keep the match when that prefix is empty, or when its last segment is `scripts` or a variable expansion (`${NAME}` or `$NAME`). Drop it for any other last segment. So `scripts/x.sh`, `.codex-workflow-src/scripts/x.sh` and `${MEMORY_SCRIPTS_DIR}/ai_memory.py` are kept, and `scripts/lib/x.sh` is dropped. Without this rule, a nested path would resolve to a top-level file that has the same basename.
 - **Python files** add `from X import`, `import X`, `from scripts.X import`, `from scripts import X`, and comma-separated `import X, Y`. Each yields the candidate `scripts/X.py`.
-- **Keep** a candidate only when `git cat-file -e <scope_ref>:<candidate>` succeeds, the candidate passes `_safe_heal_path`, and it has no further `/` after `scripts/`.
+- **Keep** a candidate only when `git cat-file -e <scope_ref>:<candidate>` succeeds and the candidate passes `_safe_heal_path`.
 
 ### Closure walk
 
@@ -167,6 +168,7 @@ Then the existing 20-path cap, existence check and tail apply. With an empty clo
 ### Re-check (Q5: A)
 
 - **Where it runs.** P3 extends the hourly recovery scan rather than the plan gate. The scan already holds the intake's lock, reconstructs reports from pipeline-authored bodies, re-runs the unchanged intake (re-verifying run provenance and the fingerprint) and files replacements.
+- **How the reconstructed report is trusted.** The existing `recovery_scan` origin accepts only `autofix_failure` reports (intake around lines 400–416), and `reconstruct_recovery_payload` is bound to the autofix body shape. P3 therefore adds a separate `rescope_scan` origin with the same binding, and no bypass for unauthenticated reports. The origin is accepted only on a `schedule` event, with `HEAL_SCOPE_RESCOPE_ENABLED` on, `SOURCE_KIND=workflow_run`, and a 64-hex expected fingerprint plus an expected issue number that come only from the scan's environment. Anything else is rejected with `_report_auth_reject "rescope_scan_invalid"`. The payload is built by a new `reconstruct_rescope_payload`, which calls the existing `build_workflow_run_payload` with the run read through the API (not the body's copy). The unchanged provenance gate then re-verifies that run. The fingerprint and duplicate decision must equal the expected values, exactly as for `recovery_scan`.
 - **How denied paths are used.** They are taken only from a pipeline-authored `ai:automation-path-plan-hold:v1` comment with `reason=heal_scope_plan_out_of_scope` (the author is checked against the token's login). They are passed to the intake as a priority list. The intake places only those already inside its own freshly computed candidate set (linked workflow paths ∪ closure ∪ existing inputs) right after the crash file. It never adds a path from that list that its own derivation did not produce.
 
 ### Clarify (G5)
@@ -257,13 +259,13 @@ Four phases (Q7: A). Each is one PR, independently mergeable in any order, compl
    - Add `_heal_fetch_linked_runs`, called before the `SCOPE_INPUTS_FROZEN` `jq -n` (around line 2513). It does link discovery (`linked-runs`), the run read, the identity checks and the jobs read, writing `${RUNTIME_DIR}/linked_runs/run-<id>.json` and `-jobs.json`. Keep the existing `warn linked_run_skipped` reasons.
    - Reduce `_heal_collect_linked_runs` to the timeline and log stage, reading those files. Its API budget, log lines and output file are unchanged.
    - The fetch runs whenever `MAX_LINKED_RUNS > 0`, as today, independent of the new switch.
-2. **Make the parent run's actor available.** Locate where the intake reads each reported run for `verify_run` (`verify_run_provenance`, around line 4203, and its intake caller) and persist that response as `${LOG_DIR}/run-<id>.json` if it is not already. No new call.
+2. **Make the parent run's actor available.** Locate where the intake reads each reported run for `verify_run` (`verify_run_provenance`, around line 4203, and its intake caller) and read the copy the intake already writes, `${LOG_DIR}/run-${run_id}-info.json` (around line 1583, copied from `${PROVENANCE_DIR}/run-${run_id}.json` when present). Pass that file as `--parent-run-json`. Do not add another copy. No new call.
 3. **Add `heal-scope linked-scope`** to `scripts/workflow_failure_heal.py` (operation choices around line 7991, handler next to `render` around line 7200).
-   - Inputs: `--linked-dir`, `--parent-run-json` (repeatable), `--parent-jobs-json` (repeatable), `--parent-log-map` (a JSON map `{linked_run_id: [parent_run_id, …]}` emitted by `linked-runs`; extend that operation's output with the parent run id per link, additively), `--repo`, `--self-repo`.
-   - It applies the provenance rules and reuses `verify_run(run_json, repo=repo, kind="workflow_run")` for `workflow_paths` (`referenced_paths`).
+   - Inputs: `--linked-dir`, `--parent-run-json` (repeatable), `--parent-jobs-json` (repeatable), `--parent-log-map` (a JSON map `{linked_run_id: [{"run_id": parent_run_id, "job_id": failed_job_id}, …]}` emitted by `linked-runs`; extend that operation to scan each failed job's log separately and to add the parent run id and job id per link, additively), `--repo`, `--self-repo`.
+   - It applies the provenance rules and reuses `verify_run(run_json, repo=repo, kind="workflow_run")` for `workflow_paths` (`referenced_paths`). After the case-insensitive identity check, `repo` is the linked run's own `repository.full_name`, passed verbatim, so the case-sensitive comparison inside `verify_run` matches by construction.
    - It records the failing step with the shared selection rule and prints `heal_linked_scope.v1` JSON, with one `linked_run_scope` log line per run on stderr. Always exit 0; on any internal error print `{"schema":"heal_linked_scope.v1","runs":[]}`.
 4. **Freeze.** When the switch is on and `repo == SELF_REPO`, write `linked_scope.json` (chmod 0444) before the freeze and add `linked_workflows` and `linked_runs` arrays to `SCOPE_INPUTS_FROZEN`. Absent or empty means `[]`.
-5. **Render input** (around line 3062). For `scope_workflows_key=self_workflows`, set `workflow_paths` to `self_workflows + linked_workflows` (deduped, order preserved) and `runs` to `runs + linked_runs`. The consumer branch is unchanged.
+5. **Render input** (around line 3062). For `scope_workflows_key=self_workflows`, set `workflow_paths` to `self_workflows + linked_workflows` (deduped, order preserved) and `runs` to `runs + linked_runs`, capped at 3 refs in total, because `_heal_scope_marker_shape_ok` rejects more than 3 runs and the heal would not be filed. Verified parent runs come first. A linked run that does not fit is left out entirely, with its workflow paths, and logged `linked_run_scope run=<id> outcome=rejected reason=run_cap`. The consumer branch is unchanged.
 6. **Switch parsing** follows `SCOPE_RECOVERY_SWITCH` (around line 234). Document it in the intake header comment block.
 7. **Fragments:** `changelog.d/<N>-heal-linked-run-scope.md` (`changed`), and `agents.d/<N>-heal-linked-run-scope.md` targeting `Workflow architecture` (amend the #8248 paragraph's "never feeds the scope" with the qualified exception) and `Stable log prefixes (contractual)` if the `WORKFLOW_HEAL` outcome tokens are registered there.
 
@@ -276,19 +278,21 @@ Four phases (Q7: A). Each is one PR, independently mergeable in any order, compl
    - When the switch is on and the heal is self-repo, build the seeds: parent runs from `${LOG_DIR}/run-<id>-jobs.json` with their verified `referenced_paths`, plus `linked_scope.json` runs whose `step` is non-null when that file has a valid schema.
    - Run `heal-scope closure` against `scope_checkout` / `scope_ref`, add `closure_paths` to `scope_inputs.json`, pass the reserve, and log `scope_closure`.
    - The seeds come only from the frozen and verified files listed above.
+   - When `scope_ref` is not an ancestor of the default branch tip (a PR-branch `workflow_run` heal, where `checkout_ref` is the run's head SHA, intake around line 3036), skip closure seeding and log `scope_closure_seed_skipped run=<id> reason=pr_scope`. A PR author then cannot widen the frozen scope by adding scripts at their own head. A failed ancestry check counts as not an ancestor.
 5. **Fragments:** `changelog.d/<N>-heal-script-closure.md` and `agents.d/<N>-heal-script-closure.md` (`Workflow architecture`).
 
 ### P3: Plan-hold re-check
 
-1. **Candidates** (`scripts/workflow_failure_heal_recovery_scan.sh`). When `HEAL_SCOPE_RESCOPE_ENABLED` is on, from the existing listing also keep open heal issues that meet all of these:
+1. **Candidates** (`scripts/workflow_failure_heal_recovery_scan.sh`). The existing jq filter (around line 187) drops every issue whose body contains `ai:workflow-heal-scope`, which is exactly what rescope candidates carry. When `HEAL_SCOPE_RESCOPE_ENABLED` is on, build a second candidate list with its own jq select from the same nodes file, and leave the recovery filter unchanged. Keep open heal issues that meet all of these:
    - authored by the token login, labelled `ai:workflow-heal`, carrying a scope marker;
    - with the newest pipeline-authored `ai:automation-path-plan-hold:v1 … reason=heal_scope_plan_out_of_scope source=plan …` comment;
-   - with no open PR referencing the issue;
+   - with no open PR referencing the issue. The data comes from the same GraphQL listing query, extended with `timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 20)` and the source pull request's `state`. That adds no call; a missing or unreadable field excludes the issue;
    - with no `ai:heal-rescope:v1` comment for the same `denied=<sha256-12>` (sha256 of the sorted, decoded denied paths, first 12 hex).
 
    Process at most `HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK` candidates (shared with recovery) and respect `HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS`.
-2. **Reconstruct** (`scripts/workflow_failure_heal.py`, `reconstruct_recovery_payload`, around line 3920). Add a `rescope` mode that also accepts `workflow_run` heal bodies, reading the pipeline-written source run URL, target branch and head SHA. It refuses an edited body, unless `verify_heal_scope_pipeline_edits` accepts it, and refuses missing markers, as today.
+2. **Reconstruct** (`scripts/workflow_failure_heal.py`, next to `reconstruct_recovery_payload`, around line 3920). Add `reconstruct_rescope_payload`, with a `rescope` operation, for `workflow_run` heal bodies. `reconstruct_recovery_payload` stays unchanged and autofix-only. The new function reads the pipeline-written source run URL, target branch and head SHA, then builds the payload with `build_workflow_run_payload` from the run read through the API (see Approach → Re-check). It refuses an edited body, unless `verify_heal_scope_pipeline_edits` accepts it, and refuses missing markers, as today.
 3. **Intake origin `rescope_scan`** (`scripts/workflow_failure_heal_intake.sh`).
+   - Gate the origin as described in Approach → Re-check (`schedule` only, switch on, `SOURCE_KIND=workflow_run`, expected fingerprint and issue from the scan's environment; otherwise `rescope_scan_invalid`).
    - Accept `HEAL_RESCOPE_PRIORITY_PATHS_FILE` (decoded denied paths) only for this origin. Require the recomputed fingerprint to equal the issue's `fp`, as recovery does.
    - Render with `priority_paths` = denied ∩ (crash file ∪ workflow paths ∪ linked workflow paths ∪ uncapped closure ∪ test subjects ∪ changed files). Add a keyword-only `priority_paths: Iterable[str] = ()` to `render_heal_scope_marker`, placed right after `crash_file` and filtered to members of the other inputs inside the function as a second guard.
    - If every denied path is in the rendered marker: file the replacement through the recovery replacement helpers. The body is the original body with the new marker plus `Re-issued from #<N> (heal rescope)`. Post `ai:heal-rescope:v1 outcome=replaced` and the existing `ai:heal-scope-recovery:v1 replaced_by=` marker on the original, and close it as `not_planned` with a comment.
@@ -299,7 +303,7 @@ Four phases (Q7: A). Each is one PR, independently mergeable in any order, compl
 
 ### P4: Clarify scope facts and rule
 
-1. **Facts block** (`scripts/clarify_github_facts.py`). When `HEAL_CLARIFY_SCOPE_FACTS_ENABLED` is on and an input text file contains exactly one `HEAL_SCOPE_RE` match (import the regex from `workflow_failure_heal.py` with the existing sibling-import fallback pattern), append:
+1. **Facts block** (`scripts/clarify_github_facts.py`). When `HEAL_CLARIFY_SCOPE_FACTS_ENABLED` is on and an input text file contains exactly one `HEAL_SCOPE_RE` match (the file imports only the standard library today, so import the regex from `workflow_failure_heal.py` after inserting `Path(__file__).resolve().parent` into `sys.path`, inside a `try`. On any import error print no block, because the facts step fails open. A test pins the import under `python3 -I -B`), append:
 
    ```
    HEAL SCOPE (fixed by the pipeline; editable paths): <paths, comma-separated>
@@ -336,6 +340,7 @@ Existing test files are extended rather than new ones added, because `tests/test
 ### P1 (unit, in `tests/test_workflow_failure_heal.py`)
 
 - `linked-scope` accepts a #8287-shaped fixture: parent run 40746491161 with the failed job window 18:39–19:40Z and `triggering_actor` `shubhodeep1`; linked run 40752760153 with `created_at` 19:16:08Z, conclusion `cancelled`, the same actor, and `referenced_workflows` naming `memory_maintenance.yml`. Expected workflow paths: `internal-memory-maintenance.yml` and `memory_maintenance.yml`. Expected step: `Extract repository learnings (fail-open)` with selection `cancelled`.
+- Run cap: one parent run plus three qualifying linked runs yields `runs=` with 3 refs, and the last linked run is logged `reason=run_cap` with its workflow paths absent. `check-marker` accepts the marker.
 - One rejection test per provenance reason: conclusion `success`, `created_at` outside the window, actor mismatch, actor missing, consumer heal, and a foreign-repo `referenced_workflows` entry being dropped.
 - Intake-level: with the switch off, `SCOPE_INPUTS_FROZEN` and the marker are byte-identical to a golden fixture; with it on, the marker gains both paths and `runs=` gains the linked ref.
 - The evidence prompt section is byte-identical with the switch on or off.
@@ -346,6 +351,7 @@ Existing test files are extended rather than new ones added, because `tests/test
 - Step selection: failed, cancelled and longest cases.
 - Matching: exact, reusable `caller / callee`, a matrix suffix, an unnamed step (skipped), duplicate names (skipped), and missing `run:` (skipped).
 - Extraction: `${DIR}/ai_memory.py`, `bash scripts/x.sh`, `source scripts/x.sh`, `. scripts/x.sh`, Python import forms, a non-existent name (dropped), and a nested path (dropped).
+- PR scope: a `scope_ref` that is not an ancestor of the default branch tip yields no closure and logs `reason=pr_scope`.
 - Closure on a temp git repo mirroring the prototype: depth limit, smallest-depth wins, deterministic order, the 200-read cap.
 - Render order: the reserve placement, leftover filling, the 20 cap, and byte-identical output with an empty closure.
 - Integration on the real tree at a pinned commit: the seeds from #8287 yield `scripts/ai_memory_lib.py` within the first 20 paths.
