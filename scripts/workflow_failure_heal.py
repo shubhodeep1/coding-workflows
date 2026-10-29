@@ -389,11 +389,16 @@ DEFAULT_FAILURE_FINGERPRINT_MAX_IDENTICAL = 3
 # REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL. review_conflict_resolve.sh writes
 # them as ``conflict_resolver_<fail-closed reason>`` (PR #6438: a conflict set
 # the resolver sandbox cannot carry failed ~28 identical runs on one head).
+# review_autofix_step_post_editor_summary.sh writes
+# ``review_editor_sandbox_path_excluded`` when the editor changed nothing and
+# declined a finding only as "sandbox-excluded path" (#8321: PR #8250 was
+# re-reviewed 29 times on unchanged heads).
 NON_RETRYABLE_FAILURE_REASONS = frozenset(
 	{
 		"conflict_resolver_sandbox_path_host_only",
 		"conflict_resolver_sandbox_path_unsupported",
 		"conflict_resolver_sandbox_support_missing",
+		"review_editor_sandbox_path_excluded",
 	}
 )
 # A non-retryable cap is re-armed once per verified review-support commit not
@@ -4879,6 +4884,7 @@ _NON_RETRYABLE_EXPLANATIONS = {
 	"conflict_resolver_sandbox_path_host_only": "Another review/autofix run cannot resolve this: the conflicted path(s) are executed on the host and the resolver sandbox refuses them by design. Merge the conflict by hand, push, then remove `ai:needs-human`.",
 	"conflict_resolver_sandbox_path_unsupported": "Another review/autofix run cannot resolve this: the conflicted path(s) are symlinks or have names the resolver sandbox cannot carry, so it refuses them. Merge the conflict by hand, push, then remove `ai:needs-human`.",
 	"conflict_resolver_sandbox_support_missing": "Another review/autofix run cannot resolve this: the verified workflow support commit is missing the conflict resolver's sandbox support files, so no resolver run can start until workflow support is fixed. Ask a maintainer to fix workflow support, or merge the conflict by hand and push, then remove `ai:needs-human`.",
+	"review_editor_sandbox_path_excluded": "Another review/autofix run cannot fix this: the fix needs a path the review editor sandbox does not admit (a `.claude/` file other than the admitted command and docs reference files, or a new file there). Make that change by hand, push, then remove `ai:needs-human`.",
 }
 _NON_RETRYABLE_EXPLANATION_DEFAULT = "Another review/autofix run cannot resolve this failure. Resolve it by hand, push, then remove `ai:needs-human`."
 
@@ -4898,7 +4904,7 @@ def render_non_retryable_comment(decision: dict[str, Any], *, pr_number: Any, he
 		lines.append("Conflicted path(s) that need a manual merge:")
 		lines.append("")
 		lines.extend(f"- `{sanitize_text(path).replace('@', '')}`" for path in paths)
-	elif reason != "conflict_resolver_sandbox_support_missing":
+	elif reason not in ("conflict_resolver_sandbox_support_missing", "review_editor_sandbox_path_excluded"):
 		lines.append("The conflicted path(s) could not be read from the failure comment; see the latest review/autofix failure comment on this pull request.")
 	lines.extend(["", _NON_RETRYABLE_EXPLANATIONS.get(reason, _NON_RETRYABLE_EXPLANATION_DEFAULT), "", "No heal issue was opened."])
 	run_match = _RUN_URL_RE.fullmatch(str(intake_run_url or ""))
