@@ -320,16 +320,21 @@ unblock_hold_condition()
 				echo unknown
 				return 0
 			fi
-			# The changelog keeps the history of a retired step, so it does not count.
+			# The checkout must be readable; the grep result itself no longer decides.
+			# A placeholder missing from code does not show the step is done: a
+			# docs-only operator step (a label repair, say) names it only in
+			# changelog.d/ from the start, and the shallow checkout cannot tell
+			# "removed from code" from "never in code". Counting that as done
+			# resumed bitsafe.io#603 twice while its labels were still wrong.
 			git -C "${dir}" grep -q -F -e "${ref}" -- . ':(exclude)CHANGELOG.md' ':(exclude)changelog.d' >/dev/null 2>&1 || rc=$?
 			case "${rc}" in
-				1) echo met; return 0 ;;
-				0) ;;
+				0|1) ;;
 				*) echo unknown; return 0 ;;
 			esac
-			# Still named in code: an env-var step is done once a person set it as a
-			# repository Actions variable or secret (Q130). A read error, a missing
-			# permission included, keeps the hold waiting.
+			# An env-var step is done once a person set it as a repository Actions
+			# variable or secret (Q130). Anything else waits until the person resumes
+			# the item or the hold reaches UNBLOCK_JUDGE_WAIT_MAX_DAYS. A read error,
+			# a missing permission included, keeps the hold waiting.
 			if [ "$(gh api "repos/${REPOSITORY}/actions/variables/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ] \
 				|| [ "$(gh api "repos/${REPOSITORY}/actions/secrets/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ]; then
 				echo met

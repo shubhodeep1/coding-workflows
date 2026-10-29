@@ -3722,9 +3722,15 @@ def test_judge_waits_until_an_operator_placeholder_is_retired(tmp_path: Path) ->
 	pending = _target_repo(tmp_path / "a", "Gate the new path on DOC_SYNC_UNSET_OPERATOR_STEP.\n")
 	result, state = _judge(tmp_path / "a", ISSUE, comments=[hold], TARGET_DIR=str(pending))
 	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=holding" in result.stdout, result.stdout
-	# Only the changelog still names it: the step is done.
-	retired = _target_repo(tmp_path / "b", "Nothing pending.\n")
-	result, state = _judge(tmp_path / "b", ISSUE, comments=[hold], TARGET_DIR=str(retired))
+	# Only the changelog names it (a docs-only step, like #603's label repair):
+	# that alone does not show the step is done, so the hold keeps waiting.
+	docs_only = _target_repo(tmp_path / "b", "Nothing pending.\n")
+	result, state = _judge(tmp_path / "b", ISSUE, comments=[hold], TARGET_DIR=str(docs_only))
+	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=holding" in result.stdout, result.stdout
+	assert state["comments"] == []
+	# Set as a repository variable: the step is done.
+	result, state = _judge(tmp_path / "b", ISSUE, comments=[hold], TARGET_DIR=str(docs_only),
+		FAKE_GH_ACTIONS_VARIABLES="DOC_SYNC_UNSET_OPERATOR_STEP")
 	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=met" in result.stdout, result.stdout
 	assert state["comments"][0]["body"].startswith("/answer waited for operator step")
 	(tmp_path / "c").mkdir()
