@@ -5,13 +5,26 @@
   "entry_id": "processed_command_8295_6484376853_approved",
   "issue_number": 8295,
   "metadata": {
+    "branch": "ai/issue-8295",
+    "changed_files": [
+      ".github/workflows/memory_maintenance.yml",
+      "changelog.d/8295-memory-single-branch-clone.md",
+      "scripts/ai_memory_lib.py",
+      "tests/test_ai_memory_push_retry_backoff.py",
+      "tests/test_memory_maintenance_contract_noop.py"
+    ],
+    "issue_number": 8295,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8295",
+    "pr_number": 8308,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8308",
+    "run_attempt": "1",
+    "run_id": "40794024283",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40794024283"
   },
   "run_attempt": 1,
   "run_id": "40794024283",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T00:29:03Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T01:13:41Z",
   "workflow": "implement"
 }
