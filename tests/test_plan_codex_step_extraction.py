@@ -30,6 +30,8 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # Issue #8260 replaced the 3-line "already loaded" IMPORTANT paragraph with a
 # 6-line one that allows reading indexed agents.md sections (256 -> 259 lines,
 # 16_738 -> 16_978 bytes).
+# Issue #8339 added the one-line "no prose paragraphs, no placeholder path"
+# rule to item 1 (259 -> 260 lines, 16_978 -> 17_144 bytes).
 # Issue #8327 added a "bullets only" sentence to rule 12 (`## Deferred scope`):
 # a note inside the section made it unreadable (259 -> 263 lines,
 # 16_978 -> 17_307 bytes). Its review then dropped the inaccurate "sub-heading
@@ -37,11 +39,16 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # 17_307 -> 17_390 bytes). The rule was then cut to two lines to keep
 # prompts/mode-plan.txt within its 250-line budget (264 -> 260 lines,
 # 17_390 -> 17_142 bytes).
+# PR #8335 added the 9-line rule that implement only writes files and that a
+# plan whose work an open PR already delivers emits a PLAN_SELF_CHECK BLOCKER
+# (tele-funtoken-msg-scoring#4992; 260 -> 269 lines, 17_142 -> 17_830 bytes).
+# Merging #8339 and #8327 keeps both additions (260 -> 261 lines,
+# 17_142 -> 17_308 bytes); with #8335 the prompt is 270 lines, 17_996 bytes.
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"5ba866e8296478a5abe5a06cb62a077848f20cf9a665dc28801411280e001c39"
+	"61a2d67cf6b6f0a3b7183068b690a8afc7ca9f33780fcfabedc5fbe14c829fc6"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 17_142
-PRE_EXTRACTION_PROMPT_LINES = 260
+PRE_EXTRACTION_PROMPT_BYTES = 17_996
+PRE_EXTRACTION_PROMPT_LINES = 270
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
@@ -133,6 +140,25 @@ def test_plan_prompts_keep_paths_out_of_files_section_notes() -> None:
 	held = "## Files likely to change\n- `docs/INVENTORY.md` (one added `scripts/` bullet)\n\n## Next\n"
 	compliant = "## Files likely to change\n- `docs/INVENTORY.md` (new)\n- `scripts/x.sh` (new)\n\n## Next\n"
 	assert "scripts/" in guard.extract_plan_automation_paths(held)
+	assert guard.extract_plan_automation_paths(compliant) == ["scripts/x.sh"]
+
+
+def test_plan_prompts_keep_prose_and_placeholders_out_of_files_section() -> None:
+	# Issue #8339: a prose paragraph in the Files section mentioned a bare
+	# `scripts/<helper>` string; the gate read it as the directory `scripts/`
+	# and held the plan with path_not_granted.
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import files_touched_scope_guard as guard  # noqa: E402
+
+	rule = ("Keep the section to those bullets: no prose paragraphs, and no placeholder path such as "
+		"`scripts/<helper>`, which the gate reads as the bare directory `scripts/`.")
+	for prompt in (PLAN_RUNNER, REPO_ROOT / "prompts" / "mode-plan.txt",
+			REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		assert rule in prompt.read_text(encoding="utf-8"), prompt
+	held = ("## Files likely to change\n- `scripts/x.sh`\n\n"
+		"Each test changes only if it pins a bare `scripts/<helper>` string.\n\n## Next\n")
+	compliant = "## Files likely to change\n- `scripts/x.sh`\n\n## Next\nIt pins `scripts/<helper>`.\n"
+	assert guard.extract_plan_automation_paths(held) == ["scripts/x.sh", "scripts/"]
 	assert guard.extract_plan_automation_paths(compliant) == ["scripts/x.sh"]
 
 

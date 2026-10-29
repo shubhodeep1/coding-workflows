@@ -4249,21 +4249,25 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # Sum of remaining in-step DEADLINEs (validation-refresh 3720s +
-    # update_workflows 600s + memory-maintenance 2400s = 6720s = 112m).
+    # Sum of remaining in-step DEADLINEs (validation-refresh 5520s +
+    # update_workflows 600s + memory-maintenance 2400s = 8520s = 142m);
+    # step limits 95 + 18 + 45 = 158m; the analyser steps below have no
+    # step limit, so the DEADLINE sum (142m) is what fits the 165m cap.
     # The validation-refresh watch covers that workflow's whole 60-minute
     # `refresh` job budget (run 39694107256 timed out after 40m on a run
-    # that was still in_progress).
+    # that was still in_progress) plus a 1800s runner-queue allowance
+    # (release gate run 40831286935: the child run sat 20m22s queued,
+    # ran 41m45s, finished success, and the gate gave up 5s earlier).
     # Add headroom for prerequisite validation, checkout, and the
     # per-phase run-soft-error-analyzer composite actions (each waits
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
     # call; log1 of run #25200117236 observed ~40s per phase, so 3
     # phases under OpenRouter latency variance can plausibly reach
-    # 6–9m), runner queueing, and step setup. Cap at 135m so a runaway
+    # 6–9m), runner queueing, and step setup. Cap at 165m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
     # still be killed within a sensible budget. Down from 360m before
     # the workflow-log-analysis split-out.
-    timeout-minutes: 135
+    timeout-minutes: 165
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -4308,7 +4312,7 @@ jobs:
       # deterministic ones whose failures still gate the release.
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
-        timeout-minutes: 65
+        timeout-minutes: 95
         run: |
           set -euo pipefail
           sleep 4
@@ -4327,17 +4331,19 @@ jobs:
           # The smoke run passes discovery_dry_run=true: it skips the model
           # call and the discovery PR (up to 35m of VALIDATION_DISCOVERY_BUDGET_SECS)
           # but still runs dedup, memory plumbing and every consumer's
-          # clone/render/lint/self-test. The completion window (measured from
-          # dispatch) must cover validation-refresh.yml's refresh job
-          # timeout-minutes (60) plus queueing; run 39694107256 gave up after
-          # 2400s on a run that was still in_progress.
+          # clone/render/lint/self-test. The completion window is measured
+          # from dispatch, so runner-queue time and run time share it:
+          # refresh job timeout-minutes (60) x 60 + 120s registration slack
+          # + 1800s queue allowance = 5520s. Run 39694107256 gave up after
+          # 2400s on a run that was still in_progress; run 40831286935 gave
+          # up 5s before a run that had queued 20m22s finished success.
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
             --display-name "validation-refresh" \
             --registration-timeout-secs 2400 \
             --registration-poll-interval-secs 5 \
-            --completion-timeout-secs 3720 \
+            --completion-timeout-secs 5520 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
             --dispatch-backoff-base-secs 2 \
@@ -5155,6 +5161,17 @@ jobs:
         run: |
           set -euo pipefail
           DEADLINE=$(( $(date +%s) + 4500 ))
+          # Post /approved once per arrival in ai:awaiting-approval, as
+          # Phase 3a does. Posting on every poll left ~67 comments in run
+          # 40831286935 (08:08:20-08:31:55); each one starts every
+          # issue_comment workflow, and the extra implement runs queue in
+          # ai-implement-<repo>-<issue> (cancel-in-progress: false). A failed
+          # POST leaves the flag at 0 so the next poll retries. An issue still
+          # awaiting approval 600s after a post gets one more post, because
+          # implement can skip before it changes the label (metadata read or
+          # dependency hold) and nothing else re-triggers it.
+          ALT_APPROVED_POSTED=0
+          ALT_APPROVED_POSTED_AT=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
@@ -5167,8 +5184,24 @@ jobs:
             fi
             # Auto-approve the plan when the issue lands in awaiting-approval.
             if echo "${LABELS}" | grep -q 'ai:awaiting-approval'; then
-              gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
-                -f body="/approved" >/dev/null 2>&1 || true
+              if [ "${ALT_APPROVED_POSTED}" = "1" ] && [ $(( $(date +%s) - ALT_APPROVED_POSTED_AT )) -ge 600 ]; then
+                echo "  still awaiting approval 600s after /approved; posting again"
+                ALT_APPROVED_POSTED=0
+              fi
+              if [ "${ALT_APPROVED_POSTED}" = "0" ]; then
+                if gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+                    -f body="/approved" >/dev/null 2>&1; then
+                  ALT_APPROVED_POSTED=1
+                  ALT_APPROVED_POSTED_AT=$(date +%s)
+                  echo "  posted /approved (once per arrival)"
+                else
+                  echo "::warning::Posting /approved failed; retrying on the next poll"
+                fi
+              fi
+            elif [ -n "${LABELS}" ]; then
+              # Reset only after a read that returned labels: a failed read
+              # yields "" and must not re-arm the post mid-arrival.
+              ALT_APPROVED_POSTED=0
             fi
             # Success: the implement phase produced a PR and either is
             # mid-review or done. The alt-model gate doesn't need to wait
