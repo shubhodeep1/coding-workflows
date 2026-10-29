@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-plan.txt:40-41 (file ends at line 251) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The added two-line rule pushes the DEFAULT-tier prompt to 251 lines, exceeding the 250-line limit enforced by tests/prompt_size_budget.py.\n  WHY: The static-checks job fails with \"251 lines exceeds DEFAULT limit of 250\", which also fails the downstream lint job and blocks merge. All reviewers rated it BLOCKER, mapped here to critical.\n- changelog.d/8339-plan-files-section-placeholder-rule.md:2 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: Grammar error: \"read `scripts/<helper>` as the directory\" should be \"reads\". The reviewers called this a NIT or a style-only hardening note.\n  WHY: This is a documentation-quality issue only and has no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- prompts/mode-plan.txt:251 (added rule at lines 37-44) | severity=BLOCKER | confidence=5\n  PROBLEM: The added instruction pushes prompts/mode-plan.txt to 251 lines, exceeding the 250-line limit enforced by tests/prompt_size_budget.py.\n  WHY: The static-checks CI job fails with \"251 lines exceeds DEFAULT limit of 250\", blocking the PR.\n- changelog.d/8339-plan-files-section-placeholder-rule.md:2 | severity=NIT | confidence=5\n  PROBLEM: Tense mismatch: \"read `scripts/<helper>` as the directory `scripts/`\" should be \"reads\".\n  WHY: Documentation quality issue only, with no runtime impact.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- prompts/mode-plan.txt:251 (new rule at lines 40-41) | severity=BLOCKER | confidence=5\n  PROBLEM: The 2-line rule moves prompts/mode-plan.txt from 249 to 251 lines. tests/prompt_size_budget.py:14 sets the DEFAULT limit to 250, and the loop at tests/prompt_size_budget.py:52-74 enforces it.\n  WHY: static-checks exits 1 with \"251 lines exceeds DEFAULT limit of 250\", which fails the dependent lint job. This contradicts the PR's \"Pre-push gate: 0 failures\" claim. prompts/_templates/mode-plan.txt (237 lines) and the inline prompt in scripts/run_plan_codex.sh are not in scope of the budget check.\n- changelog.d/8339-plan-files-section-placeholder-rule.md:2 | hardening suggestion (HARDENING_RISK_SCORE: 0)\n  PROBLEM: Subject-verb agreement: \"read\" should be \"reads\" in \"...scans every protected token in that section, read `scripts/<helper>` as the directory...\".\n  WHY: The gate is singular. The suggested fix is a 1-line change.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- prompts/mode-plan.txt:40-41 (and tests/prompt_size_budget.py lines 69-74) | severity=BLOCKER | confidence=5\n  PROBLEM: The added two-line rule raises the DEFAULT-tier prompt to 251 lines, exceeding the enforced 250-line limit.\n  WHY: The prompt-size budget check exits with failure, so the static-checks job and the downstream lint gate fail. CI confirms the failure on the PR head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- prompts/mode-plan.txt:40-41 (file is 251 lines total) | severity=BLOCKER | confidence=5\n  PROBLEM: The 2-line addition pushes the DEFAULT-tier rendered prompt to 251 lines, exceeding the 250-line limit at tests/prompt_size_budget.py:14,71-74. The failing job is static-checks (run 40848561898, job 123362025356).\n  WHY: static-checks exits 1 on every run of this PR head, which also fails the downstream lint gate and blocks merge. Suggested fix: fold the rule into one line in all three copies (prompts/mode-plan.txt, prompts/_templates/mode-plan.txt, the scripts/run_plan_codex.sh inline fallback). Then update the `rule` string in tests/test_plan_codex_step_extraction.py:135-144 and re-pin PRE_EXTRACTION_PROMPT_SHA256, PRE_EXTRACTION_PROMPT_BYTES and PRE_EXTRACTION_PROMPT_LINES (tests/test_plan_codex_step_extraction.py:34-39).\n- changelog.d/8339-plan-files-section-placeholder-rule.md:2 | severity=style-only (non-blocking note)\n  PROBLEM: Tense typo: \"read\" should be \"reads\".\n  WHY: Style-only. Fold the correction in when touching the file for the fix.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c7c4d914633940510c0075a6342df67e5938e854648e1283b2ab1d7e79b81a8e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8349,
+    "run_id": "40848561905",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40848561905",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029102011_02b0d2c87f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8349,
+    "run_id": "40848561905"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T10:20:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
