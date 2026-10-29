@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Merged changes across orchestration, clarify, memory-maintenance, label-sync, and review tooling included issue-specific changelog files. When planning behavioral changes to these areas, check whether a changelog entry is expected and include it with the implementation.",
+  "fingerprint": "ce0875ee312acebc61136e390b37c6e67cf5eca19441823f394f6ddcad460852",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40941191163",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40941191163",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8314",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8321",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8369",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8370",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8380",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8324",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8326",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8374",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8375",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8381"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261029194337_41be817fd5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Substantive workflow and script changes commonly include a matching `changelog.d/` entry.",
+  "timestamps": {
+    "created_at": "2026-10-29T19:43:37Z",
+    "promoted_at": "2026-10-29T19:44:19Z",
+    "superseded_at": null
+  }
+}
