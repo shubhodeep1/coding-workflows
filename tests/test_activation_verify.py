@@ -938,6 +938,7 @@ def test_open_pr_response_that_does_not_parse_fails_open(tmp_path: Path) -> None
 	assert len(_fix_issues(state)) == 1
 	assert "fix in progress" not in state["comments"][-1]["body"]
 
+
 def test_prompt_explains_open_pr_tagging() -> None:
 	for rel in ("prompts/mode-activation-verify.txt", "prompts/_templates/mode-activation-verify.txt"):
 		prompt = (ROOT / rel).read_text(encoding="utf-8")
