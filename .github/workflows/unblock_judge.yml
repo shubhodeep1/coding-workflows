@@ -161,6 +161,7 @@ jobs:
           UNBLOCK_JUDGE_MODEL: ${{ vars.UNBLOCK_JUDGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           UNBLOCK_JUDGE_REASONING: ${{ vars.THINKING_LEVEL_UNBLOCK_JUDGE || 'high' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED: ${{ vars.CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED || 'true' }}
           UNBLOCK_JUDGE_FIXUP_WAIT_HOURS: ${{ vars.UNBLOCK_JUDGE_FIXUP_WAIT_HOURS || '72' }}
           # `wait` verdicts and operator-step holds (Q116, Q126): on by default;
           # a hold is judged again after this many days.

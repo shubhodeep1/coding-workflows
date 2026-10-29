@@ -643,6 +643,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED: ${{ vars.CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED || 'true' }}
           CHECK_TRIAGE_STAGE: diagnose
           CHECK_TRIAGE_PREPARE_ONLY: "true"
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
