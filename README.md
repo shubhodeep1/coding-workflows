@@ -1399,7 +1399,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > scripts/security/check-npm-audit.js` and syncs managed files. It overwrites
 > `scripts/security/check-npm-audit.js` with the template on every sync, and
 > the template runs under both CommonJS and `"type": "module"` packages
-> (Node.js 20.16+ or 22.3+, for `process.getBuiltinModule`). A
+> (an ESM package needs Node.js 20.16+ or 22.3+, for
+> `process.getBuiltinModule`; a CommonJS package falls back to `require`). A
 > `managed_files` entry with `"seed_only": true` is created only when the
 > consumer has no copy and is never overwritten after that:
 > `security/dependency-audit-allowlist.json` is seed-only, because its

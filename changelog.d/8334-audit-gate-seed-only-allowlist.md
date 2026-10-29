@@ -6,7 +6,7 @@
 | The numbers that matter | Value |
 | --- | --- |
 | Sync-and-restore cycles in multi-user-ai-agent | about 9 (2026-09 to 2026-10) |
-| Minimum Node.js for `check-npm-audit.js` | 20.16 or 22.3 |
+| Minimum Node.js for `check-npm-audit.js` in an ESM package | 20.16 or 22.3 (CommonJS packages keep older Node.js) |
 | New contract field | `managed_files[].seed_only` (boolean, default `false`) |
 
 What this means for consumer repos: advisory entries you add to `security/dependency-audit-allowlist.json` survive every sync, and the audit gate runs in ESM packages. A repo whose allowlist was already reset still has to restore its entries once.
