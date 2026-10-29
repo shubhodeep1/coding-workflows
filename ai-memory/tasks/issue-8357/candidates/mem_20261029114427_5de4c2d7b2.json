@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The one file the fix needs is one the pipeline cannot write, and every change the pipeline could make is forbidden. How should this heal issue be handled?\nChoices:\nA. Operator route, no pipeline code change: a person merges the existing `sync-claude-live-copies` PR, or reviews the held draft and marks it ready. If no sync PR exists, an interactive operator session copies the template over the live file byte for byte, keeping the file mode. The plan records this as an operator step and makes no repository edits. The issue stays open until push CI on `main` is green. (RECOMMENDED)\nB. Same operator route as A, plus one in-scope `changelog.d/*.md` entry. The entry would say that `main`'s CI was red until the live copy was synced, and give the cause (a template-only edit of the pre-push gate hook).\nC. Widen the heal scope to include `.claude/hooks/prepush_affected_tests.py` and let the implement phase do the copy.\n**Note:** C will probably fail. The implement editors cannot write `.claude/**` whatever the scope label says (agents.md L2793-2794 and L869), so the issue would come back for re-clarification or reach the heal generation cap.",
+  "fingerprint": "25c08b6facd93be7d5c8534097625378b6baf3a136e15bf62b24fd21c141b78e",
+  "lineage": {
+    "issue_number": 8357,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40867185872",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40867185872",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029114427_5de4c2d7b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8357,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40867185872"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8357 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T11:44:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
