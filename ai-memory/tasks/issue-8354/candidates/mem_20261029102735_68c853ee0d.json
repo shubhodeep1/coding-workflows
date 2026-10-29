@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for issue #8354: fix the `static-checks` failure on PR #8349, where `prompts/mode-plan.txt` is one line over its budget\n\nPlanning ref: `3cb6a250eb6e3db6a42304ebfce908c7f86f7b38` on branch `claude/loving-sagan-jfpze3`. The integration branch matches.\n\nScope-mode: Hold Scope\nReuse-audit: extends prompts/mode-plan.txt\nScope-mode justification: The CI failure has one cause. `prompts/mode-plan.txt` is 251 lines, and `tests/prompt_size_budget.py` limits `DEFAULT`-tier prompts to 250 (`TIER_LIMITS[\"DEFAULT\"] = 250`). `mode-plan.txt` is not listed in `EXPECTED_TIERS`, so it has to stay `DEFAULT`. The fix rewraps one bullet so the file loses a line, and makes the same change in the template so the assembler parity test still passes. No helper, test or workflow needs to change. Raising the limit or moving the file to the `LARGE` tier would weaken the gate, which runs against \u00a76 (Correctness & safety ranks above Speed). No new dependency or interface is added.\n\n## Files likely to change\n- `prompts/mode-plan.txt`\n- `prompts/_templates/mode-plan.txt`\n\n## Functions or modules to implement\n- No code changes; this edits text only.\n- In `prompts/mode-plan.txt` (currently lines 19\u201321), replace the three-line bullet:\n  ```\n  - If the planning context already surfaces `lessons_learned_record.v1`\n    entries for the same files, review up to the 5 most recent before\n    drafting and treat them as soft priors, not gospel.\n  ```\n  with this two-line version:\n  ```\n  - If the planning context already surfaces `lessons_learned_record.v1` entries for the same files,\n    review up to the 5 most recent before drafting and treat them as soft priors, not gospel.\n  ```\n  The wording stays the same. The first line is about 98 characters, the second about 91, and the continuation line keeps its two-space indent. The file drops from 251 to 250 lines.\n- In `prompts/_templates/mode-plan.txt` (currently lines 12\u201314), make exactly the same replacement. The template goes from 237 to 236 lines.\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None. Models see the same instruction text; only the line wrapping changes.\n\n## Decisions\n### D1 \u2014 Remove the line by rewrapping the lessons-learned bullet\n- Chosen: rewrap the three-line `lessons_learned_record.v1` bullet onto two lines in both the prompt and its template.\n- Alternatives considered: raise `TIER_LIMITS[\"DEFAULT\"]`; move `mode-plan.txt` to the `LARGE` tier in `EXPECTED_TIERS`; reflow the new rule from PR #8349 (lines 40\u201341); reflow lines 36\u201337; delete a different line.\n- Why: the issue rules out the first two. `tests/test_plan_codex_step_extraction.py` pins the exact line breaks in the rule blocks at lines 36\u201337 and 40\u201341 (assertions around lines 122 and 139\u2013143). A search of `tests/` for \"soft priors\", \"5 most recent\" and \"entries for the same files\" turns up no pin on this bullet. Its only other match, `tests/test_orchestrator_completion_lessons.py:411`, checks a different memory-context string. Rewrapping keeps the meaning exactly.\n\n### D2 \u2014 Leave `scripts/run_plan_codex.sh` unchanged\n- Chosen: do not touch the inline prompt copy in the runner.\n- Alternatives considered: rewrap the same bullet in the inline copy.\n- Why: `test_extracted_prompt_matches_pre_extraction_bytes` pins that copy's SHA-256, byte count and line count, so editing it would fail the test. `prompt_size_budget.py` only checks files under `prompts/`.\n\n## Security considerations\n- No trust boundary, endpoint, credential or external input is involved. The change is a text-only edit to a prompt that is checked into the repo.\n- Possible misuse: someone could reword an instruction while claiming to only rewrap it. To guard against this, the new text must contain exactly the same words as the old text with the line breaks moved, and the two copies must be byte-identical in that region.\n\n## Risks and edge cases\n- Template parity: `tests/test_assemble_prompt.py::test_assembled_templates_match_legacy_prompt_bytes` requires `assemble_prompt.sh` on the template to reproduce `prompts/mode-plan.txt` byte for byte. Both files must get identical edits, with no trailing spaces and the existing line endings kept.\n- Pinned regions: lines 36\u201337 and 40\u201341 of the prompt, and the `Default-branch reference:` paragraph that `test_plan_prompts_mention_isolated_base` compares across both copies, must not change.\n- No conflicts found: the issue's line references (the prompt at 251 lines, the bullet at lines 19\u201321, `TIER_LIMITS`, `EXPECTED_TIERS`) match the current branch.\n\n## Testing considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py` and expect OK, with `mode-plan.txt` at 250 lines.\n- Run `PYTHONDONTWRITEBYTECODE=1 pytest tests/test_assemble_prompt.py tests/test_plan_codex_step_extraction.py` to check template parity, the pinned rule blocks and the inline-prompt hash.\n- Run `PYTHONDONTWRITEBYTECODE=1 pytest tests/test_plan_reuse_audit_contract.py tests/test_plan_scope_mode_contract.py tests/test_plan_diagrams_contract.py tests/test_render_prompt_foundation.py tests/test_phase_prompt_untrusted_context_contract.py tests/test_plan_template_owned_path_guard.py`. These other `mode-plan.txt` contract tests should not be affected.\n- No new tests are needed: the existing budget gate covers this fix.\n\n## Pre-execution self-check\n- Automation (\u00a720): the change only edits existing files. It adds no script, scheduler wiring, supervisor or database work, and needs no entry in `docs/scripts-pending-removal.md`.\n- The change doesn't touch `agents.md` or any workflow YAML, so the \u00a724 and \u00a725 rules don't apply.\n- Every claim in this plan was checked against the files on the branch: the two line counts, the bullet text in both copies, the `prompt_size_budget.py` constants, and the pins in `test_plan_codex_step_extraction.py` and `test_assemble_prompt.py`.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "3317edb566ecaf93e8db662a51b7a57520af0a1aa165baa95bcd11ed7e3634f3",
+  "lineage": {
+    "issue_number": 8354,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40856908754",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40856908754",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8354"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261029102735_68c853ee0d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8354,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40856908754"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8354",
+  "timestamps": {
+    "created_at": "2026-10-29T10:27:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
