@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-10-29T08:40:43Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=tests/test_gh_api_write_guard.py:1-1; cited_path=tests/test_gh_api_write_guard.py; files_touched=README.md, agents.d/8287-unblock-hold-manual-resume.md, agents.md, changelog.d/8287-operator-step-hold-docs-only-placeholder.md, changelog.d/8287-unrouted-skip-claude-code-notes.md, scripts/orchestrate_lib.py, scripts/unblock_judge.sh, scripts/unblock_ledger.py, tests/test_orchestrate_lib.py, tests/test_unblock_judge.py.",
+  "phase": "review_autofix",
+  "pr_number": 8315,
+  "record_id": "lesson_20261029084043_54dbe9351f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_gh_api_write_guard.py",
+    "README.md",
+    "agents.d/8287-unblock-hold-manual-resume.md",
+    "agents.md",
+    "changelog.d/8287-operator-step-hold-docs-only-placeholder.md",
+    "changelog.d/8287-unrouted-skip-claude-code-notes.md",
+    "scripts/orchestrate_lib.py",
+    "scripts/unblock_judge.sh",
+    "scripts/unblock_ledger.py",
+    "tests/test_orchestrate_lib.py",
+    "tests/test_unblock_judge.py"
+  ]
+}
