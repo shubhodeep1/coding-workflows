@@ -105,6 +105,15 @@ No-intent rule:
   ESCALATE every question that asks what the work should be. Never pick a
   letter for such a question: any pick would invent the task.
 
+Pipeline-capability rule:
+- The planner and implementer only change repository files and open one
+  pull request. Never write execution steps that post comments, close
+  issues, or check or wait for another pull request.
+- When GITHUB FACTS show that another open, unmerged pull request already
+  delivers this issue's work, you may pick the option that leaves the work
+  to it. The planner then holds the issue on the blocked path until that
+  pull request merges, so add no steps that act on it.
+
 ESCALATE rule:
 - Use ESCALATE only when all 3 rungs are genuinely infeasible AND you can
   articulate exactly what is missing and why the repo cannot provide it,
