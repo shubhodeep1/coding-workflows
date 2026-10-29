@@ -707,11 +707,13 @@ def test_scripts_per_step_are_capped() -> None:
 	tree[".github/workflows/w.yml"] = _lw_workflow({"j": {"runs-on": "ubuntu-latest", "steps": [{"name": "Many", "run": body}]}})
 	tree.update({f"scripts/s{index}.sh": "x" for index in range(24)})
 	result = _lw_paths(_lw_run(9, ".github/workflows/w.yml"), _lw_jobs(_lw_step("Many", "failure")), tree)
-	assert result["paths"][1:] == [f"scripts/s{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP - 1)]
+	# The per-step cap counts existing scripts of this step only, not the run's own workflow.
+	assert result["paths"][1:] == [f"scripts/s{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP)]
+	assert _lw_reasons(result) == ["cap_reached"]
 	tree.pop("scripts/s0.sh")
 	result = _lw_paths(_lw_run(9, ".github/workflows/w.yml"), _lw_jobs(_lw_step("Many", "failure")), tree)
-	assert result["paths"][1:] == [f"scripts/s{index}.sh" for index in range(1, heal.HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP)]
-	assert "script_missing" in _lw_reasons(result)
+	assert result["paths"][1:] == [f"scripts/s{index}.sh" for index in range(1, heal.HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP + 1)]
+	assert _lw_reasons(result) == ["script_missing", "cap_reached"]
 
 
 @pytest.mark.usefixtures("_lw_yaml")
@@ -719,7 +721,7 @@ def test_scripts_per_step_are_capped() -> None:
 def test_merged_runs_dedupe_keep_order_and_cap(tmp_path: Path) -> None:
 	tree = dict(LW_TREE)
 	pairs = []
-	for index in range(12):
+	for index in range(8):
 		name = f".github/workflows/w{index}.yml"
 		tree[name] = _lw_workflow({"j": {"runs-on": "ubuntu-latest", "steps": [{"name": "Gate", "run": f"bash scripts/g{index}.sh"}]}})
 		tree[f"scripts/g{index}.sh"] = "x"
@@ -730,12 +732,24 @@ def test_merged_runs_dedupe_keep_order_and_cap(tmp_path: Path) -> None:
 	pairs.insert(1, pairs[0])  # the same run twice adds nothing new
 	exists, read_file = _lw_fakes(tree)
 	result = heal.heal_scope_linked_paths_for_runs(pairs, repo=SELF_REPO, exists=exists, read_file=read_file)
-	assert result["paths"] == [path for index in range(10) for path in (f".github/workflows/w{index}.yml", f"scripts/g{index}.sh")]
+	assert result["paths"] == [path for index in range(6) for path in (f".github/workflows/w{index}.yml", f"scripts/g{index}.sh")]
 	assert len(result["paths"]) == heal.HEAL_SCOPE_LINKED_PATHS_MAX
 	assert _lw_reasons(result).count("cap_reached") == 4
-	assert result["outcome"] == "added" and result["runs"] == 13
+	assert result["outcome"] == "added" and result["runs"] == 9
 	broken = heal.heal_scope_linked_paths_for_runs([(str(tmp_path / "absent.json"), "")], repo=SELF_REPO, exists=exists, read_file=read_file)
 	assert broken == {"outcome": "none", "paths": [], "skipped": [{"run_id": "?", "reason": "cache_unreadable"}], "runs": 1}
+
+
+def test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker() -> None:
+	# #6907/#6916: linked paths sit ahead of the subject reserve in workflow_paths.
+	assert heal.HEAL_SCOPE_LINKED_PATHS_MAX + heal.HEAL_SCOPE_SUBJECT_RESERVE == 20
+	linked = [f"scripts/linked{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_PATHS_MAX - 1)]
+	subjects = [f"scripts/subject{index}.sh" for index in range(heal.HEAL_SCOPE_SUBJECT_RESERVE)]
+	marker = heal.render_heal_scope_marker(crash_file=None, workflow_paths=[".github/workflows/test-and-mark-stable.yml", *linked],
+		changed_files=[], exists=lambda path: True, runs=[f"{SELF_REPO}:500"], test_subjects=subjects)
+	assert marker
+	for path in subjects:
+		assert path in marker
 
 
 # --- heal_scope_linked_workflows_gate --------------------------------------
