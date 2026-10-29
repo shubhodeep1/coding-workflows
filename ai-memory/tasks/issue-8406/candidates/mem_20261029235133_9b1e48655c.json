@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The issue says the reporter already has a `report_pool_reason_token`, but it doesn't: `scripts/ai_engine_fallback_report.sh` has no reference to `pool_reason` or `CLAUDE_POOL_REASON`. The reporter needs a source, and the repo already has one in `ai_engine_no_account_reason` (`scripts/ai_engine.sh` lines 246-261). It checks the `CLAUDE_POOL_REASON` env var first, then the reason file `CLAUDE_POOL_REASON_FILE` (default `${RUNNER_TEMP:-/tmp}/claude-pool-reason`, also written by `scripts/claude_pool_token.sh` line 90). It refuses symlinks, reads at most 64 bytes and strips whitespace. Copying that order keeps the work inside the four listed paths, needs no new workflow `env:` entries (option C would), and still honours the env var when a caller sets it (option B would ignore it).\nQ2: The issue says that when the argument is omitted the payload must stay byte-identical to today's (item 5). Passing `--pool-reason` only when there is a source keeps that true for jobs where the pool step never ran. The heal fingerprint (role + reason) is not affected either way. Option B would add a `Claude pool step reason: unavailable` line to every payload from a job without a source, which would change today's output for those jobs.\n\nEXECUTION PLAN (required for any non-letter decision):\nBoth answers are lettered choices, so no execution plan is needed. Binding notes for the planner:\n- Q1/A: In `scripts/ai_engine_fallback_report.sh`, add a new local variable named `report_pool_reason_token`, the name the issue uses. Check first that the script does not already use that name. Resolve it in the same order as `ai_engine_no_account_reason`:\n  1. Use `CLAUDE_POOL_REASON` if it is set and not empty.\n  2. Otherwise read the reason file `${CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason}`, only if it is a regular file and not a symlink. Read at most 64 bytes, strip whitespace, and if the read fails leave the token empty.\n  The reporter does not check the token against `^[a-z0-9_]{1,60}$` itself; `workflow_failure_heal.py` does that and maps anything that fails to `unavailable`. Do not change or call `ai_engine_no_account_reason` (\u00a710), because that function folds every value into `all_gated` or `no_credential`.\n- Q2/A: Add `--pool-reason \"<token>\"` to the `build-engine-fallback-payload` call only when there is a source: the env var was set, or the file existed. When there is no source, leave the argument out. If a source exists but its value is empty after stripping whitespace, the builder writes `unavailable`. Tests must show that a payload built without the argument is byte-identical to today's (item 5).",
+  "fingerprint": "badb4166fdf17fd57f74f90f7b856f2f8b58ee49d6d5eaa82a70029df216a579",
+  "lineage": {
+    "issue_number": 8406,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40974987965",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40974987965",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8406"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029235133_9b1e48655c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8406,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40974987965"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8406",
+  "timestamps": {
+    "created_at": "2026-10-29T23:51:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
