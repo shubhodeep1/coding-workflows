@@ -901,18 +901,20 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
           python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
 
-      # Moved from tests-promote-stall-and-review, which took 15m18s of its
-      # 20 minutes on main (run 39039638823, budget-watch issue #7576). Step
-      # timings were not readable when this was planned; these two were chosen
-      # as that job's most expensive steps by test and subprocess counts
-      # (estimated, not measured). Both need only checkout, Python 3.12 and the
-      # shared pip install, which this job already has. Names and bodies
-      # unchanged.
+      # Two moves, oldest first. History: this step first left
+      # tests-promote-stall-and-review, which took 15m18s of its 20 minutes on
+      # main (run 39039638823, budget-watch issue #7576); it and one sibling
+      # step were picked as that job's most expensive steps by test and
+      # subprocess counts (estimated, not measured; step timings were not
+      # readable) and moved to tests-heal-plan-and-validation. The sibling is
+      # not part of the later move; only this step is here.
       #
-      # Moved from tests-heal-plan-and-validation, which took 15m10s of its 20
-      # minutes on main (run 40954844196, budget-watch issue #8395). Chosen as
-      # that job's largest step not split into parallel processes, by test and
-      # subprocess count (an estimate, not measured). Name and body unchanged.
+      # Current move: from tests-heal-plan-and-validation, which took 15m10s of
+      # its 20 minutes on main (run 40954844196, budget-watch issue #8395).
+      # Chosen as that job's largest step not split into parallel processes,
+      # by test and subprocess count (an estimate, not measured). It needs only
+      # checkout, Python 3.12 and the shared pip install, which this job
+      # already has. Name and body unchanged.
       - name: Review autofix review-pipeline plumbing contract test
         run: |
           set -euo pipefail
