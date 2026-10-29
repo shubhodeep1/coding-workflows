@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-10-29T21:05:41Z",
+  "issue_number": 8327,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=agents.d/:n/a; cited_path=agents.d/; files_touched=.github/workflows/ci.yml, .github/workflows/test-and-mark-stable.yml, changelog.d/8327-phase7-cancel-timeout-status.md, tests/test_test_and_mark_stable_phase7_timeout_status.py.",
+  "phase": "review_autofix",
+  "pr_number": 8361,
+  "record_id": "lesson_20261029210541_36f7fa714d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.d/",
+    ".github/workflows/ci.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    "changelog.d/8327-phase7-cancel-timeout-status.md",
+    "tests/test_test_and_mark_stable_phase7_timeout_status.py"
+  ]
+}
