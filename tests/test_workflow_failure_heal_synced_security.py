@@ -224,6 +224,9 @@ def test_source_paths_follow_the_sync_mapping() -> None:
 	assert heal.synced_security_source_paths("CLAUDE.md") == ["CLAUDE.md"]
 	contract = {"managed_files": [{"source": "gate.sh", "target": "scripts/audit_gate.sh"}]}
 	assert heal.synced_security_source_paths("scripts/audit_gate.sh", contract) == ["workflow-templates/audit-gate/gate.sh"]
+	# A seed_only target is consumer-owned once created: no upstream source.
+	seeded = {"managed_files": [{"source": "allow.json", "target": "security/allow.json", "seed_only": True}]}
+	assert heal.synced_security_source_paths("security/allow.json", seeded) == []
 	assert heal.synced_security_source_paths(".github/retired.txt") == []
 
 

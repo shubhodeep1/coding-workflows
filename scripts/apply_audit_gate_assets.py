@@ -95,8 +95,9 @@ def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResu
 	package_script = contract["package_script"]
 	managed_items = contract["managed_files"]
 
-	# seed_only marks a file the consumer owns once it exists (the advisory
-	# allowlist): the sync creates it when missing and never overwrites it.
+	# seed_only entries hold consumer-owned data (the npm audit allowlist): the
+	# upstream copy is written only when the target is missing, never over an
+	# existing file. Overwriting it emptied consumer allowlists on every sync.
 	resolved_assets: list[tuple[Path, Path, bool]] = []
 	for item in managed_items:
 		source_rel = _safe_relative_path(item["source"], field_name="managed_files.source")
@@ -149,6 +150,11 @@ def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResu
 		for source_path, target_rel, seed_only in resolved_assets:
 			target_path = repo_root / target_rel
 			if seed_only and (target_path.exists() or target_path.is_symlink()):
+				if target_path.is_symlink() or not target_path.is_file():
+					print(
+						f"warning: seed_only target {target_rel.as_posix()} is not a regular file; left untouched",
+						file=sys.stderr,
+					)
 				continue
 			target_dir = target_path.parent
 			missing_dirs: list[Path] = []
