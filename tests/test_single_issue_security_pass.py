@@ -1186,3 +1186,29 @@ def test_gate_switch_off_keeps_todays_suppression_and_outputs() -> None:
 	guard = tail.index('if [ "${AUTOFIX_SKIP_RUNS_SECURITY_PASS:-false}" = "true" ]; then')
 	assert guard < tail.index('echo "det_skip_security_pass=') < tail.index("det_skip_security_pass_pr_json=")
 	assert "det_skip_security_pass" not in text[: text.index('echo "force_rb_judge_conflict_skip=')].split("DET_SKIP_SECURITY_PASS_REQUIRED")[0]
+
+
+def test_skip_step_holds_when_python_ignores_safe_path(tmp_path: Path) -> None:
+	# A python3 that does not honour PYTHONSAFEPATH must stop the step before
+	# the pass runs in the PR-head cwd with GH_TOKEN set. The stub fails only
+	# the safe-path probe and delegates everything else (the fake gh) to the
+	# real interpreter.
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	stub = bin_dir / "python3"
+	stub.write_text(
+		"#!/usr/bin/env bash\n"
+		'case "$*" in *sys.flags.safe_path*) exit 1 ;; esac\n'
+		f'exec "{sys.executable}" "$@"\n',
+		encoding="utf-8",
+	)
+	stub.chmod(0o755)
+	result, calls, output = _run_skip_step(tmp_path, comments=[_comment(_marker("clean", HEAD, 1))])
+	assert result.returncode != 0
+	assert output == "hold=true\nhold_reason=skip_input_unverifiable\nexhausted=false\n"
+	assert "outcome=skip_input_unverifiable" in result.stdout
+	assert "detail=python_safe_path_unavailable" in result.stdout
+	# The pass never ran: no identity read, no dispatch, no status post.
+	assert ["api", "user", "--jq", '.login // ""'] not in calls
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert not any(any("/statuses/" in arg for arg in call) for call in calls)
