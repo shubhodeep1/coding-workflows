@@ -791,6 +791,11 @@ def classify_baseline(
 	given: a static unit whose findings all exist on the baseline too is
 	inherited, otherwise it stays caused by the change and its tail lists the
 	added findings.
+
+	Each re-run unit gets `baseline_status` (the re-run's status). A unit
+	whose re-run timed out or could not start stays in pr_caused here;
+	run_gate reports it as unverified, because nothing showed the change
+	caused it.
 	"""
 	if baseline is None or not baseline.is_dir():
 		return failed, []
@@ -798,6 +803,9 @@ def classify_baseline(
 	rerun = [unit for unit in failed if unit.get("kind") != "static" and (unit.get("file") is None or (baseline / unit["file"]).is_file())]
 	if rerun:
 		reran = run_units(rerun, baseline, deadline, shards)
+		baseline_statuses = {unit["id"]: unit.get("status") for unit in reran}
+		for unit in rerun:
+			unit["baseline_status"] = baseline_statuses.get(unit["id"])
 		inherited_ids = {unit["id"] for unit in reran if unit.get("status") == "fail"}
 	if repo is not None:
 		for unit in failed:
@@ -861,6 +869,14 @@ def run_gate(
 	# run used the whole budget, so a late failure can still be confirmed as
 	# inherited (the container wrapper allows 120 s past the budget).
 	pr_caused, inherited = classify_baseline(failed, baseline, max(deadline, time.monotonic() + BASELINE_MIN_SECS), shards, repo)
+	# A failure whose baseline re-run did not finish is unverified, not caused
+	# by the change: a slow test that fails on both trees would otherwise
+	# trigger a repair turn and a second full gate run (release v1.40.3).
+	baseline_unfinished = [r for r in pr_caused if r.get("baseline_status") in ("timeout", "error")]
+	if baseline_unfinished:
+		pr_caused = [r for r in pr_caused if r not in baseline_unfinished]
+		for r in baseline_unfinished:
+			unverified.append({"item": r["id"], "reason": f"baseline_{r['baseline_status']}"})
 	changed_assertions = assertion_diff(repo, baseline, selection.get("changed_files", [])) if baseline is not None and baseline.is_dir() else []
 	if pr_caused:
 		status = "fail"
