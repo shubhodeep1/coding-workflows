@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/analyze-log.md:9 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The command downloads logs via the helper but still refers to tracking the local path in an \"Evidence Ledger\", which is not a defined tool and is not updated by the command.\n  WHY: The procedure and documentation don't match, which may make evidence collection inconsistent across commands. The reviewer rated it NIT, mapped here to low.\n- .claude/scripts/safe_fetch_url.py:312 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When `destination` exists as a directory, `fetch_url` raises a `FetchError` whose message could be more explicit.\n  WHY: The reviewer says the current structure is safe and the issue is minor. It rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/analyze-log.md:9 | severity=NIT | confidence=4\n  PROBLEM: The command downloads logs via the helper but still refers to tracking the local path in an \"Evidence Ledger\", which is not a defined tool and is not updated by the command.\n  WHY: The procedure and documentation don't match, which may make evidence collection inconsistent across commands.\n- .claude/scripts/safe_fetch_url.py:312 | severity=NIT | confidence=3\n  PROBLEM: When `destination` exists as a directory, `fetch_url` raises a `FetchError` whose message could be more explicit.\n  WHY: The current structure is safe and the issue is minor.\n- TASK_GAP: Requirement: The PR description states: \"The three synced command files downloaded raw log, artifact and PDF URLs with `curl`... Each fetch now goes through a helper.\"\n  Expected change site: .claude/commands/analyze-log.md, .claude/commands/apply-url.md, .claude/commands/investigate-issue.md\n  Evidence of absence: The conversion appears complete across all three files as specified.\n  SEVERITY: NONE\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3ea833e16a1335e53736763ed1b5845cf36aeffacab1b92318892def02f78c1d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8330,
+    "run_id": "40848434880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40848434880",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029102054_58d1800583",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8330,
+    "run_id": "40848434880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T10:20:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
