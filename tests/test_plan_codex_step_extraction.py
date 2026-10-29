@@ -34,12 +34,14 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # a note inside the section made it unreadable (259 -> 263 lines,
 # 16_978 -> 17_307 bytes). Its review then dropped the inaccurate "sub-heading
 # makes it unreadable" clause: a heading ends the section (263 -> 264 lines,
-# 17_307 -> 17_390 bytes).
+# 17_307 -> 17_390 bytes). The rule was then cut to two lines to keep
+# prompts/mode-plan.txt within its 250-line budget (264 -> 260 lines,
+# 17_390 -> 17_142 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"56e5938f459d367742c9fc6b4a920689a24024db8239ecfd6e492c9675618e5b"
+	"5ba866e8296478a5abe5a06cb62a077848f20cf9a665dc28801411280e001c39"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 17_390
-PRE_EXTRACTION_PROMPT_LINES = 264
+PRE_EXTRACTION_PROMPT_BYTES = 17_142
+PRE_EXTRACTION_PROMPT_LINES = 260
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
