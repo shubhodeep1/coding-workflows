@@ -4096,7 +4096,8 @@ def _is_unrouted_non_human_body(body: Any) -> bool:
 	text = body if isinstance(body, str) else ""
 	if _UNROUTED_PIPELINE_MARKER_RE.search(text):
 		return True
-	if _UNROUTED_CLAUDE_CODE_FOOTER_RE.search(text) and not text.lstrip().startswith("/"):
+	if (_UNROUTED_CLAUDE_CODE_FOOTER_RE.search(text) and not text.lstrip().startswith("/")
+			and not is_reclarify_command_body(text)):
 		return True
 	return not _UNROUTED_HTML_COMMENT_RE.sub("", text).strip()
 
