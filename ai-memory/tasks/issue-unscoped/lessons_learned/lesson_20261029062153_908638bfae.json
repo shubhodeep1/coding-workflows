@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-29T06:21:53Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 008 as out-of-scope; anchor=workflow-templates/.claude/scripts/safe_fetch_url.py:339-347, 355-356; cited_path=workflow-templates/.claude/scripts/safe_fetch_url.py; files_touched=.claude/scripts/safe_fetch_url.py, workflow-templates/.claude/scripts/safe_fetch_url.py, tests/test_safe_fetch_url.py.",
+  "phase": "review_autofix",
+  "pr_number": 8323,
+  "record_id": "lesson_20261029062153_908638bfae",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "workflow-templates/.claude/scripts/safe_fetch_url.py",
+    ".claude/scripts/safe_fetch_url.py",
+    "tests/test_safe_fetch_url.py"
+  ]
+}
