@@ -2662,6 +2662,9 @@ _heal_scope_linked_paths()
 _heal_scope_linked_paths || { LINKED_SCOPE_PATHS_JSON='[]'; log "scope_linked outcome=skipped paths=0 runs=0"; }
 jq -e 'type == "array" and all(.[]; type == "string")' <<< "${LINKED_SCOPE_PATHS_JSON}" >/dev/null 2>&1 || LINKED_SCOPE_PATHS_JSON='[]'
 
+# In the freeze program below, 20 is the explicit-path cap of render_heal_scope_marker
+# and 8 is HEAL_SCOPE_SUBJECT_RESERVE (scripts/workflow_failure_heal.py); change them
+# together. test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker pins it.
 jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 	--argjson failing_tests "${FAILING_TESTS_JSON}" \
 	--argjson engine_runs "${ENGINE_SCOPE_RUNS_JSON:-[]}" \
