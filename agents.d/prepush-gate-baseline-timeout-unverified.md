@@ -6,3 +6,6 @@
   second gate run. Only a baseline re-run that finishes and fails makes a unit
   `inherited`; a unit with no baseline copy of its test file still counts as
   caused by the change.
+  Like every `unverified` result, a gate result whose only problems are
+  these entries still counts as a passing stamp, so the push is not held;
+  CI on the pushed head stays the check for such a test.

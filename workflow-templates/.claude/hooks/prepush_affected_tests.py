@@ -926,7 +926,7 @@ def write_summary(result: dict) -> str:
 	if result.get("unverified"):
 		lines += ["", "### Unverified", ""]
 		for u in result["unverified"]:
-			names = ", ".join(f"`{_sanitize_name(n)}`" for n in (u.get("names") or [])[:10])
+			names = ", ".join(f"`{_sanitize_name(n)}`" for n in [n for n in (u.get("names") or []) if isinstance(n, str)][:10])
 			lines.append(f"- `{_sanitize_name(str(u.get('item')))}`: {_sanitize_name(str(u.get('reason')))}" + (f" (failed on this change: {names})" if names else ""))
 	if result.get("changed_assertions"):
 		lines += ["", "### Changed pre-existing assertions", ""]

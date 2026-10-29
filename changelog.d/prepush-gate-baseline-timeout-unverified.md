@@ -10,4 +10,4 @@ The gate re-runs failing tests on the merge-base to tell failures the change cau
 | Slow test file behind it | `tests/test_implement_post_codex_recovery.py`, about 13 minutes in the gate sandbox, failing on both trees |
 | New `unverified` reasons | `baseline_timeout`, `baseline_error` |
 
-What this means for operators: a gate summary may now list a test as unverified with `baseline_timeout` where it used to list it under "Failures caused by this change". The implement and review-side gate steps start a repair only for failures caused by the change, so neither starts one for it.
+What this means for operators: a gate summary may now list a test as unverified with `baseline_timeout` where it used to list it under "Failures caused by this change". The implement and review-side gate steps start a repair only for failures caused by the change, so neither starts one for it. Like any unverified result, it does not hold the push either: CI on the pushed commit still runs the test in full.
