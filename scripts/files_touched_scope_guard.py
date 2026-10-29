@@ -1030,7 +1030,10 @@ _HEAL_PLAN_NONE_RE = re.compile(
 	r"^\s*(?:[-*+]\s+)?" + _HEAL_PLAN_EMPHASIS + r"none" + _HEAL_PLAN_EMPHASIS
 	+ r"(?:[.!:;]" + _HEAL_PLAN_EMPHASIS + r"(?:\s|$)|\s+(?:—|–|--?)\s|\s*$)", re.IGNORECASE)
 _HEAL_PLAN_LEADIN_REST_RE = re.compile(r"\bchange\w*\b[^:\n]*:\s*(?:\*\*|__)?\s*(.*)$", re.IGNORECASE)
-_HEAL_PLAN_PATHLIKE_RE = re.compile(r"[\w*?\[\]-]/|/[\w*?.\[\]-]|[\w*?\]-]\.[A-Za-z][A-Za-z0-9]{0,9}\b")
+_HEAL_PLAN_PATHLIKE_RE = re.compile(r"[\w*?\[\]-]/|/[\w*?.\[\]-]|[\w*?\]-]\.[A-Za-z][A-Za-z0-9]{0,31}\b")
+# Common extensionless files the grant list does not name (README, OWNERS, ...).
+_HEAL_PLAN_EXTRA_BARE_FILE_RE = re.compile(
+	r"^(?:README|CHANGELOG|CONTRIBUTING|OWNERS|VERSION|AUTHORS|INSTALL|Caddyfile|Earthfile)$")
 
 
 def _heal_plan_declares_no_file_changes(section: str | None) -> bool:
@@ -1038,10 +1041,13 @@ def _heal_plan_declares_no_file_changes(section: str | None) -> bool:
 	if section is None:
 		return False
 	content: list[str] = []
+	raw_leadins: list[str] = []
 	leadins = 0
 	for line in section.splitlines():
 		if _PLAN_FILES_LEADIN_RE.match(line):
 			leadins += 1
+			# A file named on the lead-in line itself is checked below too.
+			raw_leadins.append(line)
 			rest = _HEAL_PLAN_LEADIN_REST_RE.search(line)
 			line = rest.group(1) if rest else ""
 		if line.strip():
@@ -1055,9 +1061,10 @@ def _heal_plan_declares_no_file_changes(section: str | None) -> bool:
 	# dot-led name (`.env`, `.ENV`, `.envrc`, `.npmrc`) counts, so an unlisted
 	# dotfile holds the plan instead of approving it (fail closed).
 	def _names_bare_file(line: str) -> bool:
-		return any(_PLAN_GRANT_BARE_FILE_RE.match(tok) or tok.startswith(".")
+		return any(_PLAN_GRANT_BARE_FILE_RE.match(tok) or _HEAL_PLAN_EXTRA_BARE_FILE_RE.match(tok) or tok.startswith(".")
 			for tok in (raw.rstrip(".") for raw in re.findall(r"\.?[A-Za-z0-9_][A-Za-z0-9._-]*", line)))
-	return not any("`" in line or _HEAL_PLAN_PATHLIKE_RE.search(line) or _names_bare_file(line) for line in content)
+	return not any("`" in line or _HEAL_PLAN_PATHLIKE_RE.search(line) or _names_bare_file(line)
+		for line in content + raw_leadins)
 
 
 def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: str,

@@ -271,7 +271,11 @@ def test_gate_holds_empty_section_that_does_not_say_none(tmp_path: Path) -> None
 			"## Files likely to change\nNone. Also update .ENV.",
 			"## Files likely to change\nNone. Also update .envrc.",
 			"## Files likely to change\nNone. Also update .npmrc.",
-			"## Files likely to change\nNone. Then edit .netrc."):
+			"## Files likely to change\nNone. Then edit .netrc.",
+			"## Files likely to change\nNone. Also update README.",
+			"## Files likely to change\nNone. Also edit app.webmanifest.",
+			"## Files likely to change README.md\nNone.",
+			"Files likely to change in README.md: None."):
 		record, code, _ = _gate(tmp_path, _files_section(section))
 		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_paths_missing", (section, record)
 
