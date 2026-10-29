@@ -224,13 +224,112 @@ def test_plan_picks_template_only_changes(tmp_path: Path) -> None:
 	# An allowlisted file never syncs.
 	before, after = _commit(root, "workflow-templates/.claude/hooks/own.py", "changed\n")
 	assert sync_mod.plan(root, before, after) == ["hooks/guard.py"]
-	# A push that changed the live copy too is left to the parity test.
+	# Issue #8405: a push that changed the live copy too, leaving the copies
+	# different, is recovered (the template wins) instead of left red.
 	before = _git(root, "rev-parse", "HEAD")
 	(root / ".claude" / "hooks" / "guard.py").write_text("v3\n", encoding="utf-8")
 	(root / "workflow-templates" / ".claude" / "hooks" / "guard.py").write_text("v4\n", encoding="utf-8")
 	_git(root, "add", "-A")
 	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "both")
-	assert sync_mod.plan(root, before, _git(root, "rev-parse", "HEAD")) == []
+	assert sync_mod.plan(root, before, _git(root, "rev-parse", "HEAD")) == ["hooks/guard.py"]
+	# A dry run leaves it for the parity test.
+	assert sync_mod.plan(root, before, _git(root, "rev-parse", "HEAD"), recover_both_changed=False) == []
+
+
+def _commit_both(root: Path, relative: str, template_text: str, live_text: str) -> tuple[str, str]:
+	before = _git(root, "rev-parse", "HEAD")
+	for prefix, text in (("workflow-templates/.claude", template_text), (".claude", live_text)):
+		path = root / prefix / relative
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text(text, encoding="utf-8")
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "both copies")
+	return before, _git(root, "rev-parse", "HEAD")
+
+
+def test_pending_drift_rejects_pr_that_changed_both_copies_differently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = _scratch_repo(tmp_path)
+	base, _ = _commit_both(root, "hooks/guard.py", "v2\n", "v3\n")
+	monkeypatch.setenv("CLAUDE_PARITY_PR_BASE_SHA", base)
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+	assert claude_template_drift.pending_template_paths(root) == set()
+
+
+def test_pending_drift_rejects_both_copies_changed_over_inherited_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = _scratch_repo(tmp_path)
+	_, base = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	_commit_both(root, "hooks/guard.py", "v3\n", "v4\n")
+	monkeypatch.setenv("CLAUDE_PARITY_PR_BASE_SHA", base)
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+	assert claude_template_drift.pending_template_paths(root) == set()
+
+
+def test_pending_drift_keeps_live_only_edit_over_inherited_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = _scratch_repo(tmp_path)
+	_, base = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	_commit(root, ".claude/hooks/guard.py", "live edit\n")
+	monkeypatch.setenv("CLAUDE_PARITY_PR_BASE_SHA", base)
+	assert claude_template_drift.pending_template_paths(root) == {"hooks/guard.py"}
+
+
+def test_plan_recovers_push_that_changed_both_copies(tmp_path: Path, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit_both(root, "hooks/guard.py", "v2\n", "v3\n")
+	assert sync_mod.plan(root, before, after) == ["hooks/guard.py"]
+	assert "CLAUDE_LIVE_SYNC both_changed path=.claude/hooks/guard.py action=template_wins" in capsys.readouterr().err
+
+
+def test_plan_skips_live_only_push(tmp_path: Path, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit(root, ".claude/hooks/guard.py", "live edit\n")
+	assert sync_mod.mismatched(root) == ["hooks/guard.py"]
+	assert sync_mod.plan(root, before, after) == []
+	assert "both_changed" not in capsys.readouterr().err
+
+
+def test_plan_both_changed_never_returns_allowlisted_path(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit_both(root, "hooks/own.py", "template\n", "live\n")
+	assert sync_mod.plan(root, before, after) == []
+
+
+def test_pr_dry_run_does_not_mask_both_changed_drift(tmp_path: Path, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit_both(root, "commands/x.md", "template\n", "live\n")
+	assert sync_mod.sync(root, before, after, dry_run=True, keep_committed_security_paths=True) == 0
+	assert sync_mod.mismatched(root) == ["commands/x.md"]
+	assert (root / ".claude/commands/x.md").read_text(encoding="utf-8") == "live\n"
+	assert "both_changed path=.claude/commands/x.md action=left_for_parity" in capsys.readouterr().err
+
+
+def test_plan_catch_up_recovers_same_commit_both_changed(tmp_path: Path, capsys) -> None:
+	root = _scratch_repo(tmp_path)
+	(root / "workflow-templates/.claude/commands").mkdir()
+	_commit_both(root, "hooks/guard.py", "v2\n", "v3\n")
+	before, after = _commit(root, "workflow-templates/.claude/commands/other.md", "other\n")
+	assert sync_mod.plan(root, before, after) == ["commands/other.md", "hooks/guard.py"]
+	assert "both_changed path=.claude/hooks/guard.py action=template_wins" in capsys.readouterr().err
+	assert sync_mod.plan(root, before, after, recover_both_changed=False) == ["commands/other.md"]
+	# A later live-only edit is deliberate and stays untouched.
+	_commit(root, ".claude/hooks/guard.py", "custom\n")
+	before, after = _commit(root, "workflow-templates/.claude/commands/other.md", "other v2\n")
+	assert sync_mod.plan(root, before, after) == ["commands/other.md"]
+
+
+def test_both_changed_hook_without_provenance_goes_to_held_draft(tmp_path: Path, monkeypatch, capsys) -> None:
+	root, remote = _sync_repo(tmp_path, monkeypatch)
+	before, after = _commit_both(root, "hooks/guard.py", "v2\n", "v3\n")
+	monkeypatch.setattr(sync_mod, "_commit_pull_requests_graphql", lambda _repository, shas: {sha: [] for sha in shas})
+	monkeypatch.setattr(sync_mod, "_open_sync_prs_graphql", lambda *_args: [])
+	monkeypatch.setattr(sync_mod, "_gh_json", lambda *_args: {"number": 9})
+	assert sync_mod.sync(root, before, after, dry_run=False) == 0
+	assert _git(remote, "show", "ai/sync-claude-live-copies-held:.claude/hooks/guard.py") == "v2"
+	assert _git(remote, "branch", "--list", "ai/sync-claude-live-copies") == ""
+	output = capsys.readouterr().err
+	assert "both_changed path=.claude/hooks/guard.py action=template_wins" in output
+	# The commit that last touched the live copy is the both-changed commit, so
+	# the provenance range after it is empty and the path is held for a human.
+	assert "held path=.claude/hooks/guard.py reason=no_template_commits" in output
 
 
 def test_plan_fails_open_without_a_usable_before_commit(tmp_path: Path) -> None:
@@ -556,7 +655,7 @@ def test_sync_updates_exact_match_after_decoy(tmp_path: Path, monkeypatch, capsy
 
 def test_sync_pr_rejects_malformed_entries() -> None:
 	for pr in (None, [], {"number": 1}, {"head": {"repo": None}, "base": {"ref": "main"}},
-	           {"head": {"repo": {"full_name": "octo/repo"}, "ref": "ai/sync-claude-live-copies"}, "base": "main"}):
+		{"head": {"repo": {"full_name": "octo/repo"}, "ref": "ai/sync-claude-live-copies"}, "base": "main"}):
 		assert not sync_mod._is_sync_pr(pr, "octo/repo", "ai/sync-claude-live-copies", "main")
 	closed_pr = _sync_pr(1)
 	closed_pr["state"] = "closed"

@@ -15,7 +15,10 @@ Subcommands:
   check   Exit 1 and list missing or differing live files not allowlisted.
   plan    --before SHA --after SHA: print the relative paths (under `.claude/`)
           whose template changed in that push (or a missed earlier push) while
-          the live copy did not, that differ now and are not allowlisted.
+          the live copy did not, that differ now and are not allowlisted, or
+          whose template and live copy both changed in it and still differ (the
+          template wins; logged `both_changed`). `sync --dry-run` leaves those
+          for the parity test.
   sync    plan, carry forward still-drifted copies from the previous sync
           branch when they match their current templates, and commit the copies
           on SYNC_BRANCH (default `ai/sync-claude-live-copies`; a new branch
@@ -149,14 +152,28 @@ def changed_files(root: Path, before: str, after: str) -> set[str] | None:
 	return {line for line in result.stdout.splitlines() if line}
 
 
-def plan(root: Path, before: str, after: str) -> list[str]:
+def plan(root: Path, before: str, after: str, *, recover_both_changed: bool = True) -> list[str]:
 	changed = changed_files(root, before, after)
 	if changed is None:
 		return []
 	drifted = set(mismatched(root))
 	paths: list[str] = []
 	for relative in paired_paths(root):
-		if relative not in drifted or LIVE_PREFIX + relative in changed:
+		if relative not in drifted:
+			continue
+		if LIVE_PREFIX + relative in changed:
+			# Issue #8405: a push that changed both copies and left them
+			# different would otherwise keep main's strict parity red forever.
+			# The template is the source of truth; provenance routing still
+			# decides the PR (the commit range after the live copy's last commit
+			# is empty here, so it holds the path as no_template_commits). A
+			# live-only change is a deliberate edit and stays untouched.
+			if TEMPLATE_PREFIX + relative in changed:
+				if recover_both_changed:
+					log(f"both_changed path={LIVE_PREFIX}{relative} action=template_wins")
+					paths.append(relative)
+				else:
+					log(f"both_changed path={LIVE_PREFIX}{relative} action=left_for_parity")
 			continue
 		if TEMPLATE_PREFIX + relative in changed:
 			paths.append(relative)
@@ -173,6 +190,12 @@ def plan(root: Path, before: str, after: str) -> list[str]:
 			live_sha != template_sha
 			and _git(root, "merge-base", "--is-ancestor", live_sha, template_sha, check=False).returncode == 0
 		)):
+			paths.append(relative)
+		elif recover_both_changed and template_sha and live_sha == template_sha:
+			# One commit last touched both copies and they still differ (the
+			# #8316 state); its own sync run was skipped or failed. A later
+			# live-only edit gives the live copy a newer commit and is kept.
+			log(f"both_changed path={LIVE_PREFIX}{relative} action=template_wins")
 			paths.append(relative)
 	return paths
 
@@ -638,7 +661,8 @@ def is_security_live_path(relative: str) -> bool:
 
 
 def sync(root: Path, before: str, after: str, *, dry_run: bool, keep_committed_security_paths: bool = False) -> int:
-	paths = plan(root, before, after)
+	# Dry runs (CI parity prep) must not mask both-copies drift (issue #8405).
+	paths = plan(root, before, after, recover_both_changed=not dry_run)
 	if not paths:
 		log(f"nothing_to_sync before={before} after={after}")
 		return 0
