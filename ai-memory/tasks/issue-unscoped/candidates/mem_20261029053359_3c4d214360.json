@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:1344-1351 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The `${_ti_comments_raw}.login` temp file may be left behind if the run is killed or aborts before the `rm -f` runs. Gemini cites line 1344 and `set -e` with a `jq` failure. Sonnet and GLM both say the `rm` runs unconditionally after the `if` block.\n  WHY: This is a NIT on a short-lived job's temp file. Severity is NIT for all three reviewers. Sonnet (confidence 1) says it is not a defect. GLM (confidence 4) says only abnormal termination leaks the file. Gemini (confidence 4) says a `jq` failure under `set -e` skips the `rm`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_conflict_prepare.sh: `rm -f -- \"${_ti_comments_raw}.login\"` after the V2 `python3 \u2026 | jq` pipeline | severity=NIT | confidence=1\n  PROBLEM: The earlier reviewer's concern that the `.login` temp file could be left behind does not hold. The `rm -f` runs unconditionally after the `if` block. The reviewer says it is not raising this as a defect.\n  WHY: The `$(\u2026|| true)` wrapper keeps a helper failure from aborting the script under `set -e`. A hard kill could still leave the file in the runtime temp directory.\n- All other lenses (security, correctness, concurrency, error paths, performance, index/DB, naming, trust-boundary, task completeness): NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_prepare.sh:1344 | severity=NIT | confidence=4\n  PROBLEM: Temporary file cleanup is not guaranteed in error paths if 'set -e' is enabled.\n  WHY: The script uses 'set -euo pipefail'. If the 'jq' command on line 1344 fails, the script exits without running 'rm -f' on line 1350, potentially leaving a temporary file on disk. This is minor in a short-lived job.\n- All other lenses: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_conflict_prepare.sh:1346-1351 | severity=NIT | confidence=4\n  PROBLEM: The `.login` sidecar temp file is removed only by the sequential `rm -f` at line 1351. A signal kill or hard abort between its creation and that line leaves it behind. The reviewer says the pass-1 claim that a `python3` or `jq` failure leaves the file is inaccurate.\n  WHY: At most this leaves a residual `/tmp` file on an interrupted run. It is cosmetic, and the sibling `${_ti_comments_raw}` snapshot has the same pre-existing behavior (removed at line 1380), so there is no new failure mode.\n- All other lenses: NONE.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "45c9f5d582ca71eaefd9c343d0d917f6cd000d83a569b991cc869bbd59d848e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8325,
+    "run_id": "40814765665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40814765665",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029053359_3c4d214360",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8325,
+    "run_id": "40814765665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T05:33:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
