@@ -68,6 +68,17 @@ def test_extraction_step_has_step_timeout() -> None:
 	assert job["timeout-minutes"] == 20
 
 
+def test_memory_steps_forward_single_branch_clone_switch() -> None:
+	# The off switch is read from os.environ, so both memory-writing steps map
+	# the repository variable; an empty value keeps the fast path on (#8295).
+	job = yaml.safe_load(_workflow_text())["jobs"]["memory_maintenance"]
+	steps = {step.get("name"): step for step in job["steps"]}
+	for name in ("Extract repository learnings (fail-open)", "Run memory compaction"):
+		assert steps[name]["env"]["AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED"] == (
+			"${{ vars.AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED || '' }}"
+		)
+
+
 def test_extraction_step_timeout_leaves_room_for_compaction() -> None:
 	# Run 40752760153: the fail-open extraction step had no step cap, ran into
 	# the 20-minute job timeout, and the whole job was cancelled.
