@@ -3423,6 +3423,7 @@ def test_count_identical_failures_flags_non_retryable_reasons() -> None:
 		"conflict_resolver_sandbox_path_host_only",
 		"conflict_resolver_sandbox_path_unsupported",
 		"conflict_resolver_sandbox_support_missing",
+		"review_editor_sandbox_path_excluded",
 	}
 	for reason in sorted(heal.NON_RETRYABLE_FAILURE_REASONS):
 		assert heal._FAILURE_REASON_RE.match(reason)
@@ -7125,6 +7126,55 @@ def test_non_retryable_route_decisions() -> None:
 	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B, intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/777")
 	assert "`.claude/hooks/pr_merge_status_guard.py`" in body and "manual merge" in body.lower()
 	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={HOST_ONLY_REASON} -->")
+
+
+SANDBOX_EXCLUDED_REASON = "review_editor_sandbox_path_excluded"
+
+
+def _sandbox_excluded_summary_comment(*, head: str = SHA_A, run: str = "801", support: str | None = None, author: str = CAP_AUTHOR) -> dict:
+	"""An editor-summary comment that ends with the #8321 sandbox-excluded marker."""
+	fp = heal.autofix_failure_fingerprint(failure_reason=SANDBOX_EXCLUDED_REASON, evidence_text="")["fp"]
+	marker = heal.render_failure_marker(head, SANDBOX_EXCLUDED_REASON, fp, True, run, support)
+	assert marker
+	body = (
+		"AI autofix editor summary\n\nChanges made:\n- none\n\nChange status:\n- not-edited\n\n"
+		"Ignored suggestions (with short reason):\n- .claude/docs/s25-x.md test failure \u2014 sandbox-excluded path\n\n"
+		"Files changed / commit status:\n- none\n\n" + marker
+	)
+	return {"id": int(run), "author_login": author, "body": body}
+
+
+def test_sandbox_excluded_editor_summary_trips_the_cap_on_its_first_marker() -> None:
+	"""#8321: one editor summary declining a fix as sandbox-excluded stops the head."""
+	one = [_sandbox_excluded_summary_comment()]
+	result = heal.count_identical_failures(one, head_sha=SHA_A, author_login=CAP_AUTHOR)
+	assert result["count"] == 1 and result["reason"] == SANDBOX_EXCLUDED_REASON and result["non_retryable"] is True
+	# A new head resets the count; an untrusted author never trips it.
+	assert heal.count_identical_failures(one, head_sha=SHA_B, author_login=CAP_AUTHOR)["count"] == 0
+	forged = [_sandbox_excluded_summary_comment(author="attacker")]
+	assert heal.count_identical_failures(forged, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
+	# A newer verified support SHA re-arms the stop once (#6911).
+	supported = [_sandbox_excluded_summary_comment(support=SUPPORT_S1)]
+	rearmed = heal.count_identical_failures(supported, head_sha=SHA_A, author_login=CAP_AUTHOR, current_support_sha=SUPPORT_S2)
+	assert rearmed["non_retryable"] is True and rearmed["rearm"] is True
+	same = heal.count_identical_failures(supported, head_sha=SHA_A, author_login=CAP_AUTHOR, current_support_sha=SUPPORT_S1)
+	assert same["rearm"] is False
+
+
+def test_non_retryable_route_explains_sandbox_excluded_editor_stop() -> None:
+	"""#8321: the diagnosis names the editor sandbox, not a conflict merge."""
+	payload = heal.validate_payload(_autofix_payload(failure_reason=SANDBOX_EXCLUDED_REASON))
+	decision = heal.non_retryable_route(payload, comments=[], trusted_login=NR_LOGIN)
+	assert decision["route"] is True and decision["reason"] == SANDBOX_EXCLUDED_REASON
+	assert decision["suffix"] == SANDBOX_EXCLUDED_REASON and decision["paths"] == []
+	cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap"))
+	capped = heal.non_retryable_route(cap, comments=[_sandbox_excluded_summary_comment(head=SHA_B, author=NR_LOGIN)], trusted_login=NR_LOGIN)
+	assert capped["route"] is True and capped["reason"] == SANDBOX_EXCLUDED_REASON
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B)
+	assert heal._NON_RETRYABLE_EXPLANATIONS[SANDBOX_EXCLUDED_REASON] in body
+	assert "review editor sandbox does not admit" in body
+	assert "conflicted path(s) could not be read" not in body
+	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={SANDBOX_EXCLUDED_REASON} -->")
 
 
 def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
