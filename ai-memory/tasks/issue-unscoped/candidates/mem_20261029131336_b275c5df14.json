@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:10-19 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The CommonJS `require` fallback in `loadBuiltin` is passed `node:`-prefixed specifiers (`node:child_process`, `node:fs`, `node:path` at lines 17-19), and `require('node:...')` is only supported from Node.js 14.18.0 / 16.0.0.\n  WHY: On CommonJS consumers on older Node.js, `process.getBuiltinModule` is missing, so the fallback throws before the audit runs, which regresses the pre-PR unprefixed `require('child_process')`. Severity disagreement: the sonnet and glm reviewers rated it NIT, and the minimax and luna reviewers rated it MAJOR. The highest is used. Fix: drop the `node:` prefix or strip it in the fallback.\n- README.md:1402-1405 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The CommonJS sentence omits the Node.js 14.18.0 floor that the `require` fallback actually needs.\n  WHY: Readers on older CommonJS runtimes expect the audit gate to work and then hit a raw stack trace.\n- changelog.d/8334-audit-gate-seed-only-allowlist.md:10 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The text \"CommonJS packages keep older Node.js\" implies there is no Node.js floor for CommonJS, but the fallback needs 14.18.0 or newer.\n  WHY: This is the same documentation drift as in the README.\n- agents.d/8334-audit-gate-seed-only-allowlist.md:1 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The sentence \"falls back to the CommonJS `require` on older Node.js\" omits the 14.18.0 floor.\n  WHY: The agents fragment is the canonical reference, so drift there is more durable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:17-19 | severity=low (NIT) | confidence=3\n  PROBLEM: The `require` fallback (chosen at lines 10-12) is handed `node:`-prefixed specifiers, which only work from Node.js 14.18.0 / 16.0.0. The pre-PR script used unprefixed names.\n  WHY: On CommonJS Node.js 12 or 14.17 and older, `require('node:child_process')` throws, so `npm run audit:ci` crashes. Impact is small because those versions are end-of-life. Dropping the `node:` prefix fixes it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:10-19 | severity=high (MAJOR) | confidence=4\n  PROBLEM: The CommonJS fallback still passes `node:`-prefixed specifiers to `require()`, which is only supported from Node.js 14.18.0 / 16.0.0.\n  WHY: On Node.js 14.0-14.17 or 12, `require('node:child_process')` throws `ERR_UNKNOWN_BUILTIN_MODULE`, bypassing the script's null-check message. This is a regression versus the bare specifiers used before the PR.\n- README.md:1402-1405 | severity=low (NIT) | confidence=4\n  PROBLEM: The CommonJS sentence omits the Node.js 14.18.0 floor of the fallback.\n  WHY: The README implies any CommonJS Node.js works.\n- changelog.d/8334-audit-gate-seed-only-allowlist.md (the table row \"Minimum Node.js for `check-npm-audit.js` in an ESM package\") | severity=low (NIT) | confidence=4\n  PROBLEM: \"CommonJS packages keep older Node.js\" implies there is no floor, but the CommonJS branch needs 14.18.0 or newer.\n  WHY: The changelog repeats the README drift.\n- agents.d/8334-audit-gate-seed-only-allowlist.md:1 | severity=low (NIT) | confidence=4\n  PROBLEM: \"falls back to the CommonJS `require` on older Node.js\" omits the 14.18.0 floor.\n  WHY: The agents fragment is the canonical reference, so drift there lasts longer.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:12,17-19 | severity=high (MAJOR) | confidence=5\n  PROBLEM: The CommonJS fallback uses `require` with `node:`-prefixed built-in module names.\n  WHY: CommonJS supports `require('node:...')` only from Node.js 14.18. On older runtimes `process.getBuiltinModule` is unavailable, so the loads fail before the audit runs. The prior script used unprefixed names.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:10-19 (fallback at line 12; related docs: changelog.d/8334-audit-gate-seed-only-allowlist.md line 10, README.md lines 1403-1405) | severity=low (NIT) | confidence=4\n  PROBLEM: The CommonJS fallback passes `node:`-prefixed specifiers to `require`, which is only supported from Node.js 14.18.0 / 16.0.0. The docs claim \"CommonJS packages keep older Node.js\" without a floor.\n  WHY: On Node.js 14.0-14.17 or 12, `require('node:fs')` throws MODULE_NOT_FOUND and the gate crashes with a stack trace. Those versions are long EOL, so the blast radius is small.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0a2ae15fe478b070b25d37246cc8b14ed210a09ec68756b256755cb581bc7440",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8334,
+    "run_id": "40869440390",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40869440390",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029131336_b275c5df14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8334,
+    "run_id": "40869440390"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T13:13:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
