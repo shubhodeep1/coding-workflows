@@ -2141,6 +2141,103 @@ class MovedReleaseLogStepsToHealContractTest(unittest.TestCase):
 		self.assertLess(names.index(HOOKS_NODE_SETUP_STEP), names.index(HOOKS_VITEST_STEP))
 
 
+# Steps moved out of tests-hooks-and-orchestrator, which took 15m27s of its 20
+# minutes (run 40752698170, budget-watch issue #8281): step name -> module
+# paths its body names. They run before the release job's coverage gates.
+HOOKS_TO_RELEASE_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
+HOOKS_TO_RELEASE_TARGET_JOB_ID = "tests-release-and-log-analysis"
+HOOKS_TO_RELEASE_SETUP_STEP = "Install Python CI dependencies"
+HOOKS_TO_RELEASE_FIRST_COVERAGE_STEP = "Workflow log collector coverage gate"
+MOVED_HOOKS_TO_RELEASE_STEPS = {
+	"Claude engine selection and claude_run tests": (
+		"tests/test_ai_engine.py",
+		"tests/test_claude_engine_utility_roles.py",
+	),
+	"Single-issue security pass tests (port P1)": (
+		"tests/test_single_issue_security_pass.py",
+		"tests/test_review_security_hold_sweep.py",
+	),
+	"Review sandbox Claude role tests (Phase 5c)": (
+		"tests/test_review_sandbox_claude_roles.py",
+	),
+	"Session automation retirement guard and retired labels/files tests": (
+		"tests/test_no_session_automation.py",
+		"tests/test_ai_labels_retired.py",
+		"tests/test_update_workflows_retired_files.py",
+		"tests/test_release_manifest.py",
+		"tests/test_release_manifest_workflow_contract.py",
+		"tests/test_verify_release_manifest.py",
+		"tests/test_update_workflows_manifest_verify.py",
+		"tests/test_update_workflows_pr_delivery.py",
+		"tests/test_update_workflows_template_gate.py",
+	),
+}
+
+
+class MovedHooksStepsToReleaseContractTest(unittest.TestCase):
+	"""The steps moved out of tests-hooks-and-orchestrator run once, in one job (#8281)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def target_step_names(self) -> list:
+		return [step.get("name") for step in self.jobs()[HOOKS_TO_RELEASE_TARGET_JOB_ID]["steps"]]
+
+	def test_each_step_is_owned_only_by_the_release_job(self) -> None:
+		for name in MOVED_HOOKS_TO_RELEASE_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[HOOKS_TO_RELEASE_TARGET_JOB_ID],
+				)
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_HOOKS_TO_RELEASE_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_HOOKS_TO_RELEASE_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[HOOKS_TO_RELEASE_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_HOOKS_TO_RELEASE_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_release_job_setup(self) -> None:
+		names = self.target_step_names()
+		self.assertIn(HOOKS_TO_RELEASE_SETUP_STEP, names, HOOKS_TO_RELEASE_TARGET_JOB_ID)
+		setup_index = names.index(HOOKS_TO_RELEASE_SETUP_STEP)
+		for name in MOVED_HOOKS_TO_RELEASE_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(setup_index, names.index(name))
+
+	def test_moved_steps_run_before_the_coverage_gates(self) -> None:
+		names = self.target_step_names()
+		self.assertIn(HOOKS_TO_RELEASE_FIRST_COVERAGE_STEP, names)
+		gate_index = names.index(HOOKS_TO_RELEASE_FIRST_COVERAGE_STEP)
+		for name in MOVED_HOOKS_TO_RELEASE_STEPS:
+			with self.subTest(step=name):
+				self.assertLess(names.index(name), gate_index)
+
+
 # Steps moved out of tests-release-and-log-analysis, which took 15m14s of its
 # 20 minutes (run 40750326439, budget-watch issue #8278): step name -> (new job
 # id, module paths its body names). The pick is an estimate. The promote-cycle
