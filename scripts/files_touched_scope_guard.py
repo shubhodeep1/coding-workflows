@@ -1051,11 +1051,11 @@ def _heal_plan_declares_no_file_changes(section: str | None) -> bool:
 	if any(_PLAN_GRANT_BULLET_RE.match(line) for line in content[1:]):
 		return False
 	# Extensionless names (`Makefile`, `CODEOWNERS`) and root dotfiles
-	# (`.gitignore`) are files too, though the path regex misses them. The
-	# root-file regex never grants `.env*`, so detect those names here.
+	# (`.gitignore`) are files too, though the path regex misses them. Any
+	# dot-led name (`.env`, `.ENV`, `.envrc`, `.npmrc`) counts, so an unlisted
+	# dotfile holds the plan instead of approving it (fail closed).
 	def _names_bare_file(line: str) -> bool:
-		return any(_PLAN_GRANT_BARE_FILE_RE.match(tok) or (tok.startswith(".") and _PLAN_GRANT_ROOT_FILE_RE.match(tok))
-			or re.fullmatch(r"\.env(?:\.[A-Za-z0-9_.-]+)?", tok)
+		return any(_PLAN_GRANT_BARE_FILE_RE.match(tok) or tok.startswith(".")
 			for tok in (raw.rstrip(".") for raw in re.findall(r"\.?[A-Za-z0-9_][A-Za-z0-9._-]*", line)))
 	return not any("`" in line or _HEAL_PLAN_PATHLIKE_RE.search(line) or _names_bare_file(line) for line in content)
 
