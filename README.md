@@ -1510,6 +1510,19 @@ not delete wrappers that are already present in `.github/workflows/`.
 > instead of treating it as a refspec; a positional URL or path is compared with
 > origin and asks unless it is origin.
 
+> **Safe URL fetch helper delivered by the `.claude/` sync:** the same step
+> ships `workflow-templates/.claude/scripts/safe_fetch_url.py` to
+> `.claude/scripts/safe_fetch_url.py` in
+> every consumer. `/investigate-issue`, `/analyze-log` and `/apply-url` download
+> external URLs by running that helper with `python` from inside `.claude/`
+> (`--url <url> --output <absolute path>`) instead of raw `curl`. The helper allows only
+> `https://`, refuses any host (redirect targets included) that resolves to a
+> private, loopback, link-local, multicast or reserved address, pins the
+> connection to the IP it checked, follows at most 5 redirects, caps each request
+> (each redirect hop is one request) at 100 MiB and 120 seconds, prints the final HTTP status, and exits 1 on any
+> failure or non-2xx status without leaving the error body at the output path.
+> Nothing to configure in the consumer.
+
 > The merged-PR guard checks numeric push refspecs before a separate output
 > redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
 > or option leaves the destination unknown, it requests confirmation rather
@@ -4504,7 +4517,9 @@ The gate selects:
 
 It runs them with a 15-minute budget and re-runs any failure on the
 merge-base: failures that also happen there are reported as inherited, not
-caused by the change. The result is written as a stamp for `HEAD` under
+caused by the change. For `ruff` and ShellCheck it compares findings instead:
+only findings the merge-base copy of the file did not have count, so a file
+that already had lint errors does not fail. The result is written as a stamp for `HEAD` under
 `${TMPDIR:-/tmp}/claude-prepush-gate/`, outside the repository. Fix failures
 the change caused and stamp again; do not weaken an assertion unless the task
 names that behaviour change.
@@ -4513,15 +4528,17 @@ The `PreToolUse` hook registered in `.claude/settings.json` reads the stamp
 of the commit each `git push` publishes (the pushed branch's tip, or `HEAD`
 for a bare push), so stamp the branch you push. A bulk push (`--all`,
 `--mirror`, `--branches`) or a push that includes tags always asks. A passing (or unverified, or skipped) stamp lets the push
-through without a prompt. A missing stamp, one that records failures the
-change caused, or a push whose options or destination the hook cannot
-resolve (for example an abbreviated option such as `--follow-tag`), asks for
+through without a prompt. A stamp that records failures the change caused
+never holds the push, in any permission mode: the hook passes the failures to
+the session as context and shows them to the user, and CI runs the full
+suite. A missing stamp, a stamp with a missing or unknown status, or a push
+whose options or destination the hook cannot resolve (for example an abbreviated option such as `--follow-tag`), asks for
 confirmation. In Auto mode a push whose only problems are a missing stamp or
 a pushed branch that does not exist yet (usually one the same command creates) is
 denied instead of asking: nothing runs, and the reason tells the session to
 commit, run the stamp itself and push again as its own command, so no one has
-to answer a prompt. A stamp that records failures, a bulk or tag push, and
-push options or a destination the hook cannot resolve still ask in Auto mode. The hook never runs tests itself, and it
+to answer a prompt. A bulk or tag push, and push options or a destination
+the hook cannot resolve, still ask in Auto mode. The hook never runs tests itself, and it
 fails open with a warning on internal errors. Set
 `CLAUDE_PREPUSH_TEST_GATE=off` to turn it off.
 
