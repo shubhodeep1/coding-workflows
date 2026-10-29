@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"README audit-gate contract note and changelog.d/audit-allowlist-seed-only.md.\"\n  expected_change_site: README.md or a new agents.d/ fragment as per repository conventions\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description claims a README audit-gate contract note was added, but README.md is not listed in pr_changed_files.txt and no agents.d/ fragment was introduced in the PR. (Severity stated by reviewer: NIT. Contradicted by minimax_minimax-m3, which cites README.md lines 1405-1413 as updated, and by z-ai_glm-5_3-flash, which says the note already exists at README.md:1395-1413 on the merge base.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \"README audit-gate contract note and changelog.d/audit-allowlist-seed-only.md.\"\n  Expected change site: README.md or a new agents.d/ fragment as per repository conventions.\n  Evidence of absence: The PR description claims a README audit-gate contract note was added, but README.md is not listed in pr_changed_files.txt and no agents.d/ fragment was introduced in the PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f95558445e976e726979e0613b78f88b7d11e792533d22d98297099bcd86638",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8355,
+    "run_id": "40957705570",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40957705570",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029220256_69a29ac9ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8355,
+    "run_id": "40957705570"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T22:02:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
