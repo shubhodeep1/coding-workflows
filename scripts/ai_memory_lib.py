@@ -3217,7 +3217,11 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     # the old tip stays an ancestor of the new remote tip. The read path and
     # memory_helpers.sh force-tick already clone this way.
     probe = _run_git(temp_dir.parent, ["ls-remote", "--heads", origin_url, memory_branch], check=False)
-    if probe.returncode != 0:
+    # Fallback diagnostics stay off by default: fail-open in-process callers
+    # (the integration fingerprint verifier) require an empty stderr.
+    # AI_MEMORY_CLONE_DIAGNOSTICS=1 turns them on.
+    clone_diagnostics_on = os.environ.get("AI_MEMORY_CLONE_DIAGNOSTICS", "") == "1"
+    if probe.returncode != 0 and clone_diagnostics_on:
         first_line = (_redact_memory_push_stderr(probe.stderr or "").splitlines() or [""])[0][:200]
         print(f"ai-memory: memory-branch probe failed (exit {probe.returncode}); using full clone: {first_line}", file=sys.stderr)
     if probe.returncode == 0 and probe.stdout.strip():
@@ -3240,11 +3244,12 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
         if fast_clone.returncode == 0:
             _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
             return temp_dir
-        # Fall back to the full clone below, in a fresh empty directory. Say so
-        # on stderr (credentials and URLs redacted) so a systematic fast-path
-        # failure is visible in the run log, not only as a slower clone_ms.
-        first_line = (_redact_memory_push_stderr(fast_clone.stderr or "").splitlines() or [""])[0][:200]
-        print(f"ai-memory: shallow memory-branch clone failed (exit {fast_clone.returncode}); falling back to full clone: {first_line}", file=sys.stderr)
+        # Fall back to the full clone below, in a fresh empty directory. With
+        # AI_MEMORY_CLONE_DIAGNOSTICS=1, say so on stderr (credentials and URLs
+        # redacted).
+        if clone_diagnostics_on:
+            first_line = (_redact_memory_push_stderr(fast_clone.stderr or "").splitlines() or [""])[0][:200]
+            print(f"ai-memory: shallow memory-branch clone failed (exit {fast_clone.returncode}); falling back to full clone: {first_line}", file=sys.stderr)
         shutil.rmtree(temp_dir, ignore_errors=True)
         temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
 
