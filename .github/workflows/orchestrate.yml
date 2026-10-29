@@ -1480,6 +1480,10 @@ jobs:
               # The library keeps one record per edge (hot_file before pair), so
               # also name every files_touched path the two issues share.
               touched = {i.get('id'): [p for p in (i.get('files_touched') or []) if isinstance(p, str)] for i in data.get('issues') or [] if isinstance(i, dict)}
+              # Paths the pre-push gate added to both issues never cause an edge
+              # (validate_wave_file_partition drops them, #8244); leave them out.
+              from orchestrate_lib import trusted_prepush_augmented_paths
+              aug = trusted_prepush_augmented_paths(data)
               deferrals = {}
               for wave_idx, wave in enumerate(waves):
                   if wave_idx == 0:
@@ -1495,7 +1499,8 @@ jobs:
                               reasons.append({'from': edge.get('from'), 'source': 'model'})
                           else:
                               files = list(rec.get('files') or [])
-                              files += [p for p in touched.get(edge.get('from'), []) if p in touched.get(iid, []) and p not in files]
+                              aug_both = aug.get(edge.get('from'), set()) & aug.get(iid, set())
+                              files += [p for p in touched.get(edge.get('from'), []) if p in touched.get(iid, []) and p not in files and p not in aug_both]
                               reasons.append({'from': edge.get('from'), 'source': 'auto_serialize', 'overlap_type': rec.get('overlap_type'), 'files': files})
                       if not reasons:
                           reasons = [{'source': 'unknown'}]

@@ -3997,6 +3997,19 @@ def test_wave1_deferral_logs_all_shared_files_for_mixed_hot_overlap():
 	assert reasons[0]["files"] == ["README.md", "shared.py"], reasons
 
 
+def test_wave1_deferral_omits_paths_augmented_for_both_issues():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["shared.py", "tests/test_x.py", "a.py"], ["shared.py", "tests/test_x.py", "b.py"], [])
+	data["prepush_augmented_paths"] = {"T1": ["tests/test_x.py"], "T2": ["tests/test_x.py"]}
+	orchestrate_lib.compute_waves(data, hot_files=set())
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert len(reasons) == 1 and reasons[0]["source"] == "auto_serialize", reasons
+	assert reasons[0]["files"] == ["shared.py"], reasons
+
+
 def test_wave1_deferral_logs_auto_serialize_without_write_back():
 	if not _wave1_tools_available():
 		return
