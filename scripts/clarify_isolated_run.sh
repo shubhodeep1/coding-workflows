@@ -157,13 +157,25 @@ def sensitive(parts):
             or any(part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in parts))
 
 # Pass 2 only: credential-store names the legacy roots/suffix filter never
-# reached (the list mirrors codex_isolated_workspace.READONLY_BAD_PARTS). Like
-# sensitive() hits, these are neither copied, counted nor listed.
+# reached (the list mirrors codex_isolated_workspace.READONLY_BAD_PARTS; the
+# secret-name rules below mirror its readonly_allowed()). Like sensitive()
+# hits, these are neither copied, counted nor listed.
 pass2_credential_names = {".ssh", ".aws", ".azure", ".kube", ".config", ".docker", ".npmrc", ".netrc", ".pypirc",
                           ".pgpass", ".git-credentials", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"}
 
+# Secret-name rules copied from codex_isolated_workspace.readonly_allowed().
+pass2_secret_tails = ("_secret", "_secrets", "_credential", "_credentials", "-secret", "-secrets", "-credential", "-credentials")
+pass2_config_exts = ("json", "yaml", "yml", "toml", "ini", "env", "txt", "conf", "cfg", "properties", "xml")
+
+def pass2_secret_name(lower):
+    stem, _, ext = lower.rpartition(".")
+    return (lower in ("secret", "credential") or lower.endswith(pass2_secret_tails)
+            or (bool(stem) and ext in pass2_config_exts and (stem in ("secret", "secrets", "credential", "credentials")
+                or stem.endswith(pass2_secret_tails + (".secret", ".secrets", ".credential", ".credentials")))))
+
 def pass2_credential(parts):
-    return any(part.lower() in pass2_credential_names or part.lower().endswith((".jks", ".tfstate")) for part in parts)
+    return any(part.lower() in pass2_credential_names or part.lower().endswith((".jks", ".tfstate"))
+               or pass2_secret_name(part.lower()) for part in parts)
 
 def legacy_eligible(path, parts):
     return ((path in root_files or parts[0] in roots or parts[:2] in ((".github", "workflows"), (".github", "actions")))

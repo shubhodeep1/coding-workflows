@@ -133,6 +133,11 @@ class ClarifySnapshotAllTextTest(unittest.TestCase):
 			".npmrc": b"//registry/:_authToken=x\n",
 			"deploy/id_rsa": b"key\n",
 			"certs/store.jks": b"jks\n",
+			# Secret-name rules mirrored from codex_isolated_workspace.readonly_allowed().
+			"config/prod_secret.json": b"{}\n",
+			"deploy/db-credentials.yaml": b"x: 1\n",
+			"secret/x.txt": b"secret\n",
+			"k8s/app.secrets.yml": b"x: 1\n",
 		}
 
 	def test_default_all_text_snapshot_lists_exclusions(self) -> None:
@@ -157,7 +162,8 @@ class ClarifySnapshotAllTextTest(unittest.TestCase):
 		self.assertIn("- assets/logo.png (binary)\n", prompt_text)
 		self.assertIn("- big.txt (oversize)\n", prompt_text)
 		self.assertTrue(prompt_text.endswith("=== END CLARIFY SNAPSHOT EXCLUSIONS ===\n"))
-		for sensitive_name in (".env.local", "secrets/x.txt", "keys/id.pem", "id.pem", ".npmrc", "id_rsa", "store.jks"):
+		for sensitive_name in (".env.local", "secrets/x.txt", "keys/id.pem", "id.pem", ".npmrc", "id_rsa", "store.jks",
+				"prod_secret", "db-credentials", "secret/x.txt", "app.secrets"):
 			self.assertNotIn(sensitive_name, proc.stderr)
 			self.assertNotIn(sensitive_name, prompt_text)
 		# The caller's prompt file is never edited in place.
