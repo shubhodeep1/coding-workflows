@@ -901,6 +901,31 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
           python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
 
+      # Moved from tests-promote-stall-and-review, which took 15m18s of its
+      # 20 minutes on main (run 39039638823, budget-watch issue #7576). Step
+      # timings were not readable when this was planned; these two were chosen
+      # as that job's most expensive steps by test and subprocess counts
+      # (estimated, not measured). Both need only checkout, Python 3.12 and the
+      # shared pip install, which this job already has. Names and bodies
+      # unchanged.
+      #
+      # Moved from tests-heal-plan-and-validation, which took 15m10s of its 20
+      # minutes on main (run 40954844196, budget-watch issue #8395). Chosen as
+      # that job's largest step not split into parallel processes, by test and
+      # subprocess count (an estimate, not measured). Name and body unchanged.
+      - name: Review autofix review-pipeline plumbing contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_sandbox_excluded_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
+
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -1240,26 +1265,6 @@ jobs:
             echo "::error::wiring guard part 1 shards failed: ${wg1_failed[*]}"
             exit 1
           fi
-
-      # Moved from tests-promote-stall-and-review, which took 15m18s of its
-      # 20 minutes on main (run 39039638823, budget-watch issue #7576). Step
-      # timings were not readable when this was planned; these two were chosen
-      # as that job's most expensive steps by test and subprocess counts
-      # (estimated, not measured). Both need only checkout, Python 3.12 and the
-      # shared pip install, which this job already has. Names and bodies
-      # unchanged.
-      - name: Review autofix review-pipeline plumbing contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_sandbox_excluded_escalation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
 
       - name: Implement leftover issue-branch replacement tests
         run: |
