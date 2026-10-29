@@ -114,6 +114,8 @@ jobs:
       # The stale security-hold step posts its dedup marker comment; the
       # job-level block replaces the workflow-level one, so grant it here.
       issues: write
+      # Also covers the zombie run reaper's cancel / force-cancel calls in the
+      # enumerate step (P11b), which use github.token (ZOMBIE_RUN_REAPER_TOKEN).
       actions: write
       # The CI recovery step's runner-shutdown classifier (issue #7109) reads
       # the failed jobs' check-run annotations with github.token.
@@ -209,6 +211,11 @@ jobs:
           SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
           PROVIDER_OUTAGE_PAUSED: ${{ steps.provider_outage.outputs.paused }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+          # Zombie run reaper (P11b): cancel review runs queued longer than
+          # ZOMBIE_RUN_MAX_QUEUED_HOURS, with the job's actions: write token.
+          ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'true' }}
+          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
+          ZOMBIE_RUN_REAPER_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # Classified retry for the active-run snapshot (issue #6634): the
@@ -238,10 +245,22 @@ jobs:
 
           printf '%s\n' "${prs_json}" > "${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"
 
+          # Zombie run reaper (P11b): it reads the active-run snapshot taken
+          # further down, so the early exits below skip it. Say so in the log
+          # instead of skipping silently (silent while the reaper is off).
+          zombie_reaper_skip_note()
+          {
+            case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+              false|0|no|off) ;;
+              *) echo "ZOMBIE_RUN_REAPER_END outcome=skipped reason=$1" ;;
+            esac
+          }
+
           # Provider outage (issue #6633): the CI-cancelled snapshot above is
           # still written; review dispatches wait for the provider to recover.
           if [ "${PROVIDER_OUTAGE_PAUSED:-false}" = "true" ]; then
             echo "AUTOFIX_SWEEP_SKIP reason=provider_outage candidates=$(printf '%s' "${prs_json}" | jq 'length')"
+            zombie_reaper_skip_note provider_outage
             exit 0
           fi
 
@@ -272,6 +291,7 @@ jobs:
 
           if [ "${total}" -eq 0 ]; then
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total}"
+            zombie_reaper_skip_note no_candidates
             exit 0
           fi
 
@@ -286,6 +306,7 @@ jobs:
           if ! [[ "${sweep_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || [ "${sweep_default_branch}" = "null" ]; then
             echo "::warning::AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable — review dispatch runs cannot be verified; no dispatch this tick."
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+            zombie_reaper_skip_note default_branch_unavailable
             exit 0
           fi
 
@@ -437,6 +458,34 @@ jobs:
           for wf in internal-review.yml review_autofix.yml; do
             snapshot_active_review_runs "${wf}"
           done
+
+          # Zombie run reaper (P11b, root cause 9 of
+          # docs/plans/remove-unattended-pipeline-stuck-states-plan.md): GitHub
+          # can wedge a run in `queued` for months, and a normal cancel returns
+          # 409; the stale-queued cutoff above only stops such a run from
+          # suppressing dispatch. The helper reuses the raw listing the
+          # snapshot just wrote (no second fetch, §14), cancels up to 10 runs
+          # queued longer than ZOMBIE_RUN_MAX_QUEUED_HOURS and force-cancels
+          # on 409. It comes from the trusted default-branch checkout (an
+          # Actions write must never run PR-head code) and can never fail the
+          # sweep. An incomplete snapshot skips it: a run whose in_progress
+          # copy was not listed must not be cancelled.
+          case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            false|0|no|off) ;;
+            *)
+              if [ "${active_snapshot_incomplete}" = "true" ]; then
+                echo "ZOMBIE_RUN_REAPER_END outcome=snapshot_incomplete"
+              elif [ -f .ci-rerun-support/scripts/review_autofix_sweep_reaper.sh ] \
+                && source .ci-rerun-support/scripts/review_autofix_sweep_reaper.sh \
+                && type review_autofix_sweep_reap_zombie_runs >/dev/null 2>&1; then
+                review_autofix_sweep_reap_zombie_runs \
+                  "${RUNNER_TEMP:-/tmp}/sweep-active-runs-internal-review.yml.json" \
+                  "${RUNNER_TEMP:-/tmp}/sweep-active-runs-review_autofix.yml.json" || true
+              else
+                echo "ZOMBIE_RUN_REAPER_END outcome=helper_unavailable"
+              fi
+              ;;
+          esac
 
           # Read into an array so counters survive the loop (no subshell pipe).
           mapfile -t rows < <(printf '%s' "${prs_json}" | jq -c '.[]')
