@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1526-1560 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The stall warning (lines 1559-1560) uses the cached `IMPL_RUN_STATUS` (lines 1526, 1607-1609), while the `stall-diag latest-run` line (1544) prints a freshly fetched status, so the two can contradict.\n  WHY: If the run moves from pending to in_progress after the last refresh, the log says in_progress and then warns the run \"never started\". This only affects diagnostic text. All reviewers rated it NIT.\n- .github/workflows/test-and-mark-stable.yml:1532-1535 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The new `gh api` calls in `log_implement_stall_diagnostics` have no comment recording which existing calls were audited, as \u00a714 requires.\n  WHY: This is a documentation gap only. The calls are fail-open and run once on the stall exit. All reviewers rated it NIT.\n- changelog.d/8376-implement-stall-diagnostics.md:8 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The fragment says the in-progress read shows a pre-window run holding the concurrency group. The read is `GET /actions/runs?status=in_progress` (test-and-mark-stable.yml:1556), so it misses holders in `pending`/`queued`/`waiting`.\n  WHY: If the concurrency holder is itself stuck in `pending`/`queued`, the diagnostics print `stall-diag in-progress-run: none`, and operators may wrongly conclude nothing held the group. Rated NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml: `log_implement_stall_diagnostics`, final `if` that echoes the \"never started\" warning | severity=NIT | confidence=3\n  PROBLEM: The warning uses the cached `IMPL_RUN_STATUS` from the last progress-counter refresh. The function also prints the run's current status in the `stall-diag latest-run:` line, and the two can disagree.\n  WHY: If the run moves from pending to in_progress after the last refresh, the log shows in_progress and then warns the run never started. This only affects diagnostic text.\n- .github/workflows/test-and-mark-stable.yml: comment above `log_implement_stall_diagnostics` (HARDENING_SUGGESTION) | severity=NIT | confidence=3\n  PROBLEM: \u00a714 asks that new `gh api` calls document which existing calls were audited. The comment does not say the existing progress-counter and jobs reads cover only the scoped run and cannot show other in-progress runs or a concurrency holder.\n  WHY: Suggested fix is to add 1-2 comment lines saying this, and noting the calls run once on the stall exit only. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:1544-1545, 1559-1560 | severity=NIT | confidence=4\n  PROBLEM: The diagnostic logging relies on a potentially stale `IMPL_RUN_STATUS` while also fetching a fresh status for logging.\n  WHY: If the status changes between the last cached check and the stall diagnostics, the warning at line 1559 can contradict the status fetched in the diagnostic function.\n- .github/workflows/test-and-mark-stable.yml:1532-1535 | severity=NIT | confidence=3\n  PROBLEM: The new diagnostic function uses `gh api` calls but does not document the audit against existing calls required by \u00a714.\n  WHY: This is a documentation/governance gap. The function is fail-open and runs only on a stall, so nothing breaks at runtime.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:1544, 1559-1560 (cached status set at 1526, refreshed at 1607-1609) | severity=NIT | confidence=4\n  PROBLEM: The warning uses cached `IMPL_RUN_STATUS` instead of the current status fetched for the diagnostic line.\n  WHY: If the run changes from pending to in_progress after the last poll, the log reports in_progress and then warns the run is still pending and never started, giving contradictory diagnostics.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:1559-1560 vs 1544 and 1526/1607-1608 | severity=NIT | confidence=4\n  PROBLEM: The \"never started\" `::warning::` uses the cached `IMPL_RUN_STATUS`, which refreshes only every 30 seconds, while the preceding `stall-diag latest-run` line prints a freshly fetched status.\n  WHY: If the run moves pending \u2192 in_progress during the last refresh window, the log is self-contradictory and misleads the operator.\n- changelog.d/8376-implement-stall-diagnostics.md:8 vs .github/workflows/test-and-mark-stable.yml:1556 | severity=NIT | confidence=3\n  PROBLEM: The fragment says the in-progress read shows a pre-window run holding the concurrency group. The read is `GET /actions/runs?status=in_progress` (test-and-mark-stable.yml:1556), which excludes `pending`/`queued`/`waiting` runs; the window read at 1553 also filters by `created=>`.\n  WHY: If the concurrency holder is stuck in `pending`/`queued`, as in run 40876853022, the diagnostics print `stall-diag in-progress-run: none` and the fragment's stated guarantee does not hold.\n- .github/workflows/test-and-mark-stable.yml:1532-1535, 1543, 1546, 1553, 1556 (HARDENING_SUGGESTION) | severity=NIT\n  PROBLEM: The four new `gh api` calls lack the \u00a714 audit note naming which existing calls were considered and why they cannot supply this data.\n  WHY: Suggested fix is to add 1-2 comment lines at the function. HARDENING_RISK_SCORE: 1.\n- .github/workflows/test-and-mark-stable.yml:1559-1560 (HARDENING_SUGGESTION) | severity=NIT\n  PROBLEM: The warning's \"never started\" claim rests on the 30-second-stale `IMPL_RUN_STATUS`, which can contradict the freshly fetched status printed two lines earlier.\n  WHY: Suggested fix is to reword the warning to say the status was current at the last poll, or to gate it on the freshly fetched status in `stall_diag_out`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7367b86a2ec0af43f4867771358d1e834f37397d462216115ddf56367444c5a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8379,
+    "run_id": "40906245311",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40906245311",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029164624_3932aa525b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8379,
+    "run_id": "40906245311"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T16:46:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
