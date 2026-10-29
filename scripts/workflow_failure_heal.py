@@ -4237,7 +4237,7 @@ def verify_run_provenance(
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
 	report_head = str(payload.get("head_sha") or "").strip().lower()
-	# autofix_failure runs a trusted failure marker binds to report_head.
+	# Run ids of autofix_failure runs that a trusted failure marker binds to report_head.
 	result["marker_head_run_ids"] = []
 	for position, ref in enumerate(refs):
 		run_id = str(ref["run_id"])
@@ -7132,7 +7132,7 @@ def _autofix_dispatch_run_for_pr(run_json: dict[str, Any], *, kind: str, pr_numb
 
 
 def _autofix_dispatch_run_marker_bound(run_json: dict[str, Any], *, kind: str, marker_head_bound: bool) -> bool:
-	"""True for a dispatched review run a trusted failure marker binds to the PR head.
+	"""True for a dispatched review run that a trusted failure marker binds to the PR head.
 
 	A self-dispatched ``review_autofix.yml`` run has no ``[pr:N]`` title and
 	runs on the dispatch ref, so neither its title nor its ``head_sha`` names
