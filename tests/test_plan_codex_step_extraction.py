@@ -31,10 +31,10 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # 6-line one that allows reading indexed agents.md sections (256 -> 259 lines,
 # 16_738 -> 16_978 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"c1319fc8142a0f07f66ca4e4425862c6d3040afc2ca021dab35766ee9820d743"
+	"fc04b3d4bf537375a6222366916a566f0c97503ef9c0bde8b567bad012b3455a"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 16_978
-PRE_EXTRACTION_PROMPT_LINES = 259
+PRE_EXTRACTION_PROMPT_BYTES = 17_147
+PRE_EXTRACTION_PROMPT_LINES = 261
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
@@ -126,6 +126,25 @@ def test_plan_prompts_keep_paths_out_of_files_section_notes() -> None:
 	held = "## Files likely to change\n- `docs/INVENTORY.md` (one added `scripts/` bullet)\n\n## Next\n"
 	compliant = "## Files likely to change\n- `docs/INVENTORY.md` (new)\n- `scripts/x.sh` (new)\n\n## Next\n"
 	assert "scripts/" in guard.extract_plan_automation_paths(held)
+	assert guard.extract_plan_automation_paths(compliant) == ["scripts/x.sh"]
+
+
+def test_plan_prompts_keep_prose_and_placeholders_out_of_files_section() -> None:
+	# Issue #8339: a prose paragraph in the Files section mentioned a bare
+	# `scripts/<helper>` string; the gate read it as the directory `scripts/`
+	# and held the plan with path_not_granted.
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import files_touched_scope_guard as guard  # noqa: E402
+
+	rule = ("Keep the section to those bullets: no prose paragraphs, and no placeholder path such as\n"
+		"   `scripts/<helper>`, which the gate reads as the bare directory `scripts/`.")
+	for prompt in (PLAN_RUNNER, REPO_ROOT / "prompts" / "mode-plan.txt",
+			REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		assert rule in prompt.read_text(encoding="utf-8"), prompt
+	held = ("## Files likely to change\n- `scripts/x.sh`\n\n"
+		"Each test changes only if it pins a bare `scripts/<helper>` string.\n\n## Next\n")
+	compliant = "## Files likely to change\n- `scripts/x.sh`\n\n## Next\nIt pins `scripts/<helper>`.\n"
+	assert guard.extract_plan_automation_paths(held) == ["scripts/x.sh", "scripts/"]
 	assert guard.extract_plan_automation_paths(compliant) == ["scripts/x.sh"]
 
 

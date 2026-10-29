@@ -77,6 +77,8 @@ Create a structured implementation plan that includes:
    or a directory such as `scripts/`: the plan approval gate reads every `.github/`,
    `.claude/`, `scripts/`, `prompts/` and `workflow-templates/` token in this section, and a
    bare directory holds the plan for a human. Explain why a file changes in a later section.
+   Keep the section to those bullets: no prose paragraphs, and no placeholder path such as
+   `scripts/<helper>`, which the gate reads as the bare directory `scripts/`.
 2. Functions or modules to implement
 3. Data structures affected
 4. API or interface changes
