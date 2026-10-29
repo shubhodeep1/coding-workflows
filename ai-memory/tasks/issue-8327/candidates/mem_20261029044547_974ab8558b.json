@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The concurrency-group fix (Suggested fix #1) is outside this heal issue's frozen edit scope. How should it be handled?\nChoices:\nA) Fix only what's in scope here and defer the rest (RECOMMENDED). This issue gets the Phase 7 timeout path (`::error::`, `status=timeout`, `cancel_run_id`, `exit 1`), the summary fix that reports `FAILED (no status)` instead of SKIPPED when a PR exists, regression tests under `tests/` and a `changelog.d` fragment. The per-trigger concurrency group in `cancel_on_pr_close.yml`, the pin update in `tests/test_review_merge_train.py` and the \"Conflict-safe PR-close cleanup\" agents fragment go under `## Deferred scope`, with `HEAL_COUNTERFACTUAL: PARTIAL: e2e-smoke-test`. They are then delivered through a separate issue that is not a heal issue.\nB) Keep the full fix, including `cancel_on_pr_close.yml`, in this issue. **Note:** the plan will be held with `heal_scope_plan_out_of_scope` and implement will reject the out-of-scope file whatever the approval. This only works if an operator takes the fix outside the heal pipeline.\nC) Fix only the in-scope reporting problem and drop the concurrency-group change entirely. This treats the 10-minute `pending` stall as transient, since the run that held the group is not in the evidence. Phase 7 would then fail correctly with `status=timeout` if it happens again.",
+  "fingerprint": "7c5c89c0f9646b1679b00f51b9891a90e7b0d61982bed998c4398179a862d72a",
+  "lineage": {
+    "issue_number": 8327,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40817898491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40817898491",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029044547_974ab8558b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8327,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40817898491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8327 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T04:45:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
