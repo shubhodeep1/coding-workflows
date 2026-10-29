@@ -774,6 +774,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_deploy_activate_command.py
 
+      - name: Safe URL fetch helper and command contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_safe_fetch_url.py
+
       - name: Orchestrator completion lessons + lesson retrieval tests
         run: |
           set -euo pipefail
@@ -1846,6 +1851,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_initial_state_v2.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
