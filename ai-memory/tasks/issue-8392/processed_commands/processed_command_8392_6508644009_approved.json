@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8392_6508644009_approved",
   "issue_number": 8392,
   "metadata": {
+    "branch": "ai/issue-8392",
+    "changed_files": [
+      "changelog.d/8392-engine-fallback-pool-reason.md",
+      "scripts/ai_engine_fallback_report.sh",
+      "tests/test_ai_engine.py"
+    ],
+    "issue_number": 8392,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8392",
+    "pr_number": 8398,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8398",
+    "run_attempt": "1",
+    "run_id": "40957292431",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40957292431"
   },
   "run_attempt": 1,
   "run_id": "40957292431",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T21:34:02Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T21:44:37Z",
   "workflow": "implement"
 }
