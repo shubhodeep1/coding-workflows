@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-10-29T02:19:02Z",
+  "issue_number": 8295,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=scripts/ai_memory_lib.py:3283-3284; cited_path=scripts/ai_memory_lib.py:3283-3284; files_touched=scripts/ai_memory_lib.py, tests/test_memory_maintenance_contract_noop.py, tests/test_ai_memory_push_retry_backoff.py, .github/workflows/memory_maintenance.yml, changelog.d/8295-memory-single-branch-clone.md.",
+  "phase": "review_autofix",
+  "pr_number": 8308,
+  "record_id": "lesson_20261029021902_01479c44fe",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ai_memory_lib.py:3283-3284",
+    "scripts/ai_memory_lib.py",
+    "tests/test_memory_maintenance_contract_noop.py",
+    "tests/test_ai_memory_push_retry_backoff.py",
+    ".github/workflows/memory_maintenance.yml",
+    "changelog.d/8295-memory-single-branch-clone.md"
+  ]
+}
