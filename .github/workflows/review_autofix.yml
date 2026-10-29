@@ -4033,6 +4033,10 @@ jobs:
           # Take the default branch's .ai/validate.yml on an orchestrator/project-*
           # integration-sync conflict (the sandbox excludes .ai/).
           CONFLICT_AI_ASSET_TAKE_BASE_ENABLED: ${{ vars.CONFLICT_AI_ASSET_TAKE_BASE_ENABLED || 'true' }}
+          # Read the poller's ORCHESTRATOR_STATE_V2 state (merged sub-issues and
+          # their fingerprints) on an integration-sync conflict; 'false' keeps
+          # the V1-only read, which leaves the resolver's fingerprint check off.
+          CONFLICT_INTEGRATION_V2_STATE_ENABLED: ${{ vars.CONFLICT_INTEGRATION_V2_STATE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"

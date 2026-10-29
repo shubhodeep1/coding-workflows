@@ -144,6 +144,78 @@ def test_autofix_intake_verifies_a_review_run_dispatched_for_the_pr() -> None:
 	assert "run_ref_rejected run=500 reason=unverified detail=error:_run_head_mismatch\n" in result.stdout
 
 
+def test_verify_run_binds_a_self_dispatched_review_run_by_its_marker_head() -> None:
+	# review_autofix.yml re-dispatches itself with no `[pr:N]` run name, so only
+	# the provenance gate's marker-head verdict binds it to the PR head.
+	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "event": "workflow_dispatch", "head_sha": SHA_A,
+		"display_title": "Codex PR Self-Healing Semantic Agent", "conclusion": "failure", "path": ".github/workflows/review_autofix.yml"}
+	assert heal.verify_run(run, repo=SELF_REPO, kind="autofix_failure", head_sha=SHA_B, pr_number=4174, marker_head_bound=True)["run_id"] == 500
+	rejected = (
+		{"marker_head_bound": False},
+		{"marker_head_bound": True, "run": dict(run, event="pull_request")},
+		{"marker_head_bound": True, "kind": "workflow_run"},
+	)
+	for case in rejected:
+		try:
+			heal.verify_run(case.get("run", run), repo=SELF_REPO, kind=case.get("kind", "autofix_failure"), head_sha=SHA_B, pr_number=4174, marker_head_bound=case["marker_head_bound"])
+		except ValueError as exc:
+			assert str(exc) == "run head mismatch"
+		else:
+			raise AssertionError(f"head mismatch accepted: {case}")
+
+
+def test_verify_run_provenance_lists_runs_a_trusted_marker_binds_to_the_pr_head() -> None:
+	payload = heal.validate_payload(_autofix_payload())
+	assert payload["head_sha"] == SHA_B
+	review = dict(_provenance_run(path="review_autofix.yml"), event="workflow_dispatch", head_sha=SHA_A)
+
+	def check(body: str, login: str = "workflow-bot") -> dict:
+		return heal.verify_run_provenance(payload, runs={"500": review}, comments=[{"body": body, "user": {"login": login}}], trusted_login="workflow-bot", self_repo=SELF_REPO)
+
+	canonical = f"AI review/autofix failed\n\n<!-- review-autofix-failure:v1 head={SHA_B} reason=workflow_failure fp={FP_HEX} degraded=0 run=500 -->"
+	assert check(canonical)["status"] == "ok" and check(canonical)["marker_head_run_ids"] == ["500"]
+	cap = f"capped\n<!-- review-autofix-failure-cap:v1 head={SHA_B.upper()} fp={FP_HEX} run=500 -->\nmore"
+	assert check(cap)["marker_head_run_ids"] == ["500"]
+	# A marker for another head still links the run, but does not bind its head.
+	other_head = canonical.replace(f"head={SHA_B}", f"head={SHA_A}")
+	assert check(other_head)["status"] == "ok" and check(other_head)["marker_head_run_ids"] == []
+	# A marker naming another run, or written by anyone else, binds nothing.
+	assert check(canonical.replace("run=500", "run=501"))["marker_head_run_ids"] == []
+	assert check(canonical, login="attacker")["marker_head_run_ids"] == []
+	# The report must carry a valid head for any binding.
+	headless = dict(payload, head_sha=None)
+	assert heal.verify_run_provenance(headless, runs={"500": review}, comments=[{"body": canonical, "user": {"login": "workflow-bot"}}], trusted_login="workflow-bot", self_repo=SELF_REPO)["marker_head_run_ids"] == []
+
+
+def test_autofix_intake_verifies_a_self_dispatched_review_run_bound_by_its_marker() -> None:
+	# coding-workflows#8285 (intake run 40814586379): review_autofix.yml
+	# re-dispatched itself on main, so the run's title has no `[pr:N]` and its
+	# head is main's tip. Only the pipeline's failure marker on the PR names
+	# the run and the PR head; verify-run dropped it, and the intake failed on
+	# an unresolved scope marker with a CRITICAL alert.
+	payload = _autofix_payload()
+	dispatched = {
+		"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "workflow_dispatch", "head_sha": SHA_A, "head_branch": "main",
+		"display_title": "Codex PR Self-Healing Semantic Agent", "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/review_autofix.yml", "pull_requests": [],
+	}
+	marker = f"<!-- review-autofix-failure:v1 head={SHA_B} reason=workflow_failure fp={FP_HEX} degraded=0 run=500 -->"
+	jobs = {"500": [{"id": 9001, "name": "codex-agent", "workflow_name": "Codex PR Self-Healing Semantic Agent", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}
+
+	def state_with(body: str) -> dict:
+		state = _intake_state(jobs=jobs, run_details={"500": dispatched})
+		state["comments"][f"repos/{CONSUMER_REPO}/issues/4174/comments"] = [{"body": f"AI review/autofix failed\n\n{body}", "user": {"login": "workflow-bot"}}]
+		return state
+
+	result, _, _ = _run_intake(payload, state_with(marker), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "run_ref_rejected" not in result.stdout and "runs=1" in result.stdout
+	# A marker for an older PR head still links the run but cannot bind its head.
+	stale = marker.replace(f"head={SHA_B}", f"head={SHA_A}")
+	result, _, _ = _run_intake(payload, state_with(stale), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "run_ref_rejected run=500 reason=unverified detail=error:_run_head_mismatch\n" in result.stdout
+
+
 def test_verify_run_accepts_pending_run_only_when_allowed() -> None:
 	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "status": "in_progress", "conclusion": None, "path": ".github/workflows/internal-plan.yml"}
 	assert heal.verify_run(run, repo=SELF_REPO, kind="phase_failure", allow_pending=True)["run_id"] == 500
