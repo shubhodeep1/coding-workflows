@@ -263,7 +263,10 @@ def test_gate_holds_empty_section_that_does_not_say_none(tmp_path: Path) -> None
 			"## Files likely to change\nNone. Touch `x` only.",
 			"## Files likely to change\nNone.\n- something else",
 			"## Files likely to change\nEdit the parser.\nNone.",
-			"## Files likely to change\nNone.\n\n## Files to change\nRewrite the parser."):
+			"## Files likely to change\nNone.\n\n## Files to change\nRewrite the parser.",
+			"## Files likely to change\nNone.\nUpdate the Makefile.",
+			"## Files likely to change\nNone. Also edit CODEOWNERS.",
+			"## Files likely to change\nNone. Then refresh .gitignore."):
 		record, code, _ = _gate(tmp_path, _files_section(section))
 		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_paths_missing", (section, record)
 
