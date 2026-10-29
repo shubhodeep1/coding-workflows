@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_single_issue_security_pass.py:1120-1136 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The fail-closed branch added in scripts/review_autofix_step_deterministic_skip_security_pass.sh:186-189 (`det_skip_security_pass_unverifiable python_safe_path_unavailable`) is never exercised at runtime; the only coverage is a static string assertion (`assert \"python_safe_path_unavailable\" in text`, line 1135) against the script text.\n  WHY: If the probe were removed or reordered past the pass invocation at scripts/review_autofix_step_deterministic_skip_security_pass.sh:191-201, no test would fail. The reviewer rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_single_issue_security_pass.py:1120-1136 | severity=low | confidence=3\n  PROBLEM: The fail-closed branch added in scripts/review_autofix_step_deterministic_skip_security_pass.sh:186-189 (`det_skip_security_pass_unverifiable python_safe_path_unavailable`) is never exercised at runtime; the only coverage is a static string assertion (`assert \"python_safe_path_unavailable\" in text`, line 1135) against the script text.\n  WHY: If the probe were removed or reordered past the pass invocation at scripts/review_autofix_step_deterministic_skip_security_pass.sh:191-201, no test would fail. The reviewer rated this NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ac9d98bc54ad026c6f9448b29fd4c592ba09b6ee12fc38749c590f188cf2f633",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8345,
+    "run_id": "40930220017",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40930220017",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029184349_0ac24c7f34",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8345,
+    "run_id": "40930220017"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T18:43:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
