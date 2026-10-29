@@ -5,13 +5,25 @@
   "entry_id": "processed_command_8347_6493261512_approved",
   "issue_number": 8347,
   "metadata": {
+    "branch": "ai/issue-8347",
+    "changed_files": [
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/8347-release-gate-queue-allowance.md",
+      "tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py",
+      "tests/test_validation_refresh_workflow_contract.py"
+    ],
+    "issue_number": 8347,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8347",
+    "pr_number": 8353,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8353",
+    "run_attempt": "1",
+    "run_id": "40851557625",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40851557625"
   },
   "run_attempt": 1,
   "run_id": "40851557625",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T09:46:51Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T10:08:16Z",
   "workflow": "implement"
 }
