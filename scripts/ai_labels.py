@@ -27,6 +27,18 @@ GITHUB_API_BACKOFF_BASE_SECONDS = 1.0
 GITHUB_API_BACKOFF_CAP_SECONDS = 8.0
 RETIRED_LABEL_IN_USE_PAGE_SIZE = 100
 RETIRED_LABEL_IN_USE_MAX_LISTED_NUMBERS = 10
+# Retired-label drain (RETIRED_LABEL_DRAIN_ENABLED, default true): before a
+# retired label is deleted, the open issues / PRs that still carry it are
+# commented on once (durable marker) and closed, at most
+# RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN items per sync run in total.
+RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN = 10
+RETIRED_LABEL_DRAIN_MAX_LIST_PAGES = 2
+RETIRED_LABEL_DRAIN_PAGE_SIZE = 100
+RETIRED_LABEL_DRAIN_MARKER_PREFIX = "<!-- ai:retired-label-drain:v1 label="
+RETIRED_LABEL_DRAIN_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+RETIRED_LABEL_DRAIN_TRUSTED_BOT_LOGIN = "github-actions[bot]"
+RETIRED_LABEL_DRAIN_TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
+RETIRED_LABEL_DRAIN_FALSE_VALUES = frozenset({"false", "0", "no", "off"})
 
 
 def _require_nonempty(value: str | None, field_name: str) -> str:
@@ -213,7 +225,13 @@ def _github_api_request(
     method: str = "GET",
     payload: dict[str, Any] | None = None,
     require_token: bool = False,
+    retry_transient: bool = True,
 ) -> Any:
+    # retry_transient=False makes exactly one attempt. Use it for
+    # non-idempotent writes (a comment POST): a 5xx or timeout after GitHub
+    # applied the write would otherwise post the same comment again. HTTP 429
+    # is still retried: GitHub rejects a rate-limited write without applying it.
+    attempt_limit = GITHUB_API_MAX_ATTEMPTS if retry_transient else 1
     token_text = _github_token()
     if require_token and token_text is None:
         raise LabelContractError("GH_TOKEN / GITHUB_TOKEN is required unless --dry-run is set")
@@ -242,12 +260,13 @@ def _github_api_request(
             with urllib.request.urlopen(request, timeout=120) as response:
                 response_body = response.read()
         except urllib.error.HTTPError as exc:
-            if exc.code not in GITHUB_API_RETRY_STATUSES or attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
+            status_attempt_limit = GITHUB_API_MAX_ATTEMPTS if exc.code == 429 else attempt_limit
+            if exc.code not in GITHUB_API_RETRY_STATUSES or attempt_index + 1 >= status_attempt_limit:
                 raise
             time.sleep(_github_retry_delay_seconds(exc.headers, attempt_index))
             continue
         except (urllib.error.URLError, OSError):
-            if attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
+            if attempt_index + 1 >= attempt_limit:
                 raise
             time.sleep(_github_retry_delay_seconds(None, attempt_index))
             continue
@@ -794,6 +813,356 @@ def _warn_if_retired_label_in_use(*, repo: str, label_name: str, dry_run: bool) 
     )
 
 
+def _retired_label_drain_enabled() -> bool:
+    """Read the ``RETIRED_LABEL_DRAIN_ENABLED`` switch (default ``true``).
+
+    Unset or empty means enabled. ``true/1/yes/on`` and ``false/0/no/off`` are
+    matched trimmed and case-insensitively. Any other value logs
+    ``LABEL_SYNC_RETIRED_DRAIN_CONFIG`` (``level=WARNING``) and keeps the
+    default. The default lives here so callers that do not export the
+    variable still drain (CLAUDE.md §8).
+    """
+    raw_value = os.environ.get("RETIRED_LABEL_DRAIN_ENABLED")
+    value_text = (raw_value or "").strip().lower()
+    if not value_text or value_text in RETIRED_LABEL_DRAIN_TRUE_VALUES:
+        return True
+    if value_text in RETIRED_LABEL_DRAIN_FALSE_VALUES:
+        return False
+    shown_value = _sanitize_log_detail(raw_value or "")
+    if len(shown_value) > 40:
+        shown_value = f"{shown_value[:37]}..."
+    print(
+        f"LABEL_SYNC_RETIRED_DRAIN_CONFIG: level=WARNING value={shown_value} default=true "
+        "detail=unrecognised RETIRED_LABEL_DRAIN_ENABLED value; draining",
+        file=sys.stderr,
+    )
+    return True
+
+
+def _retired_label_drain_marker(label_name: str) -> str:
+    """Return the durable marker comment for one retired label.
+
+    The label name is percent-quoted (``:`` kept) so it can never close the
+    HTML comment early.
+    """
+    return f"{RETIRED_LABEL_DRAIN_MARKER_PREFIX}{urllib.parse.quote(label_name, safe=':')} -->"
+
+
+def _retired_label_drain_comment_body(label_name: str, *, is_pr: bool) -> str:
+    kind_text = "pull request" if is_pr else "issue"
+    return (
+        f"{_retired_label_drain_marker(label_name)}\n"
+        f"This {kind_text} carries the retired label `{label_name}`, which the AI label contract no longer uses "
+        "(`retired_labels` in `.github/ai/label_contract.v1.json`). Closing it so the label can be deleted. "
+        "Reopen it and remove the label if the work should continue."
+    )
+
+
+def _list_open_items_with_label(repo: str, label_name: str) -> tuple[list[dict[str, Any]], bool]:
+    """List the open issues and PRs that carry ``label_name``.
+
+    Input: repo slug and label name. Output: ``(items, complete)`` where each
+    item is ``{"number": int, "is_pr": bool, "comments": int}`` and
+    ``complete`` is true only when the last page read was not full.
+    API calls (CLAUDE.md §15): up to ``RETIRED_LABEL_DRAIN_MAX_LIST_PAGES``
+    read-only ``GET repos/{repo}/issues?labels=<label>&state=open&per_page=100&page=<n>``
+    (the issues endpoint also returns PRs); it stops after the first page
+    that is not full. Fails closed: HTTP / transport errors propagate, and a
+    non-array page or an entry without an integer ``number`` raises
+    ``ValueError``, so a malformed read never counts as an empty listing.
+    """
+    encoded_label_name = urllib.parse.quote(label_name, safe="")
+    items: list[dict[str, Any]] = []
+    for page_number in range(1, RETIRED_LABEL_DRAIN_MAX_LIST_PAGES + 1):
+        page_items = _github_api_request(
+            f"repos/{repo}/issues?labels={encoded_label_name}&state=open"
+            f"&per_page={RETIRED_LABEL_DRAIN_PAGE_SIZE}&page={page_number}"
+        )
+        if not isinstance(page_items, list):
+            raise ValueError("unexpected issues response shape (expected a JSON array)")
+        for entry in page_items:
+            if not isinstance(entry, dict):
+                raise ValueError("issues response entry was not a JSON object")
+            number_value = entry.get("number")
+            if not isinstance(number_value, int) or isinstance(number_value, bool) or number_value <= 0:
+                raise ValueError("issues response entry had no positive integer number")
+            comments_value = entry.get("comments")
+            if not isinstance(comments_value, int) or isinstance(comments_value, bool) or comments_value < 0:
+                comments_value = 0
+            items.append(
+                {
+                    "number": number_value,
+                    "is_pr": "pull_request" in entry,
+                    "comments": comments_value,
+                }
+            )
+        if len(page_items) < RETIRED_LABEL_DRAIN_PAGE_SIZE:
+            return items, True
+    return items, False
+
+
+def _retired_label_marker_present(repo: str, number: int, marker: str, comment_count: int) -> bool:
+    """Return true when a trusted author already posted ``marker`` on the item.
+
+    API calls (CLAUDE.md §15): one read-only
+    ``GET repos/{repo}/issues/{number}/comments?per_page=100&page=<last>``,
+    where ``<last>`` comes from the listing's ``comments`` count, so the
+    newest comments (where the drain's own marker sits) are read first. When
+    that page has no trusted marker and ``<last>`` is above 1, one more GET
+    reads ``<last> - 1``, so a marker that newer comments pushed across the
+    page boundary is still found (at most two calls). Only comments whose author association is OWNER / MEMBER / COLLABORATOR,
+    or whose author is ``github-actions[bot]``, count; a marker forged by
+    anyone else is ignored. Raises on read failure or a non-array response.
+    """
+    last_page = max(1, -(-comment_count // RETIRED_LABEL_DRAIN_PAGE_SIZE))
+    for page_number in range(last_page, max(0, last_page - 2), -1):
+        comment_items = _github_api_request(
+            f"repos/{repo}/issues/{number}/comments?per_page={RETIRED_LABEL_DRAIN_PAGE_SIZE}&page={page_number}"
+        )
+        if not isinstance(comment_items, list):
+            raise ValueError("unexpected comments response shape (expected a JSON array)")
+        for comment in comment_items:
+            if not isinstance(comment, dict):
+                continue
+            body_text = comment.get("body")
+            if not isinstance(body_text, str) or marker not in body_text:
+                continue
+            association_text = comment.get("author_association")
+            user_value = comment.get("user")
+            login_text = user_value.get("login") if isinstance(user_value, dict) else None
+            if association_text in RETIRED_LABEL_DRAIN_TRUSTED_ASSOCIATIONS or login_text == RETIRED_LABEL_DRAIN_TRUSTED_BOT_LOGIN:
+                return True
+    return False
+
+
+def _append_retired_label_drain_error(
+    errors: list[dict[str, Any]],
+    *,
+    repo: str,
+    label_name: str,
+    action: str,
+    dry_run: bool,
+    exc: Exception,
+    item_number: int | None = None,
+) -> None:
+    status_code: int | None = None
+    if isinstance(exc, urllib.error.HTTPError):
+        status_code = exc.code
+        message_text = _http_error_message(exc)
+    else:
+        message_text = str(exc)
+    if item_number is not None:
+        message_text = f"item=#{item_number}: {message_text}"
+    _append_label_sync_error(
+        errors,
+        repo=repo,
+        label_name=label_name,
+        action=action,
+        dry_run=dry_run,
+        message=message_text,
+        status=status_code,
+    )
+
+
+def _drain_retired_label(
+    *,
+    repo: str,
+    label_name: str,
+    dry_run: bool,
+    budget: list[int],
+    errors: list[dict[str, Any]],
+) -> bool:
+    """Close the open items that carry a retired label; return True when it may be deleted.
+
+    Input: repo slug, retired label name, ``dry_run``, a one-element list
+    ``[remaining]`` holding the item budget shared by every retired label in
+    the run, and the sync error list. Output: True only when a complete
+    listing confirmed that no open item carries the label.
+    API calls (CLAUDE.md §15), per retired label:
+
+    * one listing (``_list_open_items_with_label``, up to 2 GETs); when it is
+      complete and empty nothing else is called and the label may be deleted;
+    * per item, within the shared budget: one or two comments GETs (marker
+      check), one ``POST repos/{repo}/issues/{n}/comments`` when no trusted
+      marker is present (a 5xx or timeout is not retried, so a lost response
+      cannot post the comment twice and the next run re-checks the marker;
+      only an HTTP 429 is retried, up to ``GITHUB_API_MAX_ATTEMPTS`` calls,
+      because GitHub does not apply a rate-limited write), and one ``PATCH repos/{repo}/issues/{n}`` that closes it
+      (``state_reason=not_planned`` for issues only; PRs have none);
+    * one final listing (up to 2 GETs) after every listed item was closed.
+
+    ``dry_run`` only reads the first listing and logs
+    ``LABEL_SYNC_RETIRED_DRAIN action=plan``. The label is kept (False) after
+    a failed or incomplete listing, a failed marker read / comment / close,
+    an exhausted budget, or a non-empty final listing; the next run retries.
+    Every failure is appended to ``errors`` and never aborts the sync.
+    """
+    try:
+        items, complete = _list_open_items_with_label(repo, label_name)
+    except LabelContractError:
+        raise
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        _append_retired_label_drain_error(
+            errors, repo=repo, label_name=label_name, action="drain_list", dry_run=dry_run, exc=exc
+        )
+        return False
+
+    if complete and not items:
+        return True
+
+    def _count_text(count: int) -> str:
+        return str(count) if complete else f"{count}+"
+
+    if dry_run:
+        would_process = min(len(items), max(0, budget[0]))
+        budget[0] -= would_process
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_DRAIN",
+            repo=repo,
+            label_name=label_name,
+            action="plan",
+            dry_run=True,
+            extra_fields=(
+                ("count", _count_text(len(items))),
+                ("complete", "true" if complete else "false"),
+                ("would_process", str(would_process)),
+            ),
+        )
+        return False
+
+    marker = _retired_label_drain_marker(label_name)
+    processed_count = 0
+    item_failed = False
+    for item in items:
+        if budget[0] <= 0:
+            break
+        budget[0] -= 1
+        processed_count += 1
+        item_number = item["number"]
+        is_pr = bool(item["is_pr"])
+
+        try:
+            marker_found = _retired_label_marker_present(repo, item_number, marker, item["comments"])
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            _append_retired_label_drain_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="drain_marker_check",
+                dry_run=False,
+                exc=exc,
+                item_number=item_number,
+            )
+            item_failed = True
+            continue
+
+        if not marker_found:
+            try:
+                _github_api_request(
+                    f"repos/{repo}/issues/{item_number}/comments",
+                    method="POST",
+                    payload={"body": _retired_label_drain_comment_body(label_name, is_pr=is_pr)},
+                    require_token=True,
+                    retry_transient=False,
+                )
+            except LabelContractError:
+                raise
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                # Never close an item whose explanation comment was not posted.
+                _append_retired_label_drain_error(
+                    errors,
+                    repo=repo,
+                    label_name=label_name,
+                    action="drain_comment",
+                    dry_run=False,
+                    exc=exc,
+                    item_number=item_number,
+                )
+                item_failed = True
+                continue
+
+        close_payload: dict[str, Any] = {"state": "closed"}
+        if not is_pr:
+            close_payload["state_reason"] = "not_planned"
+        try:
+            _github_api_request(
+                f"repos/{repo}/issues/{item_number}",
+                method="PATCH",
+                payload=close_payload,
+                require_token=True,
+            )
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            _append_retired_label_drain_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="drain_close",
+                dry_run=False,
+                exc=exc,
+                item_number=item_number,
+            )
+            item_failed = True
+            continue
+
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_DRAINED",
+            repo=repo,
+            label_name=label_name,
+            action="close",
+            dry_run=False,
+            extra_fields=(
+                ("item", str(item_number)),
+                ("kind", "pr" if is_pr else "issue"),
+                ("comment", "marker_present" if marker_found else "posted"),
+            ),
+        )
+
+    remaining_count = len(items) - processed_count
+    deferred_reason: str | None = None
+    if item_failed:
+        deferred_reason = "item_failed"
+    elif not complete:
+        deferred_reason = "incomplete_listing"
+    elif remaining_count > 0:
+        deferred_reason = "budget"
+    if deferred_reason is not None:
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_DRAIN_DEFERRED",
+            repo=repo,
+            label_name=label_name,
+            action="delete",
+            dry_run=False,
+            extra_fields=(("reason", deferred_reason), ("remaining", _count_text(remaining_count))),
+        )
+        return False
+
+    try:
+        final_items, final_complete = _list_open_items_with_label(repo, label_name)
+    except LabelContractError:
+        raise
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        _append_retired_label_drain_error(
+            errors, repo=repo, label_name=label_name, action="drain_final_list", dry_run=False, exc=exc
+        )
+        return False
+    if final_complete and not final_items:
+        return True
+    final_count_text = str(len(final_items)) if final_complete else f"{len(final_items)}+"
+    _log_label_sync(
+        "LABEL_SYNC_RETIRED_DRAIN_DEFERRED",
+        repo=repo,
+        label_name=label_name,
+        action="delete",
+        dry_run=False,
+        extra_fields=(("reason", "final_listing_not_empty"), ("remaining", final_count_text)),
+    )
+    return False
+
+
 def _delete_retired_labels(
     contract: dict[str, Any],
     *,
@@ -819,15 +1188,44 @@ def _delete_retired_labels(
       ``GET`` found the label. Its failure is logged and ignored (fail-open),
       the warning never blocks the delete, and the exit status is unchanged.
 
+    The two bullets above describe the switch-off path
+    (``RETIRED_LABEL_DRAIN_ENABLED=false``), which is kept unchanged. With
+    the drain on (the default), the in-use warning is replaced by
+    ``_drain_retired_label``, which lists, comments on and closes the open
+    items carrying the label (at most ``RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN``
+    items per run across all retired labels) and allows the ``DELETE`` only
+    after a complete listing shows no open items. A label that is not in use
+    costs one listing ``GET`` and the ``DELETE``, as before. On ``dry_run``
+    the label ``GET`` runs first (404 is still ``LABEL_SYNC_RETIRED_ABSENT``),
+    then only the first listing; a label is counted as deleted only when that
+    listing is complete and empty. The drain never changes the exit status.
+
     Logs ``LABEL_SYNC_DELETED`` / ``LABEL_SYNC_RETIRED_ABSENT`` per label, plus
     ``LABEL_SYNC_RETIRED_IN_USE`` / ``LABEL_SYNC_RETIRED_CHECK_FAILED`` from
-    the in-use check.
+    the in-use check (switch off) or ``LABEL_SYNC_RETIRED_DRAIN`` /
+    ``LABEL_SYNC_RETIRED_DRAINED`` / ``LABEL_SYNC_RETIRED_DRAIN_DEFERRED``
+    from the drain (switch on).
     """
     deleted_count = 0
-    for label_name in contract.get("retired_labels", []):
+    retired_label_names = contract.get("retired_labels", [])
+    drain_enabled = _retired_label_drain_enabled() if retired_label_names else False
+    drain_budget = [RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN]
+    for label_name in retired_label_names:
         label_path = _github_label_path(repo, label_name)
         try:
-            if dry_run:
+            if drain_enabled and dry_run:
+                _github_api_request(label_path)
+                if not _drain_retired_label(
+                    repo=repo, label_name=label_name, dry_run=True, budget=drain_budget, errors=errors
+                ):
+                    continue
+            elif drain_enabled:
+                if not _drain_retired_label(
+                    repo=repo, label_name=label_name, dry_run=False, budget=drain_budget, errors=errors
+                ):
+                    continue
+                _github_api_request(label_path, method="DELETE", require_token=True)
+            elif dry_run:
                 _github_api_request(label_path)
                 _warn_if_retired_label_in_use(repo=repo, label_name=label_name, dry_run=dry_run)
             else:
