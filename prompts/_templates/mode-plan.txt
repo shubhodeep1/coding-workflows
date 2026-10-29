@@ -81,7 +81,11 @@ Output contract — produce a plan covering, in order:
    omit the section when the plan covers the whole issue, and never emit it
    for an orchestrator-managed child issue. Implement opens the PR with a
    non-closing reference, so the issue stays open and clarification restarts
-   for these items after the merge.
+   for these items after the merge. The section holds only those bullets (an
+   indented line continues the bullet above it): put any note about how the
+   items will be delivered in another section. A prose line, note or
+   sub-heading inside it makes the section unreadable, so the issue closes at
+   the merge and a heal plan's `PARTIAL` counterfactual is held.
 
 Use the following shared security and money-handling lens when planning any
 affected surface:

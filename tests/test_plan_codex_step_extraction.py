@@ -30,11 +30,14 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # Issue #8260 replaced the 3-line "already loaded" IMPORTANT paragraph with a
 # 6-line one that allows reading indexed agents.md sections (256 -> 259 lines,
 # 16_738 -> 16_978 bytes).
+# Issue #8327 added a "bullets only" sentence to rule 12 (`## Deferred scope`):
+# a note inside the section made it unreadable (259 -> 263 lines,
+# 16_978 -> 17_307 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"c1319fc8142a0f07f66ca4e4425862c6d3040afc2ca021dab35766ee9820d743"
+	"f3bcf180fb8242759d309d2b568aeadc4dba54d470a870961296b5a99bde142e"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 16_978
-PRE_EXTRACTION_PROMPT_LINES = 259
+PRE_EXTRACTION_PROMPT_BYTES = 17_307
+PRE_EXTRACTION_PROMPT_LINES = 263
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
