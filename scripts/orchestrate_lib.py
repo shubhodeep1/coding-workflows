@@ -781,10 +781,51 @@ def _parallel_groups_from_edges(
 	return groups
 
 
+def trusted_prepush_augmented_paths(data: dict[str, Any]) -> dict[str, set[str]]:
+	"""Return the augmented-only paths per issue that the partition guard may ignore.
+
+	``data["prepush_augmented_paths"]`` (``PREPUSH_AUGMENTED_PATHS_KEY``) is
+	written by :func:`augment_files_touched`, but it travels inside
+	model-written decomposition JSON, so it is untrusted. An issue gets an
+	entry only when its marker value is a list of strings that are all in
+	that issue's ``files_touched`` and do not cover all of them (at least
+	one planned path remains, the ``marker_ignored`` rule of
+	``augment_files_touched``). Any other shape gives the issue no entry, so
+	its overlaps count as before. ``data`` is never mutated (issue #8244).
+	"""
+	raw = data.get(PREPUSH_AUGMENTED_PATHS_KEY) if isinstance(data, dict) else None
+	if not isinstance(raw, dict):
+		return {}
+	trusted: dict[str, set[str]] = {}
+	for issue in data.get("issues", []) or []:
+		if not isinstance(issue, dict):
+			continue
+		issue_id = issue.get("id")
+		if not isinstance(issue_id, str) or issue_id not in raw:
+			continue
+		entry = raw.get(issue_id)
+		if not isinstance(entry, list) or not entry:
+			continue
+		if not all(isinstance(p, str) for p in entry):
+			continue
+		touched_raw = issue.get("files_touched", []) or []
+		if not isinstance(touched_raw, list):
+			continue
+		touched = {p for p in touched_raw if isinstance(p, str)}
+		entry_set = set(entry)
+		if not entry_set <= touched:
+			continue
+		if not (touched - entry_set):
+			continue
+		trusted[issue_id] = entry_set
+	return trusted
+
+
 def validate_wave_file_partition(
 	wave_ids: list[str],
 	issues_by_id: dict[str, dict[str, Any]],
 	hot_files: set[str] | None = None,
+	augmented_paths: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
 	"""Detect sibling file-touch overlaps within a single wave.
 
@@ -816,9 +857,18 @@ def validate_wave_file_partition(
 		scope closes that bypass. Two unknown-scope siblings are also paired
 		with each other.
 
+	``augmented_paths`` (from :func:`trusted_prepush_augmented_paths`) maps
+	an issue id to the paths the pre-push gate added to its files_touched.
+	A shared path listed for BOTH issues of a pair was planned by neither,
+	so it does not count as an overlap (issue #8244: a shared affected test
+	serialized two independent siblings). A path at least one of the two
+	issues planned counts as before, hot-file handling included. The
+	``unknown_scope`` check still looks at the raw lists.
+
 	A wave with a single issue never yields overlaps.
 	"""
 	hot = hot_files or set()
+	augmented = augmented_paths or {}
 	overlaps: list[dict[str, Any]] = []
 
 	# Build {issue_id: set(paths)} once.
@@ -844,7 +894,9 @@ def validate_wave_file_partition(
 					"files": [],
 				})
 				continue
-			common = sorted(fa & fb)
+			shared = fa & fb
+			augmented_both = augmented.get(iid_a, set()) & augmented.get(iid_b, set())
+			common = sorted(shared - augmented_both)
 			if not common:
 				continue
 			pair_key = (iid_a, iid_b)
@@ -904,6 +956,8 @@ def auto_serialize_file_overlaps(
 	issues_by_id: dict[str, dict[str, Any]] = {i["id"]: i for i in data["issues"]}
 	edges: list[dict[str, str]] = list(data.get("dependency_edges", []) or [])
 	serializations: list[dict[str, Any]] = []
+	# Overlaps on paths only the pre-push gate added never serialize (#8244).
+	augmented = trusted_prepush_augmented_paths(data)
 
 	def _edge_exists(frm: str, to: str) -> bool:
 		for e in edges:
@@ -926,7 +980,7 @@ def auto_serialize_file_overlaps(
 		groups = _parallel_groups_from_edges(issues_by_id, edges)
 		any_new = False
 		for group_idx, wave_ids in enumerate(groups):
-			overlaps = validate_wave_file_partition(wave_ids, issues_by_id, hot)
+			overlaps = validate_wave_file_partition(wave_ids, issues_by_id, hot, augmented_paths=augmented)
 			if not overlaps:
 				continue
 			for record in overlaps:
@@ -3394,9 +3448,20 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 
 	wave_reports: list[dict[str, Any]] = []
 	total_overlaps = 0
+	# Same augmented-only rule as auto_serialize_file_overlaps (issue #8244),
+	# so the reported counts match the edges actually injected.
+	augmented = trusted_prepush_augmented_paths(data)
+	augmented_only_overlaps_ignored = 0
 	for wave_idx, wave in enumerate(raw_waves):
 		ids = [i["id"] for i in wave]
-		overlaps = validate_wave_file_partition(ids, issues_by_id, hot_files)
+		overlaps = validate_wave_file_partition(ids, issues_by_id, hot_files, augmented_paths=augmented)
+		if augmented:
+			unfiltered_pairs = {
+				(o["issue_a"], o["issue_b"])
+				for o in validate_wave_file_partition(ids, issues_by_id, hot_files)
+			}
+			kept_pairs = {(o["issue_a"], o["issue_b"]) for o in overlaps}
+			augmented_only_overlaps_ignored += len(unfiltered_pairs - kept_pairs)
 		total_overlaps += len(overlaps)
 		wave_reports.append({
 			"wave": wave_idx + 1,
@@ -3414,6 +3479,7 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 			"ok": False,
 			"error": str(exc),
 			"total_overlaps": total_overlaps,
+			"augmented_only_overlaps_ignored": augmented_only_overlaps_ignored,
 			"wave_reports": wave_reports,
 			"hot_files_audit": hot_files_audit,
 		})
@@ -3424,6 +3490,7 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 		"hot_files": sorted(hot_files),
 		"hot_files_audit": hot_files_audit,
 		"total_overlaps": total_overlaps,
+		"augmented_only_overlaps_ignored": augmented_only_overlaps_ignored,
 		"wave_reports": wave_reports,
 		"planned_serializations": planned,
 	})
@@ -4130,6 +4197,325 @@ def cmd_unrouted_blocked_comments(args: argparse.Namespace) -> int:
 	return 0
 
 
+# ---------------------------------------------------------------------------
+# Pre-push affected-test gate, phase P2 (issue #8189): orchestrator scoping.
+#
+# ``augment-files-touched`` runs the trusted gate module's ``select
+# --paths-file`` on each issue's planned files_touched and appends the
+# affected tests and companion registries, so the partition guard and the
+# child issue body see them. ``render-expected-files`` renders the advisory
+# "Expected files" section of a child issue body. The section is advisory
+# only: its heading never contains the allowlist key and its entries are
+# backticked bullets, so scripts/files_touched_scope_guard.py still finds no
+# allowlist block in it (plan D5, Q18).
+# ---------------------------------------------------------------------------
+
+PREPUSH_AUGMENT_MAX_FILES_TOUCHED = 50
+PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS = 60
+# Top-level decomposition key recording the paths augmentation added per
+# issue (like partition_serializations, a key the poller does not read).
+PREPUSH_AUGMENTED_PATHS_KEY = "prepush_augmented_paths"
+_EXPECTED_FILE_FORBIDDEN_RE = re.compile(r"[\s`<>\\\x00-\x1f\x7f-\x9f]")
+EXPECTED_FILES_SECTION_HEADER = (
+	"**Expected files** (advisory, from the decomposition; includes the tests and\n"
+	"registries this change affects. Update them in the same change.)"
+)
+
+
+def _expected_file_entry_ok(path: Any) -> bool:
+	"""Return True for a repository-relative path that is safe to render in a code span."""
+	if not isinstance(path, str) or not 1 <= len(path) <= 300:
+		return False
+	if _EXPECTED_FILE_FORBIDDEN_RE.search(path):
+		return False
+	if path.startswith("/"):
+		return False
+	parts = path.split("/")
+	if any(part == ".." for part in parts):
+		return False
+	if parts[0].lower() == ".git":
+		return False
+	return True
+
+
+def render_expected_files_section(paths: Any) -> str:
+	"""Render the advisory "Expected files" section; empty string when nothing is left."""
+	if not isinstance(paths, list):
+		return ""
+	kept: list[str] = []
+	seen: set[str] = set()
+	for path in paths:
+		if not _expected_file_entry_ok(path) or path in seen:
+			continue
+		seen.add(path)
+		kept.append(path)
+	if not kept:
+		return ""
+	return EXPECTED_FILES_SECTION_HEADER + "\n" + "\n".join(f"- `{path}`" for path in kept)
+
+
+def cmd_render_expected_files(args: argparse.Namespace) -> int:
+	"""Print the "Expected files" section for a JSON array of paths; never fails."""
+	try:
+		source = args.paths_json_file
+		if source == "-":
+			raw = sys.stdin.read()
+		else:
+			raw = Path(source).read_text(encoding="utf-8")
+		section = render_expected_files_section(json.loads(raw))
+		if section:
+			sys.stdout.write(section + "\n")
+	except Exception:  # noqa: BLE001 - advisory renderer, fail open to no section
+		return 0
+	return 0
+
+
+def _prepush_augment_log_id(issue_id: Any) -> str:
+	return re.sub(r"[^A-Za-z0-9._-]", "_", str(issue_id))[:80] or "unknown"
+
+
+def _prepush_augment_log(message: str) -> None:
+	print(f"PREPUSH_TEST_GATE phase=augment {message}", file=sys.stderr)
+
+
+def _prepush_select_planned_paths(
+	module: Path,
+	repo_root: Path,
+	paths: list[str],
+	timeout_secs: int,
+) -> tuple[list[str] | None, str]:
+	"""Run the gate module's ``select --paths-file`` and return its candidate paths.
+
+	Candidates are ``affected_tests[].path`` first, then ``companion_files``,
+	in module order, so the 50-entry cap keeps the affected tests. Returns ``(None, reason)`` on any failure.
+	"""
+	import tempfile
+
+	with tempfile.TemporaryDirectory(prefix="prepush-augment-") as tmp:
+		paths_file = Path(tmp) / "paths.txt"
+		out_file = Path(tmp) / "select.json"
+		lines = [p for p in paths if "\n" not in p and "\r" not in p]
+		paths_file.write_text("".join(f"{p}\n" for p in lines), encoding="utf-8")
+		env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG") if key in os.environ}
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		cmd = [
+			sys.executable, "-I", "-B", str(module), "select",
+			"--repo-root", str(repo_root),
+			"--paths-file", str(paths_file),
+			"--out", str(out_file),
+		]
+		try:
+			proc = subprocess.run(
+				cmd,
+				cwd=str(repo_root),
+				env=env,
+				stdin=subprocess.DEVNULL,
+				capture_output=True,
+				timeout=timeout_secs,
+				check=False,
+			)
+		except subprocess.TimeoutExpired:
+			return None, "timeout"
+		except OSError:
+			return None, "module_error"
+		if proc.returncode != 0:
+			return None, "module_failed"
+		if not out_file.is_file():
+			return None, "output_missing"
+		try:
+			payload = json.loads(out_file.read_text(encoding="utf-8"))
+		except (OSError, ValueError):
+			return None, "malformed_json"
+	if not isinstance(payload, dict):
+		return None, "malformed_json"
+	# The module always emits both keys; a response missing one is incomplete.
+	if "companion_files" not in payload or "affected_tests" not in payload:
+		return None, "malformed_json"
+	companions = payload.get("companion_files", [])
+	affected = payload.get("affected_tests", [])
+	if not isinstance(companions, list) or not isinstance(affected, list):
+		return None, "malformed_json"
+	candidates: list[str] = []
+	for entry in affected:
+		if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+			return None, "malformed_json"
+		candidates.append(entry["path"])
+	for entry in companions:
+		if not isinstance(entry, str):
+			return None, "malformed_json"
+		candidates.append(entry)
+	return candidates, ""
+
+
+def _prepush_write_json_atomic(path: Path, data: Any) -> None:
+	import tempfile
+
+	fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+	try:
+		with os.fdopen(fd, "w", encoding="utf-8") as handle:
+			json.dump(data, handle, ensure_ascii=True, indent=2)
+			handle.flush()
+			os.fsync(handle.fileno())
+		os.chmod(tmp_name, 0o644)
+		os.replace(tmp_name, str(path))
+	except BaseException:
+		try:
+			os.unlink(tmp_name)
+		except OSError:
+			pass
+		raise
+
+
+def augment_files_touched(
+	data: dict[str, Any],
+	module: Path,
+	repo_root: Path,
+	timeout_secs: int = PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS,
+) -> dict[str, int]:
+	"""Append affected tests and companions to each issue's files_touched, in place.
+
+	``data`` must already have passed ``validate_decomposition``. An issue with
+	an empty files_touched list stays empty. Never exceeds
+	PREPUSH_AUGMENT_MAX_FILES_TOUCHED entries per issue.
+	"""
+	totals = {"issues": 0, "added": 0, "truncated": 0, "skipped": 0}
+	# Paths an earlier run added, keyed by issue id. Only the planned paths
+	# (files_touched minus these) go to the module, so a second run selects
+	# the same candidates, finds them present and adds nothing; feeding the
+	# added tests back in would expand the scope transitively.
+	recorded_raw = data.get(PREPUSH_AUGMENTED_PATHS_KEY)
+	recorded: dict[str, list[str]] = {}
+	if isinstance(recorded_raw, dict):
+		for key, value in recorded_raw.items():
+			if isinstance(key, str) and isinstance(value, list):
+				recorded[key] = [v for v in value if isinstance(v, str)]
+	recorded_initial = {key: list(value) for key, value in recorded.items()}
+	for issue in data.get("issues", []):
+		totals["issues"] += 1
+		issue_id = str(issue.get("id", ""))
+		log_id = _prepush_augment_log_id(issue_id)
+		existing = list(issue.get("files_touched", []) or [])
+		if not existing:
+			# Nothing was planned, so nothing could have been added: drop any
+			# model-supplied marker entry instead of writing it back.
+			recorded.pop(issue_id, None)
+			_prepush_augment_log(f"issue={log_id} added=0 truncated=0")
+			continue
+		previously_added = set(recorded.get(issue_id, [])) & set(existing)
+		planned = [p for p in existing if p not in previously_added]
+		# The marker arrives inside model-written JSON, so it is trusted only
+		# when it is consistent with what this code would have recorded: some
+		# planned path remains, and every recorded path is still selected from
+		# the remaining planned paths. Otherwise the whole list is planned.
+		marker_ignored = bool(previously_added) and not planned
+		candidates: list[str] | None = None
+		reason = ""
+		if not marker_ignored:
+			candidates, reason = _prepush_select_planned_paths(module, repo_root, planned, timeout_secs)
+			if candidates is not None and previously_added and not previously_added.issubset(candidates):
+				marker_ignored = True
+		if marker_ignored:
+			_prepush_augment_log(f"issue={log_id} outcome=marker_ignored")
+			previously_added = set()
+			recorded.pop(issue_id, None)
+			planned = list(existing)
+			candidates, reason = _prepush_select_planned_paths(module, repo_root, planned, timeout_secs)
+		if candidates is None:
+			# A timeout is a no-op for this issue only; later issues still run.
+			# Restore a marker entry the ignored-marker branch dropped, so a
+			# failed selection leaves this issue's marker unchanged.
+			if issue_id in recorded_initial:
+				recorded[issue_id] = recorded_initial[issue_id]
+			totals["skipped"] += 1
+			_prepush_augment_log(f"issue={log_id} outcome=skipped reason={reason}")
+			continue
+		present = set(existing)
+		new_paths: list[str] = []
+		for candidate in candidates:
+			if candidate in present or not _expected_file_entry_ok(candidate):
+				continue
+			present.add(candidate)
+			new_paths.append(candidate)
+		room = max(0, PREPUSH_AUGMENT_MAX_FILES_TOUCHED - len(existing))
+		added = new_paths[:room]
+		truncated = len(new_paths) - len(added)
+		if added:
+			issue["files_touched"] = existing + added
+			recorded[issue_id] = [p for p in existing if p in previously_added] + added
+		totals["added"] += len(added)
+		totals["truncated"] += truncated
+		_prepush_augment_log(f"issue={log_id} added={len(added)} truncated={truncated}")
+	# Write the marker back when paths were added, or when dropping ignored or
+	# empty-issue entries changed it, so model-supplied junk is not kept.
+	# A raw marker the parser had to filter (non-dict, non-list values,
+	# non-string entries) is cleaned only when some issue did not fail, so a
+	# run where every selection failed leaves the file unchanged.
+	marker_malformed = recorded_raw is not None and recorded_raw != recorded_initial
+	totals["marker_changed"] = 0
+	if (
+		totals["added"] > 0
+		or recorded != recorded_initial
+		or (marker_malformed and totals["skipped"] < totals["issues"])
+	):
+		totals["marker_changed"] = 1
+		if recorded:
+			data[PREPUSH_AUGMENTED_PATHS_KEY] = recorded
+		else:
+			data.pop(PREPUSH_AUGMENTED_PATHS_KEY, None)
+	return totals
+
+
+def cmd_augment_files_touched(args: argparse.Namespace) -> int:
+	"""Fail-open CLI for augment_files_touched; always exits 0."""
+	import copy
+
+	summary: dict[str, Any] = {"ok": True, "issues": 0, "added": 0, "truncated": 0, "skipped": 0, "written": False}
+	try:
+		module = Path(args.gate_module)
+		if module.is_symlink() or not module.is_file():
+			_prepush_augment_log("outcome=skipped reason=module_absent")
+			_print_json(summary)
+			return 0
+		path = Path(args.decomposition)
+		try:
+			with path.open("r", encoding="utf-8") as handle:
+				raw = json.load(handle)
+		except (OSError, ValueError):
+			raw = None
+		if not isinstance(raw, dict):
+			_prepush_augment_log("outcome=skipped reason=decomposition_unreadable")
+			_print_json(summary)
+			return 0
+		try:
+			data = validate_decomposition(raw)
+		except OrchestrateError:
+			_prepush_augment_log("outcome=skipped reason=decomposition_invalid")
+			_print_json(summary)
+			return 0
+		timeout_secs = int(getattr(args, "timeout_secs", PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS) or PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS)
+		timeout_secs = min(300, max(5, timeout_secs))
+		repo_root = Path(args.repo_root).resolve()
+		totals = augment_files_touched(data, module.resolve(), repo_root, timeout_secs)
+		summary.update(totals)
+		try:
+			validate_decomposition(copy.deepcopy(data))
+		except OrchestrateError:
+			_prepush_augment_log("outcome=skipped reason=post_validate_failed")
+			summary.update({"issues": 0, "added": 0, "truncated": 0, "skipped": 0, "marker_changed": 0})
+			_print_json(summary)
+			return 0
+		if (totals["added"] > 0 or totals.get("marker_changed")) and getattr(args, "write_back", False):
+			try:
+				_prepush_write_json_atomic(path, data)
+				summary["written"] = True
+			except OSError:
+				_prepush_augment_log("outcome=skipped reason=write_failed")
+	except Exception as exc:  # noqa: BLE001 - the augmentation must never fail the step
+		_prepush_augment_log(f"outcome=skipped reason=internal_error error={type(exc).__name__}")
+	_print_json(summary)
+	return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Orchestrator helper utilities")
 	parser.add_argument(
@@ -4289,6 +4675,18 @@ def build_parser() -> argparse.ArgumentParser:
 	p_unrouted.add_argument("--max-age-hours", type=int, default=168)
 	p_unrouted.add_argument("--now", default="")
 	p_unrouted.set_defaults(func=cmd_unrouted_blocked_comments)
+
+	p_augment = subparsers.add_parser("augment-files-touched", help="Append affected tests and companions from the pre-push gate module to each issue's files_touched (fail-open)")
+	p_augment.add_argument("--decomposition", required=True)
+	p_augment.add_argument("--repo-root", default=".")
+	p_augment.add_argument("--gate-module", required=True)
+	p_augment.add_argument("--timeout-secs", type=int, default=PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS)
+	p_augment.add_argument("--write-back", action="store_true", help="Atomically write the augmented decomposition back to --decomposition")
+	p_augment.set_defaults(func=cmd_augment_files_touched)
+
+	p_expected = subparsers.add_parser("render-expected-files", help="Render the advisory Expected files section for a JSON array of paths ('-' reads stdin)")
+	p_expected.add_argument("--paths-json-file", required=True)
+	p_expected.set_defaults(func=cmd_render_expected_files)
 
 	return parser
 

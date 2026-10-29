@@ -170,6 +170,26 @@ def test_template_stays_backward_compatible() -> None:
 	assert STATUS_CONTEXT in text
 
 
+def test_template_header_documents_the_update_hold() -> None:
+	# Issue #8117: a consumer audit read the default-on gate as a reverted
+	# security hold. The gate is deliberate (unset means on); the header must
+	# say how to hold updates, and the gate it documents must stay in place.
+	header = TEMPLATE.read_text(encoding="utf-8").split("name: AI Update Workflows", 1)[0]
+	lines = [line.lstrip("#").strip() for line in header.splitlines()]
+	assert "AI_WORKFLOW_AUTO_UPDATE_ENABLED" in " ".join(lines)
+	start = next(i for i, line in enumerate(lines) if "AI_WORKFLOW_AUTO_UPDATE_ENABLED" in line)
+	while start > 0 and lines[start - 1]:
+		start -= 1
+	end = start
+	while end < len(lines) and lines[end]:
+		end += 1
+	paragraph = " ".join(lines[start:end])
+	assert "'false'" in paragraph
+	assert "runs by default" in paragraph
+	assert "cannot erase the hold" in paragraph
+	assert _caller_job()["if"] == "${{ vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false' }}"
+
+
 def test_template_renders_to_an_immutable_ref() -> None:
 	sys.path.insert(0, str(REPO_ROOT / "scripts"))
 	try:

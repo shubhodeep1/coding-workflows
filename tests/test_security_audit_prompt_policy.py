@@ -146,6 +146,31 @@ def test_system_instructions_let_json_only_prompt_override_report_sections() -> 
 	assert "Leave out the actions, assumptions and missing-context notes above" in section
 
 
+FINAL_MESSAGE_CONTRACT_BULLETS = (
+	"- Your final message is parsed as JSON, so it must be the array alone: no heading, summary, explanation or closing remark before or after it. One ```json fence around the whole array is the only wrapper allowed.",
+	"- When the audit finds nothing, your final message is exactly `[]`. Do not add a sentence saying the audit is clean or listing what you checked: the parser rejects `[]` followed by any text, and the audit fails.",
+)
+
+
+def test_audit_prompt_forbids_summary_after_empty_array() -> None:
+	# Security Audit run 40333816067 (issue #8204) failed with
+	# malformed_output: a clean audit replied "[]" and then a prose summary of
+	# the files it checked. security_audit.sh deliberately rejects "[]" with
+	# text after it, so the role prompt itself must say that the final message
+	# is the bare array and that a clean audit is exactly "[]".
+	for path in AUDIT_PROMPTS:
+		text = _read(path)
+		contract_idx = text.index("\nOutput contract:\n")
+		anchor = "- Output one JSON array and nothing else.\n"
+		anchor_idx = text.index(anchor, contract_idx)
+		position = anchor_idx + len(anchor)
+		for bullet in FINAL_MESSAGE_CONTRACT_BULLETS:
+			assert text.startswith(bullet + "\n", position), (
+				f"{path}: expected {bullet[:60]!r} next in the output contract"
+			)
+			position += len(bullet) + 1
+
+
 def main() -> int:
 	import unittest
 

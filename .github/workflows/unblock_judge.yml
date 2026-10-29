@@ -173,6 +173,9 @@ jobs:
           # Q148: close a heal issue whose failure a sibling already fixed.
           UNBLOCK_HEAL_ALREADY_FIXED_ENABLED: ${{ vars.UNBLOCK_HEAL_ALREADY_FIXED_ENABLED || 'true' }}
           UNBLOCK_PROTECTED_HANDOFF_ENABLED: ${{ vars.UNBLOCK_PROTECTED_HANDOFF_ENABLED || 'false' }}
+          # Harness routing: a harness-owned verdict sends a heal report instead of a fix-up.
+          UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED: ${{ vars.UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED || 'true' }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
           # The automation-path re-check runs the implement guard with the
           # same ALLOW_WORKFLOW_EDITS default implement.yml uses.
           UNBLOCK_JUDGE_REGRANT_ENABLED: ${{ vars.UNBLOCK_JUDGE_REGRANT_ENABLED || 'true' }}

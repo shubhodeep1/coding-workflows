@@ -63,14 +63,16 @@ jobs:
           python-version: "3.12"
 
       - name: Extract repository learnings (fail-open)
-        # Below the 20-minute job timeout so a slow extraction fails only this
-        # step and continue-on-error applies (run 40752760153 was cancelled).
+        # Without a step cap a slow extraction used the whole 20-minute job
+        # budget and the job was cancelled (run 40752760153), so
+        # continue-on-error never applied and compaction never ran.
         timeout-minutes: 10
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MEMORY_LEARNINGS_EXTRACT_ENABLED: ${{ vars.MEMORY_LEARNINGS_EXTRACT_ENABLED || 'true' }}
+          AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED: ${{ vars.AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -204,6 +206,7 @@ jobs:
           BATCH_API_DISABLED: ${{ vars.BATCH_API_DISABLED || 'false' }}
           BATCH_API_PROVIDER: ${{ vars.BATCH_API_PROVIDER || 'auto' }}
           BATCH_API_POLL_TIMEOUT_HOURS: ${{ vars.BATCH_API_POLL_TIMEOUT_HOURS || '24' }}
+          AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED: ${{ vars.AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED || '' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail

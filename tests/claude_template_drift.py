@@ -16,6 +16,7 @@ error yields the empty set, so the tests fail closed.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -89,3 +90,41 @@ def pending_template_paths(repo_root: Path) -> set[str]:
 		return {relative for relative in drift if relative in changed or _drifted_at(repo_root, base, relative, sync)}
 	except Exception:  # noqa: BLE001 - any failure keeps parity strict
 		return set()
+
+
+# Permission rules only coding-workflows' live `.claude/settings.json` carries
+# (`.github/ai/claude_template_divergence.json` lists the file). The daily
+# activation routine runs in a coding-workflows session and opens sessions
+# without the Auto-mode check (operator decision 2026-10-26); consumer repos
+# never receive the rule.
+LIVE_ONLY_ALLOW_RULES = ("mcp__claude-code-remote__create_session",)
+
+
+def settings_match_template(template_text: str, live_text: str) -> bool:
+	"""True when the live settings are the template plus exactly the live-only rules.
+
+	The live file must equal the template text with the live-only rules
+	appended, in order, at the end of `permissions.allow`; any other
+	difference, a missing rule or an extra one, is a mismatch.
+	"""
+	try:
+		template = json.loads(template_text)
+		live = json.loads(live_text)
+	except ValueError:  # malformed settings JSON is a mismatch, not a traceback
+		return False
+	if not isinstance(template, dict) or not isinstance(live, dict) or not isinstance(live.get("permissions"), dict):
+		return False  # valid JSON of the wrong shape is a mismatch too
+	live_allow = live.get("permissions", {}).get("allow", [])
+	if not isinstance(live_allow, list):
+		return False  # a non-list allow value is a mismatch, not a TypeError
+	extras = tuple(live_allow[len(live_allow) - len(LIVE_ONLY_ALLOW_RULES):])
+	if extras != LIVE_ONLY_ALLOW_RULES:
+		return False
+	live["permissions"]["allow"] = live_allow[: len(live_allow) - len(LIVE_ONLY_ALLOW_RULES)]
+	if live != template:
+		return False
+	# Formatting stays the template's: only the appended lines may differ.
+	stripped = live_text
+	for rule in LIVE_ONLY_ALLOW_RULES:
+		stripped = re.sub(r",\s*\"" + re.escape(rule) + r"\"", "", stripped, count=1)
+	return stripped == template_text

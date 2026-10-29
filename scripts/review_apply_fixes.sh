@@ -105,6 +105,7 @@ fi
 # reviewers, seven runs in a row). The step probes for the marker below and
 # skips older staged copies that lack it.
 # supports: --preflight
+# supports: --repair-turn
 #
 # The preflight runs after the helper sourcing above, so a helper that unsets
 # or rewrites a variable at source time is seen exactly as the editor sees it.
@@ -270,8 +271,17 @@ run_editor_codex_attempt() {
       if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
       return 80
     fi
-    [ "${editor_claude_rc}" -eq 75 ] || return "${editor_claude_rc}"
+    if [ "${editor_claude_rc}" -ne 75 ]; then
+      # Clear an earlier attempt's OpenCode latch only when this Claude
+      # attempt succeeded: a failed Claude attempt wrote nothing, so edits an
+      # earlier OpenCode fallback left behind must keep the codex-bot identity.
+      if [ "${editor_claude_rc}" -eq 0 ] && [ -n "${GITHUB_ENV:-}" ]; then echo "REVIEW_EDITOR_ENGINE_FELL_BACK=false" >> "${GITHUB_ENV}" || true; fi
+      return "${editor_claude_rc}"
+    fi
     echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=claude_unavailable action=opencode" >&2
+    # The commit step (review_commit_changes.sh) reads this to keep the
+    # codex-bot identity on a commit OpenCode wrote.
+    if [ -n "${GITHUB_ENV:-}" ]; then echo "REVIEW_EDITOR_ENGINE_FELL_BACK=true" >> "${GITHUB_ENV}" || true; fi
   fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
@@ -285,6 +295,47 @@ run_editor_codex_attempt() {
 
   exec "${editor_opencode_cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
 }
+
+# One editor turn for the "Pre-push affected-test gate" step
+# (scripts/review_autofix_step_prepush_test_gate.sh): runs the prompt once
+# through run_editor_codex_attempt, so engine selection, the Claude ->
+# OpenCode fallback, the workspace safety check and the sandbox's validated
+# transfer stay in this one owner. The step probes the marker above.
+review_apply_fixes_repair_turn()
+{
+	local repair_prompt="${1:-}" repair_out="${2:-}" repair_rc=0
+	if [ -z "${repair_prompt}" ] || [ ! -f "${repair_prompt}" ] || [ -L "${repair_prompt}" ] || [ -z "${repair_out}" ]; then
+		echo "::warning::review_apply_fixes --repair-turn needs a regular prompt file and an output path" >&2
+		return 2
+	fi
+	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ] || ! : > "${repair_out}"; then
+		echo "::warning::review_apply_fixes --repair-turn has no writable RUNTIME_DIR or output" >&2
+		return 2
+	fi
+	MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-6-sol}"
+	EDITOR_REASONING_EFFORT="${EDITOR_REASONING_EFFORT:-high}"
+	EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
+	rm -f "${RUNTIME_DIR}/review_sandbox_transfer_reason_${repair_out##*/}"
+	(
+		trap '' PIPE
+		# A Claude capacity wait (exit 80) in this extra turn writes
+		# AUTOFIX_FAILURE_REASON=claude_capacity to GITHUB_ENV. The gate step
+		# reports it and the main fix is still committed, so it must not mark
+		# the whole review run as paused: give the turn a throwaway file.
+		GITHUB_ENV="${RUNTIME_DIR}/prepush_gate_repair_github_env"
+		: > "${GITHUB_ENV}" || exit 2
+		export GITHUB_ENV
+		PATH="${EDITOR_CODEX_PATH:-${PATH}}" run_editor_codex_attempt "${repair_prompt}" "${repair_out}" \
+			"${RUNTIME_DIR}/prepush_gate_repair_stderr.txt" "${RUNTIME_DIR}/prepush_gate_repair_activity" \
+			"${RUNTIME_DIR}/prepush_gate_repair_status"
+	) || repair_rc=$?
+	return "${repair_rc}"
+}
+
+if [ "${1:-}" = "--repair-turn" ]; then
+	review_apply_fixes_repair_turn "${2:-}" "${3:-}"
+	exit $?
+fi
 
 emit_context_budget_warn_for_prompt() {
   local phase="$1"
@@ -1319,7 +1370,13 @@ excluded except for ".github/workflows/", ".github/actions/" and the files
 ".github/ai/claude_engine.json" and ".claude/hooks/gh_api_write_guard.py".
 "scripts/claude_settings.json.tmpl" is also admitted. In particular,
 ".claude/commands/" files are admitted only when their twins exist in the
-verified workflow-support checkout. Other ".claude/" and ".github/ai/"
+verified workflow-support checkout. ".claude/docs/<name>.md" reference
+files are admitted the same way: only when their twin exists in the
+verified workflow-support checkout, so the ".claude/docs/" files present
+in your workspace are the admitted ones, and new ".claude/docs/" files
+cannot be created. When a twin "workflow-templates/.claude/docs/<name>.md"
+exists, edit both copies in the same run so they stay byte-identical.
+Other ".claude/" and ".github/ai/"
 paths are not available except for the named files. Secret, credential, ".env" and
 key-file paths, dependency and build directories, and files with extensions
 outside the admitted set are excluded and cannot be written back.
@@ -1546,7 +1603,7 @@ If additional context is required beyond what is inlined, you may read:
 - files imported by the changed code
 - the original bug report file located under ${PREVIOUS_REVIEWS_DIR}
 - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
-- The editor workspace contains only admitted source paths, including selected .claude/commands/ files, .claude/hooks/gh_api_write_guard.py and .github/ai/claude_engine.json when present. Do not create excluded paths; if a finding needs one, list it under Ignored suggestions with reason "sandbox-excluded path".
+- The editor workspace contains only admitted source paths, including selected .claude/commands/ files, selected .claude/docs/ reference files, .claude/hooks/gh_api_write_guard.py and .github/ai/claude_engine.json when present. Do not create excluded paths; if a finding needs one, list it under Ignored suggestions with reason "sandbox-excluded path".
 - Creating a directory symlink, an unadmitted directory under .github/ or .claude/, a directory with a secret-like name, or a case variant of an excluded build/cache directory aborts the whole transfer of your edits. Exact excluded build/cache names are omitted.
 The bug report may contain important context about the problem being fixed.
 
@@ -2347,13 +2404,14 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   _hb_fifo=""
   # The editor's stderr goes to tmp_err through the heartbeat FIFO and is
   # printed only on failure, so on a successful attempt the Claude engine's
-  # account-pool telemetry never reached the job log. Replay those lines on
+  # account-pool telemetry never reached the job log. Replay those lines,
+  # plus the usage JSON line claude_engine.py extract prints on success, on
   # every attempt (once per attempt, so a retried run replays each attempt's
   # lines) with a stage=editor prefix so they stay distinct from the raw
   # failure dump. Like the consolidator's stage=consolidator stderr= replay,
   # escape `%`, CR, `##[` and leading `::<cmd>` first so editor stderr can
   # never be parsed as a workflow command.
-  { grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${tmp_err}" 2>/dev/null || true; } | sed -e 's/%/%25/g' -e 's/\r/ /g' -e 's/##\[/##\\[/g' -e 's/^::\(error\|warning\|notice\|debug\|group\|endgroup\|add-mask\|add-matcher\|remove-matcher\|set-output\|save-state\|echo\|stop-commands\|add-path\|set-env\)\([[:space:]]\|::\)/::\\\1\2/g' -e 's/^/stage=editor /' >&2 || true
+  { grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) |^\{.*"type": "result"' "${tmp_err}" 2>/dev/null || true; } | sed -e 's/%/%25/g' -e 's/\r/ /g' -e 's/##\[/##\\[/g' -e 's/^::\(error\|warning\|notice\|debug\|group\|endgroup\|add-mask\|add-matcher\|remove-matcher\|set-output\|save-state\|echo\|stop-commands\|add-path\|set-env\)\([[:space:]]\|::\)/::\\\1\2/g' -e 's/^/stage=editor /' >&2 || true
 
   # The watchdog subshell exits on its own (143/142/144) after it kills the
   # editor, so by the time the editor process is reaped the watchdog may
@@ -2532,7 +2590,9 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
     if [ -s "${tmp_err}" ]; then
       echo "Editor stderr on attempt ${attempt}:"
-      cat "${tmp_err}"
+      # The usage JSON line was already replayed above as stage=editor; drop it
+      # here so cost_audit.py does not count the same Claude call twice.
+      sed -e '/^{.*"type": "result"/d' "${tmp_err}"
     fi
     rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
     exit 78
@@ -2838,13 +2898,17 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     fi
     if [ -s "${tmp_err}" ]; then
       echo "Editor stderr on attempt ${attempt}:"
-      cat "${tmp_err}"
+      # The usage JSON line was already replayed above as stage=editor; drop it
+      # here so cost_audit.py does not count the same Claude call twice.
+      sed -e '/^{.*"type": "result"/d' "${tmp_err}"
     fi
   else
     echo "Editor execution failed on attempt ${attempt}."
     if [ -s "${tmp_err}" ]; then
       echo "Editor stderr on attempt ${attempt}:"
-      cat "${tmp_err}"
+      # The usage JSON line was already replayed above as stage=editor; drop it
+      # here so cost_audit.py does not count the same Claude call twice.
+      sed -e '/^{.*"type": "result"/d' "${tmp_err}"
     fi
   fi
   if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
@@ -2997,5 +3061,7 @@ fi
 final_editor_err="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
 if [ -n "${final_editor_err}" ] && [ -s "${final_editor_err}" ]; then
   echo "Editor stderr from final attempt:"
-  cat "${final_editor_err}"
+  # Same filter as the per-attempt dumps: the usage JSON line was already
+  # replayed as stage=editor, so cost_audit.py must not see it twice.
+  sed -e '/^{.*"type": "result"/d' "${final_editor_err}"
 fi

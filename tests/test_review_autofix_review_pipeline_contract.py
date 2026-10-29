@@ -88,6 +88,9 @@ def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> Non
 	for key in ("PR_EVENT_HEAD_SHA", "GATE_HEAD_SHA", "GATE_AUTO_MERGE_ENABLED", "DETERMINISTIC_SKIP", "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED"):
 		assert f"{key}:" in workflow
 	assert 'review_head_gate.sh' in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split()
+	# #8195: the consolidator, parser, ledger and floor-rule stages are skipped when these are not staged.
+	for script in ("review_floor_rules.sh", "review_consolidate.sh", "review_parse_consolidator.sh", "review_issue_ledger.sh", "ledger_emit_substate.sh", "codex_thread_reuse.sh"):
+		assert script in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split(), script
 	assert 'REVIEW_HEAD_GATE_CONTEXT="ai-review/head-gate"' in HEAD_GATE_HELPER.read_text(encoding="utf-8")
 	assert auto_merge.index('review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"', auto_merge.index('_orch_pr_head_sha=')) < auto_merge.index('gh_retry gh pr merge')
 	judge_lines = judge.splitlines()
@@ -1287,9 +1290,9 @@ def _run_review_tier_harness(
 			"HAS_PR_DIFF": "true",
 			"REVIEW_TIER_RESOLVER_ENABLED": "true",
 			"REVIEW_TIER_LITE_MAX_LOC": "50",
-			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.7-plus",
+			"REVIEW_TIER_LITE_REVIEWER_SLUG": "google/gemini-3.1-flash-lite",
 			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,z-ai/glm-5.3-flash,qwen/qwen3.7-plus,openai/gpt-6-luna",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,z-ai/glm-5.3-flash,google/gemini-3.1-flash-lite,openai/gpt-6-luna",
 			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
@@ -4435,7 +4438,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert lite_result["REVIEW_TIER"] == "lite"
 	assert lite_result["REVIEW_TIER_REASON"] == "doc_only_<=50_loc"
 	assert lite_result["review_tier_file"] == "lite"
-	assert lite_result["active_models"] == ["qwen/qwen3.7-plus"]
+	assert lite_result["active_models"] == ["google/gemini-3.1-flash-lite"]
 	assert lite_result["REVIEW_TIER_FORCED_FULL"] == "false"
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" in lite_result["github_env"]
 	assert "REVIEW_TIER: tier=lite" in lite_result["stdout"]
@@ -4445,7 +4448,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	code_lite_result = _run_review_tier_harness(diff_text=unprotected_code_diff)
 	assert code_lite_result["REVIEW_TIER"] == "lite"
 	assert code_lite_result["REVIEW_TIER_REASON"] == "code_<=50_loc_unprotected"
-	assert code_lite_result["active_models"] == ["qwen/qwen3.7-plus"]
+	assert code_lite_result["active_models"] == ["google/gemini-3.1-flash-lite"]
 
 	# A small diff under a protected path never drops below four reviewers.
 	standard_result = _run_review_tier_harness(diff_text=standard_diff)
@@ -4456,7 +4459,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert standard_result["active_models"] == [
 		"minimax/minimax-m3",
 		"z-ai/glm-5.3-flash",
-		"qwen/qwen3.7-plus",
+		"google/gemini-3.1-flash-lite",
 		"openai/gpt-6-luna",
 	]
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
@@ -4666,7 +4669,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	becomes the lite pool (PR #6438: the panel models now cost about the same,
 	so no model is reserved for the full tier)."""
 	reviewer_models = _workflow_reviewer_models()
-	assert len(reviewer_models) == 6
+	assert len(reviewer_models) == 5
 
 	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	default_line = "REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}"
@@ -4695,7 +4698,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	assert default_standard_picks == set(reviewer_models)
 
 	# A repo that pins the standard list: lite draws from that list only.
-	pinned_standard = ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
+	pinned_standard = ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "google/gemini-3.1-flash-lite", "openai/gpt-6-luna"]
 	assert set(pinned_standard) < set(reviewer_models)
 	excluded = set(reviewer_models) - set(pinned_standard)
 	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(pinned_standard)}
@@ -4728,7 +4731,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 
 	# A standard list with an unknown slug: lite draws from the full panel and
 	# says so, while standard itself fails open to the full panel as before.
-	bad_standard = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "qwen/qwen3.7-plus,unknown/model"}
+	bad_standard = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "google/gemini-3.1-flash-lite,unknown/model"}
 	bad_lite = _run_review_tier_harness(diff_text=lite_diff, extra_env={**bad_standard, "PR_NUMBER": "4242"})
 	assert bad_lite["REVIEW_TIER"] == "lite"
 	assert bad_lite["active_models"] == expected_lite("4242", reviewer_models)
@@ -4739,11 +4742,11 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 		diff_text=lite_diff,
 		extra_env={
 			"REVIEW_TIER_LITE_REVIEWER_SLUG": "",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "qwen/qwen3.7-plus,qwen/qwen3.7-plus",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "google/gemini-3.1-flash-lite,google/gemini-3.1-flash-lite",
 			"PR_NUMBER": "9",
 		},
 	)
-	assert dup_lite["active_models"] == ["qwen/qwen3.7-plus"]
+	assert dup_lite["active_models"] == ["google/gemini-3.1-flash-lite"]
 
 	# A pinned lite slug still wins over the standard pool.
 	pinned_lite = _run_review_tier_harness(
@@ -5205,7 +5208,6 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 		"google/gemini-3.1-flash-lite",
 		"minimax/minimax-m3",
 		"openai/gpt-6-luna",
-		"qwen/qwen3.7-plus",
 		"z-ai/glm-5.3-flash",
 	]
 	# The Claude review-panel slot never runs on OpenRouter: it retries on
@@ -5221,6 +5223,8 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
 	assert chains["openai/gpt-6-luna"] == ["openai/gpt-5.6-luna"]
+	# Retired from the panel in the 2026-10-26 cost cut (lowest unique-finding
+	# yield per dollar); kept for operator overrides.
 	assert chains["qwen/qwen3.7-plus"] == ["qwen/qwen3.6-plus"]
 	# Retired-roster mappings stay for operator overrides (CLAUDE.md §6).
 	assert chains["z-ai/glm-5.2"] == ["z-ai/glm-5.3-flashx"]
@@ -7819,7 +7823,7 @@ def test_review_blocked_judge_merges_are_bound_to_judged_head_sha() -> None:
 	assert '[[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in judge_text, (
 		"review-blocked judge must refuse merge actions without a full evaluated head SHA"
 	)
-	for merge_mode in ("--squash --auto", "--squash"):
+	for merge_mode in ('"${RB_MERGE_METHOD_FLAG:---squash}" --auto', '"${RB_MERGE_METHOD_FLAG:---squash}"'):
 		expected_call = (
 			'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" '
 			f'{merge_mode} --match-head-commit "${{RB_JUDGED_HEAD_SHA}}"'
@@ -9284,6 +9288,11 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	block = apply_fixes.split("SANDBOX WORKSPACE LIMITS", 1)[1].split("=== BEGIN UNTRUSTED", 1)[0]
 	assert ".claude/commands/" in block
 	assert "sandbox-excluded path" in block
+	# #8321: twinned .claude/docs/ reference files are admitted; both copies are edited together.
+	assert '".claude/docs/<name>.md" reference' in block
+	assert "edit both copies in the same run so they stay byte-identical" in block
+	assert 'new ".claude/docs/" files' in block and "cannot be created" in block
+	assert "selected .claude/docs/ reference files" in apply_fixes
 	assert "`" not in block and "$" not in block and "\\" not in block
 	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
 	assert spec is not None and spec.loader is not None
@@ -9294,6 +9303,102 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	assert not workspace_module.allowed(".claude/hooks/pr_merge_status_guard.py")
 	assert workspace_module.allowed(".github/workflows/x.yml")
 	assert workspace_module.allowed(".claude/hooks/gh_api_write_guard.py")
+
+
+def test_review_isolation_admits_only_twinned_claude_docs() -> None:
+	"""#8321: .claude/docs/<name>.md is admitted like .claude/commands/*.md (twin-only)."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	spec = importlib.util.spec_from_file_location("review_workspace_docs_admission", workspace_helper)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	admitted = {".claude/docs/x.md"}
+	assert module.allowed(".claude/docs/x.md", commands=admitted)
+	assert not module.allowed(".claude/docs/x.md")
+	assert not module.allowed(".claude/docs/y.md", commands=admitted)
+	for rejected in (".claude/docs/a/x.md", ".claude/docs/.x.md", ".claude/docs/x.txt", ".claude/hooks/other.py", ".claude/settings.json", ".claude/settings.local.json"):
+		assert not module.allowed(rejected, commands=admitted | {rejected}), rejected
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / ".claude/docs").mkdir(parents=True)
+		(host / ".claude/docs/x.md").write_text("live before\n")
+		(host / ".claude/docs/y.md").write_text("untwinned\n")
+		(host / "workflow-templates/.claude/docs").mkdir(parents=True)
+		(host / "workflow-templates/.claude/docs/x.md").write_text("live before\n")
+		(host / "workflow-templates/.claude/docs/y.md").write_text("PR-only twin\n")
+		# z.md is twinned on both sides but has no live copy: never admitted.
+		(host / "workflow-templates/.claude/docs/z.md").write_text("template only\n")
+		trusted = root / "verified" / ".codex-workflow-src" / "workflow-templates/.claude/docs"
+		trusted.mkdir(parents=True)
+		(trusted / "x.md").write_text("trusted template\n")
+		(trusted / "z.md").write_text("trusted template\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".claude", "workflow-templates"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "verified")},
+				capture_output=True, text=True, check=False,
+			)
+
+		snap = run("snapshot")
+		assert snap.returncode == 0, snap.stderr
+		inventory = json.loads(manifest.with_name(manifest.name + ".admitted_commands.json").read_text())
+		assert inventory == [".claude/docs/x.md"]
+		assert (source / ".claude/docs/x.md").exists()
+		assert not (source / ".claude/docs/y.md").exists()
+		assert (source / "workflow-templates/.claude/docs/x.md").exists()
+		# An unadmitted new docs file is dropped by refresh and never transferred.
+		(source / ".claude/docs/new.md").write_text("new instructions\n")
+		refreshed = run("refresh")
+		assert refreshed.returncode == 0, refreshed.stderr
+		assert not (source / ".claude/docs/new.md").exists()
+		# Both copies transfer back together; a new docs file does not.
+		(source / ".claude/docs/x.md").write_text("live after\n")
+		(source / "workflow-templates/.claude/docs/x.md").write_text("live after\n")
+		(source / ".claude/docs/new.md").write_text("new instructions\n")
+		(source / ".claude/docs/z.md").write_text("created live copy\n")
+		moved = run("transfer")
+		assert moved.returncode == 0, moved.stderr
+		assert (host / ".claude/docs/x.md").read_text() == "live after\n"
+		assert (host / "workflow-templates/.claude/docs/x.md").read_text() == "live after\n"
+		assert not (host / ".claude/docs/new.md").exists()
+		assert not (host / ".claude/docs/z.md").exists()
+		assert (host / ".claude/docs/y.md").read_text() == "untwinned\n"
+		# Heal scope (strict enumeration, no admitted inventory) still refuses .claude/docs/.
+		with pytest.raises(ValueError, match="out of heal scope|unsafe workspace directory"):
+			list(module.enumerate_workspace(source, None, None, strict=True))
+		# A forged nested docs entry in the frozen inventory fails closed.
+		inventory_path = manifest.with_name(manifest.name + ".admitted_commands.json")
+		inventory_path.write_text(json.dumps([".claude/docs/a/b.md"]))
+		with pytest.raises(ValueError, match="admitted command inventory missing"):
+			module.load_admitted_commands(manifest)
+		forged = run("transfer")
+		assert forged.returncode == 1
+		assert "reason=admitted_inventory_missing" in forged.stderr
+	# Without docs twins in the verified checkout, creating .claude/docs/ stays an unsafe directory.
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / "scripts/a.py").write_text("x = 1\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		env = {**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "verified")}
+		assert subprocess.run([sys.executable, str(workspace_helper), "snapshot", str(host), str(source), str(manifest)], env=env, capture_output=True, text=True).returncode == 0
+		(source / ".claude/docs").mkdir(parents=True)
+		(source / ".claude/docs/x.md").write_text("new\n")
+		rejected_run = subprocess.run([sys.executable, str(workspace_helper), "transfer", str(host), str(source), str(manifest)], env=env, capture_output=True, text=True)
+		assert rejected_run.returncode == 1 and "reason=unsafe_directory" in rejected_run.stderr
+		assert not (host / ".claude").exists()
 
 
 def test_review_isolation_transfer_failure_evidence() -> None:
@@ -9921,7 +10026,7 @@ def test_review_sandbox_transfer_reason_is_reported_and_archived() -> None:
 	assert 'cp "${transfer_reason_file}" "${PREVIOUS_REVIEWS_DIR}/review_sandbox_transfer_reason_${attempt}.txt"' in block
 	assert "::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason=${transfer_reason}" in block
 	assert 'transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"' in block
-	assert "including selected .claude/commands/ files, .claude/hooks/gh_api_write_guard.py" in apply_fixes
+	assert "including selected .claude/commands/ files, selected .claude/docs/ reference files, .claude/hooks/gh_api_write_guard.py" in apply_fixes
 	assert "sandbox-excluded path" in apply_fixes
 
 
@@ -10741,6 +10846,111 @@ def _run_reviewer_pass2_shadow_tests() -> None:
 		with tempfile.TemporaryDirectory(prefix="pass2-shadow-") as tmp:
 			func(Path(tmp), *args)  # type: ignore[operator]
 	test_reviewer_pass2_shadow_is_never_read_by_pass2_control()
+
+
+# ── Integration post-sync test repair (#8210, plan phase P5) ──────────
+
+_POST_SYNC_REPAIR_SKIP_CLAUSE = "env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'"
+
+
+def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	pre_review = [line for line in raw.splitlines() if "env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'" in line]
+	assert len(pre_review) == 17, len(pre_review)
+	for line in pre_review:
+		assert line.lstrip().startswith("if: "), line
+		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in line, line
+	# Plus the two merge-authorizing steps: a repair-only run reviewed nothing,
+	# so it must neither enable auto-merge nor apply ai:ready-to-merge.
+	# The security-pass gate and the review-blocked judge skip too: neither may
+	# dispatch an audit, use up a cycle, or fix/merge on a repair-only run.
+	for name in (
+		"Enable auto-merge on PR",
+		"Mark linked issues ready to merge",
+		"Single-issue security pass",
+		"Review-blocked judge decision",
+		# With the judge skipped its outputs are empty, so the exhaustion
+		# fallbacks would label, comment, poll and page without a verdict.
+		"Mark linked issues review-blocked (autofix exhaustion)",
+		"Force orchestrate poll after review-blocked exhaustion",
+		"Post review-blocked comment on PR (autofix exhaustion)",
+		"Telegram review-blocked judge decision",
+		"Telegram success",
+	):
+		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 26
+
+
+def test_post_sync_test_repair_commit_is_pushed() -> None:
+	push = _step_block("Push all pending commits")
+	assert (
+		"(env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true' || env.INTEGRATION_TEST_REPAIRED == 'true')"
+		in push
+	)
+	retrigger = _step_block("Re-trigger review via workflow_dispatch")
+	assert "INTEGRATION_TEST_REPAIRED" not in retrigger
+
+
+def test_post_sync_test_repair_step_follows_the_topology_gate() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	topology = raw.index("      - name: Pre-review deterministic merge-topology gate\n")
+	step = raw.index("      - name: Integration post-sync test repair\n")
+	reviewers = raw.index("      - name: Run reviewer models\n")
+	assert topology < step < reviewers
+	following = raw[topology + 1:step]
+	assert following.count("      - name: ") == 0
+	block = raw[step:reviewers]
+	assert "if: inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-') && env.CAN_PUSH == 'true'" in block
+	assert "continue-on-error: true" in block
+	assert "PREPUSH_TEST_GATE_STEP_MODE: integration" in block
+	assert "POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair }}" in block
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in block
+	assert 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"' in block
+	assert "review_autofix_step_prepush_test_gate.sh" in block
+
+
+def test_post_sync_test_repair_input_is_declared_on_both_triggers_and_the_template() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	declaration = (
+		"      post_sync_test_repair:\n"
+		"        description: \"Integration branch only: gate and repair post-sync test failures (#8210)\"\n"
+		"        required: false\n"
+		"        default: false\n"
+		"        type: boolean\n"
+	)
+	assert raw.count(declaration) == 2
+	call_start = raw.index("  workflow_call:\n")
+	dispatch_start = raw.index("  workflow_dispatch:\n")
+	positions = [m.start() for m in re.finditer(re.escape(declaration), raw)]
+	assert any(call_start < pos < dispatch_start for pos in positions)
+	assert any(pos > dispatch_start for pos in positions)
+	template = (REPO_ROOT / "workflow-templates" / "ai-review.yml").read_text(encoding="utf-8")
+	assert re.search(r"^      post_sync_test_repair:\n        description: ", template, re.M)
+	assert (
+		"      post_sync_test_repair: ${{ github.event_name == 'workflow_dispatch' && "
+		"github.event.inputs.post_sync_test_repair == 'true' }}\n"
+	) in template
+	# internal-review.yml calls review_autofix.yml@main, which must declare
+	# the input before a pass-through can land (PR #4438 startup_failure).
+	internal = (REPO_ROOT / ".github" / "workflows" / "internal-review.yml").read_text(encoding="utf-8")
+	assert "post_sync_test_repair" not in internal
+
+
+def test_post_sync_test_repair_keeps_review_autofix_well_under_the_size_guard() -> None:
+	assert WORKFLOW.stat().st_size < 430_000, WORKFLOW.stat().st_size
+
+
+def test_post_sync_test_repair_step_script_mode_and_resolver_hand_off() -> None:
+	script = (REPO_ROOT / "scripts" / "review_autofix_step_prepush_test_gate.sh").read_text(encoding="utf-8")
+	assert 'if [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "integration" ]; then' in script
+	body = script[script.index("review_prepush_test_gate_integration_main()\n{"):]
+	body = body[:body.index("\n}\n")]
+	# The skip flag is written before any mode/conflict/merge-base check.
+	active = body.index('echo "INTEGRATION_TEST_REPAIR_ACTIVE=true" >> "${GITHUB_ENV}"')
+	assert active < body.index("review_prepush_test_gate_mode")
+	assert active < body.index("reason=conflict_path")
+	assert 'bash "${resolver}" --test-repair "${gate_dir}/run1/result.json"' in body
+	assert "--phase integration" in body
 
 
 if __name__ == "__main__":

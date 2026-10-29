@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (127)
+## Processed source docs (128)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -133,6 +133,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-22-2.md`
 - `analysis/workflow-optimization-2026-09-22-3.md`
 - `analysis/workflow-optimization-2026-09-23.md`
+- `analysis/workflow-optimization-2026-09-26.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1539,3 +1540,75 @@ Processed: 2026-10-23
 - DEAD-001: already-implemented — `BRANCH_REBUILD_THRESHOLD_DECISION` logs `skip_reason` and `last_rebuild_at`.
 - MERGE-001 / MERGE-003 / MERGE-004 / MERGE-005 and REUSE-001: rejected — RISKY_SKIP per the doc.
 - MERGE-002: rejected — RISKY_SKIP, and also already-implemented: clarify's comment read is paginated once and shared.
+
+### `analysis/workflow-optimization-2026-09-25.md`
+Processed: 2026-10-25
+- SEC-001 / SEC-002 (gh_helpers.sh log redaction): applied — issue #8095: `gh_retry` and `gh_api_json_to_file` no longer print request-body arguments or raw response text on failure.
+- BUG-003 (merge-probe unknown sibling state): applied — issue #8096: a failed sibling-PR lookup is cached as unknown, not as an empty list, and the merge is deferred until the lookup succeeds.
+- Executive 4 / Rel 4 / Cost 1, failure-class part: applied — issue #8097: one `REVIEWER_ATTEMPT_RESULT` line per OpenCode reviewer attempt, with `empty_structured_output` and `provider_request_invalid` classes.
+- Rel 3 / Speed 3, diagnostic part: applied — `tests/test_assemble_prompt.py` reports the template name, the first differing character offset, the lengths and the hashes when assembled and legacy prompt bytes differ; byte equality is unchanged.
+- Executive 1 / Speed 2 / Rel 1 (missing `pre_assembled_static.txt`): already-implemented — every `git clean` in `scripts/review_autofix_step_merge_topology_gate.sh` excludes the file (`-e pre_assembled_static.txt`), and `review_autofix_step_preflight_required_files.sh` checks it.
+- Executive 2 / Speed 1 / Rel 2 (substate timeout storm): already-implemented — the job-scoped circuit breaker in `scripts/ledger_emit_substate.sh` (`circuit_open`) skips later substates after the first timeout or auth failure.
+- Shortening the `LEDGER_EMIT_TIMEOUT_SECONDS` default to 10-15 s: rejected — the breaker already limits the cost to one wait per job, memory writes push to a git branch with retries, and there is no evidence a short timeout keeps them reliable.
+- Moving the strict-render test earlier in CI: rejected — obsolete since CI became parallel jobs (#4707).
+- Executive 5 and Orchestrator health skip reasons: already-implemented — `AI_PHASE_GATE_V1` gate/reason lines.
+- Orchestrator health, fingerprint-cap terminal handoff: already-implemented — the `fingerprint-cap-block` job, the `ai:review-blocked` label, the cap comment and the heal report.
+- Rel 4, bytecode artefacts: already-implemented — `__pycache__` is excluded in `review_untrusted_workspace.py`, and the helpers run with `PYTHONDONTWRITEBYTECODE`.
+- Rel 4, manifest and workspace-guard classes for the editor: already-implemented — `EDITOR_ATTEMPT_RESULT` `failure_class`.
+- Rel 4, supplying only one reasoning control: rejected — not reproducible; `scripts/write_opencode_config.sh` writes only `reasoning.effort` and no `max_tokens`, and the new `provider_request_invalid` class will surface any recurrence.
+- `CONTEXT_BUDGET_WARN`: already-implemented — already emitted pre-flight.
+- Close-cleanup unlinked-run logging: already-implemented — `cancel_on_pr_close` lists the preserved unlinked runs.
+- Speed 4 (poller timing), Cost 2 (reasoning trials), Cost 3 (extra cache logging; prefix bytes are already logged), Rel 5 (startup annotations), Semble probe separation, AI memory health counters, check-run and API request counters, and queue latency: rejected — measurement-only proposals with no failure behind them, or collector-side work.
+- Cost 4 (Semble overflow trimming): rejected — medium quality risk that needs a review-quality comparison.
+- Cost 5 (Serena): rejected — informational only, nothing to change.
+- BUG-001: already-implemented — `_parse_pages` in `collect_pr_check_runs_context.py` raises on empty or malformed output, and the result ends as `api_error`.
+- BUG-002: already-implemented — the sweep skips dispatch on an incomplete active-run snapshot (`AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE`).
+- BUG-004: already-implemented — reviews are dispatched from the default branch with `[pr:<N>]` run names and are matched by PR number.
+- BUG-005: already-implemented — the pass-1 summariser runs only when `pass1_successful` is above 0.
+- BUG-006: rejected — `MERGE_TRAIN_MAX_OLDER_PRS` is a documented API-budget bound in the `review_merge_train.sh` header; returning 'incomplete' would hold trains deeper than 20 PRs, which needs an owner decision.
+- BUG-007: already-implemented — `review_collect_pr_metadata.sh` fails closed on an unresolved default branch.
+- BUG-008: already-implemented — follow-up issue creation is a single attempt, and `gh_retry` makes one attempt for non-idempotent creates.
+- EXPR-001: already-implemented — the `implement.yml` 'Stage workflow support files' step passes vars through `env:`, its `run:` body has no `${{ }}`, and `tests/test_workflow_file_size_limit.py` guards the limit.
+- API-001 / API-002 / API-003, BATCH-001 / BATCH-002 and MERGE-002: rejected — tagged RISKY_SKIP by the doc itself (pagination, retry and race-sensitive paths); API-002 is largely superseded by the `gh_api_retry` classifier.
+- MERGE-001 and REUSE-001: rejected — NEEDS_VERIFICATION; coverage equivalence for the release guard and the cross-job freshness contract cannot be verified statically.
+- DUP-001 / DUP-002 / DUP-003: rejected — refactor-only; new shared helpers would have to be staged into every support and sandbox list, risking missing-helper failures.
+- DEAD-001: rejected — removing identifiers needs explicit approval (naming immutability).
+- SHELL-001: rejected — needs a per-code triage of about 40 warnings across many scripts before the gate is raised; out of scope for an automated change.
+
+### `analysis/workflow-optimization-2026-09-26.md`
+Processed: 2026-10-25
+- Speed #1 (ledger substate timeouts): already-implemented — `LEDGER_EMIT_TIMEOUT_SECONDS` bounds each call, and the job-scoped circuit breaker `LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED` exists in `scripts/ledger_emit_substate.sh`. The per-run summary line is rejected as superseded by the breaker.
+- Speed #2 / Reliability #1 (fail CI contracts early, run ruff first): already-implemented — since #4707, CI's static-checks job (shell-block guard, ruff) runs in parallel with the test jobs from the start. `tests/test_codex_thread_reuse_core.py` now asserts `validate.yml`'s trusted `stage_workflow_support.sh validate --manifest` bootstrap.
+- Speed #3 (memory clone/write/push timing): applied — issue #8130. Checkout reuse is deferred until the new timing shows that clone time dominates.
+- Speed #4 (CI shard blind interval): already-implemented — the shard runner emits `TEST_CASE_EVENT` per test, and the orchestrate-poll matrix has 5 groups since #8113.
+- Cost #1 (editor change loss): already-implemented — the editor-changes-lost detector and redispatch exist, and `EDITOR_ATTEMPT_RESULT` logs each attempt.
+- Cost #2 and the Prompt Cache section (stable-prefix hash logging): rejected — diagnostics only, with no defined consumer; needs its own design.
+- Cost #3 (Semble net bytes): rejected — diagnostics only, with no defined consumer; needs its own design.
+- Cost #4 (do not downgrade models on config alone): already-implemented as advisory — `EDITOR_ATTEMPT_RESULT` and `REVIEWER_ATTEMPT_RESULT` record the model per attempt, and no change was proposed.
+- Reliability #2 (support staging diagnostics): already-implemented — `stage_workflow_support.sh` names the missing file and the support SHA and fails closed, and `review_autofix.yml` "Log token usage" guards `EDITOR_SUMMARY_FILE` with `:-`.
+- Reliability #3 (blocked reviews as blocked work): already-implemented — the fingerprint-cap-block job, the `review-autofix-failure-cap:v1` comment and `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` exist, with re-arm on a new support SHA (#6911).
+- Reliability #4 (renderer stderr excerpt): rejected — one observed run; the manifest shell-safety gate already logs pointer and class on exit 14, and copying renderer stderr into summaries risks echoing consumer-controlled text.
+- Reliability #5 (synthetic MCP fallbacks): rejected — interpretation only, no change proposed.
+- AI Memory Health (timing and reason category): the reason category is already-implemented (`memory_helpers.sh` `stderr_category`); timing is applied through Speed #3 (issue #8130).
+- GH API update-branch on dirty PRs: rejected — at most two writes saved, and the conflict-heal call sites in `orchestrate_poll_process.sh` use the attempt deliberately.
+- GH API read-path hygiene: rejected — the doc confirms no unbatched read.
+- GH_API per-step aggregate: rejected — broad new telemetry; `GH_API_RETRY` already logs each retried call.
+- Orchestrator transition and skip-reason events: rejected — broad telemetry; `POLL_PROGRESS` and `AI_PHASE_GATE_V1` already record progression and skip reasons.
+- Queue timestamps: rejected — the doc states no optimization is justified.
+- SEC-001 (PR-head triage instructions): already-implemented — triage stages trusted support, sets `persist-credentials: false` and diagnoses in the credential-free isolated container.
+- BUG-001 (failed dedup read permits a new triage issue): applied — issue #8126.
+- BUG-002 (merge-train older-PR cap): rejected — `MERGE_TRAIN_OLDER_PR_CAP` is a deliberate, logged fail-open API bound, consistent with the gate failing open on unverifiable state; failing closed would starve PRs.
+- BUG-003 (candidate PR cache does not enforce repository identity): applied — issue #8128.
+- BUG-004 (merge-train comment writes report success on failure): applied — issue #8127.
+- BATCH-001 and BATCH-002: rejected — tagged RISKY_SKIP by the doc itself.
+- API-001 (known label created again per linked issue): applied — issue #8129.
+- DUP-001: rejected — a refactor of trust-boundary steps whose copies have since diverged deliberately; contract tests pin each workflow.
+- DUP-002: rejected — a release-safety refactor with no defect; both copies were updated together.
+- DUP-003: rejected — conditional on recurring drift, and the predicate-parity test exists.
+- EXPR-001: already-implemented — the "Stage workflow support files" run body in `implement.yml` has no `${{ }}`; values pass through `STAGE_*` env.
+- EXPR-002: rejected — below the doc's own risk thresholds.
+- CONSIST-001: already-implemented — `set_issue_phase_label_resilient` now POSTs the target and DELETEs stale phase labels one at a time, with no full-set PUT.
+- DEAD-001: rejected — a guarded fallback that sourced helpers (`pr_checks_lib.sh`) may call.
+- SHELL-001: rejected — style only; SC2043 is not enforced at CI's error severity.
+- DEBT-001: already-implemented — the 480,000-byte CI guard exists, and `ci_budget_watch` opens `ai:ci-budget` at 440,000 bytes.
+- MERGE-001 and MERGE-002: rejected — tagged RISKY_SKIP by the doc itself.

@@ -290,7 +290,7 @@ memory_ensure_branch()
 		cd "${temp_dir}"
 		git init --quiet
 		git config user.name "codex-bot"
-		git config user.email "codex@users.noreply.github.com"
+		git config user.email "codex-bot@users.noreply.invalid"
 		git remote add origin "${origin_url}"
 		git checkout --orphan "${branch}"
 
@@ -732,7 +732,7 @@ _memory_force_tick_ensure_branch()
 		cd "${tmp_dir}"
 		git init --quiet
 		git config user.name "codex-bot"
-		git config user.email "codex@users.noreply.github.com"
+		git config user.email "codex-bot@users.noreply.invalid"
 		git checkout --orphan "${branch}" >/dev/null 2>&1
 		mkdir -p "${memory_root}"
 		echo "AI memory branch — created automatically." > "${memory_root}/README.md"
@@ -1028,7 +1028,7 @@ memory_force_tick_put()
 	(
 		cd "${tmp_dir}"
 		git config user.name "codex-bot"
-		git config user.email "codex@users.noreply.github.com"
+		git config user.email "codex-bot@users.noreply.invalid"
 		git add "${memory_root}/runs/force_tick/${tracking_issue}.json"
 		if git diff --cached --quiet; then
 			:

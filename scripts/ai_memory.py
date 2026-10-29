@@ -392,6 +392,9 @@ def cmd_record_run_event(args: argparse.Namespace) -> int:
         event_type=args.event_type,
         did_push=result.get("did_push", False),
         push_attempts=result.get("push_attempts", 0),
+        clone_ms=result.get("clone_ms", 0),
+        write_ms=result.get("write_ms", 0),
+        push_ms=result.get("push_ms", 0),
     )
     return 0
 
@@ -737,6 +740,9 @@ def cmd_record_candidate(args: argparse.Namespace) -> int:
         issue_number=issue_number,
         did_push=result.get("did_push", False),
         push_attempts=result.get("push_attempts", 0),
+        clone_ms=result.get("clone_ms", 0),
+        write_ms=result.get("write_ms", 0),
+        push_ms=result.get("push_ms", 0),
     )
     return 0
 

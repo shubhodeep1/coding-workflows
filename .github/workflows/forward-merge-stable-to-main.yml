@@ -265,6 +265,42 @@ jobs:
           # warnings while the real resolver ran on main's ref).
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
 
+          # Reuse an open fallback PR that already carries this stable tip
+          # (PRs #8169 and #8170). A release pushes to stable, which starts
+          # this workflow, and test-and-mark-stable.yml's sync-to-main job
+          # then dispatches it again for the same commit. The concurrency
+          # group serializes the two runs, but each one opened its own PR
+          # from its own run-id branch. Both PRs resolved the same conflict
+          # separately, so once the first merged, the second had two merge
+          # bases with main, conflicted on GitHub and never merged.
+          # API budget (CLAUDE.md §15): one paginated REST list of open PRs
+          # into main (one call per 100 PRs), issued only on this fallback
+          # path. Only same-repository heads count, so a fork PR whose ref
+          # name matches a leftover origin branch cannot suppress the new
+          # PR. The calls below cannot answer
+          # it: `gh pr create` runs after the branch push, and
+          # resolve_existing_pr_number only looks up this run's own branch.
+          # Fail open: if the list or a branch fetch fails, open a new PR as
+          # before, because a missing PR would strand the stable fix.
+          STABLE_TIP="$(git rev-parse origin/stable)"
+          EXISTING_FALLBACK_PRS=""
+          if ! EXISTING_FALLBACK_PRS="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" --paginate \
+            --jq '.[] | select((.head.repo.full_name // "") == env.GITHUB_REPOSITORY and (.head.ref | startswith("auto/forward-merge-stable-"))) | "\(.number) \(.head.ref)"' 2>/dev/null)"; then
+            EXISTING_FALLBACK_PRS=""
+            echo "::warning::Could not list open forward-merge PRs; opening a new fallback PR without the duplicate check."
+          fi
+          while read -r EXISTING_PR_NUMBER EXISTING_PR_REF; do
+            [ -n "${EXISTING_PR_REF:-}" ] || continue
+            if git fetch --no-tags origin "+refs/heads/${EXISTING_PR_REF}:refs/remotes/origin/${EXISTING_PR_REF}" 2>/dev/null \
+              && git merge-base --is-ancestor "${STABLE_TIP}" "refs/remotes/origin/${EXISTING_PR_REF}"; then
+              echo "FORWARD_MERGE_FALLBACK outcome=reused pr=${EXISTING_PR_NUMBER} head_ref=${EXISTING_PR_REF} stable=${STABLE_TIP:0:12}"
+              echo "::notice::Open forward-merge PR #${EXISTING_PR_NUMBER} already carries stable ${STABLE_TIP:0:12}; not opening a duplicate."
+              echo "reused_pr_number=${EXISTING_PR_NUMBER}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done <<< "${EXISTING_FALLBACK_PRS}"
+          echo "FORWARD_MERGE_FALLBACK outcome=open_new stable=${STABLE_TIP:0:12}"
+
           # The merge-strategy warning is identical on both paths and
           # MUST appear at the top of the PR body. Squash-merging or
           # rebase-merging this PR drops `stable`'s commits from `main`'s
@@ -444,8 +480,11 @@ jobs:
           set -euo pipefail
           AHEAD="${{ steps.check.outputs.ahead }}"
           STATUS="${{ steps.direct.outputs.merge_status }}"
+          REUSED_PR="${{ steps.fallback.outputs.reused_pr_number }}"
           if [ "${AHEAD}" = "0" ]; then
             echo "Result: no-op (stable already merged into main)"
+          elif [ -n "${REUSED_PR}" ]; then
+            echo "Result: open fallback PR #${REUSED_PR} already carries this stable commit; no new PR"
           elif [ "${STATUS}" = "pushed" ]; then
             echo "Result: forward-merged ${AHEAD} commit(s) directly to main"
           elif [ "${STATUS}" = "conflict" ]; then
