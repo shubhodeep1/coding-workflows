@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8294,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8294\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8302\",\"pr_number\":8302,\"branch\":\"ai/issue-8294\",\"run_id\":\"40792913863\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40792913863\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/review_autofix_sweep.yml\",\"agents.d/stuck-states-p11b-zombie-reaper.md\",\"changelog.d/stuck-states-p11b-zombie-reaper.md\",\"docs/INVENTORY.md\",\"scripts/review_autofix_sweep_reaper.sh\",\"tests/test_review_autofix_sweep_zombie_reaper.py\"]}",
+  "fingerprint": "e83f74375e61746add87e24688da818d2d172a04960babdedc1edbf302918657",
+  "lineage": {
+    "issue_number": 8294,
+    "parent_ids": [],
+    "pr_number": 8302,
+    "run_id": "40792913863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40792913863",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8302"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261029004415_48d136661c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8294,
+    "level": "run",
+    "pr_number": 8302,
+    "run_id": "40792913863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8294: https://github.com/shubhodeep1/coding-workflows/pull/8302",
+  "timestamps": {
+    "created_at": "2026-10-29T00:44:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
