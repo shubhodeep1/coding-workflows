@@ -5,13 +5,32 @@
   "entry_id": "processed_command_8341_6492153215_approved",
   "issue_number": 8341,
   "metadata": {
+    "branch": "ai/issue-8341",
+    "changed_files": [
+      ".github/workflows/check_failure_triage.yml",
+      ".github/workflows/clarify.yml",
+      ".github/workflows/orchestrate_clarify_respond.yml",
+      ".github/workflows/plan.yml",
+      ".github/workflows/unblock_judge.yml",
+      "README.md",
+      "agents.d/stuck-states-p9a-clarify-snapshot-all-text.md",
+      "changelog.d/stuck-states-p9a-clarify-snapshot-all-text.md",
+      "scripts/clarify_isolated_run.sh",
+      "tests/test_check_failure_triage_workflow_security.py",
+      "tests/test_clarify_isolated_run.py"
+    ],
+    "issue_number": 8341,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8341",
+    "pr_number": 8351,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8351",
+    "run_attempt": "1",
+    "run_id": "40844686261",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40844686261"
   },
   "run_attempt": 1,
   "run_id": "40844686261",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T08:56:07Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T09:47:24Z",
   "workflow": "implement"
 }
