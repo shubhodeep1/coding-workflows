@@ -1517,6 +1517,19 @@ not delete wrappers that are already present in `.github/workflows/`.
 > instead of treating it as a refspec; a positional URL or path is compared with
 > origin and asks unless it is origin.
 
+> **Safe URL fetch helper delivered by the `.claude/` sync:** the same step
+> ships `workflow-templates/.claude/scripts/safe_fetch_url.py` to
+> `.claude/scripts/safe_fetch_url.py` in
+> every consumer. `/investigate-issue`, `/analyze-log` and `/apply-url` download
+> external URLs by running that helper with `python` from inside `.claude/`
+> (`--url <url> --output <absolute path>`) instead of raw `curl`. The helper allows only
+> `https://`, refuses any host (redirect targets included) that resolves to a
+> private, loopback, link-local, multicast or reserved address, pins the
+> connection to the IP it checked, follows at most 5 redirects, caps each request
+> (each redirect hop is one request) at 100 MiB and 120 seconds, prints the final HTTP status, and exits 1 on any
+> failure or non-2xx status without leaving the error body at the output path.
+> Nothing to configure in the consumer.
+
 > The merged-PR guard checks numeric push refspecs before a separate output
 > redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
 > or option leaves the destination unknown, it requests confirmation rather
