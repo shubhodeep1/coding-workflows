@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update `tests/e2e_smoke_canary.txt`\n\nThis plan was made on `orchestrator/project-8299` at commit `fa8c36e67d76f2c17c816db114f6e1cda816a150`. The integration branch matches.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. The change is a data edit. The file now reads:\n```\nstatus: ok\ndecompose-run: 40427433026\n```\nOnly line 2 changes: replace `40427433026` with `40794181365`. The final content is exactly `status: ok\\ndecompose-run: 40794181365\\n`, with LF line endings and a trailing newline.\n\n## Data structures affected\nOnly the two-line plain-text canary file.\n\n## API or interface changes\nNone.\n\n## Automation surface (\u00a720.E)\n- **New or existing code:** this changes existing data only. It adds no new script and does not extend any existing script.\n- **Scheduler or PR-push entry point:** none. The file is a smoke-test canary that the orchestrator's end-to-end run checks.\n- **Long-running supervisor:** none is needed.\n- **Database work:** none.\n- **Removal-registry entry:** none is needed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue limits the change to one file and its acceptance criteria require `git diff --stat` to list only that file. The issue's \"Expected files\" list also names about ten test files. That list is advisory, and the issue's explicit constraint takes precedence, so none of those tests are edited. Line 1 is already correct, so the change is one line.\n\n## Decisions\n### D1 \u2014 Edit only the canary file\n- **Chosen:** rewrite only `tests/e2e_smoke_canary.txt`.\n- **Alternatives considered:** also updating the advisory \"Expected files\" test list.\n- **Why:** the issue's constraints and acceptance criteria forbid editing any other file.\n\n### D2 \u2014 Leave the sibling and spec files alone\n- **Chosen:** do not read or change `tests/e2e_smoke_canary_b.txt` or `tests/e2e_smoke_canary_spec.txt`.\n- **Alternatives considered:** none.\n- **Why:** the issue explicitly excludes both files.\n\n## Security considerations\n- **Trust boundaries:** none are touched.\n- **Endpoints or surfaces:** none are added.\n- **Input handling:** the issue text is untrusted, and the only value taken from it is the literal run ID `40794181365`.\n- **Abuse cases:** none apply. There is no money handling and no secrets are involved.\n\n## Potential risks or edge cases\n- **Conflict with the issue:** the issue describes the file as needing both lines set. Line 1 already reads `status: ok`; only line 2 differs.\n- **Formatting risks:** the edit must keep a single trailing newline and must not introduce CRLF line endings or a BOM.\n- **Advisory test list:** the \"Expected files\" list conflicts with the single-file constraint. Following the constraint (D1) resolves this.\n\n## Testing considerations\nCheck the acceptance criteria directly:\n- `head -n 1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 40794181365`.\n- `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n\nNo test suite changes are needed.\n\n## Pre-execution self-check\nThe plan is one file and one line, and it meets every acceptance criterion.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "720aec5b8c08514066671aa35d8c8f31910427fd6a62c7ec2f146df8aa6ac68b",
+  "lineage": {
+    "issue_number": 8300,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40795206586",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40795206586",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8300"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261029004613_2d769f8d19",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8300,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40795206586"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8300",
+  "timestamps": {
+    "created_at": "2026-10-29T00:46:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
