@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8352,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8352\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8358\",\"pr_number\":8358,\"branch\":\"ai/issue-8352\",\"run_id\":\"40867632426\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40867632426\",\"changed_files\":[\"changelog.d/8352-security-pass-create-race-test-diagnostics.md\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "9a543c58593a50f6941cfda302bedf5ad0bf6cddb2fab4ff34305270056c7e08",
+  "lineage": {
+    "issue_number": 8352,
+    "parent_ids": [],
+    "pr_number": 8358,
+    "run_id": "40867632426",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40867632426",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8358"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261029115549_df4a36c407",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8352,
+    "level": "run",
+    "pr_number": 8358,
+    "run_id": "40867632426"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8352: https://github.com/shubhodeep1/coding-workflows/pull/8358",
+  "timestamps": {
+    "created_at": "2026-10-29T11:55:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
