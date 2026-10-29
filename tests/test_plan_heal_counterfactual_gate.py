@@ -31,6 +31,10 @@ CF_TEMPLATE = REPO_ROOT / "prompts" / "_templates" / "mode-plan-heal-counterfact
 HEAL_PROMPTS = (REPO_ROOT / "prompts" / "mode-workflow-failure-heal.txt",
 	REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt")
 FIXTURE_8241 = REPO_ROOT / "tests" / "fixtures" / "heal_counterfactual" / "issue_8241_plan.md"
+FIXTURE_8327 = REPO_ROOT / "tests" / "fixtures" / "heal_counterfactual" / "issue_8327_plan.md"
+# The trailing note the #8327 planner wrote inside its "## Deferred scope" section.
+NOTE_8327 = "\nThese items are delivered through a separate issue that is not a heal issue,"
+DEFERRED_MISSING_HINT = "The section must appear once and hold only `- ` bullets: a prose line or note inside it makes it unreadable."
 
 
 def _load_partial_delivery():
@@ -223,6 +227,22 @@ def test_issue_8241_fixture_is_held() -> None:
 	assert "STATUS: CLEAR" in text and "PLAN_SELF_CHECK: PASS" in text
 
 
+def test_issue_8327_fixture_trailing_note_is_held() -> None:
+	"""Issue #8327: a prose note after the bullets made the section unreadable."""
+	text = FIXTURE_8327.read_text(encoding="utf-8")
+	result = _check(text)
+	assert (result["decision"], result["result"], result["reason"]) == ("hold", "FAIL", "deferred_scope_missing"), result
+	assert result["jobs"] == ["e2e-smoke-test"]
+	assert PD.parse_plan(text)["reason"] == "prose_in_block"
+	# The same plan without the note is a fully deferred PARTIAL: the note alone held it.
+	start = text.index(NOTE_8327)
+	end = text.index("\n\n", start + 1)
+	bullets_only = text[:start] + text[end:]
+	result = _check(bullets_only)
+	assert (result["decision"], result["result"], result["reason"]) == ("approve", "PARTIAL", "partial_jobs_deferred"), result
+	assert len(PD.parse_plan(bullets_only)["items"]) == 3
+
+
 def test_cli_exit_codes() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		plan = Path(tmp) / "plan.md"
@@ -249,6 +269,8 @@ def test_counterfactual_prompt_contract() -> None:
 		"## Would the suggested fix have passed?", "re-derive"):
 		assert needle in text, needle
 	assert "{{" not in text
+	# Issue #8327: the planner must know that a note inside the section holds the plan.
+	assert "section holds only `- ` bullets: a prose line or note inside it makes it" in text
 
 
 def test_heal_intake_prompt_has_the_would_it_pass_subsection() -> None:
@@ -406,6 +428,23 @@ def test_plan_step_holds_the_8241_fixture() -> None:
 	assert "<!-- ai:heal-counterfactual-hold:v1 issue=123 plan_comment=555 result=FAIL source=plan -->" in hold
 	assert "Counterfactual line: `HEAL_COUNTERFACTUAL: FAIL:" in hold
 	assert "`/approved`, or `/reclarify`" in hold
+
+
+def test_plan_step_hold_explains_an_unreadable_deferred_scope() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_HEAL_ISSUE, FIXTURE_8327.read_text(encoding="utf-8"))
+	assert run["approvals"] == [], run["stdout"]
+	assert ("AI_PHASE_GATE_V1 phase=plan gate=heal_counterfactual outcome=hold result=FAIL "
+		"reason=deferred_scope_missing issue=123") in run["stdout"]
+	assert len(run["holds"]) == 1
+	assert "Reason: `deferred_scope_missing`" in run["holds"][0]
+	assert DEFERRED_MISSING_HINT in run["holds"][0]
+
+
+def test_deferred_scope_missing_hint_matches_in_both_callers() -> None:
+	for path in (PLAN_WF, POLLER):
+		assert path.read_text(encoding="utf-8").count(DEFERRED_MISSING_HINT) == 1, path
 
 
 def test_plan_step_hold_comment_is_deduplicated() -> None:

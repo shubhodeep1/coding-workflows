@@ -77,6 +77,7 @@ Create a structured implementation plan that includes:
    or a directory such as `scripts/`: the plan approval gate reads every `.github/`,
    `.claude/`, `scripts/`, `prompts/` and `workflow-templates/` token in this section, and a
    bare directory holds the plan for a human. Explain why a file changes in a later section.
+   Keep the section to those bullets: no prose paragraphs, and no placeholder path such as `scripts/<helper>`, which the gate reads as the bare directory `scripts/`.
 2. Functions or modules to implement
 3. Data structures affected
 4. API or interface changes
@@ -127,7 +128,8 @@ Create a structured implementation plan that includes:
    omit the section when the plan covers the whole issue, and never emit it
    for an orchestrator-managed child issue. Implement opens the PR with a
    non-closing reference, so the issue stays open and clarification restarts
-   for these items after the merge.
+   for these items after the merge. The section holds only those bullets; the next heading ends it.
+   A prose line or note inside it makes the section unreadable, so put any note in another section.
 
 Use the following shared security and money-handling lens when planning any
 affected surface:

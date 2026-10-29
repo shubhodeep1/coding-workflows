@@ -1509,6 +1509,19 @@ not delete wrappers that are already present in `.github/workflows/`.
 > instead of treating it as a refspec; a positional URL or path is compared with
 > origin and asks unless it is origin.
 
+> **Safe URL fetch helper delivered by the `.claude/` sync:** the same step
+> ships `workflow-templates/.claude/scripts/safe_fetch_url.py` to
+> `.claude/scripts/safe_fetch_url.py` in
+> every consumer. `/investigate-issue`, `/analyze-log` and `/apply-url` download
+> external URLs by running that helper with `python` from inside `.claude/`
+> (`--url <url> --output <absolute path>`) instead of raw `curl`. The helper allows only
+> `https://`, refuses any host (redirect targets included) that resolves to a
+> private, loopback, link-local, multicast or reserved address, pins the
+> connection to the IP it checked, follows at most 5 redirects, caps each request
+> (each redirect hop is one request) at 100 MiB and 120 seconds, prints the final HTTP status, and exits 1 on any
+> failure or non-2xx status without leaving the error body at the output path.
+> Nothing to configure in the consumer.
+
 > The merged-PR guard checks numeric push refspecs before a separate output
 > redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
 > or option leaves the destination unknown, it requests confirmation rather
@@ -2749,7 +2762,7 @@ through `clarify → plan → implement → review`.
 | `HEAL_SYNCED_SECURITY_FINDING_ENABLED` | `true` | coding-workflows only. Takes `synced_security_finding` reports in the heal intake (project #7604): a consumer's security audit lists high or critical findings on files the `@stable` sync manages and the consumer has not modified, and the intake files one `ai:workflow-heal` issue here per file, category and line area (shared by every consumer; later reports become occurrence comments). Unset, empty or `true` (any letter case) is on; `false` turns the kind off (`WORKFLOW_HEAL skip reason=synced_security_finding_disabled`, nothing read or written), and any other value also turns it off after `WORKFLOW_HEAL warn invalid_switch name=HEAL_SYNCED_SECURITY_FINDING_ENABLED`. The report needs a verified OIDC identity from the consumer's `security-audit.yml` run whose ref is the report's release SHA, that SHA must be on `stable`, and every finding's file must be a managed path of that release; otherwise it is rejected with `WORKFLOW_HEAL report_auth=rejected reason=identity_required\|release_mismatch\|release_not_on_stable\|release_unavailable\|unmanaged_path`. A finding on a file listed in that release's (or the current) `workflow-templates/retired_files.txt` opens nothing and logs `WORKFLOW_HEAL skip reason=retired_file`, since the consumer's sync deletes the file. Categories such as `A01: Broken Access Control`, `A03 Injection` or `STRIDE: Tampering` are normalised to the canonical OWASP 2021 / STRIDE name; other OWASP years are rejected. Only the file, line, OWASP 2021 / STRIDE category, severity, confidence, finding id and consumer repository are published; a report carrying any other field (an exploit scenario, a recommendation) is rejected. Logs `WORKFLOW_HEAL received kind=synced_security_finding findings=N opened=X occurrences=Y skipped=Z`. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `HEAL_SYNCED_SECURITY_LINE_BUCKET` | `25` | coding-workflows only. Line-area size for `synced_security_finding` reports: findings in the same file and category whose `line // bucket` is equal share one heal issue (fingerprint `sha256(path\|category\|line//bucket)`). Unset or empty is `25`, a non-integer falls back to `25` with a warning, values below `1` count as `1`, and values above `1000000` (the line cap) count as `1000000`. |
 | `HEAL_REISSUE_DEDUPE_ENABLED` | `true` | coding-workflows only. The unblock judge re-issues a blocked heal issue as an ordinary issue (no `ai:workflow-heal` label, no heal markers) whose body opens with `Re-issued by the unblock judge from #N.`, and closes the original. When a report's lineage has a closed heal issue and no open duplicate, the intake searches each repository that can own the heal issue once (`search/issues`, at most two reads) for open re-issues, follows a re-issue of a re-issue back up to five steps, and records the report as an occurrence on the open re-issue (`WORKFLOW_HEAL duplicate ... match=reissue`) instead of a new generation. Every issue on the chain must be written by the heal issue's author. A failed search keeps the first decision (`WORKFLOW_HEAL reissue_lookup outcome=skip reason=search_failed`). Unset, empty or `true` keeps it on; `false` turns it off; any other value turns it off with `::warning::WORKFLOW_HEAL reissue_lookup outcome=skip reason=invalid_switch`. See [Workflow Failure Heal](#workflow-failure-heal). |
-| `HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED` | `true` | Issue #7444 (unblock fix-up for #7434). plan.yml's "Auto-approve clear plan" never writes a pipeline plan grant (Q108) into an `ai:workflow-heal` issue body: it verifies the live `ai:workflow-heal-scope:v1` marker (`workflow_failure_heal.py heal-scope verify`) and approves only when every path the plan lists is inside that scope (`files_touched_scope_guard.py --plan-auto-approval-gate --heal-scope-file`); otherwise it holds with `heal_scope_unverified`, `heal_scope_plan_out_of_scope`, `heal_scope_plan_paths_missing` or `heal_scope_check_unavailable` and logs `PIPELINE_PLAN_GRANT issue=<n> source=plan outcome=skipped reason=heal_issue`. A heal plan that lists no automation path also needs that verified scope now. The implement heal preflight (`scripts/implement_heal_preflight.sh`) accepts an edited heal body only when one GraphQL read of its `userContentEdits` shows every revision written by the `GH_PAT` login with the identical scope marker (log `HEAL_SCOPE_PIPELINE_EDIT_ACCEPTED issue=<n> edits=<k>`); another editor, a deleted revision, more than 100 revisions, a changed marker or a failed read still refuses with `reason=edited detail=editor_untrusted\|edit_history_redacted\|edit_history_unavailable\|marker_changed`. Unset, empty or `true` keeps it on; `false` restores the earlier behaviour (Q108 write, then `reason=edited`); any other value turns it off with a warning. |
+| `HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED` | `true` | Issue #7444 (unblock fix-up for #7434). plan.yml's "Auto-approve clear plan" never writes a pipeline plan grant (Q108) into an `ai:workflow-heal` issue body: it verifies the live `ai:workflow-heal-scope:v1` marker (`workflow_failure_heal.py heal-scope verify`) and approves only when every path the plan lists is inside that scope (`files_touched_scope_guard.py --plan-auto-approval-gate --heal-scope-file`); otherwise it holds with `heal_scope_unverified`, `heal_scope_plan_out_of_scope`, `heal_scope_plan_paths_missing` or `heal_scope_check_unavailable`. A plan whose Files section says it changes no file ("None" as its first text, no bullet after it, no backtick and no path- or filename-shaped token in the section) is approved with reason `heal_scope_plan_no_changes` (#8241), and implement closes the issue through its success-no-op path; an empty or prose-only Files section still holds with `heal_scope_plan_paths_missing`. Every heal-issue plan-gate run, approved or held, logs `PIPELINE_PLAN_GRANT issue=<n> source=plan outcome=skipped reason=heal_issue`. A heal plan that lists no automation path also needs that verified scope now. The implement heal preflight (`scripts/implement_heal_preflight.sh`) accepts an edited heal body only when one GraphQL read of its `userContentEdits` shows every revision written by the `GH_PAT` login with the identical scope marker (log `HEAL_SCOPE_PIPELINE_EDIT_ACCEPTED issue=<n> edits=<k>`); another editor, a deleted revision, more than 100 revisions, a changed marker or a failed read still refuses with `reason=edited detail=editor_untrusted\|edit_history_redacted\|edit_history_unavailable\|marker_changed`. Unset, empty or `true` keeps it on; `false` restores the earlier behaviour (Q108 write, then `reason=edited`); any other value turns it off with a warning. |
 | `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`), phase reports included; enable it only after consumers have synced wrappers whose reporters attach a token. `false` (transition default) accepts them after the binding checks, with a Telegram `DEBUG` notice. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
@@ -4488,7 +4501,9 @@ The gate selects:
 
 It runs them with a 15-minute budget and re-runs any failure on the
 merge-base: failures that also happen there are reported as inherited, not
-caused by the change. The result is written as a stamp for `HEAD` under
+caused by the change. For `ruff` and ShellCheck it compares findings instead:
+only findings the merge-base copy of the file did not have count, so a file
+that already had lint errors does not fail. The result is written as a stamp for `HEAD` under
 `${TMPDIR:-/tmp}/claude-prepush-gate/`, outside the repository. Fix failures
 the change caused and stamp again; do not weaken an assertion unless the task
 names that behaviour change.
@@ -4497,15 +4512,17 @@ The `PreToolUse` hook registered in `.claude/settings.json` reads the stamp
 of the commit each `git push` publishes (the pushed branch's tip, or `HEAD`
 for a bare push), so stamp the branch you push. A bulk push (`--all`,
 `--mirror`, `--branches`) or a push that includes tags always asks. A passing (or unverified, or skipped) stamp lets the push
-through without a prompt. A missing stamp, one that records failures the
-change caused, or a push whose options or destination the hook cannot
-resolve (for example an abbreviated option such as `--follow-tag`), asks for
+through without a prompt. A stamp that records failures the change caused
+never holds the push, in any permission mode: the hook passes the failures to
+the session as context and shows them to the user, and CI runs the full
+suite. A missing stamp, a stamp with a missing or unknown status, or a push
+whose options or destination the hook cannot resolve (for example an abbreviated option such as `--follow-tag`), asks for
 confirmation. In Auto mode a push whose only problems are a missing stamp or
 a pushed branch that does not exist yet (usually one the same command creates) is
 denied instead of asking: nothing runs, and the reason tells the session to
 commit, run the stamp itself and push again as its own command, so no one has
-to answer a prompt. A stamp that records failures, a bulk or tag push, and
-push options or a destination the hook cannot resolve still ask in Auto mode. The hook never runs tests itself, and it
+to answer a prompt. A bulk or tag push, and push options or a destination
+the hook cannot resolve, still ask in Auto mode. The hook never runs tests itself, and it
 fails open with a warning on internal errors. Set
 `CLAUDE_PREPUSH_TEST_GATE=off` to turn it off.
 
