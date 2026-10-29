@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8314_6486610496_approved",
   "issue_number": 8314,
   "metadata": {
+    "branch": "ai/issue-8314",
+    "changed_files": [
+      ".github/workflows/orchestrate.yml",
+      "changelog.d/8314-wave1-deferral-diagnostics.md",
+      "tests/test_orchestrate_lib.py"
+    ],
+    "issue_number": 8314,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8314",
+    "pr_number": 8324,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8324",
+    "run_attempt": "1",
+    "run_id": "40809215821",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40809215821"
   },
   "run_attempt": 1,
   "run_id": "40809215821",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T03:03:25Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T03:55:21Z",
   "workflow": "implement"
 }
