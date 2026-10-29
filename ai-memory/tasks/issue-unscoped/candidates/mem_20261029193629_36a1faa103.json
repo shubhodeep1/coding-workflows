@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3439-3444 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `${STATUS:-?}` is used in the `::error::` log message instead of `${STATUS}`, which the reviewer says is dead defensive code because STATUS is always set in the polling loop.\n  WHY: The reviewer reports no functional failure, only a logging nit (source severity NIT). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash examined the same expansion and chose not to raise it. z-ai_glm-5_3-flash argued it is defensive-correct under `set -euo pipefail`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add an agents fragment that corrects 'Cleanup jobs share repository-scoped concurrency' under 'Conflict-safe PR-close cleanup', plus a changelog fragment for the concurrency change\"\n  expected_change_site: agents.d/ and changelog.d/\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: No agents.d/ or changelog.d/ fragment for the concurrency-group fix is in the diff. The PR description defers it under \"Deferred scope\" (AD-1), and both reviewers rate it NIT.\n- requirement: \"Give the cancel-on-close job in the reusable 'cancel_on_pr_close.yml' workflow (job 'cancel-active-runs') a per-trigger concurrency group ... `cancel-on-pr-close-${{ github.repository }}-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number }}`, keeping `cancel-in-progress: false`\"\n  expected_change_site: .github/workflows/cancel_on_pr_close.yml\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No diff hunk in .github/workflows/cancel_on_pr_close.yml. The PR description defers it (AD-1) because the frozen heal-scope marker excludes the file. Source severity is NIT (deferred).\n- requirement: \"Update the concurrency-group pin in 'tests/test_review_merge_train.py' near line 1860 in the same change as the workflow edit\"\n  expected_change_site: tests/test_review_merge_train.py\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No diff hunk in tests/test_review_merge_train.py. The PR description defers it as paired with the workflow edit. Source severity is NIT (deferred).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: \"Add an agents fragment that corrects 'Cleanup jobs share repository-scoped concurrency' under 'Conflict-safe PR-close cleanup', plus a changelog fragment for the concurrency change\"\n  Expected change site: agents.d/ and changelog.d/\n  Evidence of absence: The PR description explicitly defers these items under \"Deferred scope\" (AD-1). They are not implemented in this PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:3439-3444 | severity=low (source: NIT) | confidence=4\n  PROBLEM: `${STATUS:-?}` is used in the `::error::` log message instead of `${STATUS}`, which the reviewer says is dead defensive code because STATUS is always set at line 3365.\n  WHY: No functional failure, only a diagnostic nit. The check `[ \"${STATUS:-}\" != \"completed\" ]` at line 3439 is correct.\n- TASK_GAP (deferred per PR description / AD-1):\n  Requirement: \"Give the cancel-on-close job in the reusable 'cancel_on_pr_close.yml' workflow (job 'cancel-active-runs') a per-trigger concurrency group ... `cancel-on-pr-close-${{ github.repository }}-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number }}`, keeping `cancel-in-progress: false`\"\n  Expected change site: .github/workflows/cancel_on_pr_close.yml\n  Evidence of absence: No diff hunk in .github/workflows/cancel_on_pr_close.yml. The PR description's \"Deferred scope\" bullet 1 defers it because the frozen heal-scope marker excludes the file and `heal_scope_plan_out_of_scope` cannot be lifted.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP (deferred per PR description / AD-1):\n  Requirement: \"Update the concurrency-group pin in 'tests/test_review_merge_train.py' near line 1860 in the same change as the workflow edit\"\n  Expected change site: tests/test_review_merge_train.py\n  Evidence of absence: No diff hunk. The PR description defers it as paired with the workflow edit, since changing the pin alone would break the test against an unchanged workflow.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP (deferred per PR description / AD-1):\n  Requirement: \"Add an agents fragment that corrects 'Cleanup jobs share repository-scoped concurrency' under 'Conflict-safe PR-close cleanup', plus a changelog fragment for the concurrency change\"\n  Expected change site: agents.d/ and changelog.d/\n  Evidence of absence: No new agents.d/ or changelog.d/ fragment targets the concurrency-group fix. The PR description defers it as part of the root-cause fix bundle.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7ee7ace017d208ae86a91267bd22cc15093e58c7363550881d7c76c2e368de12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8361,
+    "run_id": "40932477192",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40932477192",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029193629_36a1faa103",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8361,
+    "run_id": "40932477192"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T19:36:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
