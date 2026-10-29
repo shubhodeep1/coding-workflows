@@ -272,8 +272,10 @@ PY
 # goes to the fix issue as before (fail open).
 activation_open_prs_json()
 {
-	local activation_open_prs_response activation_open_prs_out=""
+	local activation_open_prs_response activation_open_prs_out="" activation_open_prs_reason="lookup_failed"
 	if activation_open_prs_response="$(gh_retry gh api "repos/${REPOSITORY}/pulls?state=open&sort=updated&direction=desc&per_page=50" 2>/dev/null)"; then
+		# The call succeeded: an empty result below means the response did not parse.
+		activation_open_prs_reason="parse_failed"
 		# Only same-repository heads from trusted authors (the trust rule used
 		# for the linked issue and fix-issue lookup), so an outside or fork PR's
 		# text cannot steer a gap out of the fix issue.
@@ -287,7 +289,7 @@ activation_open_prs_json()
 			else empty end' 2>/dev/null)"
 	fi
 	if [ -z "${activation_open_prs_out}" ]; then
-		echo "::warning::ACTIVATION_VERIFY open_pull_requests unavailable reason=lookup_failed" >&2
+		echo "::warning::ACTIVATION_VERIFY open_pull_requests unavailable reason=${activation_open_prs_reason}" >&2
 		activation_open_prs_out='{"open_pull_requests": []}'
 	fi
 	printf '%s\n' "${activation_open_prs_out}"
