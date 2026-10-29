@@ -5745,7 +5745,8 @@ def synced_security_source_paths(file: str, audit_gate_contract: Any = None) -> 
 	Same mapping as build_sync_manifest.derive_managed_digests: a top-level
 	wrapper comes from workflow-templates/<name>.yml, a .claude/ file from
 	workflow-templates/.claude/, CLAUDE.md from CLAUDE.md, an audit-gate target
-	from its contract source. A retired file maps to nothing.
+	from its contract source. A retired file and a ``seed_only`` audit-gate
+	target (consumer-owned once created) map to nothing.
 	"""
 	paths: list[str] = []
 	prefix = ".github/workflows/"
@@ -5757,7 +5758,7 @@ def synced_security_source_paths(file: str, audit_gate_contract: Any = None) -> 
 		paths.append("CLAUDE.md")
 	contract = audit_gate_contract if isinstance(audit_gate_contract, dict) else {}
 	for item in contract.get("managed_files") or []:
-		if not isinstance(item, dict):
+		if not isinstance(item, dict) or item.get("seed_only") is True:
 			continue
 		source, target = item.get("source"), item.get("target")
 		if target == file and isinstance(source, str) and source and is_valid_repo_path("workflow-templates/audit-gate/" + source):
