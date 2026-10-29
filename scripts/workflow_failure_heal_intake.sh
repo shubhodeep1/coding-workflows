@@ -1599,6 +1599,13 @@ while IFS=$'\t' read -r run_id run_url; do
 	if [ "${SOURCE_KIND}" = autofix_failure ] && [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
 		verify_pr_args=(--pr-number "${ISSUE_NUMBER}")
 	fi
+	# A self-dispatched review_autofix.yml run has no `[pr:N]` title either; the
+	# provenance gate binds it by a trusted failure marker that names this run
+	# and the PR head (marker_head_run_ids).
+	if [ "${SOURCE_KIND}" = autofix_failure ] && [ -s "${PROVENANCE_RESULT:-}" ] \
+		&& jq -e --arg id "${run_id}" '(.marker_head_run_ids // []) | index($id) != null' "${PROVENANCE_RESULT}" >/dev/null 2>&1; then
+		verify_pr_args+=(--marker-head-bound)
+	fi
 	if [ "${run_info_ready}" != true ] \
 		|| ! python3 "${HEAL_PY}" verify-run --run-json "${RUN_INFO_FILE}" --repo "${SOURCE_REPO}" --target-repo "${SELF_REPO}" --kind "${SOURCE_KIND}" "${verify_pending_args[@]}" "${verify_pr_args[@]}" \
 			--head-sha "$({ [ "${SOURCE_KIND}" = autofix_failure ] || [ "${SOURCE_KIND}" = workflow_run ]; } && printf '%s' "${HEAD_SHA}" || true)" > "${RUN_INFO_FILE}.verified" 2> "${RUN_INFO_FILE}.verify_error" \

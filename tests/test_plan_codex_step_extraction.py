@@ -32,11 +32,20 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # 16_738 -> 16_978 bytes).
 # Issue #8339 added the one-line "no prose paragraphs, no placeholder path"
 # rule to item 1 (259 -> 260 lines, 16_978 -> 17_144 bytes).
+# Issue #8327 added a "bullets only" sentence to rule 12 (`## Deferred scope`):
+# a note inside the section made it unreadable (259 -> 263 lines,
+# 16_978 -> 17_307 bytes). Its review then dropped the inaccurate "sub-heading
+# makes it unreadable" clause: a heading ends the section (263 -> 264 lines,
+# 17_307 -> 17_390 bytes). The rule was then cut to two lines to keep
+# prompts/mode-plan.txt within its 250-line budget (264 -> 260 lines,
+# 17_390 -> 17_142 bytes).
+# Merging #8339 and #8327 keeps both additions (260 -> 261 lines,
+# 17_142 -> 17_308 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"744aff0d0ff99b0f17c72f779e3c6f7ff1945d5639e9a9e617ee9a651228d465"
+	"762902538b6fa853079f2d35ea8106fc80b45d02ceea2b63e51882574ff9decf"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 17_144
-PRE_EXTRACTION_PROMPT_LINES = 260
+PRE_EXTRACTION_PROMPT_BYTES = 17_308
+PRE_EXTRACTION_PROMPT_LINES = 261
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:

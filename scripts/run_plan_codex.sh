@@ -128,7 +128,8 @@ Create a structured implementation plan that includes:
    omit the section when the plan covers the whole issue, and never emit it
    for an orchestrator-managed child issue. Implement opens the PR with a
    non-closing reference, so the issue stays open and clarification restarts
-   for these items after the merge.
+   for these items after the merge. The section holds only those bullets; the next heading ends it.
+   A prose line or note inside it makes the section unreadable, so put any note in another section.
 
 Use the following shared security and money-handling lens when planning any
 affected surface:
