@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8392,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8392\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8398\",\"pr_number\":8398,\"branch\":\"ai/issue-8392\",\"run_id\":\"40957292431\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40957292431\",\"changed_files\":[\"changelog.d/8392-engine-fallback-pool-reason.md\",\"scripts/ai_engine_fallback_report.sh\",\"tests/test_ai_engine.py\"]}",
+  "fingerprint": "aa33cb2712f755ed412ab7ffe4b976911a55be1f2d2158791b112d6209241cb5",
+  "lineage": {
+    "issue_number": 8392,
+    "parent_ids": [],
+    "pr_number": 8398,
+    "run_id": "40957292431",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40957292431",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8398"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261029214357_d30aa7c68f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8392,
+    "level": "run",
+    "pr_number": 8398,
+    "run_id": "40957292431"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8392: https://github.com/shubhodeep1/coding-workflows/pull/8398",
+  "timestamps": {
+    "created_at": "2026-10-29T21:43:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
