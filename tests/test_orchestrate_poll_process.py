@@ -15237,6 +15237,8 @@ def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 		issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
 		issue_comments={501: [standalone_state_comment]},
 		mock_gh_issue_list_label_filter=True,
+		# Switch-off parity: the legacy skip-and-close path (stuck-states P3b).
+		env_overrides={"STALL_FINGERPRINT_BREAKER_ENABLED": "false"},
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
 	assert standalone_state is not None
@@ -15513,9 +15515,13 @@ def test_managed_failure_fingerprint_breaker_trips_and_label_survives_next_tick(
 		issue_labels={10: ["ai:clarification"]},
 		issue_comments={10: [_ffb_marker_comment(9001), _ffb_marker_comment(9002)]},
 	)
-	assert "ai:plan-failed" in result["issues"]["10"]["labels"]
+	# Managed scope uses the non-terminal ai:needs-human, never the
+	# terminal ai:plan-failed (which would close the wave issue for good).
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	assert "ai:plan-failed" not in result["issues"]["10"]["labels"]
 	assert len(_ffb_breaker_comments(result["issues"]["10"]["comments"])) == 1
 	assert "STALL_FINGERPRINT_BREAKER issue=10 scope=managed outcome=tripped" in result["stdout"]
+	assert "label=ai:needs-human" in result["stdout"]
 	wave_issue = result["latest_state"]["waves"][0]["issues"][0]
 	assert [entry["run"] for entry in wave_issue["failure_fingerprints"]] == ["9001", "9002"]
 	assert not any(str(comment.get("body", "")).startswith("/answer") for comment in result["issues"]["10"]["comments"])
@@ -15527,9 +15533,10 @@ def test_managed_failure_fingerprint_breaker_trips_and_label_survives_next_tick(
 		issue_labels={10: list(result["issues"]["10"]["labels"])},
 		issue_comments={10: list(result["issues"]["10"]["comments"])},
 	)
-	assert "ai:plan-failed" in second["issues"]["10"]["labels"]
+	assert "ai:needs-human" in second["issues"]["10"]["labels"]
 	assert len(_ffb_breaker_comments(second["issues"]["10"]["comments"])) == 1
 	assert "outcome=tripped" not in second["stdout"]
+	assert second["latest_state"]["waves"][0]["issues"][0]["status"] not in ("closed", "skipped")
 
 
 def test_managed_stall_exhaustion_escalates_needs_human_without_closing():

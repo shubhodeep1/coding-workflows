@@ -22598,8 +22598,10 @@ _failure_fingerprint_breaker_check()
 # _failure_fingerprint_breaker_apply <issue_num> <scope>
 # Adds FFB_LABEL, verifies it by re-reading labels (like escalate_human), and
 # posts the breaker comment that carries the consumption-point marker.
-# Returns 1 (no comment, no state change) when the label cannot be verified,
-# so the next tick retries idempotently.
+# Returns 1 (no comment, no state change) when the label cannot be verified
+# or the breaker comment could not be posted and the label was rolled back,
+# so the next tick retries idempotently. Returns 2 when the comment failed and
+# the label could not be rolled back (the issue stays stopped).
 _failure_fingerprint_breaker_apply()
 {
   local issue_num="$1"
@@ -22614,6 +22616,7 @@ _failure_fingerprint_breaker_apply()
   ffb_labels_after="$(get_issue_labels_json "${issue_num}")"
   if ! has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
     echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} label=${FFB_LABEL}"
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed label=${FFB_LABEL}"
     return 1
   fi
 
@@ -22632,7 +22635,20 @@ ${ffb_rows}
 
 The unblock judge will pick this up on its next scan."
   if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${ffb_body}" >/dev/null 2>&1; then
-    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} (label applied; breaker comment not posted)" >&2
+    # The breaker comment is the only consumption point for the marker
+    # history. Without it, a later unblock-judge resume would re-trip on the
+    # same markers, so roll the label back (both callers only reach here
+    # when the issue did not carry it) and let the next tick retry. Return 2
+    # when the rollback cannot be verified, so callers do not run the legacy
+    # ladder on an issue that still carries the failure label.
+    gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "${FFB_LABEL}" >/dev/null 2>&1 || true
+    ffb_labels_after="$(get_issue_labels_json "${issue_num}")"
+    if has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=failed (label applied; breaker comment not posted)"
+      return 2
+    fi
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=done (breaker comment not posted; next tick retries)"
+    return 1
   fi
   echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=tripped phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} label=${FFB_LABEL}"
   tg_notify_issue "${issue_num}" "Failure-signature breaker tripped for issue #${issue_num}: phase '${FFB_PHASE}' failed with the same fingerprint ${FFB_FP} in runs ${FFB_RUNS}. Labelled ${FFB_LABEL} for the unblock judge." "WARNING"
@@ -22694,6 +22710,11 @@ else:
     _failure_fingerprint_breaker_check "${ffb_issue}" "${ffb_comments}" "true" "managed"
     case "${FFB_DECISION}" in
       trip)
+        # Managed wave issues get ai:needs-human (a dedicated-handler phase)
+        # instead of ai:plan-failed / ai:clarify-failed: those are
+        # TERMINAL_PHASES, which reconcile_wave_issue_status would record as
+        # a permanent "closed" wave status (the skip-and-close P3b removes).
+        FFB_LABEL="ai:needs-human"
         _failure_fingerprint_breaker_apply "${ffb_issue}" "managed" || continue
         ffb_new_labels="$(printf '%s' "${ffb_issue_labels}" | jq -c --arg l "${FFB_LABEL}" 'if index($l) == null then . + [$l] else . end' 2>/dev/null || echo "${ffb_issue_labels}")"
         LABELS_JSON="$(printf '%s' "${ffb_labels_map}" | jq -c --arg key "${ffb_issue}" --argjson labels "${ffb_new_labels}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
@@ -23109,13 +23130,20 @@ PY
     _failure_fingerprint_breaker_check "${issue_num}" "${comments_json}" "${_std_ffb_cache_available}" "standalone"
     case "${FFB_DECISION}" in
       trip)
-        if _failure_fingerprint_breaker_apply "${issue_num}" "standalone"; then
+        local _std_ffb_apply_rc=0
+        _failure_fingerprint_breaker_apply "${issue_num}" "standalone" || _std_ffb_apply_rc=$?
+        if [ "${_std_ffb_apply_rc}" -eq 0 ]; then
           updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson recent "${FFB_RECENT_JSON}" --argjson now "$(date +%s)" '
             .failure_fingerprints = $recent | .updated_ts = $now
           ' 2>/dev/null || echo "${updated_state}")"
           write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          continue
         fi
-        continue
+        # rc=2: the failure label is still on the issue; skip the ladder.
+        # rc=1: nothing applied; fall through so the legacy ladder still runs.
+        if [ "${_std_ffb_apply_rc}" -ne 1 ]; then
+          continue
+        fi
         ;;
       identity_unavailable|history_unavailable|unavailable)
         echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=standalone outcome=${FFB_DECISION}"
