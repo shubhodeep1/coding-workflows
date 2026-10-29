@@ -1164,8 +1164,10 @@ jobs:
 
       - name: Checkout PR head for security pass
         # #8333: the pass verifies extension ancestry against the audited head
-        # with git plumbing only; no PR code runs. Same-repo heads only (the
-        # gate refuses fork heads), pinned to the gate-observed SHA.
+        # with git plumbing only; no PR code runs (the pass's Python runs with
+        # PYTHONSAFEPATH=1, so PR modules in this cwd are never imported).
+        # Same-repo heads only (the gate refuses fork heads), pinned to the
+        # gate-observed SHA.
         if: ${{ needs.gate.outputs.det_skip_security_pass == 'true' }}
         uses: actions/checkout@v5
         with:

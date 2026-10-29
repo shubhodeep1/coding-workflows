@@ -1119,6 +1119,22 @@ def test_skip_step_comment_read_failure_holds_markers_unverifiable(tmp_path: Pat
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
+def test_skip_step_never_imports_pr_head_python_modules(tmp_path: Path) -> None:
+	# The pass's `python3 -c` age checks run with the PR head as cwd and
+	# GH_TOKEN set; PYTHONSAFEPATH=1 keeps a PR-supplied datetime.py out.
+	checkout = tmp_path / "pr-head"
+	checkout.mkdir()
+	sentinel = tmp_path / "pr_module_imported"
+	(checkout / "datetime.py").write_text(f"open({str(sentinel)!r}, 'w').close()\n", encoding="utf-8")
+	result, _calls, output = _run_skip_step(tmp_path, comments=[_comment(_marker("pending", HEAD, 1))])
+	assert result.returncode == 0, result.stderr
+	assert output == "hold=true\nhold_reason=audit_pending\nexhausted=false\n"
+	assert not sentinel.exists()
+	text = SKIP_STEP.read_text(encoding="utf-8")
+	assert "&& PYTHONSAFEPATH=1 \\\n" in text
+	assert "python_safe_path_unavailable" in text
+
+
 def test_deterministic_skip_merge_wiring() -> None:
 	gate = _steps(REVIEW, "gate")["Evaluate review gate"]
 	assert gate["env"]["AUTOFIX_SKIP_RUNS_SECURITY_PASS"] == "${{ vars.AUTOFIX_SKIP_RUNS_SECURITY_PASS || 'true' }}"

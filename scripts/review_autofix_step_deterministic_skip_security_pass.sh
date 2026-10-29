@@ -178,12 +178,21 @@ det_skip_security_pass_main()
 		linked_json="[]"
 	fi
 
-	# The pass reads the PR-head checkout through git plumbing only (no PR
-	# code runs); support code comes from the verified checkout.
+	# The pass reads the PR-head checkout through git plumbing only; support
+	# code comes from the verified checkout. Its `python3 -c` calls run with
+	# the PR head as cwd and GH_TOKEN set, so PYTHONSAFEPATH=1 keeps a
+	# PR-supplied module (e.g. a root datetime.py) off sys.path. A Python
+	# that ignores it fails closed, as in codex-agent.
+	if ! PYTHONSAFEPATH=1 python3 -c 'import sys; raise SystemExit(0 if sys.flags.safe_path else 1)' >/dev/null 2>&1; then
+		det_skip_security_pass_unverifiable python_safe_path_unavailable
+		return 1
+	fi
 	: > "${pass_output}"
 	(
 		cd "${checkout}" \
-			&& SUPPORT_SCRIPTS_DIR="${support_dir}" \
+			&& PYTHONSAFEPATH=1 \
+			PYTHONDONTWRITEBYTECODE=1 \
+			SUPPORT_SCRIPTS_DIR="${support_dir}" \
 			PR_PAYLOAD_FILE="${pr_file}" \
 			PR_ISSUE_COMMENTS_FILE="${comments_file}" \
 			LINKED_ISSUES_JSON="${linked_json}" \
