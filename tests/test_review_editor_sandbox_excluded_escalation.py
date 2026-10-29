@@ -71,7 +71,7 @@ PR_8250_SUMMARY = _summary(
 
 
 # The commit step writes "- none" when it committed nothing (review_commit_changes.sh).
-def _run_step(tmp_path: Path, summary: str, *, committed: str | None = "- none\n", heal_py: Path | None = HEAL_PY, head: str = HEAD) -> tuple[subprocess.CompletedProcess[str], str, str]:
+def _run_step(tmp_path: Path, summary: str, *, committed: str | None = "- none\n", heal_py: Path | None = HEAL_PY, head: str = HEAD, extra_env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], str, str]:
 	support_dir = tmp_path / "support"
 	support_dir.mkdir(exist_ok=True)
 	(support_dir / "gh_helpers.sh").write_text(FAKE_GH, encoding="utf-8")
@@ -106,6 +106,8 @@ def _run_step(tmp_path: Path, summary: str, *, committed: str | None = "- none\n
 	}
 	if heal_py is not None:
 		env["AUTOFIX_FAILURE_HEAL_PY"] = str(heal_py)
+	if extra_env:
+		env.update(extra_env)
 	result = subprocess.run(["bash", str(STEP_SCRIPT)], capture_output=True, text=True, env=env, timeout=120)
 	body = body_file.read_text(encoding="utf-8") if body_file.exists() else ""
 	return result, body, github_env.read_text(encoding="utf-8")
@@ -173,6 +175,15 @@ def test_placeholder_committed_files_count_as_nothing_committed(tmp_path: Path, 
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "review-autofix-failure:v1" in body
 	assert _escalation_lines(result.stdout) == [f"AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head={HEAD} findings=1 outcome=marker"]
+
+
+def test_did_commit_true_writes_no_marker_even_with_placeholder_text(tmp_path: Path) -> None:
+	"""A committed root file named "none" prints as "- none"; DID_COMMIT=true still wins."""
+	summary = _summary(ignored="- .claude/docs/a.md — sandbox-excluded path")
+	result, body, _ = _run_step(tmp_path, summary, committed="- none\n", extra_env={"DID_COMMIT": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "review-autofix-failure:v1" not in body
+	assert _escalation_lines(result.stdout) == []
 
 
 def test_missing_helper_logs_marker_unavailable_and_still_posts(tmp_path: Path) -> None:

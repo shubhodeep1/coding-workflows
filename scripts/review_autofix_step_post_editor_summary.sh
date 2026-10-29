@@ -202,6 +202,11 @@ if [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -f "${COMMITTED_FILES_FILE}" ] && [ -
   && ! grep -q -v -E '^[[:space:]]*$|^- none$|^- none \(edits withheld for safety: .*\)$|^- commit skipped \(.*\)$' "${COMMITTED_FILES_FILE}"; then
   sandbox_excluded_nothing_committed=1
 fi
+# The commit step's own flag wins over the file text: a committed path that
+# prints like a placeholder line never counts as nothing committed.
+if [ "${DID_COMMIT:-}" = "true" ]; then
+  sandbox_excluded_nothing_committed=0
+fi
 if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_committed}" = "1" ]; then
   sandbox_excluded_findings="$(tr -d '\r' < "${EDITOR_SUMMARY_FILE}" | awk '
     BEGIN { section = ""; status = ""; count = 0; trail = "[] \t.\"\047`)*]+$" }
