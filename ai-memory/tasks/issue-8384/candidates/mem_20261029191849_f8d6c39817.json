@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: replace the contents of `tests/e2e_smoke_canary.txt`\n\n**Planning ref:** HEAD `04e934aceac01dda985641f4a6373f0fcf1a9e93` on branch `main`. The integration branch mismatch flag reads `unknown`, not `true`, so the plan is not blocked.\n\n**Answers:** the clarify phase found nothing to ask and posted `/answer [auto-answered-by-clarify]` itself, so there are no Q-IDs to map. The issue fully specifies the change.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- None. This is a data-file content replacement.\n\n## Data structures affected\n- The file currently has 2 lines, each ending in a newline:\n  - `status: ok`\n  - `decompose-run: 40427433026`\n- It must become exactly these 3 lines:\n  - `status: ok`\n  - `run_id: alt-40932430968`\n  - `updated-by: ai-pipeline`\n- Each line ends with a single `\\n`, matching the existing file. There is no extra blank line and no CRLF.\n\n## API or interface changes\n- None.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks to edit one existing file and forbids touching anything else. No helpers, patterns or new code apply. The plan rewrites the existing file in place and changes nothing else.\n\n## Decisions\n### D1 \u2014 Trailing newline\n- Chosen: end the last line with a single newline, as the current file does.\n- Alternatives considered: no trailing newline.\n- Why: it matches the existing file's convention and POSIX text-file norms. \"Exactly three lines\" means three newline-terminated lines.\n\n### D2 \u2014 No changelog or agents.d fragment\n- Chosen: modify only the canary file.\n- Alternatives considered: adding a `changelog.d` entry.\n- Why: the issue says to modify only `tests/e2e_smoke_canary.txt`.\n\n## Security considerations\n- No trust boundary, endpoint, secret or money-handling code is touched.\n- The content is static text taken from the issue. Nothing in it is executed.\n\n## Risks and edge cases\n- A CRLF line ending or a trailing blank line would make the content not \"exactly\" the three lines. To check, `cat -A` should show three lines, each ending in `$`.\n- There is no conflict between the issue and the codebase: the file exists on this ref as the issue says.\n\n## Testing considerations\n- Check the result with `cat -A tests/e2e_smoke_canary.txt` and `git diff --stat`. The diff should show 1 file changed, with 2 insertions and 1 deletion.\n- No test suite reads this file in a way that needs new tests.\n\n## Pre-execution self-check\n- The plan covers the single required file and the exact content.\n- There is no scope creep, and the plan follows the output format.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "4f7f97adab1687b1449786d9787f9116ac8fec9e76525ad1d1748b773b2e5e65",
+  "lineage": {
+    "issue_number": 8384,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40937562086",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40937562086",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8384"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261029191849_f8d6c39817",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8384,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40937562086"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8384",
+  "timestamps": {
+    "created_at": "2026-10-29T19:18:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
