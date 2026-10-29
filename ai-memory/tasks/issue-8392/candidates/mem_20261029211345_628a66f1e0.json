@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Option A is the only choice the pipeline can finish without an operator. The scope marker covers `scripts/ai_engine_fallback_report.sh`, `scripts/ai_engine.sh`, `scripts/clarify_isolated_run.sh` and `tests/**`, but not `scripts/workflow_failure_heal.py`. So B would stop at the plan gate again, and C's follow-up issue also needs an operator to act on the scope. D ships no fix and no regression test, which the fix constraints forbid. A keeps `no_credential`, the record format, the heal payload and the fingerprint unchanged (\u00a710), and fixes the defect that can be fixed in scope. That defect is in `ai_engine_no_account_reason` (`scripts/ai_engine.sh:246-261`): it reduces every pool-step outcome except `all_gated` to `no_credential` and logs nothing about the real reason. The reporter (`scripts/ai_engine_fallback_report.sh:322-359`) then logs, alerts and summarises without it. After this change the specific reason will appear in the consumer run's log, Telegram alert and step summary.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo (lettered choice A; this section records the binding implementation boundaries)\n  inputs:\n    - scripts/ai_engine.sh: `ai_engine_no_account_reason` (lines 246-261). It reads the reason file `${CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason}` with a symlink skip and `head -c 64`.\n    - scripts/ai_engine_fallback_report.sh: the dispatch loop and its `log` lines (lines 319-347), the `tg_send_msg` call (line 353) and the `GITHUB_STEP_SUMMARY` block (lines 355+).\n    - scripts/claude_pool_token.sh `finish()` reason tokens, used as test fixtures: `crashed`, `cli_missing`, `broker_refused_workflow_sha_unverifiable`, `auth_failed`, `oidc_unavailable`.\n    - Existing tests under tests/ that already exercise `ai_engine_fallback_report.sh` / `ai_engine_no_account_reason`. Extend the closest one instead of creating a parallel harness.\n  steps:\n    - Add one new helper with a unique name (check for collisions in `scripts/ai_engine.sh` and every script that sources it), for example `ai_engine_pool_reason_token`. It reads the same reason file the same way: skip a missing file or a symlink, read at most 64 bytes, strip whitespace. It prints the token only if it matches `^[a-z0-9_]{1,60}$`, otherwise it prints `unavailable`. Leave the output of `ai_engine_no_account_reason` unchanged.\n    - When the no-account path resolves to `no_credential`, write one stable stderr line: `AI_ENGINE_POOL_REASON role=<role> pool_reason=<token>`. Write it from inside `ai_engine_no_account_reason` (stderr only, so the stdout value that callers capture through `$(...)` stays the same) or from its two call sites (`scripts/ai_engine.sh:518`, `scripts/clarify_isolated_run.sh:252`). Do not change the fallback record line.\n    - In `scripts/ai_engine_fallback_report.sh`, read the token through the same helper, or an inline copy with the same rules if the reporter does not source `ai_engine.sh`. Append ` pool_reason=<token>` to the existing `dispatched`/`skip_dispatch` log lines when the fallback reason is `no_credential`, and add it to the Telegram text and the step-summary entry. Do not pass it to `build-engine-fallback-payload`, and do not change the payload, `--reason`, the payload or dispatch file names, or the fingerprint inputs.\n    - Fail open: a missing, unreadable, symlinked or malformed file gives `pool_reason=unavailable` and never changes the exit code or the dispatch.\n    - Register `AI_ENGINE_POOL_REASON` as a new stable log prefix through an `agents.d/<issue>-pool-reason-log.md` fragment under the \"Stable log prefixes (contractual)\" section (\u00a725). Do not edit agents.md directly. If the fragment path is outside the scope marker, drop the new prefix and only add the `pool_reason=` key to the existing reporter log lines.\n    - Add a regression test under tests/ with a temporary `CLAUDE_POOL_REASON_FILE` holding `crashed`, `cli_missing` and `broker_refused_workflow_sha_unverifiable`. Assert that `pool_reason=<token>` appears in the stderr or reporter log, and that `ai_engine_no_account_reason` still prints `no_credential`. Also assert that the generated payload JSON is byte-identical with and without the file (payload unchanged). Add negative cases: a missing file, a symlink, an over-long token and a token with invalid characters (for example `Bad Reason!`) all give `pool_reason=unavailable`, and `all_gated` still gives `all_gated`.\n    - Run the new test on the reported head, where it must fail because `pool_reason=` is missing, and again with the fix, where it must pass. Record both runs in the PR body.\n    - In the PR body, record under known limitations that the reason still does not reach the heal intake payload, because that requires `scripts/workflow_failure_heal.py`, which is outside this issue's verified scope. Use `Refs` wording only, with no auto-close keywords against tracking issues (\u00a721).\n  replaces_acceptance_criterion: The suggested-fix items \"pass the value to build-engine-fallback-payload\" and \"Claude pool step reason evidence line in the payload\" are replaced by \"the pool step's reason appears as a structured `pool_reason=<token>` field in the consumer run's log, alert and step summary, with the payload unchanged\".\n  equivalence_argument: An operator triaging a `no_credential` report can find the specific cause (broker refusal, probe crash, CLI install failure, OIDC) on the run linked in the heal issue's \"Reporting run\" URL. That URL is already in the payload, so the evidence the summary calls missing becomes reachable without a scope change. The heal fingerprint stays the same and no backward-compatibility surface changes.\n  reversibility: The change only adds log fields, alert text and step-summary text. Removing the helper and the extra fields restores today's behaviour exactly. If a human later wants the reason in the payload as well, they can file a scoped issue for `scripts/workflow_failure_heal.py` that reuses the helper's validation rules.",
+  "fingerprint": "6cce6102875909c972868646949f21d8125fad53e2bb8c742c765d5940cf469b",
+  "lineage": {
+    "issue_number": 8392,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40954101326",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40954101326",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8392"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029211345_628a66f1e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8392,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40954101326"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8392",
+  "timestamps": {
+    "created_at": "2026-10-29T21:13:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
