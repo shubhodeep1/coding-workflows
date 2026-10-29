@@ -1542,6 +1542,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           # Build state using Python helper
           python3 -c "
@@ -1593,9 +1594,12 @@ jobs:
           for STATE_PACK_CHUNK in "${STATE_PACK_FILES[@]}"; do
             STATE_PACK_PART=$((STATE_PACK_PART + 1))
             jq -Rs '{body: .}' < "${STATE_PACK_CHUNK}" > "${STATE_PACK_CHUNK}.json"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+            if ! gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
               --method POST \
-              --input "${STATE_PACK_CHUNK}.json" >/dev/null
+              --input "${STATE_PACK_CHUNK}.json" >/dev/null; then
+              echo "::error::Failed to post ORCHESTRATOR_STATE_V2 chunk ${STATE_PACK_PART}/${STATE_PACK_TOTAL} to tracking issue #${TRACKING_ISSUE_NUMBER}."
+              exit 1
+            fi
           done
           echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER} (ORCHESTRATOR_STATE_V2 parts=${STATE_PACK_PART} raw_bytes=${STATE_PACK_RAW_BYTES})"
 
