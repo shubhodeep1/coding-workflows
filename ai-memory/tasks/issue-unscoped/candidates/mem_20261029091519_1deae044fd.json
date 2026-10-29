@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/8330-safe-fetch-command-helper.md:9 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The \"up to 6 x 120 s\" bound omits per-hop synchronous DNS resolution (`socket.getaddrinfo` with no timeout in `resolve_target`), which runs outside curl's `--max-time`.\n  WHY: A slow or hung resolver can push a fetch past the documented ceiling, so the doc is slightly inaccurate. All reviewers rated it NIT. Code references cited: workflow-templates/.claude/scripts/safe_fetch_url.py:156-167, 354, 374-376.\n- agents.d/8330-safe-fetch-command-helper.md:9 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The \"120 s per request\" figure ignores that `subprocess.run` uses `timeout=limits.max_time + 5.0` (workflow-templates/.claude/scripts/safe_fetch_url.py:294), so the per-hop ceiling is 125 s and the 6-hop worst case is about 750 s, not 720 s.\n  WHY: Readers reasoning about worst-case latency from the doc are off by about 30 s; this is a documentation rounding issue only (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/8330-safe-fetch-command-helper.md:9 | severity=NIT | confidence=4\n  PROBLEM: The duration claim \"up to 6 x 120 s\" omits the time spent on synchronous DNS resolution before each request.\n  WHY: Documentation is slightly inaccurate about the upper bound of total request duration, because DNS resolution runs outside the per-request time limit.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/8330-safe-fetch-command-helper.md:9 | severity=NIT | confidence=4\n  PROBLEM: The \"up to 6 x 120 s\" upper bound omits per-hop DNS resolution time. `resolve_target` (workflow-templates/.claude/scripts/safe_fetch_url.py:161-167) calls `socket.getaddrinfo` with no timeout and runs once per hop, so the real worst case is `6 \u00d7 DNS_time + 6 \u00d7 (max_time + 5 s)`.\n  WHY: Under a slow or hung upstream resolver the documented bound is misleading, and the PR description's \"120 s total\" cap still implies a total cap.\n- agents.d/8330-safe-fetch-command-helper.md:9 | severity=NIT | confidence=4\n  PROBLEM: \"120 s per request\" is not exact: `subprocess.run` is given `timeout=limits.max_time + 5.0` (workflow-templates/.claude/scripts/safe_fetch_url.py:294), so each hop is capped at 125 s and the 6-hop worst case is roughly 750 s, not 720 s.\n  WHY: This is the same class of issue as the DNS point: readers are off by about 30 s across the default 6-hop path. It is a documentation rounding issue, not a runtime bug.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/8330-safe-fetch-command-helper.md:9 (also workflow-templates/.claude/scripts/safe_fetch_url.py:156-167, 374-376) | severity=NIT | confidence=4\n  PROBLEM: The doc says a fetch following five redirects can take \"up to 6 x 120 s\", but DNS resolution is outside the curl request timeout and has no timeout set in the helper.\n  WHY: A delayed DNS lookup can make a fetch exceed the documented upper bound, and redirect targets are resolved before their next request as well.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/8330-safe-fetch-command-helper.md:9 (cross-reference workflow-templates/.claude/scripts/safe_fetch_url.py resolve_target line 156, called at lines 354 and 376) | severity=NIT | confidence=4\n  PROBLEM: The 6 x 120 s bound covers only the curl subprocesses. Each hop also runs a synchronous `socket.getaddrinfo` DNS resolution with no timeout before curl starts (safe_fetch_url.py:354,376), and the `_run_single_hop` subprocess timeout (`limits.max_time + 5.0`) cannot bound it.\n  WHY: This is a documentation-accuracy mismatch only. The fragment states a total duration cap that the code does not enforce end to end, and no code behavior is wrong.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "497e4a6c1666ecfb31a75d9e3dffcd944f391b4e03dae3feacc590887a862adf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8330,
+    "run_id": "40837593469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40837593469",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029091519_1deae044fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8330,
+    "run_id": "40837593469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T09:15:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
