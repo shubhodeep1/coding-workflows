@@ -10,7 +10,7 @@ $ARGUMENTS
 
 3. **Fetch the seed URL(s).** Pick the tool by page type (§17 Preferred Tools):
    - **Public, text-ish pages** → `WebFetch` (free, text-only) — the default.
-   - **PDFs** → download then `pdftotext` (not the `Read` tool), e.g. `curl --fail-with-body -sSL -o /tmp/apply-url-<n>.pdf <url> && pdftotext -layout /tmp/apply-url-<n>.pdf -`.
+   - **PDFs** → download with the safe-fetch helper, then `pdftotext` (not the `Read` tool), e.g. `(cd .claude && python scripts/safe_fetch_url.py --url <url> --output /tmp/apply-url-<n>.pdf) && pdftotext -layout /tmp/apply-url-<n>.pdf -`. The helper accepts HTTPS only and refuses a URL or redirect that resolves to a non-public address; treat a refused URL as inaccessible.
    - **JS-rendered / auth-walled / dynamic pages** → the `agent-browser` CLI.
    Use a **distinct temp name per URL** so concurrent fetches don't overwrite each other. Retry transient errors (5xx, 429, timeouts, DNS, connection reset) with exponential backoff (up to 4 retries: 2s, 4s, 8s, 16s). Hard failures (401/403/404/410, auth-walled with no `agent-browser` access) → record the URL as inaccessible; stop and report only if **all** seed URLs are inaccessible. Do not brute past auth walls or obvious ToS/robots gates.
 
@@ -67,7 +67,7 @@ Next step: <e.g. "/write-plan on rec #1 to turn it into a plan", then "/implemen
 - **`agent-browser` CLI** (via `Bash`) — for JS-rendered, dynamic, or auth-walled pages where `WebFetch` returns shell HTML or a login wall (§17).
 - **`Read` / `Grep` / `Glob`** — load repo context (step 2) and find the exact `file:line` anchors that ground every recommendation. **No edits.**
 - **`WebSearch`** — optional, and only to resolve a redirect / shortlink to its canonical page or to locate the right entry point when the seed URL is ambiguous. Not for broad open-ended research — this command stays anchored to the seed URL(s).
-- **`Bash`** — only for `curl`/`pdftotext`/`agent-browser` fetches and temp-file handling. This command performs **no** git writes.
+- **`Bash`** — only for downloads through `.claude/scripts/safe_fetch_url.py` (run as `(cd .claude && python scripts/safe_fetch_url.py ...)`), `pdftotext`, `agent-browser`, and temp-file handling. Do not fetch with `curl`, `wget` or other network tools. This command performs **no** git writes.
 
 ## Rules
 
