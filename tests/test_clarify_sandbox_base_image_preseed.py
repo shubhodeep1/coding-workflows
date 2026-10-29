@@ -474,7 +474,11 @@ def test_helper_is_executable_and_parses() -> None:
 
 def test_step_calls_shared_helper() -> None:
 	body = _step(STEP_NAME)["run"]
-	assert "bash scripts/clarify_base_image_preseed.sh scripts/clarify_sandbox/Dockerfile" in body
+	# The helper runs from the verified support bundle when it is staged
+	# (SUPPORT_SCRIPTS_DIR, P2a) and from scripts/ under the kill switch.
+	assert (
+		'bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_base_image_preseed.sh" scripts/clarify_sandbox/Dockerfile'
+	) in body
 	assert "reason=helper_missing" in body
 	assert "preseed_mirror_re" not in body, "the step body must not duplicate the helper"
 
