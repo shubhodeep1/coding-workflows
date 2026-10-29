@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Across multiple merged changes, the repository pairs workflow or script updates with a corresponding changelog.d file. When planning a user-visible or operational change, check the changelog convention and include an entry unless the change is an isolated test-only update.",
+  "fingerprint": "eb86b66e5ed42fcd023be794ca528f8803f272400d7f6ee70e2c5a3c90a2a2ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40885035693",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40885035693",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8292",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8293",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8295",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8305",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8306",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8303",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8308",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8313",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8317",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8318"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261029135405_e37443914e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Behavioral and workflow changes commonly include a focused changelog.d entry.",
+  "timestamps": {
+    "created_at": "2026-10-29T13:54:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
