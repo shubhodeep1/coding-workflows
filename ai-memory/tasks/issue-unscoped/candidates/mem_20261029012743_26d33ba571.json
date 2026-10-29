@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "When changing the agent index, check the shared builder and the clarify, plan, and implement workflow integrations that consume it. The repository has dedicated index tests, including a symlink-guard test, so extend those when changing index discovery or safety behavior.",
+  "fingerprint": "6e1fb81b74217a60422e975b74a97e8580399de4ced06daf7ce8ca103ba4ff7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40799156825",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40799156825",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7072",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8265",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8268",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8269",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8279",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8267",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8270",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8271",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8283",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8289"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261029012743_26d33ba571",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Static-context agent indexes are built through scripts/build_static_context.sh and used across multiple workflow modes.",
+  "timestamps": {
+    "created_at": "2026-10-29T01:27:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
