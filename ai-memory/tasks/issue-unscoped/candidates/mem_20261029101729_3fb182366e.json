@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:suite-level failures | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Regression in implementation recovery test suite caused by PR changes.\n  WHY: Multiple tests (test_review_pipeline_integration_chain_module_runs_clean, test_staged_support_guard_marks_only_auto_release_safe_conflicts, etc.) are reported failing due to this PR, indicating a regression in the implementation post-codex recovery logic. Source severity was \"MAJOR\", mapped to high. Note disagreement: anthropic_claude-sonnet-5_5 saw the same failures but did not verify them, and judged they might be misattributed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update its content so it is exactly these three lines: status: ok / run_id: alt-40831286935 / updated-by: ai-pipeline\" and \"Only modify tests/e2e_smoke_canary.txt.\"\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: Reviewer states the gap is not absent. tests/e2e_smoke_canary.txt on the PR head contains exactly the three required lines in order, and pr_changed_files.txt lists only that file, so the requirement is fully satisfied (source severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:suite-level failures | severity=MAJOR | confidence=5\n  PROBLEM: Regression in implementation recovery test suite caused by PR changes.\n  WHY: Multiple tests (test_review_pipeline_integration_chain_module_runs_clean, test_staged_support_guard_marks_only_auto_release_safe_conflicts, etc.) are failing specifically due to this PR, indicating a regression in the implementation post-codex recovery logic.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Update its content so it is exactly these three lines: status: ok / run_id: alt-40831286935 / updated-by: ai-pipeline\" and \"Only modify tests/e2e_smoke_canary.txt.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: Not absent \u2014 verified present. tests/e2e_smoke_canary.txt on the PR head contains exactly the three required lines in order, and pr_changed_files.txt lists only that file. Requirement is fully satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d309b1202c8477e7dde41d2592d53782581223336535851bf7323faa0af15d78",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "40847604469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40847604469",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029101729_3fb182366e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "40847604469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T10:17:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
