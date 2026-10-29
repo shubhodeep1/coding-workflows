@@ -86,6 +86,8 @@ if endpoint.endswith("/files?per_page=100"):
 if endpoint.startswith("repos/o/r/pulls?state=open"):
 	if os.environ.get("FAKE_GH_FAIL_OPEN_PRS") == "1":
 		sys.exit(1)
+	if os.environ.get("FAKE_GH_OPEN_PRS_RAW") is not None:
+		done(os.environ["FAKE_GH_OPEN_PRS_RAW"])
 	done(json.dumps(state.get("open_prs", [])))
 if endpoint.startswith("search/issues?"):
 	if os.environ.get("FAKE_GH_FAIL_SEARCH") == "1":
@@ -927,6 +929,14 @@ def test_open_pr_lookup_failure_fails_open(tmp_path: Path) -> None:
 	assert len(_fix_issues(state)) == 1
 	assert "fix in progress" not in state["comments"][-1]["body"]
 
+
+def test_open_pr_response_that_does_not_parse_fails_open(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, _tagged(91), open_prs=[OPEN_PR_91], env_extra={"FAKE_GH_OPEN_PRS_RAW": '{"message": "not a list"}'})
+	assert "ACTIVATION_VERIFY open_pull_requests unavailable reason=parse_failed" in result.stderr
+	assert "reason=lookup_failed" not in result.stderr
+	assert _context(tmp_path)["open_pull_requests"] == []
+	assert len(_fix_issues(state)) == 1
+	assert "fix in progress" not in state["comments"][-1]["body"]
 
 def test_prompt_explains_open_pr_tagging() -> None:
 	for rel in ("prompts/mode-activation-verify.txt", "prompts/_templates/mode-activation-verify.txt"):
