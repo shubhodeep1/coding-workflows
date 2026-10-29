@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2146-2148 (mirrored in changelog.d/8281-hooks-job-steps-to-release.md:7) | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The headroom accounting for `tests-release-and-log-analysis` omits the four steps #8279 moved into that same job in the same merge window (ci.yml:2196-2236). It also omits that the largest moved step measured 887s in run 40066148233.\n  WHY: If a cold runner reproduces the 887s measurement, the target job (timeout-minutes: 20 at ci.yml:1990) could approach or exceed its timeout. The reviewer rated this a documentation-accuracy defect, not a demonstrated runtime failure (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml` (selection of steps moved from `tests-hooks-and-orchestrator` to `tests-release-and-log-analysis`, lines 2146-2170) and `changelog.d/8281-hooks-job-steps-to-release.md`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: ci.yml:2146-2148 and the changelog say the step timings could not be read and the steps were picked by estimated cost, so the diff does not show they are the slowest. The destination job already received four steps from #8279 (ci.yml:2186-2236), so its remaining headroom is not shown. Severity disagreement: NIT (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) vs MAJOR (minimax_minimax-m3, openai_gpt-6-luna), highest is MAJOR. The structural deliverables are present, and the estimate-based choice is disclosed in the code comment and the changelog.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, in the choice of steps moved from `tests-hooks-and-orchestrator` to `tests-release-and-log-analysis`, and the rationale in `changelog.d/8281-hooks-job-steps-to-release.md`.\n  Evidence of absence: The comment at ci.yml:2146-2148 and the changelog say the step timings could not be read, so the steps were picked by estimated cost. The changelog never mentions that #8279 already moved four steps into `tests-release-and-log-analysis`. The structural deliverables are present, and this is a rationale gap, not a functional failure.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- All other checklist categories: NONE. The reviewer found no concrete defect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml` (the four step removals/insertions and the explanatory comment above the moved steps) and `changelog.d/8281-hooks-job-steps-to-release.md` (the rationale paragraph).\n  Evidence of absence: Both the workflow comment (`.github/workflows/ci.yml:2146-2148`) and the changelog body (`changelog.d/8281-hooks-job-steps-to-release.md:11`) state the step timings could not be read, so the steps were picked by estimated cost, not measured. The diff does not establish that the four chosen steps are the slowest or that `tests-release-and-log-analysis` has the most headroom. The changelog omits that #8279 moved four more steps into the same target job (`.github/workflows/ci.yml:2186-2236`).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- All other checklist categories: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-hooks-and-orchestrator` to `tests-release-and-log-analysis`.\n  Evidence of absence: `.github/workflows/ci.yml:2146-2148` states the steps were selected by estimated cost because the run's timings could not be read. The destination had also received four steps in the preceding change (`.github/workflows/ci.yml:2186-2195`), and this PR does not establish that it still has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- All other checklist categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/8281-hooks-job-steps-to-release.md:7 (mirrored in .github/workflows/ci.yml:2146-2148) | severity=low | confidence=3\n  PROBLEM: The headroom accounting for `tests-release-and-log-analysis` omits the four steps #8279 moved into that same job (ci.yml:2196-2236). It also omits that the largest moved step measured 887s in run 40066148233 (analysis/workflow-optimization-2026-10-24-2.md:67).\n  WHY: If a cold runner reproduces the 887s measurement, the target job (timeout-minutes: 20 at ci.yml:1990) approaches or exceeds its timeout. The reviewer called this a documentation-accuracy defect, not a demonstrated runtime failure (NIT).\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml` step selection (lines 2146-2170) and `changelog.d/8281-hooks-job-steps-to-release.md`.\n  Evidence of absence: The structural deliverables are present (steps moved unchanged, names kept, no new jobs, no timeout change). However, ci.yml:2147-2148 and the changelog say the steps were picked by estimated cost, so there is no measured-timing basis for \"slowest steps\" or \"most headroom\". The headroom narrative omits the four steps #8279 moved into the target job. This is a rationale-evidence gap, not a missing implementation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "58a5c46303ca143817188bdb19604ed591dd0f4e10f93c9a57591ddc3bcc67bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8285,
+    "run_id": "40823667904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40823667904",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029063806_07f28f9c16",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8285,
+    "run_id": "40823667904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T06:38:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
