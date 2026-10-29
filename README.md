@@ -4487,7 +4487,9 @@ The gate selects:
 
 It runs them with a 15-minute budget and re-runs any failure on the
 merge-base: failures that also happen there are reported as inherited, not
-caused by the change. The result is written as a stamp for `HEAD` under
+caused by the change. For `ruff` and ShellCheck it compares findings instead:
+only findings the merge-base copy of the file did not have count, so a file
+that already had lint errors does not fail. The result is written as a stamp for `HEAD` under
 `${TMPDIR:-/tmp}/claude-prepush-gate/`, outside the repository. Fix failures
 the change caused and stamp again; do not weaken an assertion unless the task
 names that behaviour change.
@@ -4496,15 +4498,17 @@ The `PreToolUse` hook registered in `.claude/settings.json` reads the stamp
 of the commit each `git push` publishes (the pushed branch's tip, or `HEAD`
 for a bare push), so stamp the branch you push. A bulk push (`--all`,
 `--mirror`, `--branches`) or a push that includes tags always asks. A passing (or unverified, or skipped) stamp lets the push
-through without a prompt. A missing stamp, one that records failures the
-change caused, or a push whose options or destination the hook cannot
-resolve (for example an abbreviated option such as `--follow-tag`), asks for
+through without a prompt. A stamp that records failures the change caused
+never holds the push, in any permission mode: the hook passes the failures to
+the session as context and shows them to the user, and CI runs the full
+suite. A missing stamp, a stamp with a missing or unknown status, or a push
+whose options or destination the hook cannot resolve (for example an abbreviated option such as `--follow-tag`), asks for
 confirmation. In Auto mode a push whose only problems are a missing stamp or
 a pushed branch that does not exist yet (usually one the same command creates) is
 denied instead of asking: nothing runs, and the reason tells the session to
 commit, run the stamp itself and push again as its own command, so no one has
-to answer a prompt. A stamp that records failures, a bulk or tag push, and
-push options or a destination the hook cannot resolve still ask in Auto mode. The hook never runs tests itself, and it
+to answer a prompt. A bulk or tag push, and push options or a destination
+the hook cannot resolve, still ask in Auto mode. The hook never runs tests itself, and it
 fails open with a warning on internal errors. Set
 `CLAUDE_PREPUSH_TEST_GATE=off` to turn it off.
 
