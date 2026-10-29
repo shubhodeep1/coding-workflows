@@ -876,7 +876,8 @@ def run_gate(
 	if baseline_unfinished:
 		pr_caused = [r for r in pr_caused if r not in baseline_unfinished]
 		for r in baseline_unfinished:
-			unverified.append({"item": r["id"], "reason": f"baseline_{r['baseline_status']}"})
+			# Keep the PR-side failing test names (not the tail) for diagnosis.
+			unverified.append({"item": r["id"], "reason": f"baseline_{r['baseline_status']}", "names": failing_names(r.get("tail", ""))})
 	changed_assertions = assertion_diff(repo, baseline, selection.get("changed_files", [])) if baseline is not None and baseline.is_dir() else []
 	if pr_caused:
 		status = "fail"
@@ -924,7 +925,9 @@ def write_summary(result: dict) -> str:
 				lines.append(f"- `{_sanitize_name(str(entry.get('test')))}`" + (f": {names}" if names else ""))
 	if result.get("unverified"):
 		lines += ["", "### Unverified", ""]
-		lines += [f"- `{_sanitize_name(str(u.get('item')))}`: {_sanitize_name(str(u.get('reason')))}" for u in result["unverified"]]
+		for u in result["unverified"]:
+			names = ", ".join(f"`{_sanitize_name(n)}`" for n in (u.get("names") or [])[:10])
+			lines.append(f"- `{_sanitize_name(str(u.get('item')))}`: {_sanitize_name(str(u.get('reason')))}" + (f" (failed on this change: {names})" if names else ""))
 	if result.get("changed_assertions"):
 		lines += ["", "### Changed pre-existing assertions", ""]
 		lines += [f"- `{_sanitize_name(str(a.get('file')))}` ({a.get('kind')}): `{_sanitize_name(str(a.get('line')))}`" for a in result["changed_assertions"]]
