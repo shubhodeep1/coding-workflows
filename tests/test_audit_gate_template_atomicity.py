@@ -267,6 +267,15 @@ def test_reapply_preserves_a_consumer_allowlist() -> None:
 		assert again.returncode == 0, f"stdout:\n{again.stdout}\n\nstderr:\n{again.stderr}"
 		assert _read_json(repo_root / ".tmp" / "audit_gate_result.json")["status"] == "unchanged"
 
+		# A symlink, even a dangling one, at the seed-only target is left as is.
+		allowlist_file.unlink()
+		allowlist_file.symlink_to("missing-allowlist.json")
+		linked = _run_apply(contract_root=CANONICAL_CONTRACT_ROOT, repo_root=repo_root)
+		assert linked.returncode == 0, f"stdout:\n{linked.stdout}\n\nstderr:\n{linked.stderr}"
+		assert _read_json(repo_root / ".tmp" / "audit_gate_result.json")["status"] == "unchanged"
+		assert allowlist_file.is_symlink() and not allowlist_file.exists()
+		assert "seed_only target" in linked.stderr
+
 
 def test_seed_only_must_be_a_boolean() -> None:
 	with tempfile.TemporaryDirectory(prefix="audit-gate-seed-only-type-") as td:

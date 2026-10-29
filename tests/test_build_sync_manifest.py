@@ -157,6 +157,20 @@ def test_seed_only_audit_gate_target_is_allowed_but_consumer_owned(tmp_path):
 	assert "scripts/security/x.js" in digests
 
 
+def test_non_boolean_seed_only_is_rejected(tmp_path):
+	repo, _sha = make_upstream_repo(tmp_path)
+	contract = {"managed_files": [{"source": "assets/allow.json", "target": "security/allow.json", "seed_only": "true"}]}
+	assets = repo / "workflow-templates" / "audit-gate" / "assets"
+	assets.mkdir(parents=True)
+	(assets / "allow.json").write_text("[]\n", encoding="utf-8")
+	(repo / "workflow-templates" / "audit-gate" / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "bad seed-only")
+	sha = _git(repo, "rev-parse", "HEAD")
+	for mode in ("managed-paths", "managed-digests"):
+		assert run_builder(mode, "--repo-root", str(repo), "--commit", sha).returncode != 0
+
+
 def test_canonical_contract_marks_the_allowlist_seed_only():
 	"""Issue shubhodeep1/multi-user-ai-agent#322: overwriting the allowlist on
 	every sync emptied consumer allowlists and failed their npm Audit Gate."""

@@ -258,6 +258,8 @@ def derive_allowed_paths(repo_root: Path, commit: str = "HEAD", include_consumer
 			target = item.get("target") if isinstance(item, dict) else None
 			if not (isinstance(target, str) and target):
 				continue
+			if not isinstance(item.get("seed_only", False), bool):
+				raise ManifestError("audit-gate contract.json seed_only must be a boolean")
 			# A seed_only target is created once and then consumer-owned.
 			if not include_consumer_owned and item.get("seed_only") is True:
 				continue
@@ -327,6 +329,8 @@ def derive_managed_digests(repo_root: Path, commit: str = "HEAD") -> dict:
 		except (UnicodeDecodeError, json.JSONDecodeError) as exc:
 			raise ManifestError("audit-gate contract.json is not valid JSON") from exc
 		for item in contract.get("managed_files", []) or []:
+			if isinstance(item, dict) and not isinstance(item.get("seed_only", False), bool):
+				raise ManifestError("audit-gate contract.json seed_only must be a boolean")
 			if not isinstance(item, dict) or item.get("seed_only") is True:
 				continue
 			source, target = item.get("source"), item.get("target")

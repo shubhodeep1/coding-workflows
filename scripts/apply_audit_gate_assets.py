@@ -150,6 +150,11 @@ def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResu
 		for source_path, target_rel, seed_only in resolved_assets:
 			target_path = repo_root / target_rel
 			if seed_only and (target_path.exists() or target_path.is_symlink()):
+				if target_path.is_symlink() or not target_path.is_file():
+					print(
+						f"warning: seed_only target {target_rel.as_posix()} is not a regular file; left untouched",
+						file=sys.stderr,
+					)
 				continue
 			target_dir = target_path.parent
 			missing_dirs: list[Path] = []
