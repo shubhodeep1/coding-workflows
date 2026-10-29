@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-plan.txt:143 | severity=high | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The new \"work is already on the planning ref\" PLAN_SELF_CHECK BLOCKER (also in prompts/_templates/mode-plan.txt) is routed to the blocked path by tests/test_plan_clarify_blocked_output.py (_self_check_blocker_routes_to_blocked), but none of the wait_for kinds in prompts/mode-judge-unblock.txt (line 52: pr_on_branch, item_closed, placeholder_retired) describes this case, so no resume condition exists.\n  WHY: An issue whose work is already on the default branch would be parked in ai:blocked and need a person to act, and the change sits outside the PR's stated open-PR intent. Source severity is MAJOR, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- prompts/mode-plan.txt:143 | severity=high | confidence=2\n  PROBLEM: The new \"work is already on the planning ref\" PLAN_SELF_CHECK BLOCKER (also in prompts/_templates/mode-plan.txt) is routed to the blocked path, but none of the wait_for kinds in prompts/mode-judge-unblock.txt (line 52: pr_on_branch, item_closed, placeholder_retired) describes it, so no resume condition exists.\n  WHY: An issue whose work is already on the default branch would be parked in ai:blocked and need a person to act, and the change sits outside the PR's stated open-PR intent. Source severity is MAJOR, mapped to high.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- scripts/activation_verify.sh:289-292 | hardening suggestion (HARDENING_RISK_SCORE: 1)\n  PROBLEM: In activation_open_prs_json, the single `reason=lookup_failed` label also fires when the API call succeeded but jq produced empty output, so an API failure cannot be told from a parse failure.\n  WHY: The symlink helper above distinguishes `git_failed` from `parse_failed` (lines 256-258). Suggested fix: set a local reason variable (`lookup_failed` or `parse_failed`) and use it in the warning, about 3 lines changed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "665f17fab16668bff608f2b4dd7b3c41cf7f3e85d8b345307fcf69c08917e843",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8335,
+    "run_id": "40849975920",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40849975920",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029102656_df3cf0b858",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8335,
+    "run_id": "40849975920"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T10:26:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
