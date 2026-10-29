@@ -36,6 +36,10 @@ jobs:
     # issue #7382), so "Regression tests wired by the CI wiring guard
     # (part 1)" was moved out to tests-release-and-log-analysis, and from there
     # on to tests-heal-plan-and-validation in #7406.
+    # It then took 11m17s of its 15 minutes on main (run 40954844196,
+    # budget-watch issue #8394), so its three test steps moved out to
+    # tests-hooks-and-orchestrator, orchestrate-poll (3) and
+    # tests-promote-stall-and-review; the job again runs static checks only.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -448,62 +452,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
 
-      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
-      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
-      # measured about 2 minutes. Step names and bodies are unchanged.
-      # "Regression tests wired by the CI wiring guard (part 1)", moved here
-      # with it, moved on to tests-release-and-log-analysis in #7382 and is in
-      # tests-heal-plan-and-validation since #7406.
-      - name: Implement post-Codex recovery unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
-
-      # Moved from tests-heal-plan-and-validation, which measured 15m04s of
-      # its 20 minutes on main (run 38481381592, issue #7334). Per-step
-      # timings for that run were not available when these steps were
-      # chosen. Step names and bodies are unchanged.
-      - name: Validation self-test unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_runner.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_status.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_integration_ref_ci_triage.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_audit_upstream_report.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_integrity.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_resolver_union.py
-
-      - name: Validation bootstrap and family direct-run tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
-
   tests-hooks-and-orchestrator:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -900,6 +848,21 @@ jobs:
           python3 -m coverage erase
           PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
           python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
+
+      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
+      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
+      # measured about 2 minutes. Step names and bodies are unchanged.
+      # "Regression tests wired by the CI wiring guard (part 1)", moved here
+      # with it, moved on to tests-release-and-log-analysis in #7382 and is in
+      # tests-heal-plan-and-validation since #7406.
+      # Moved on from static-checks, which took 11m17s of its 15 minutes on
+      # main (run 40954844196, budget-watch issue #8394). The pick is an
+      # estimate from test and subprocess counts, not measured; the run's step
+      # timings were not readable. Name and body unchanged.
+      - name: Implement post-Codex recovery unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1989,6 +1952,27 @@ jobs:
             exit 1
           fi
 
+      # Moved from static-checks, which took 11m17s of its 15 minutes on main
+      # (run 40954844196, budget-watch issue #8394). The pick is an estimate
+      # from test and subprocess counts, not measured. This job has the most
+      # recorded room (#8278; its last own budget-watch issue was #7677).
+      # Name and body unchanged.
+      - name: Validation bootstrap and family direct-run tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
+
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -2799,6 +2783,43 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
+
+      # Moved from tests-heal-plan-and-validation, which measured 15m04s of
+      # its 20 minutes on main (run 38481381592, issue #7334). Per-step
+      # timings for that run were not available when these steps were
+      # chosen. Step names and bodies are unchanged.
+      # Moved on from static-checks, which took 11m17s of its 15 minutes on
+      # main (run 40954844196, budget-watch issue #8394). The pick is an
+      # estimate from test and subprocess counts (the largest of the three
+      # moved steps), not measured. Pinned to group 3: its only other pinned
+      # steps are two single-module steps, its last budget-watch issue was
+      # #8072, and since then it lost the unblock step (#8072, #8091, #8118)
+      # and its slice shrank from 1/4 to 1/5 (#8113). Name and body unchanged.
+      - name: Validation self-test unit tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_status.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_integration_ref_ci_triage.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_audit_upstream_report.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_integrity.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_resolver_union.py
 
   budget-watch:
     # Early warning for the two budgets CI has hit without notice (workflow
