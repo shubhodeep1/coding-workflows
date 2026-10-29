@@ -210,8 +210,12 @@ def test_intake_freezes_failing_tests_before_the_diagnosis() -> None:
 	assert "failing_tests: (.failing_tests // {names: [], files: []})" in text
 
 
-def _run_scope_freeze(log_dir: Path, runtime_dir: Path) -> subprocess.CompletedProcess:
-	"""Run the intake's real freeze block (helper through the chmod) in bash."""
+def _run_scope_freeze(log_dir: Path, runtime_dir: Path, *, linked_env: bool = True) -> subprocess.CompletedProcess:
+	"""Run the intake's real freeze block (helper through the chmod) in bash.
+
+	linked_env=False leaves out the variables the linked-run helpers (#8360)
+	read, to prove the block still runs when they are unset (#8377).
+	"""
 	if shutil.which("jq") is None:
 		pytest.skip("jq is required to run the intake's scope-freeze block")
 	text = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
@@ -229,6 +233,8 @@ def _run_scope_freeze(log_dir: Path, runtime_dir: Path) -> subprocess.CompletedP
 		"CRASH_OWNERSHIP": "none",
 		"SOURCE_REPO": SELF_REPO,
 	}
+	if linked_env:
+		env.update({"MAX_LINKED_RUNS": "0", "SOURCE_KIND": "", "SELF_REPO": SELF_REPO, "SCOPE_LINKED_WORKFLOWS_ENABLED": "true"})
 	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=True)
 
 
@@ -262,6 +268,23 @@ def test_scope_freeze_collects_runs_and_paths_from_verified_records() -> None:
 		assert frozen["runs"] == [f"{SELF_REPO}:12", f"{SELF_REPO}:7"]
 		assert frozen["self_workflows"] == ["scripts/a.sh", "scripts/b.sh"]
 		assert frozen["consumer_workflows"] == [".github/workflows/ci.yml"]
+		assert "WORKFLOW_HEAL scope_linked outcome=skipped paths=0 runs=0" in result.stderr
+
+
+def test_scope_freeze_survives_unset_linked_run_variables() -> None:
+	# #8377: the linked-run helpers sit inside the freeze block; a bare ${VAR}
+	# under set -u killed the shell even inside the `|| log` guard.
+	with tempfile.TemporaryDirectory() as tmpdir:
+		log_dir, runtime_dir = Path(tmpdir, "logs"), Path(tmpdir, "runtime")
+		log_dir.mkdir()
+		runtime_dir.mkdir()
+		result = _run_scope_freeze(log_dir, runtime_dir, linked_env=False)
+		assert result.returncode == 0
+		assert "unbound variable" not in result.stderr
+		assert "WORKFLOW_HEAL scope_linked outcome=skipped paths=0 runs=0" in result.stderr
+		assert "scope_inputs_freeze_failed" not in result.stderr
+		frozen = json.loads((runtime_dir / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+		assert frozen["self_workflows"] == []
 
 
 def test_prompt_tells_the_healer_how_to_pick_a_side() -> None:

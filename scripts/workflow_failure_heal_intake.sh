@@ -2549,6 +2549,9 @@ _heal_slurp_verified_runs()
 #   calls per linked run; each makes a single attempt (GH_RETRY_MAX_ATTEMPTS=1).
 #   Fails open: a failed, malformed or foreign read logs
 #   `warn linked_run_skipped run=<id> reason=<token>` and the run is skipped.
+#   Defaults keep the freeze block runnable on its own (_run_scope_freeze in
+#   tests/test_workflow_failure_heal_scope_tests.py); the real intake sets every
+#   variable before this point, so production behaviour is unchanged (#8377).
 _heal_fetch_linked_runs()
 {
 	local linked_dir="${RUNTIME_DIR}/linked_runs"
@@ -2557,13 +2560,13 @@ _heal_fetch_linked_runs()
 	local -a parent_logs=()
 	# A stale id list from an earlier call must never be reused.
 	rm -f "${fetched_ids_file}"
-	[ "${MAX_LINKED_RUNS}" -gt 0 ] 2>/dev/null || return 0
-	[ -s "${SUMMARIES_FILE}" ] || return 0
-	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+	[ "${MAX_LINKED_RUNS:-0}" -gt 0 ] 2>/dev/null || return 0
+	[ -s "${SUMMARIES_FILE:-}" ] || return 0
+	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE:-}" 2>/dev/null)
 	[ "${#parent_logs[@]}" -gt 0 ] || return 0
-	exclude_ids="$(jq -r '[.run_refs[]?.run_id | tostring] | join(",")' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+	exclude_ids="$(jq -r '[.run_refs[]?.run_id | tostring] | join(",")' "${PAYLOAD_FILE:-}" 2>/dev/null || true)"
 	linked_json="$(python3 "${HEAL_PY}" linked-runs --log-files "${parent_logs[@]}" --repo "${SOURCE_REPO}" \
-		--exclude-run-ids "${exclude_ids}" --limit "${MAX_LINKED_RUNS}" 2>/dev/null)" || return 1
+		--exclude-run-ids "${exclude_ids}" --limit "${MAX_LINKED_RUNS:-0}" 2>/dev/null)" || return 1
 	jq -e 'type == "array" and length > 0' <<< "${linked_json}" >/dev/null 2>&1 || return 0
 	mkdir -p "${linked_dir}" || return 1
 	: > "${fetched_ids_file}" || return 1
@@ -2606,6 +2609,9 @@ _heal_fetch_linked_runs || log "warn linked_runs_failed"
 #   call: a missing HEAD_SHA commit gets the same git fetch _open_issue makes.
 #   Fails open: any failure leaves `[]`, today's scope.
 #   WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED=false skips the helper.
+#   Defaults keep the freeze block runnable on its own (_run_scope_freeze); the
+#   real intake sets every variable it reads. An unset SOURCE_KIND or SELF_REPO
+#   only fails the eligibility check, so it never widens the scope (#8377).
 LINKED_SCOPE_PATHS_JSON='[]'
 _heal_scope_linked_paths()
 {
@@ -2613,6 +2619,8 @@ _heal_scope_linked_paths()
 	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
 	local linked_id="" scope_linked_out="" scope_linked_outcome="skipped" scope_linked_paths='[]' scope_linked_runs=0
 	local scope_linked_sources='[]' scope_linked_count=0
+	local scope_linked_switch="${SCOPE_LINKED_WORKFLOWS_ENABLED:-true}" scope_linked_self_repo="${SELF_REPO:-}"
+	local scope_linked_source_kind="${SOURCE_KIND:-}"
 	local -a scope_linked_pairs=() scope_linked_source_paths=()
 	LINKED_SCOPE_PATHS_JSON='[]'
 	if [ -s "${fetched_ids_file}" ]; then
@@ -2622,9 +2630,9 @@ _heal_scope_linked_paths()
 			scope_linked_runs=$((scope_linked_runs + 1))
 		done < "${fetched_ids_file}"
 	fi
-	if [ "${SCOPE_LINKED_WORKFLOWS_ENABLED,,}" = "false" ]; then
+	if [ "${scope_linked_switch,,}" = "false" ]; then
 		scope_linked_outcome="disabled"
-	elif [ "${SOURCE_KIND}" = workflow_run ] && [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ] && [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+	elif [ "${scope_linked_source_kind}" = workflow_run ] && [ -n "${scope_linked_self_repo}" ] && [ "${SOURCE_REPO,,}" = "${scope_linked_self_repo,,}" ] && [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
 		if ! git rev-parse --verify --quiet "${HEAD_SHA}^{commit}" >/dev/null 2>&1; then
 			_git_fetch_ownership_refs "${HEAD_SHA}" || true
 		fi
@@ -2632,8 +2640,8 @@ _heal_scope_linked_paths()
 			scope_linked_sources="$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')"
 			mapfile -t scope_linked_source_paths < <(jq -r '.[]? | strings' <<< "${scope_linked_sources}" 2>/dev/null)
 			if scope_linked_out="$(python3 "${HEAL_PY}" heal-scope linked-workflow-paths --checkout . --ref "${HEAD_SHA}" \
-				--repo "${SOURCE_REPO}" --self-repo "${SELF_REPO}" --source-kind "${SOURCE_KIND}" --source-repo "${SOURCE_REPO}" \
-				--enabled "${SCOPE_LINKED_WORKFLOWS_ENABLED}" --source-workflow-paths "${scope_linked_source_paths[@]}" "${scope_linked_pairs[@]}" 2>/dev/null)" \
+				--repo "${SOURCE_REPO}" --self-repo "${scope_linked_self_repo}" --source-kind "${scope_linked_source_kind}" --source-repo "${SOURCE_REPO}" \
+				--enabled "${scope_linked_switch}" --source-workflow-paths "${scope_linked_source_paths[@]}" "${scope_linked_pairs[@]}" 2>/dev/null)" \
 				&& jq -e '(.paths | type == "array") and all(.paths[]; type == "string") and (.outcome | type == "string")' <<< "${scope_linked_out}" >/dev/null 2>&1; then
 				scope_linked_outcome="$(jq -r '.outcome' <<< "${scope_linked_out}" | tr -cd 'a-z' | head -c 20)"
 				case "${scope_linked_outcome}" in
