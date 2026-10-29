@@ -4132,7 +4132,8 @@ jobs:
     runs-on: ubuntu-latest
     # Sum of remaining in-step DEADLINEs (validation-refresh 5520s +
     # update_workflows 600s + memory-maintenance 2400s = 8520s = 142m);
-    # step limits 95 + 18 + 45 = 158m, under the 165m job cap.
+    # step limits 95 + 18 + 45 = 158m; the analyser steps below have no
+    # step limit, so the DEADLINE sum (142m) is what fits the 165m cap.
     # The validation-refresh watch covers that workflow's whole 60-minute
     # `refresh` job budget (run 39694107256 timed out after 40m on a run
     # that was still in_progress) plus a 1800s runner-queue allowance
@@ -5021,7 +5022,9 @@ jobs:
                   echo "::warning::Posting /approved failed; retrying on the next poll"
                 fi
               fi
-            else
+            elif [ -n "${LABELS}" ]; then
+              # Reset only after a read that returned labels: a failed read
+              # yields "" and must not re-arm the post mid-arrival.
               ALT_APPROVED_POSTED=0
             fi
             # Success: the implement phase produced a PR and either is

@@ -203,6 +203,13 @@ def test_alt_model_wait_retries_a_failed_approved_post() -> None:
 	assert "Posting /approved failed" in out
 
 
+def test_alt_model_wait_keeps_flag_across_a_failed_label_read() -> None:
+	# An empty label read (failed lookup) must not re-arm the post.
+	seq = ["ai:awaiting-approval", "", "ai:awaiting-approval", "ai:done"]
+	rc, attempts, oks, out = _run_alt_wait(seq)
+	assert rc == 0, out
+	assert (attempts, oks) == (1, 1), out
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	for test in tests:
