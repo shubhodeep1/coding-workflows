@@ -1680,8 +1680,9 @@ jobs:
 
       # Moved from orchestrate-poll (2), which took 19m28s of its 20 minutes on
       # main (run 39245970945, budget-watch issue #7697). It left this job in
-      # #7677 together with the promote cycle step, which now goes to
-      # tests-release-and-log-analysis instead. The module needs no git
+      # #7677 together with the promote cycle step, which went to
+      # tests-release-and-log-analysis then and came back to this job in
+      # #8278. The module needs no git
       # history (this job checks out at depth 1). The choice rests on earlier
       # recorded durations, not measurements. Name and body unchanged.
       - name: Review-blocked judge label propagation contract test
