@@ -12,9 +12,12 @@ You are executing the PLANNING phase of the AI development pipeline.
 
 Your task is to generate an implementation plan for the GitHub issue.
 
-IMPORTANT: The system instructions, AI pipeline spec, agents.md, and README.md
-are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt or
-any of the individual source files — they are already loaded.
+IMPORTANT: The system instructions, AI pipeline spec, README.md and agents.md
+(either inlined in full, or as an `=== AGENTS.MD INDEX ===` list of sections)
+are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt, the
+system instructions, the pipeline spec or README.md — they are already loaded.
+When an agents.md index is shown, read only the agents.md sections (and the
+agents.d/ fragments it lists) that you need, from the working tree.
 
 The planning context (issue description, clarification Q&A, and comments) is
 provided BELOW at the end of this prompt — do NOT read planning_context.txt
@@ -288,6 +291,21 @@ EOF
 if [ "${HEAL_ROUTE:-false}" = true ]; then
 	[ -s "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" ] || { echo '::error::Heal evidence bundle missing' >&2; exit 1; }
 	cat "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" >> "${CODEX_PROMPT_FILE}"
+	# Issue #8249: a heal plan must state whether the change would have turned
+	# the observed failing run green (HEAL_COUNTERFACTUAL line). A missing
+	# prompt does not fail planning: the plan then has no line and the plan
+	# auto-approval gate holds it for a human.
+	heal_cf_prompt="prompts/mode-plan-heal-counterfactual.txt"
+	heal_cf_rendered=""
+	if [ -f "${heal_cf_prompt}" ] && [ ! -L "${heal_cf_prompt}" ] \
+		&& heal_cf_rendered="$(bash scripts/render_prompt.sh "${heal_cf_prompt}")" && [ -n "${heal_cf_rendered}" ]; then
+		{
+			echo
+			printf '%s\n' "${heal_cf_rendered}"
+		} >> "${CODEX_PROMPT_FILE}"
+	else
+		echo "::warning::HEAL_COUNTERFACTUAL prompt unavailable; the plan auto-approval gate will hold this heal plan"
+	fi
 fi
 
 # Update progress comment to signal model invocation is starting

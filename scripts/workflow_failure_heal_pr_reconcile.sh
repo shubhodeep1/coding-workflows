@@ -184,8 +184,8 @@ _retarget_heal()
 		else
 			merge_message="Merge ${BASE_REF} into ${heal_branch} after #${SOURCE_PR} merged"
 		fi
-		if ! GIT_AUTHOR_NAME="codex-bot" GIT_AUTHOR_EMAIL="codex@users.noreply.github.com" \
-			GIT_COMMITTER_NAME="codex-bot" GIT_COMMITTER_EMAIL="codex@users.noreply.github.com" \
+		if ! GIT_AUTHOR_NAME="codex-bot" GIT_AUTHOR_EMAIL="codex-bot@users.noreply.invalid" \
+			GIT_COMMITTER_NAME="codex-bot" GIT_COMMITTER_EMAIL="codex-bot@users.noreply.invalid" \
 			git -C "${merge_dir}" merge --quiet --no-edit -m "${merge_message}" "${merge_ref}" >/dev/null 2>&1; then
 			git -C "${merge_dir}" merge --abort >/dev/null 2>&1 || true
 			git worktree remove --force "${merge_dir}" >/dev/null 2>&1 || true

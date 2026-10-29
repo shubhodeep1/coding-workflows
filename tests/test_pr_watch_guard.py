@@ -36,6 +36,9 @@ TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "
 SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
+# Full §25 text moved out of CLAUDE.md to keep the always-loaded file small.
+CLAUDE_MD_S25_REFERENCE = REPO_ROOT / ".claude" / "docs" / "s25-pr-watching-disabled.md"
+TEMPLATE_CLAUDE_MD_S25_REFERENCE = REPO_ROOT / "workflow-templates" / ".claude" / "docs" / "s25-pr-watching-disabled.md"
 SEED_REPO_COMMAND = REPO_ROOT / ".claude" / "commands" / "seed-repo.md"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -258,23 +261,40 @@ def test_template_parity():
 	if "hooks/pr_watch_guard.py" not in pending:
 		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	if "settings.json" not in pending:
-		assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(encoding="utf-8")
+		assert claude_template_drift.settings_match_template(
+			TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"), SETTINGS_PATH.read_text(encoding="utf-8")
+		)
+
+
+def test_settings_match_template_rejects_any_other_difference():
+	template = '{\n  "permissions": {\n    "allow": [\n      "Read"\n    ]\n  }\n}\n'
+	live = template.replace('"Read"', '"Read",\n      "mcp__claude-code-remote__create_session"')
+	assert claude_template_drift.settings_match_template(template, live)
+	assert not claude_template_drift.settings_match_template(template, template)
+	assert not claude_template_drift.settings_match_template(template, live.replace('session"', 'session",\n      "Bash(*)"'))
+	assert not claude_template_drift.settings_match_template(template, live.replace('"Read"', '"Write"'))
+	for malformed in ("[]", "null", '"text"', '{"permissions": []}', "{not json",
+		'{"permissions": {"allow": 5}}', '{"permissions": {"allow": null}}', '{"permissions": {"allow": {}}}'):
+		assert not claude_template_drift.settings_match_template(template, malformed)
 
 
 def test_claude_md_documents_the_rule():
 	text = CLAUDE_MD.read_text(encoding="utf-8")
+	reference = CLAUDE_MD_S25_REFERENCE.read_text(encoding="utf-8")
+	assert TEMPLATE_CLAUDE_MD_S25_REFERENCE.read_text(encoding="utf-8") == reference
 	assert "## §25. PR Watching Is Disabled (MANDATORY)" in text
 	assert ".claude/hooks/pr_watch_guard.py" in text
 	assert "`mcp__.*__subscribe_pr_activity`" in text
 	assert "tests/test_pr_watch_guard.py" in text
+	assert ".claude/docs/s25-pr-watching-disabled.md" in text
 	assert (
 		"fails open with a `systemMessage` warning when the hook payload cannot be read, "
 		"is invalid or non-object JSON, or guard evaluation raises an internal exception."
-	) in " ".join(text.split())
+	) in " ".join(reference.split())
 	assert (
 		"Empty or whitespace-only hook input is treated as an empty object and allowed "
 		"silently because there is no tool payload to evaluate."
-	) in " ".join(text.split())
+	) in " ".join(reference.split())
 	# §12.G is retained for §6 section stability but marked inactive.
 	assert "### G) Autofix CI / Address-Comments Mode Add-ons\n\n**INACTIVE — superseded by §25.**" in text
 	# The event trigger is gone from the §12 preamble.

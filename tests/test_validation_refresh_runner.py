@@ -631,8 +631,10 @@ slots:
 
 
 def _enabled_discovery_ctx(
-	*, dry_run: bool = False
+	*, dry_run: bool = False, close_superseded: bool = False
 ) -> "refresh_runner.discovery_module.DiscoveryRunContext":
+	# The superseded-PR sweep is off by default here so the flow tests keep
+	# their exact command sequences; the sweep tests turn it on.
 	return refresh_runner.discovery_module.DiscoveryRunContext(
 		source_root=REPO_ROOT,
 		prompt_path=REPO_ROOT / "prompts" / "mode-validate-discover.txt",
@@ -649,6 +651,7 @@ def _enabled_discovery_ctx(
 		dedup_days=7,
 		enabled=True,
 		dry_run=dry_run,
+		close_superseded=close_superseded,
 	)
 
 
@@ -1657,6 +1660,202 @@ def test_dispatch_discovery_dedup_check_runs_before_budget_gate() -> None:
 		assert stub.dedup_calls == ["octo/demo-repo"]
 		assert stub.appended == []
 		executor.assert_consumed()
+
+
+SWEEP_SEED_TITLE = "chore(validation): seed .ai/validate.yml (type: node-runtime)"
+SWEEP_BOT_COMMITS = [{"oid": "a1", "authors": [{"name": "codex-bot", "email": "codex@users.noreply.github.com"}]}]
+SWEEP_BOT_VIEW_JSON = json.dumps({"commits": SWEEP_BOT_COMMITS})
+
+
+def _sweep_pr_list_json(entries: list[tuple[int, str]]) -> str:
+	return json.dumps(
+		[
+			{
+				"number": number,
+				"url": f"https://github.com/octo/demo-repo/pull/{number}",
+				"headRefName": branch,
+				"title": SWEEP_SEED_TITLE,
+				"commits": SWEEP_BOT_COMMITS,
+			}
+			for number, branch in entries
+		]
+	)
+
+
+def test_dispatch_discovery_sweep_closes_stale_seed_pr_even_on_dedup_hit() -> None:
+	# btc_sweeper#196: a seed PR stayed open after another seed merged, then
+	# conflicted on `.ai/validate.yml` and stopped review/autofix. The sweep
+	# runs before the dedup gate, so it closes the PR on the next cycle.
+	with tempfile.TemporaryDirectory(prefix="discovery-sweep-dedup-") as td, _StubMemory(
+		dedup_returns=True
+	) as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		(repo_dir / ".ai").mkdir()
+		(repo_dir / ".ai" / "validate.yml").write_text(VALID_NODE_RUNTIME_MANIFEST, encoding="utf-8")
+		branch = "ai/validation-refresh"
+		executor = FakeExecutor(
+			[
+				PlannedCall(
+					("gh", "pr", "list"),
+					stdout=_sweep_pr_list_json([(196, "automation/validate-discovery/38b0e3d9fa3d/node-runtime")]),
+				),
+				PlannedCall(("gh", "pr", "view", "196"), stdout=SWEEP_BOT_VIEW_JSON),
+				PlannedCall(("gh", "pr", "close", "196")),
+			]
+		)
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx(close_superseded=True))
+		result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch=branch)
+		stdout = io.StringIO()
+		with contextlib.redirect_stdout(stdout):
+			runner._dispatch_discovery(
+				result=result,
+				repo_dir=repo_dir,
+				repository="octo/demo-repo",
+				default_branch="main",
+			)
+		assert result.discovery_outcome == "skipped_dedup"
+		assert "superseded_pr: #196 reason=manifest_already_committed outcome=closed" in result.discovery_diagnostics
+		assert (
+			"VALIDATION_DISCOVERY_SUPERSEDED repository=octo/demo-repo pr=196 "
+			"branch=automation/validate-discovery/38b0e3d9fa3d/node-runtime "
+			"reason=manifest_already_committed outcome=closed"
+		) in stdout.getvalue()
+		assert stub.dedup_calls == ["octo/demo-repo"]
+		executor.assert_consumed()
+
+
+def test_dispatch_discovery_sweep_closes_older_pr_after_opening_replacement() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-sweep-replace-") as td, _StubMemory() as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)  # no manifest committed: seed path
+		branch = "ai/validation-refresh"
+		older_branch = "automation/validate-discovery/38b0e3d9fa3d/node-runtime"
+
+		def on_close(command: list[str], _cwd: Path | None) -> None:
+			assert "https://github.com/octo/demo-repo/pull/99" in command[command.index("--comment") + 1]
+
+		executor = FakeExecutor(
+			[
+				# Sweep listing: one older seed PR, not obsolete yet (no manifest, no replacement).
+				PlannedCall(("gh", "pr", "list"), stdout=_sweep_pr_list_json([(196, older_branch)])),
+				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
+				PlannedCall(ISOLATED_CODEX_PREFIX, stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),
+				PlannedCall(("gh", "pr", "list"), stdout="[]\n"),  # open_or_update's own branch lookup
+				PlannedCall(("git", "checkout", "-B")),
+				PlannedCall(("git", "config", "user.name")),
+				PlannedCall(("git", "config", "user.email")),
+				PlannedCall(("git", "add")),
+				PlannedCall(("git", "commit")),
+				PlannedCall(("git", "push", "-u", "origin")),
+				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/99\n"),
+				# Second pass reuses the first listing: no new gh pr list.
+				# #196's SHA is an ancestor of this run's HEAD, so it is older.
+				PlannedCall(("git", "merge-base", "--is-ancestor", "38b0e3d9fa3d"), check=False),
+				PlannedCall(("gh", "pr", "view", "196"), stdout=SWEEP_BOT_VIEW_JSON),
+				PlannedCall(("gh", "pr", "close", "196"), callback=on_close),
+			]
+		)
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx(close_superseded=True))
+		result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch=branch)
+		runner._dispatch_discovery(
+			result=result,
+			repo_dir=repo_dir,
+			repository="octo/demo-repo",
+			default_branch="main",
+		)
+		assert result.discovery_outcome == "pr_opened"
+		assert result.discovery_pr_url == "https://github.com/octo/demo-repo/pull/99"
+		assert "superseded_pr: #196 reason=superseded_by_newer_pr outcome=closed" in result.discovery_diagnostics
+		assert len(stub.appended) == 1
+		assert stub.appended[0]["outcome"] == "success_seeded"
+		gh_pr_lists = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "list"]]
+		assert len(gh_pr_lists) == 2  # sweep listing + the existing per-branch lookup
+		executor.assert_consumed()
+
+
+def test_discovery_prs_at_or_before_head_keeps_newer_and_unresolvable_prs() -> None:
+	# A concurrent run may have opened a PR for a newer HEAD; only PRs whose
+	# branch SHA is this run's HEAD or an ancestor of it are passed on to close.
+	prefix = "automation/validate-discovery"
+	replacement = f"{prefix}/abc123def456/node-runtime"
+
+	def _pr(number: int, branch: str) -> "refresh_runner.discovery_module.OpenDiscoveryPr":
+		return refresh_runner.discovery_module.OpenDiscoveryPr(
+			number=number,
+			url=f"https://github.com/octo/demo-repo/pull/{number}",
+			head_branch=branch,
+			title=SWEEP_SEED_TITLE,
+			bot_only=True,
+		)
+
+	executor = FakeExecutor(
+		[
+			PlannedCall(("git", "merge-base", "--is-ancestor", "38b0e3d9fa3d"), check=False),
+			PlannedCall(("git", "merge-base", "--is-ancestor", "fedcba987654"), returncode=1, check=False),
+		]
+	)
+	runner = _make_runner(executor, "ai/validation-refresh", discovery_ctx=_enabled_discovery_ctx(close_superseded=True))
+	result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch="ai/validation-refresh")
+	stdout = io.StringIO()
+	with contextlib.redirect_stdout(stdout):
+		older = runner._discovery_prs_at_or_before_head(
+			result=result,
+			repository="octo/demo-repo",
+			repo_dir=Path("/nonexistent"),
+			consumer_head_sha="abc123def4567890",
+			open_prs=[
+				_pr(196, f"{prefix}/38b0e3d9fa3d/node-runtime"),
+				_pr(300, f"{prefix}/fedcba987654/node-runtime"),
+				_pr(301, f"{prefix}/--upload-pack=x/node-runtime"),
+				_pr(99, replacement),
+			],
+			replacement_branch=replacement,
+		)
+	assert [pr.number for pr in older] == [196]
+	assert "pr=300 branch=automation/validate-discovery/fedcba987654/node-runtime" in stdout.getvalue()
+	assert "pr=301" in stdout.getvalue() and "outcome=kept_not_older" in stdout.getvalue()
+	assert "superseded_pr: #300 reason=superseded_by_newer_pr outcome=kept_not_older" in result.discovery_diagnostics
+	assert "superseded_pr: #301 reason=superseded_by_newer_pr outcome=kept_not_older" in result.discovery_diagnostics
+	executor.assert_consumed()  # no merge-base for the non-hex branch or the replacement
+
+
+def test_dispatch_discovery_sweep_list_failure_does_not_block_discovery() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-sweep-fail-") as td, _StubMemory(
+		dedup_returns=True
+	) as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		branch = "ai/validation-refresh"
+		executor = FakeExecutor(
+			[PlannedCall(("gh", "pr", "list"), returncode=1, stderr="HTTP 502")]
+		)
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx(close_superseded=True))
+		result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch=branch)
+		runner._dispatch_discovery(
+			result=result,
+			repo_dir=repo_dir,
+			repository="octo/demo-repo",
+			default_branch="main",
+		)
+		assert result.discovery_outcome == "skipped_dedup"
+		assert any(d.startswith("superseded_sweep_list_failed:") for d in result.discovery_diagnostics)
+		assert stub.dedup_calls == ["octo/demo-repo"]
+		executor.assert_consumed()
+
+
+def test_build_default_discovery_ctx_reads_close_superseded_env() -> None:
+	saved = os.environ.get("VALIDATION_DISCOVERY_CLOSE_SUPERSEDED")
+	try:
+		os.environ.pop("VALIDATION_DISCOVERY_CLOSE_SUPERSEDED", None)
+		assert refresh_runner._build_default_discovery_ctx(REPO_ROOT).close_superseded is True
+		os.environ["VALIDATION_DISCOVERY_CLOSE_SUPERSEDED"] = "false"
+		assert refresh_runner._build_default_discovery_ctx(REPO_ROOT).close_superseded is False
+	finally:
+		if saved is None:
+			os.environ.pop("VALIDATION_DISCOVERY_CLOSE_SUPERSEDED", None)
+		else:
+			os.environ["VALIDATION_DISCOVERY_CLOSE_SUPERSEDED"] = saved
 
 
 # ---------------------------------------------------------------------------

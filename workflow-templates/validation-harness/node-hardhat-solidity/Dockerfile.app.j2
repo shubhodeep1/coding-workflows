@@ -13,12 +13,17 @@ WORKDIR /workspace
 
 COPY . /workspace
 
+# A Hardhat project needs package.json at the build context root. Fail the
+# build when it is missing, so a build-context problem (for example a root
+# .dockerignore that drops the project) is reported at startup instead of as
+# an npm ENOENT inside the test suite (fun-token-multi-chain#579).
 RUN if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then \
 		npm ci; \
 	elif [ -f package.json ]; then \
 		npm install; \
 	else \
-		echo "package.json not found; skipping npm install"; \
+		echo "harness_error: package.json missing from build context /workspace (check the repository .dockerignore)" >&2; \
+		exit 1; \
 	fi
 
 CMD ["sh", "-c", "while :; do sleep 3600; done"]

@@ -382,6 +382,29 @@ def test_engine_and_claude_steps_run_on_idle_ticks_when_needed() -> None:
 		assert by_name[name]["if"] == "(steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')", name
 
 
+VALIDATION_HARNESS_ENV_LINES = (
+	"VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}",
+	"VALIDATION_HARNESS_HOLD_MAX_DAYS: ${{ vars.VALIDATION_HARNESS_HOLD_MAX_DAYS || '14' }}",
+	"VALIDATION_HARNESS_MAX_RESUMES_PER_FP: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES_PER_FP || '2' }}",
+	"VALIDATION_HARNESS_MAX_RESUMES: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES || '4' }}",
+	"VALIDATION_HARNESS_ROUTE_LOGIN: ${{ vars.VALIDATION_HARNESS_ROUTE_LOGIN || '' }}",
+)
+
+
+def test_validation_harness_hold_env_is_wired_into_both_poller_steps() -> None:
+	"""Refs #7913: the harness hold switches reach every step that runs the full poller."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for step_name in ("Process each tracking issue", STANDALONE_SWEEP_STEP):
+		block = _step_block(wf, step_name)
+		for line in VALIDATION_HARNESS_ENV_LINES:
+			assert line in block, (step_name, line)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert '_validation_harness_int_config VALIDATION_HARNESS_HOLD_MAX_DAYS 14 1 365' in poller
+	assert '_validation_harness_int_config VALIDATION_HARNESS_MAX_RESUMES_PER_FP 2 0 100' in poller
+	assert '_validation_harness_int_config VALIDATION_HARNESS_MAX_RESUMES 4 0 100' in poller
+	yaml.safe_load(wf)
+
+
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "worktree_registry.sh" in wf
@@ -576,6 +599,7 @@ def main() -> int:
 	test_standalone_pr_sweeps_run_without_tracking_issues()
 	test_standalone_recovery_sweep_runs_without_tracking_issues()
 	test_engine_and_claude_steps_run_on_idle_ticks_when_needed()
+	test_validation_harness_hold_env_is_wired_into_both_poller_steps()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	test_find_tracking_step_maps_standalone_recovery_switch()
 	test_standalone_stall_probe_log_prefix_is_registered()

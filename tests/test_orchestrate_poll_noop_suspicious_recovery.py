@@ -1042,6 +1042,21 @@ def test_noop_forged_productive_commit_fails_gate_c():
 	assert any("gate C" in a for a in out["alerts"]), out
 
 
+def test_noop_claude_and_new_codex_identities_count_as_productive():
+	"""Writers commit as claude-bot or codex-bot on the .invalid domain; both
+	count, as does the legacy codex-bot pair (the default fixture)."""
+	for ident in ({"name": "claude-bot", "email": "claude-bot@users.noreply.invalid"},
+			{"name": "codex-bot", "email": "codex-bot@users.noreply.invalid"}):
+		out = _run_noop_sweep(commits=_noop_commits(ident))
+		assert len(out["merges"]) == 1, (ident, out)
+	# Name and email must match one pair exactly.
+	for ident in ({"name": "claude-bot", "email": "codex@users.noreply.github.com"},
+			{"name": "claude-bot", "email": "claude@users.noreply.github.com"}):
+		out = _run_noop_sweep(commits=_noop_commits(ident))
+		assert not out["merges"], (ident, out)
+		assert any("gate C" in a for a in out["alerts"]), (ident, out)
+
+
 def test_noop_productive_commit_not_pushed_by_pipeline_fails_gate_c():
 	"""Issue #7126: git identity is forgeable, so the qualifying commit must
 	also be inside a push by the pipeline login."""
@@ -1199,12 +1214,22 @@ def test_every_poller_merge_is_head_bound():
 
 def test_noop_productive_identity_matches_commit_writers():
 	text = _poller_text()
+	# The legacy pair stays: commits made before the .invalid emails still count.
 	assert 'NOOP_PRODUCTIVE_COMMIT_NAME="codex-bot"' in text
 	assert 'NOOP_PRODUCTIVE_COMMIT_EMAIL="codex@users.noreply.github.com"' in text
+	match = re.search(r"^NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON='(.*)'$", text, re.M)
+	assert match, "NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON must be a single-quoted literal"
+	identities = json.loads(match.group(1))
+	assert {"name": "codex-bot", "email": "codex@users.noreply.github.com"} in identities
 	for rel in ("scripts/review_commit_changes.sh", "scripts/review_rb_judge.sh"):
 		writer = (REPO_ROOT / rel).read_text()
-		assert re.search(r'git config user\.name "codex-bot"', writer), rel
-		assert re.search(r'git config user\.email "codex@users\.noreply\.github\.com"', writer), rel
+		# Each writer commits as claude-bot or codex-bot; both must count.
+		for name in ("claude-bot", "codex-bot"):
+			email = f"{name}@users.noreply.invalid"
+			assert re.search(rf'git config user\.name "{name}"', writer), (rel, name)
+			assert re.search(rf'git config user\.email "{re.escape(email)}"', writer), (rel, email)
+			assert {"name": name, "email": email} in identities, (rel, name)
+		assert "codex@users.noreply.github.com" not in writer, rel
 
 
 def test_noop_force_merge_controls_named_by_security_pass_findings_stay_in_place():
@@ -1229,8 +1254,10 @@ def test_noop_force_merge_controls_named_by_security_pass_findings_stay_in_place
 	# Gate C: a qualifying commit must carry the pipeline git identity and
 	# arrive in a push by the pipeline login on this head ref.
 	gate_c = sweep_code[sweep_code.index("N_PROD_PUSHED="):sweep_code.index('if [ "${N_PROD_PUSHED}" != "true" ]')]
-	assert '--arg name "${NOOP_PRODUCTIVE_COMMIT_NAME}"' in gate_c and '--arg email "${NOOP_PRODUCTIVE_COMMIT_EMAIL}"' in gate_c, gate_c
-	assert '(.value.commit.committer.name // "") == $name' in gate_c and '(.value.commit.author.email // "") == $email' in gate_c, gate_c
+	assert '--argjson ids "${NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON}"' in gate_c, gate_c
+	assert '(.value.commit.committer // {}) as $cm | (.value.commit.author // {}) as $au' in gate_c, gate_c
+	assert 'any($ids[]; (($cm.name // "") == .name and ($cm.email // "") == .email)' in gate_c, gate_c
+	assert '(($au.name // "") == .name and ($au.email // "") == .email)' in gate_c, gate_c
 	assert '(.actor.login // "") == $login and (.ref // "") == $ref' in gate_c, gate_c
 	assert "select(.b < $k and $k <= .a)" in gate_c, gate_c
 	assert '_pr_wait_for_required_checks "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}" 0' in sweep_code

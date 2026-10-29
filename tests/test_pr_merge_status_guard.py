@@ -36,6 +36,9 @@ SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
+# Full §21 text moved out of CLAUDE.md to keep the always-loaded file small.
+CLAUDE_MD_S21_REFERENCE = REPO_ROOT / ".claude" / "docs" / "s21-merged-pr-commit-guard.md"
+TEMPLATE_CLAUDE_MD_S21_REFERENCE = REPO_ROOT / "workflow-templates" / ".claude" / "docs" / "s21-merged-pr-commit-guard.md"
 _WORKER_ACCOUNT_ID = "a" * 32
 _OTHER_WORKER_ACCOUNT_ID = "b" * 32
 _WORKER_URL = f"https://api.cloudflare.com/client/v4/accounts/{_WORKER_ACCOUNT_ID}/workers/scripts/name"
@@ -2448,8 +2451,8 @@ def test_template_copies_are_identical() -> None:
 	if "hooks/pr_merge_status_guard.py" not in pending:
 		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	if "settings.json" not in pending:
-		assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
-			encoding="utf-8"
+		assert claude_template_drift.settings_match_template(
+			TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"), SETTINGS_PATH.read_text(encoding="utf-8")
 		)
 	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
@@ -2468,11 +2471,14 @@ def test_review_editor_can_transfer_guard_without_opening_other_claude_hooks() -
 
 def test_claude_md_documents_the_guard() -> None:
 	text = CLAUDE_MD.read_text(encoding="utf-8")
+	reference = CLAUDE_MD_S21_REFERENCE.read_text(encoding="utf-8")
+	assert TEMPLATE_CLAUDE_MD_S21_REFERENCE.read_text(encoding="utf-8") == reference
 	assert "## §21. Merged-PR Commit Guard (MANDATORY)" in text
 	assert ".claude/hooks/pr_merge_status_guard.py" in text
+	assert ".claude/docs/s21-merged-pr-commit-guard.md" in text
 	assert "CLAUDE_PR_MERGE_GUARD=off" in text
-	assert "The guard is skipped entirely" not in text
-	assert "The API-write\nconfirmation safeguard remains active in both cases." in text
+	assert "The guard is skipped entirely" not in text + reference
+	assert "The API-write\nconfirmation safeguard remains active in both cases." in reference
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -2862,7 +2868,7 @@ def test_guard_is_wired_for_the_mcp_push_tools(path: Path) -> None:
 
 
 def test_claude_md_documents_the_history_fallback() -> None:
-	text = CLAUDE_MD.read_text(encoding="utf-8")
+	text = CLAUDE_MD.read_text(encoding="utf-8") + CLAUDE_MD_S21_REFERENCE.read_text(encoding="utf-8")
 	assert "mcp__github__push_files" in text
 	assert "first-parent" in text
 	assert "git history" in text
@@ -3527,3 +3533,50 @@ def test_cdpath_set_before_a_shell_wrapper_reaches_its_cd(monkeypatch) -> None:
 	)
 	assert [invocation.subcommand for invocation in invocations] == ["push"]
 	assert invocations[0].warning, invocations
+
+
+# --- Auto mode: shape-only push doubts deny instead of asking -----------------
+
+@pytest.mark.parametrize("command", [
+	# The branch only exists once the command has run, so its tip cannot be resolved yet.
+	"git checkout -q -b claude/new-log && git push -u origin claude/new-log 2>&1 | tail -1",
+	'git push origin "$SOURCE:feature/x"',
+	"git push origin HEAD:$DEST",
+])
+def test_auto_mode_denies_a_push_whose_only_doubt_is_its_shell_shape(monkeypatch, merged_branch_repo, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("an unresolved push must not be looked up"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "permission_mode": "auto",
+		"tool_input": {"command": command}})
+	assert code == 2
+	assert "Auto mode: nothing ran" in message and "git push -u origin <branch>" in message
+	assert "could not resolve git push" in message
+	out = capsys.readouterr().out
+	assert '"permissionDecision": "ask"' not in out
+
+
+@pytest.mark.parametrize("mode", [None, "default", "acceptEdits", "plan", "Auto"])
+def test_shape_only_push_doubt_still_asks_outside_auto_mode(monkeypatch, merged_branch_repo, capsys, mode) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("an unresolved push must not be looked up"))
+	payload = {"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git checkout -b claude/new-log && git push -u origin claude/new-log"}}
+	if mode is not None:
+		payload["permission_mode"] = mode
+	assert guard.evaluate(payload) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_auto_mode_still_asks_when_a_shape_doubt_comes_with_a_branch_deletion(monkeypatch, merged_branch_repo, capsys) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
+	code, _ = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "permission_mode": "auto",
+		"tool_input": {"command": 'git push origin "$SOURCE:feature/x" :old-branch'}})
+	assert code == 0
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "deletes remote branches" in response["hookSpecificOutput"]["permissionDecisionReason"]

@@ -52,22 +52,22 @@ def test_extraction_workflow_is_automatic_short_and_fail_open() -> None:
 	assert "Repository learnings model extraction failed; continuing without extraction" in extraction_step
 
 
-def test_extraction_step_timeout_below_job_timeout() -> None:
-	# Run 40752760153: the fail-open extraction step had no timeout of its own,
-	# so a slow run hit the job timeout and the whole job was cancelled.
-	# continue-on-error only applies when the step itself times out.
-	job = yaml.safe_load(_workflow_text())["jobs"]["memory_maintenance"]
+def test_extraction_step_timeout_leaves_room_for_compaction() -> None:
+	# Run 40752760153: the fail-open extraction step had no step cap, ran into
+	# the 20-minute job timeout, and the whole job was cancelled.
+	memory_workflow = yaml.safe_load(_workflow_text())
+	job = memory_workflow["jobs"]["memory_maintenance"]
 	step_names = [step.get("name") for step in job["steps"]]
 	extraction_index = step_names.index("Extract repository learnings (fail-open)")
 	compaction_index = step_names.index("Run memory compaction")
 	extraction_step = job["steps"][extraction_index]
-	step_timeout = extraction_step.get("timeout-minutes")
 
-	assert isinstance(step_timeout, int)
-	assert extraction_step.get("continue-on-error") is True
-	assert step_timeout < job["timeout-minutes"]
-	assert job["timeout-minutes"] - step_timeout >= 8
 	assert extraction_index < compaction_index
+	assert extraction_step["continue-on-error"] is True
+	step_timeout_minutes = extraction_step["timeout-minutes"]
+	assert isinstance(step_timeout_minutes, int)
+	assert step_timeout_minutes < job["timeout-minutes"]
+	assert job["timeout-minutes"] - step_timeout_minutes >= 8
 
 
 def test_memory_maintenance_timeout_hierarchy() -> None:

@@ -43,6 +43,16 @@ Subcommands:
     normalized the same way. Paths with no computable digest (symlinks, a
     wrapper the renderer rejects) are left out.
 
+``classify-paths --digests-json F --repo-root R --commit SHA --paths-file P``
+    Prints one JSON object mapping each newline-separated path in ``P`` to
+    ``unmanaged`` (not a key of the ``managed-digests`` map in ``F``),
+    ``unmodified`` (its blob at ``SHA`` hashes to a listed digest, directly
+    or, for a ``.github/workflows/`` file, after its pinned release SHAs are
+    normalized) or ``modified`` (anything else, including a missing file, a
+    symlink or a submodule). Blobs are read from git objects, never from the
+    working tree. Check-failure triage (issue #8265) uses it; the security
+    audit keeps an inline copy of the same rule.
+
 ``check-paths --allowed-file A --paths-file P``
     Exits 0 when every newline-separated path in ``P`` matches an allowlist
     entry, otherwise prints the first offending path and exits 3. In an
@@ -98,6 +108,13 @@ STATIC_UPSTREAM_MANAGED_PATHS = (
 # an unmodified wrapper from an older release whose body matches the current
 # template still matches.
 PIN_NORMALIZED_SHA = "0" * 40
+# The pinned-ref shapes the renderer writes; must match the security audit's
+# inline WRAPPER_PIN_PATTERNS (scripts/security_audit.sh, parity-tested).
+WRAPPER_PIN_PATTERNS = (
+	re.compile(rb"(shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml@)[0-9a-f]{40}( # stable)"),
+	re.compile(rb"(ref: )[0-9a-f]{40}( # stable)"),
+)
+MANAGED_STATUSES = ("unmanaged", "unmodified", "modified")
 
 
 class ManifestError(Exception):
@@ -340,6 +357,49 @@ def derive_managed_digests(repo_root: Path, commit: str = "HEAD") -> dict:
 	return dict(sorted(digests.items()))
 
 
+def normalize_wrapper_pins(data: bytes) -> bytes:
+	"""Replace every pinned release SHA with PIN_NORMALIZED_SHA (same rule as the audit)."""
+	normalized_sha = PIN_NORMALIZED_SHA.encode("ascii")
+	for pattern in WRAPPER_PIN_PATTERNS:
+		data = pattern.sub(lambda match: match.group(1) + normalized_sha + match.group(2), data)
+	return data
+
+
+def classify_managed_path(path: str, digests: dict, blob, mode) -> str:
+	"""``unmanaged``, ``unmodified`` (the release's own bytes) or ``modified``.
+
+	``blob`` is the file's bytes at the commit under test (None when absent)
+	and ``mode`` its git tree mode. Only a regular file (100644 / 100755)
+	whose sha256, or for a wrapper its pin-normalized sha256, is listed counts
+	as unmodified; a consumer change to a synced file is the consumer's own.
+	"""
+	expected = digests.get(path) if isinstance(digests, dict) else None
+	if not expected:
+		return "unmanaged"
+	if blob is None or mode not in ("100644", "100755"):
+		return "modified"
+	if hashlib.sha256(blob).hexdigest() in expected:
+		return "unmodified"
+	if path.startswith(".github/workflows/"):
+		normalized = normalize_wrapper_pins(blob)
+		if normalized != blob and hashlib.sha256(normalized).hexdigest() in expected:
+			return "unmodified"
+	return "modified"
+
+
+def classify_paths(repo_root: Path, commit: str, digests: dict, paths: list) -> dict:
+	"""Classify ``paths`` at ``commit`` (git objects only, never the working tree)."""
+	entries = {path: (mode, kind, oid) for mode, kind, oid, path in list_tree(repo_root, commit)}
+	wanted = [entries[path][2] for path in paths if path in entries and entries[path][1] == "blob" and entries[path][0] in ("100644", "100755")]
+	blobs = read_blobs(repo_root, wanted)
+	result = {}
+	for path in paths:
+		entry = entries.get(path)
+		blob = blobs.get(entry[2]) if entry and entry[1] == "blob" else None
+		result[path] = classify_managed_path(path, digests, blob, entry[0] if entry else None)
+	return result
+
+
 def render_manifest(repo_root: Path, commit: str, version: str) -> str:
 	manifest = {
 		"schema": SCHEMA,
@@ -396,6 +456,20 @@ def cmd_managed_digests(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_classify_paths(args: argparse.Namespace) -> int:
+	try:
+		digests = json.loads(Path(args.digests_json).read_text(encoding="utf-8"))
+		paths = [line for line in Path(args.paths_file).read_text(encoding="utf-8").split("\n") if line]
+	except (OSError, UnicodeDecodeError, ValueError) as exc:
+		raise ManifestError("unreadable digests or path file") from exc
+	if not isinstance(digests, dict) or not digests:
+		raise ManifestError("empty or malformed digests")
+	repo_root = Path(args.repo_root)
+	commit = resolve_commit(repo_root, args.commit)
+	print(json.dumps(classify_paths(repo_root, commit, digests, paths), sort_keys=True))
+	return 0
+
+
 def cmd_check_paths(args: argparse.Namespace) -> int:
 	try:
 		# "\n" only: splitlines() would also split on U+2028/U+2029 and
@@ -440,11 +514,16 @@ def main(argv: list | None = None) -> int:
 	digests = sub.add_parser("managed-digests")
 	digests.add_argument("--repo-root", required=True)
 	digests.add_argument("--commit", default="HEAD")
+	classify = sub.add_parser("classify-paths")
+	classify.add_argument("--digests-json", required=True)
+	classify.add_argument("--repo-root", required=True)
+	classify.add_argument("--commit", required=True)
+	classify.add_argument("--paths-file", required=True)
 	check = sub.add_parser("check-paths")
 	check.add_argument("--allowed-file", required=True)
 	check.add_argument("--paths-file", required=True)
 	args = parser.parse_args(argv)
-	handlers = {"build": cmd_build, "allowed-paths": cmd_allowed_paths, "managed-paths": cmd_managed_paths, "managed-digests": cmd_managed_digests, "check-paths": cmd_check_paths}
+	handlers = {"build": cmd_build, "allowed-paths": cmd_allowed_paths, "managed-paths": cmd_managed_paths, "managed-digests": cmd_managed_digests, "classify-paths": cmd_classify_paths, "check-paths": cmd_check_paths}
 	if args.command not in handlers:
 		parser.print_usage(sys.stderr)
 		return 2

@@ -63,6 +63,18 @@
 #                                            the failing PR's head ref
 #                                            (default "false"; off until an
 #                                            operator enables it)
+#   CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED  default true (unset, empty or true in
+#                                            any case); "false" turns it off; any other
+#                                            value turns it off with a warning. When on,
+#                                            a failure whose fix is only in unmodified
+#                                            upstream-managed files is reported upstream
+#                                            instead of filing a consumer issue (#8265)
+#   CHECK_TRIAGE_UPSTREAM_MANAGED_DIGESTS_FILE  managed-digests map staged by the workflow
+#                                            from the pinned support checkout (default empty)
+#   CHECK_TRIAGE_UPSTREAM_REPOSITORY          upstream repository (default
+#                                            shubhodeep1/coding-workflows)
+#   CHECK_TRIAGE_WRAPPER_SHA                  verified 40-hex support pin (default empty;
+#                                            routing needs it)
 #   TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED    "true" adds an "Integration branch:" line
 #                                            when the failing PR's head is an existing
 #                                            orchestrator/project-<N> branch of this
@@ -319,9 +331,167 @@ if [ -z "${TRUSTED_SUPPORT_DIR}" ] ||
 	exit 1
 fi
 case "${TRIAGE_STAGE}" in
-	all|collect|diagnose) ;;
+	all|collect|diagnose|route) ;;
 	*) log "error invalid_stage"; exit 1 ;;
 esac
+
+# --- Upstream-managed routing (issue #8265) --------------------------------
+# A check that fails because of a file the @stable sync manages and the
+# consumer has not modified cannot be fixed by a consumer PR (the managed
+# wrapper integrity check refuses it). The diagnosis lists the files its fix
+# must change in an AFFECTED_FILES block; when every listed file is an
+# unmodified managed file, or the named cause is an unmodified managed
+# workflow, one pointer-only heal report goes upstream instead of a consumer
+# issue. Every failure files the consumer issue as before (fail open).
+UPSTREAM_ROUTING_SWITCH="${CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED:-true}"
+case "${UPSTREAM_ROUTING_SWITCH,,}" in
+	''|true)
+		UPSTREAM_ROUTING_ENABLED="true"
+		;;
+	false)
+		UPSTREAM_ROUTING_ENABLED="false"
+		;;
+	*)
+		echo "::warning::CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED has an unrecognised value; upstream routing stays off. Use true or false."
+		UPSTREAM_ROUTING_ENABLED="false"
+		;;
+esac
+UPSTREAM_REPOSITORY="${CHECK_TRIAGE_UPSTREAM_REPOSITORY:-shubhodeep1/coding-workflows}"
+UPSTREAM_DIGESTS_FILE="${CHECK_TRIAGE_UPSTREAM_MANAGED_DIGESTS_FILE:-}"
+UPSTREAM_WRAPPER_SHA="${CHECK_TRIAGE_WRAPPER_SHA:-}"
+UPSTREAM_ROUTE_FILE="${RUNTIME_DIR}/upstream_route.json"
+UPSTREAM_HEAL_PY="${TRUSTED_SUPPORT_DIR}/scripts/workflow_failure_heal.py"
+# Set when DIAG_FILE holds the CI-log fallback body: untrusted log text never routes.
+UPSTREAM_DIAGNOSIS_FALLBACK="false"
+
+# Classify the raw diagnosis (before neutralisation). Writes the decision to
+# UPSTREAM_ROUTE_FILE; never fails the run.
+triage_upstream_classify()
+{
+	local route_digests="" route_repo_root="${GITHUB_WORKSPACE:-.}" route_reason=""
+	rm -f "${UPSTREAM_ROUTE_FILE}"
+	if [ -n "${UPSTREAM_DIGESTS_FILE}" ] && [ -f "${UPSTREAM_DIGESTS_FILE}" ] && [ ! -L "${UPSTREAM_DIGESTS_FILE}" ]; then
+		route_digests="${UPSTREAM_DIGESTS_FILE}"
+	fi
+	if [ "${UPSTREAM_DIAGNOSIS_FALLBACK}" = "true" ]; then
+		printf '{"decision":"file","reason":"fallback_diagnosis"}\n' > "${UPSTREAM_ROUTE_FILE}"
+	elif [ ! -f "${UPSTREAM_HEAL_PY}" ] || [ -L "${UPSTREAM_HEAL_PY}" ]; then
+		printf '{"decision":"file","reason":"helper_missing"}\n' > "${UPSTREAM_ROUTE_FILE}"
+	elif ! [[ "${HEAD_SHA,,}" =~ ^[0-9a-f]{40}$ ]] && [ "${UPSTREAM_ROUTING_ENABLED}" = "true" ] && [ "${REPO,,}" != "${UPSTREAM_REPOSITORY,,}" ]; then
+		printf '{"decision":"file","reason":"head_sha_unavailable"}\n' > "${UPSTREAM_ROUTE_FILE}"
+	elif ! env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GH_TOKEN -u GITHUB_TOKEN -u OPENROUTER_API_KEY -u TG_BOT_SECRET \
+		GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null PYTHONDONTWRITEBYTECODE=1 \
+		timeout 120 python3 -I -B "${UPSTREAM_HEAL_PY}" check-triage-route --diagnosis-file "${DIAG_FILE}" \
+		--digests-json "${route_digests}" --repo-root "${route_repo_root}" --commit "${HEAD_SHA,,}" \
+		--enabled "${UPSTREAM_ROUTING_ENABLED}" --repo "${REPO}" --upstream-repo "${UPSTREAM_REPOSITORY}" \
+		--historical "${HISTORICAL_MODE}" > "${UPSTREAM_ROUTE_FILE}" 2>/dev/null \
+		|| ! jq -e '.decision == "route" or .decision == "file"' "${UPSTREAM_ROUTE_FILE}" >/dev/null 2>&1; then
+		printf '{"decision":"file","reason":"classify_failed"}\n' > "${UPSTREAM_ROUTE_FILE}"
+	fi
+	# The route stage reads the failing SHA and details URL from here.
+	if jq --arg head_sha "${HEAD_SHA,,}" --arg details_url "${CHECK_DETAILS_URL}" \
+		'. + {head_sha: $head_sha, details_url: $details_url}' "${UPSTREAM_ROUTE_FILE}" > "${UPSTREAM_ROUTE_FILE}.tmp" 2>/dev/null; then
+		mv "${UPSTREAM_ROUTE_FILE}.tmp" "${UPSTREAM_ROUTE_FILE}"
+	else
+		rm -f "${UPSTREAM_ROUTE_FILE}.tmp"
+		printf '{"decision":"file","reason":"classify_failed"}\n' > "${UPSTREAM_ROUTE_FILE}"
+	fi
+	route_reason="$(jq -r '.reason // ""' "${UPSTREAM_ROUTE_FILE}" | tr -cd 'a-z_' | head -c 40)"
+	if [ "$(jq -r '.decision' "${UPSTREAM_ROUTE_FILE}")" = "route" ]; then
+		log "upstream_route outcome=candidate reason=${route_reason} paths=$(jq -r '.paths | length' "${UPSTREAM_ROUTE_FILE}") heal_fp=$(jq -r '.heal_fp // ""' "${UPSTREAM_ROUTE_FILE}" | tr -cd '0-9a-f' | head -c 64) pr=${PR_NUMBER}"
+	else
+		log "upstream_route outcome=file reason=${route_reason:-unknown} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY:-check}"
+	fi
+	return 0
+}
+
+# Send one pointer-only heal report upstream for a "route" decision. Returns
+# 0 only when the dispatch was accepted; any other outcome files the consumer
+# issue (fail open).
+triage_upstream_send()
+{
+	local send_dir="${RUNTIME_DIR}/upstream_route" send_head="" send_details="" send_reason="" send_fp="" detail=""
+	[ -s "${UPSTREAM_ROUTE_FILE}" ] || return 1
+	[ "$(jq -r '.decision // ""' "${UPSTREAM_ROUTE_FILE}" 2>/dev/null)" = "route" ] || return 1
+	send_reason="$(jq -r '.reason // ""' "${UPSTREAM_ROUTE_FILE}" | tr -cd 'a-z_' | head -c 40)"
+	send_fp="$(jq -r '.heal_fp // ""' "${UPSTREAM_ROUTE_FILE}" | tr -cd '0-9a-f' | head -c 64)"
+	if [ "${UPSTREAM_ROUTING_ENABLED}" != "true" ]; then
+		log "upstream_route outcome=fail_open reason=disabled pr=${PR_NUMBER}"
+		return 1
+	fi
+	if ! [[ "${UPSTREAM_WRAPPER_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+		log "upstream_route outcome=fail_open reason=support_unpinned pr=${PR_NUMBER}"
+		return 1
+	fi
+	if [ "${WORKFLOW_HEAL_ENABLED:-true}" = "false" ]; then
+		log "upstream_route outcome=fail_open reason=workflow_heal_disabled pr=${PR_NUMBER}"
+		return 1
+	fi
+	if [ -z "${GH_TOKEN:-}" ]; then
+		log "upstream_route outcome=fail_open reason=token_missing pr=${PR_NUMBER}"
+		return 1
+	fi
+	if [ ! -f "${UPSTREAM_HEAL_PY}" ] || [ -L "${UPSTREAM_HEAL_PY}" ]; then
+		log "upstream_route outcome=fail_open reason=helper_missing pr=${PR_NUMBER}"
+		return 1
+	fi
+	mkdir -p "${send_dir}"
+	send_head="$(jq -r '.head_sha // ""' "${UPSTREAM_ROUTE_FILE}")"
+	send_details="$(jq -r '.details_url // ""' "${UPSTREAM_ROUTE_FILE}")"
+	if ! python3 -I -B "${UPSTREAM_HEAL_PY}" build-synced-check-payload --decision-json "${UPSTREAM_ROUTE_FILE}" \
+		--repo "${REPO}" --pr "${PR_NUMBER}" --check-name "${CHECK_NAME}" --details-url "${send_details}" \
+		--head-sha "${send_head}" --wrapper-sha "${UPSTREAM_WRAPPER_SHA}" --run-id "${GITHUB_RUN_ID:-}" \
+		> "${send_dir}/payload.json" 2>/dev/null \
+		|| ! python3 -I -B "${UPSTREAM_HEAL_PY}" validate-payload --payload-json "${send_dir}/payload.json" >/dev/null 2>&1; then
+		log "upstream_route outcome=fail_open reason=payload_invalid pr=${PR_NUMBER}"
+		return 1
+	fi
+	rm -f "${send_dir}/report_identity.jwt"
+	python3 -I -B "${UPSTREAM_HEAL_PY}" request-report-identity --out "${send_dir}/report_identity.jwt" >/dev/null 2>&1 || true
+	if [ ! -s "${send_dir}/report_identity.jwt" ]; then
+		log "upstream_route outcome=fail_open reason=identity_unavailable pr=${PR_NUMBER}"
+		return 1
+	fi
+	if ! python3 -I -B "${UPSTREAM_HEAL_PY}" wrap-dispatch --payload-json "${send_dir}/payload.json" \
+		--report-identity-file "${send_dir}/report_identity.jwt" > "${send_dir}/dispatch.json" 2>/dev/null; then
+		rm -f "${send_dir}/report_identity.jwt"
+		log "upstream_route outcome=fail_open reason=dispatch_envelope_failed pr=${PR_NUMBER}"
+		return 1
+	fi
+	rm -f "${send_dir}/report_identity.jwt"
+	if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPOSITORY}/dispatches" --input "${send_dir}/dispatch.json" >/dev/null 2> "${send_dir}/dispatch_error.txt"; then
+		detail="$(head -c 200 "${send_dir}/dispatch_error.txt" 2>/dev/null | tr '\r\n' '  ' | tr -cd '[:print:]' | sed 's/::/: :/g')"
+		rm -f "${send_dir}/dispatch.json"
+		log "upstream_route outcome=fail_open reason=dispatch_failed pr=${PR_NUMBER} detail=${detail}"
+		return 1
+	fi
+	rm -f "${send_dir}/dispatch.json"
+	log "skip reason=upstream_managed fp=${FP:-none} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY:-check} paths=$(jq -r '.paths | length' "${UPSTREAM_ROUTE_FILE}") route_reason=${send_reason}"
+	log "upstream_route outcome=routed heal_fp=${send_fp} upstream=${UPSTREAM_REPOSITORY}"
+	tg_send_msg "Check-failure auto-triage routed ${REPO} PR #${PR_NUMBER} (check '${CHECK_NAME_DISPLAY:-check}') upstream to ${UPSTREAM_REPOSITORY}: the fix is in an unmodified synced file. No consumer issue was filed." "DEBUG" >/dev/null 2>&1 || true
+	if [ -n "${GITHUB_OUTPUT:-}" ]; then
+		echo "routed=true" >> "${GITHUB_OUTPUT}"
+	fi
+	return 0
+}
+
+if [ "${TRIAGE_STAGE}" = "route" ]; then
+	# Runs between diagnose and post with GH_PAT and the job's OIDC grant; it
+	# reads only the hand-off files the diagnose stage wrote.
+	if [ ! -s "${TRIAGE_METADATA_FILE}" ]; then
+		log "upstream_route outcome=fail_open reason=metadata_missing"
+		exit 0
+	fi
+	PR_NUMBER="$(jq -r '.pr_number // ""' "${TRIAGE_METADATA_FILE}")"
+	CHECK_NAME="$(jq -r '.check_name // ""' "${TRIAGE_METADATA_FILE}")"
+	FP="$(jq -r '.fingerprint // ""' "${TRIAGE_METADATA_FILE}" | tr -cd '0-9a-f' | head -c 64)"
+	if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]] || ! CHECK_NAME_DISPLAY="$(sanitize_check_name_display "${CHECK_NAME}")"; then
+		log "upstream_route outcome=fail_open reason=metadata_invalid"
+		exit 0
+	fi
+	triage_upstream_send || true
+	exit 0
+fi
 
 if [ "${TRIAGE_STAGE}" = "diagnose" ]; then
 	if [ ! -s "${TRIAGE_METADATA_FILE}" ] || [ ! -f "${RUNTIME_DIR}/pr_payload.json" ]; then
@@ -669,12 +839,34 @@ TRIAGE_DEDUP_STATE=open
 if [ "${HISTORICAL_MODE}" = "true" ]; then
 	TRIAGE_DEDUP_STATE=all
 fi
-OPEN_TRIAGE="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
+# Issue #8126 (BUG-001): a listing we could not read never counts as "no
+# duplicate". The paginated call, the page merge and the array check each have
+# to succeed; otherwise no issue is filed and the run fails visibly. The raw
+# page must be an array: the projection always wraps its output in [...], so
+# the later array check alone would let a "{}" page read as an empty listing.
+triage_dedup_list_ok=true
+OPEN_TRIAGE=""
+# rc= in the failure line tells a rate-limit stop (75) from other API errors.
+triage_dedup_rc=0
+TRIAGE_DEDUP_PAGES="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
 	-f state="${TRIAGE_DEDUP_STATE}" \
 	-f labels="${TRIAGE_LABEL}" \
 	-F per_page=100 \
-	--jq '[.[] | select(.pull_request | not) | {number, body: (.body // "")}]' 2>/dev/null \
-	| jq -s 'add // []' 2>/dev/null || echo '[]')"
+	--jq 'if type == "array" then [.[] | select(.pull_request | not) | {number, body: (.body // "")}] else error("not_an_array") end' 2>/dev/null)" || triage_dedup_rc=$?
+if [ "${triage_dedup_rc}" -ne 0 ]; then
+	triage_dedup_list_ok=false
+elif [ -z "${TRIAGE_DEDUP_PAGES//[[:space:]]/}" ]; then
+	# A working call prints at least one page ("[]" when empty); no output is not proof.
+	triage_dedup_list_ok=false
+elif ! OPEN_TRIAGE="$(printf '%s' "${TRIAGE_DEDUP_PAGES}" | jq -s 'add // []' 2>/dev/null)"; then
+	triage_dedup_list_ok=false
+elif ! printf '%s' "${OPEN_TRIAGE}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+	triage_dedup_list_ok=false
+fi
+if [ "${triage_dedup_list_ok}" != "true" ]; then
+	log "error reason=dedup_list_failed fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY} rc=${triage_dedup_rc}"
+	exit 1
+fi
 EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${FP}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"
 if [ -n "${EXISTING}" ]; then
 	log "skip reason=duplicate_open_issue issue=${EXISTING} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
@@ -1521,6 +1713,7 @@ fi
 
 # Fallback body if the model produced nothing usable.
 if [ ! -s "${DIAG_FILE}" ]; then
+	UPSTREAM_DIAGNOSIS_FALLBACK="true"
 	{
 		echo "## Summary"
 		echo
@@ -1545,6 +1738,15 @@ print(evidence, end="" if evidence.endswith("\n") else "\n")
 print(fence)
 PY
 	} > "${DIAG_FILE}"
+fi
+
+# Issue #8265: classify the raw diagnosis before neutralisation edits it. The
+# upstream repository itself runs nothing new (no helper, no route file).
+if [ "${REPO,,}" = "${UPSTREAM_REPOSITORY,,}" ]; then
+	rm -f "${UPSTREAM_ROUTE_FILE}"
+	log "upstream_route outcome=file reason=self_repo pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY:-check}"
+else
+	triage_upstream_classify
 fi
 
 # CI-log text and model quotations are untrusted even inside a code fence.
@@ -1748,6 +1950,11 @@ if [ "${CHECK_TRIAGE_PREPARE_ONLY:-false}" = "true" ]; then
 	if [ -n "${GITHUB_OUTPUT:-}" ]; then
 		echo "ready=true" >> "${GITHUB_OUTPUT}"
 	fi
+	exit 0
+fi
+
+# Direct callers (stage "all") route here; the workflow routes in its own step.
+if triage_upstream_send; then
 	exit 0
 fi
 

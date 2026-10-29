@@ -1016,7 +1016,7 @@ esac
 		self.assertLess(post["run"].index("triage_post_check_name="), post["run"].index("gh_retry gh issue create"))
 		self.assertIn('--title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}"', post["run"])
 		self.assertNotIn('--title "CI failure: ${CHECK_NAME}', post["run"])
-		self.assertEqual(post["if"], "${{ steps.diagnose_triage.outputs.ready == 'true' }}")
+		self.assertEqual(post["if"], "${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' }}")
 		self.assertEqual(post["env"]["GH_TOKEN"], "${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}")
 		self.assertIn('cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"', post["run"])
 		self.assertIn("emit_event.sh emit_event.py", _step(triage_job, name="Stage workflow support files")["run"])
@@ -1249,6 +1249,9 @@ def _run_collect_stage(
 	it. Historical mode (#7093) reads run 37 / job 113 from ``MOCK_HIST_RUN`` /
 	``MOCK_HIST_JOB`` and the job log from ``MOCK_HIST_LOG_FILE`` (404 when
 	unset); ``MOCK_TRIAGE_ISSUES`` replaces the empty triage-issue list.
+	``MOCK_TRIAGE_LIST_FAIL`` (any non-empty value) makes the triage-issue
+	listing fail with HTTP 502 (#8126). ``MOCK_TRIAGE_RAW_PAGE`` is a raw API
+	page that the stub runs through the script's own ``--jq`` filter.
 	``inspect(runtime_dir, env)`` runs before the temp dir is removed.
 
 	``pr_payload_overrides`` replaces top-level PR payload keys."""
@@ -1302,7 +1305,15 @@ case "$*" in
     [ -n "${MOCK_BASE_CHECK_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
   "api repos/owner/repo/issues/41") jq -n --rawfile body "${MOCK_PARENT_BODY_FILE}" '{number: 41, body: $body}' ;;
-  "api --paginate --method GET repos/owner/repo/issues "*) printf '%s\\n' "${MOCK_TRIAGE_ISSUES:-${MOCK_OPEN_TRIAGE:-[]}}" ;;
+  "api --paginate --method GET repos/owner/repo/issues "*)
+    if [ -n "${MOCK_TRIAGE_LIST_FAIL:-}" ]; then echo 'gh: Server Error (HTTP 502)' >&2; exit 1; fi
+    if [ -n "${MOCK_TRIAGE_RAW_PAGE+set}" ]; then
+      triage_jq=""; triage_prev=""
+      for triage_arg in "$@"; do [ "${triage_prev}" = "--jq" ] && triage_jq="${triage_arg}"; triage_prev="${triage_arg}"; done
+      printf '%s' "${MOCK_TRIAGE_RAW_PAGE}" | jq -c "${triage_jq}" || exit 1
+      exit 0
+    fi
+    printf '%s\\n' "${MOCK_TRIAGE_ISSUES:-${MOCK_OPEN_TRIAGE:-[]}}" ;;
   "api --allow-escape-sequences repos/owner/repo/actions/runs/37")
     [ -n "${MOCK_HIST_RUN:-}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
     printf '%s\\n' "${MOCK_HIST_RUN}" ;;
@@ -2846,6 +2857,390 @@ class CheckFailureTriagePrBranchRoutingTests(unittest.TestCase):
 			"${{ vars.CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}",
 		)
 		self.assertIn('"${CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" != "true"', TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8"))
+
+
+
+class CheckFailureTriageDedupFailClosedTests(unittest.TestCase):
+	"""Issue #8126 (BUG-001): when the duplicate-issue listing cannot be read,
+	triage fails with reason=dedup_list_failed instead of filing a possible
+	duplicate. A working empty listing still proceeds."""
+
+	def _assert_fail_closed(self, proc, outputs, metadata, calls: list[str]) -> None:
+		self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE error reason=dedup_list_failed fp=", proc.stdout)
+		self.assertIn("pr=17 check=CI", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+		self.assertFalse(any(call.startswith("issue create") for call in calls), calls)
+
+	def test_failed_listing_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", calls_path=calls, extra_env={"MOCK_TRIAGE_LIST_FAIL": "1"},
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+		self.assertIn(" rc=1", proc.stdout)
+		self.assertTrue(any("-f state=open" in call for call in calls if "repos/owner/repo/issues " in call), calls)
+
+	def test_failed_listing_in_historical_mode_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", pr_overrides=CLOSED_MERGED, calls_path=calls,
+			extra_env=_hist_env(MOCK_TRIAGE_LIST_FAIL="1"),
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+		self.assertTrue(any("-f state=all" in call for call in calls if "repos/owner/repo/issues " in call), calls)
+
+	def test_malformed_listing_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", calls_path=calls, extra_env={"MOCK_OPEN_TRIAGE": "not json"},
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+
+	def test_non_array_listing_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", calls_path=calls, extra_env={"MOCK_OPEN_TRIAGE": '{"number": 1}'},
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+
+	def test_raw_object_page_fails_closed(self) -> None:
+		# The real --jq projection turns "{}" into "[]"; the filter must reject it.
+		for raw in ("{}", '{"a": {}}'):
+			with self.subTest(raw=raw):
+				calls: list[str] = []
+				proc, outputs, metadata = _run_collect_stage(
+					parent_body="", calls_path=calls, extra_env={"MOCK_TRIAGE_RAW_PAGE": raw},
+				)
+				self._assert_fail_closed(proc, outputs, metadata, calls)
+
+	def test_empty_output_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", calls_path=calls, extra_env={"MOCK_TRIAGE_RAW_PAGE": ""},
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+
+	def test_raw_empty_array_page_proceeds(self) -> None:
+		proc, outputs, _metadata = _run_collect_stage(parent_body="", extra_env={"MOCK_TRIAGE_RAW_PAGE": "[]"})
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(outputs.get("ready"), "true")
+
+	def test_valid_empty_listing_proceeds(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(parent_body="", extra_env={"MOCK_OPEN_TRIAGE": "[]"})
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertNotIn("dedup_list_failed", proc.stdout)
+		self.assertTrue(metadata.get("fingerprint"))
+
+	def test_source_contract(self) -> None:
+		text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
+		fail_log = 'log "error reason=dedup_list_failed fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY} rc=${triage_dedup_rc}"'
+		self.assertIn(fail_log, text)
+		self.assertLess(text.index(fail_log), text.index("gh issue create"))
+		self.assertIn("jq -e 'type == \"array\"'", text)
+		block = text[text.index("# --- Duplicate-issue dedup"):text.index("EXISTING=")]
+		self.assertNotIn("|| echo '[]'", block)
+		self.assertIn("_safe_gh_jq()", text)
+
+
+# ---------------------------------------------------------------------------
+# Issue #8265: upstream-managed routing
+# ---------------------------------------------------------------------------
+
+UPSTREAM_PIN = "1" * 40
+UPSTREAM_OTHER_PIN = "2" * 40
+UPSTREAM_WRAPPER_PATH = ".github/workflows/ai-review.yml"
+UPSTREAM_FAKE_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl"
+UPSTREAM_HEAL_SHIM = """#!/usr/bin/env python3
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("heal_under_test", {real!r})
+module = importlib.util.module_from_spec(spec)
+sys.modules["heal_under_test"] = module
+spec.loader.exec_module(module)
+module.request_report_identity = lambda audience="": ({token!r}, "")
+sys.exit(module.main())
+"""
+
+
+def _upstream_wrapper_text(pin: str) -> str:
+	return f"jobs:\n  review:\n    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{pin} # stable\n"
+
+
+def _upstream_digests() -> dict:
+	normalized = _upstream_wrapper_text("0" * 40).encode("utf-8")
+	return {
+		UPSTREAM_WRAPPER_PATH: [hashlib.sha256(normalized).hexdigest()],
+		".claude/commands/do.md": [hashlib.sha256(b"do\n").hexdigest()],
+	}
+
+
+def _upstream_block(paths: list[str], cause: str | None = None) -> str:
+	lines = ["AFFECTED_FILES_BEGIN"]
+	if cause:
+		lines.append(f"cause: {cause}")
+	lines.extend(f"- {path}" for path in paths)
+	lines.append("AFFECTED_FILES_END")
+	return "\n".join(lines) + "\n"
+
+
+def _run_upstream_route(
+	*,
+	diagnosis: str,
+	switch: str | None = "true",
+	digests: dict | None = None,
+	wrapper_text: str | None = None,
+	symlink_wrapper: bool = False,
+	dispatch_rc: int = 0,
+	repository: str = "owner/repo",
+	stage: str = "split",
+	wrapper_sha: str = UPSTREAM_PIN,
+	workflow_heal_enabled: str | None = None,
+) -> dict:
+	"""Run diagnose then route (stage="split", as the workflow does) or the
+	single "all" stage of a direct caller. Returns logs, calls and outputs."""
+	with tempfile.TemporaryDirectory(prefix="check-triage-upstream-") as temp_dir:
+		root = Path(temp_dir)
+		workspace = root / "workspace"
+		trusted = root / "trusted"
+		runtime = root / "runtime"
+		for directory in (workspace / "scripts" / "clarify_sandbox", workspace / ".github" / "workflows", workspace / ".claude" / "commands",
+				trusted / "scripts" / "clarify_sandbox", trusted / "prompts", runtime):
+			directory.mkdir(parents=True)
+		(trusted / "unattended_system_instructions.md").write_text("Trusted instructions\n")
+		(trusted / "prompts" / "mode-check-failure-triage.txt").write_text("Trusted prompt\n")
+		for filename in ("clarify_openrouter_broker.py", "clarify_sandbox/Dockerfile"):
+			(workspace / "scripts" / filename).write_text("TRUSTED\n")
+			(trusted / "scripts" / filename).write_text("TRUSTED\n")
+		_write_executable(trusted / "scripts" / "clarify_isolated_run.sh", '#!/usr/bin/env bash\ncat "$MOCK_DIAG_SOURCE" > "$2"\n')
+		_write_executable(trusted / "scripts" / "workflow_failure_heal.py", UPSTREAM_HEAL_SHIM.format(
+			real=str(REPO_ROOT / "scripts" / "workflow_failure_heal.py"), token=UPSTREAM_FAKE_JWT))
+		wrapper = workspace / UPSTREAM_WRAPPER_PATH
+		if symlink_wrapper:
+			(workspace / "wrapper-target.yml").write_text(_upstream_wrapper_text(UPSTREAM_OTHER_PIN))
+			wrapper.symlink_to("../../wrapper-target.yml")
+		else:
+			wrapper.write_text(wrapper_text if wrapper_text is not None else _upstream_wrapper_text(UPSTREAM_OTHER_PIN))
+		(workspace / ".claude" / "commands" / "do.md").write_text("do\n")
+		(workspace / "app.js").write_text("console.log(1)\n")
+		git_env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+			"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid", "GIT_CONFIG_NOSYSTEM": "1"}
+		for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+			git_env.pop(name, None)
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True, env=git_env)
+		subprocess.run(["git", "-C", str(workspace), "add", "-A"], check=True, env=git_env)
+		subprocess.run(["git", "-C", str(workspace), "-c", "commit.gpgsign=false", "commit", "-q", "-m", "head"], check=True, env=git_env)
+		head_sha = subprocess.run(["git", "-C", str(workspace), "rev-parse", "HEAD"], check=True, env=git_env, capture_output=True, text=True).stdout.strip()
+		metadata = {
+			"pr_number": "17", "check_name": "Workflow Ref Pinning Gate", "fingerprint": "f" * 64,
+			"generation": "1", "root": "f" * 64, "head_ref": "feature/x",
+			"title": "Feature", "url": "https://github.com/owner/repo/pull/17",
+		}
+		(runtime / "triage_metadata.json").write_text(json.dumps(metadata))
+		(runtime / "pr_payload.json").write_text("{}")
+		(runtime / "pr_body.txt").write_text("PR description\n")
+		digests_file = root / "digests.json"
+		digests_file.write_text(json.dumps(_upstream_digests() if digests is None else digests))
+		model_source = root / "model-output"
+		model_source.write_text(diagnosis)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		gh_log = root / "gh-calls.log"
+		_write_executable(bin_dir / "docker", "#!/usr/bin/env bash\nexit 0\n")
+		_write_executable(bin_dir / "gh", f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> {str(gh_log)!r}
+case "$*" in
+	*dispatches*) exit {int(dispatch_rc)} ;;
+	*"issue create"*) echo "https://github.com/owner/repo/issues/900"; exit 0 ;;
+esac
+exit 0
+""")
+		env = os.environ.copy()
+		for name in ("BASH_ENV", "ENV", "TG_BOT_SECRET", "TG_CHAT_ID", "TG_ADMIN_CHAT_ID", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+				"CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED", "WORKFLOW_HEAL_ENABLED", "TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED"):
+			env.pop(name, None)
+		if switch is not None:
+			env["CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED"] = switch
+		if workflow_heal_enabled is not None:
+			env["WORKFLOW_HEAL_ENABLED"] = workflow_heal_enabled
+		output_path = root / "output"
+		env.update({
+			"CHECK_TRIAGE_TRUSTED_SUPPORT_DIR": str(trusted),
+			"GITHUB_WORKSPACE": str(workspace), "GITHUB_REPOSITORY": repository,
+			"GITHUB_OUTPUT": str(output_path), "GITHUB_RUN_ID": "4242",
+			"MOCK_DIAG_SOURCE": str(model_source), "RUNTIME_DIR": str(runtime),
+			"CHECK_TRIAGE_HEAD_SHA": head_sha,
+			"CHECK_TRIAGE_DETAILS_URL": f"https://github.com/{repository}/actions/runs/777/job/1",
+			"CHECK_TRIAGE_UPSTREAM_MANAGED_DIGESTS_FILE": str(digests_file),
+			"CHECK_TRIAGE_WRAPPER_SHA": wrapper_sha,
+			"GH_TOKEN": "fake-token-value",
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+		})
+		logs = ""
+		if stage == "split":
+			first = subprocess.run(["bash", str(TRIAGE_SCRIPT_PATH)], cwd=workspace, capture_output=True, text=True, timeout=120, check=False,
+				env={**env, "CHECK_TRIAGE_STAGE": "diagnose", "CHECK_TRIAGE_PREPARE_ONLY": "true"})
+			second = subprocess.run(["bash", str(TRIAGE_SCRIPT_PATH)], cwd=workspace, capture_output=True, text=True, timeout=120, check=False,
+				env={**env, "CHECK_TRIAGE_STAGE": "route"})
+			logs = first.stdout + first.stderr + second.stdout + second.stderr
+			returncodes = (first.returncode, second.returncode)
+		else:
+			# The "all" stage of a direct caller, with the collected hand-off:
+			# the diagnose path reuses it, so run it as "diagnose" without
+			# prepare-only (that path ends in the script's own issue create).
+			proc = subprocess.run(["bash", str(TRIAGE_SCRIPT_PATH)], cwd=workspace, capture_output=True, text=True, timeout=120, check=False,
+				env={**env, "CHECK_TRIAGE_STAGE": "diagnose"})
+			logs = proc.stdout + proc.stderr
+			returncodes = (proc.returncode,)
+		calls = gh_log.read_text().splitlines() if gh_log.exists() else []
+		route_file = runtime / "upstream_route.json"
+		return {
+			"logs": logs,
+			"returncodes": returncodes,
+			"calls": calls,
+			"output": output_path.read_text() if output_path.exists() else "",
+			"route": json.loads(route_file.read_text()) if route_file.exists() else None,
+			"body": (runtime / "issue_body.md").read_text() if (runtime / "issue_body.md").exists() else None,
+		}
+
+
+class CheckFailureTriageUpstreamRoutingTests(unittest.TestCase):
+	"""Issue #8265: a failure whose fix is only in unmodified upstream-managed
+	files goes upstream as one heal report instead of a consumer issue."""
+
+	def _dispatches(self, result: dict) -> list[str]:
+		return [call for call in result["calls"] if "dispatches" in call]
+
+	def _issue_creates(self, result: dict) -> list[str]:
+		return [call for call in result["calls"] if "issue create" in call]
+
+	def assert_filed_as_today(self, result: dict, reason: str) -> None:
+		self.assertEqual(self._dispatches(result), [])
+		self.assertNotIn("routed=true", result["output"])
+		self.assertIn("ready=true", result["output"])
+		self.assertIsNotNone(result["body"])
+		self.assertIn(f"upstream_route outcome=file reason={reason}", result["logs"])
+		self.assertNotIn("skip reason=upstream_managed", result["logs"])
+
+	def test_all_unmodified_managed_paths_route_upstream(self) -> None:
+		diagnosis = "## Summary\nPinning gate failed\n" + _upstream_block([UPSTREAM_WRAPPER_PATH, ".claude/commands/do.md"])
+		result = _run_upstream_route(diagnosis=diagnosis)
+		self.assertEqual(result["returncodes"], (0, 0), result["logs"])
+		self.assertEqual(len(self._dispatches(result)), 1, result["calls"])
+		self.assertIn("repos/shubhodeep1/coding-workflows/dispatches", self._dispatches(result)[0])
+		self.assertEqual(self._issue_creates(result), [])
+		self.assertIn("routed=true", result["output"])
+		self.assertIn("skip reason=upstream_managed", result["logs"])
+		self.assertRegex(result["logs"], r"upstream_route outcome=routed heal_fp=[0-9a-f]{64} upstream=shubhodeep1/coding-workflows")
+		self.assertEqual(result["route"]["reason"], "all_unmodified_managed")
+		self.assertNotIn("fake-token-value", result["logs"])
+		self.assertNotIn(UPSTREAM_FAKE_JWT, result["logs"])
+
+	def test_all_stage_routes_without_creating_an_issue(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		result = _run_upstream_route(diagnosis=diagnosis, stage="all")
+		self.assertEqual(result["returncodes"], (0,), result["logs"])
+		self.assertEqual(len(self._dispatches(result)), 1)
+		self.assertEqual(self._issue_creates(result), [])
+
+	def test_managed_and_unmanaged_without_cause_files_the_consumer_issue(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH, "app.js"])
+		self.assert_filed_as_today(_run_upstream_route(diagnosis=diagnosis), "unmanaged_paths")
+
+	def test_managed_wrapper_cause_routes_even_with_unmanaged_paths(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH, "app.js"], cause=UPSTREAM_WRAPPER_PATH)
+		result = _run_upstream_route(diagnosis=diagnosis)
+		self.assertEqual(len(self._dispatches(result)), 1, result["logs"])
+		self.assertEqual(result["route"]["reason"], "managed_wrapper_cause")
+		self.assertEqual(result["route"]["paths"], [UPSTREAM_WRAPPER_PATH])
+
+	def test_modified_managed_path_files_the_consumer_issue(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		edited = _upstream_wrapper_text(UPSTREAM_OTHER_PIN) + "# consumer edit\n"
+		self.assert_filed_as_today(_run_upstream_route(diagnosis=diagnosis, wrapper_text=edited), "consumer_modified")
+
+	def test_symlinked_managed_path_counts_as_modified(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		self.assert_filed_as_today(_run_upstream_route(diagnosis=diagnosis, symlink_wrapper=True), "consumer_modified")
+
+	def test_missing_or_malformed_block_keeps_todays_behaviour(self) -> None:
+		cases = {
+			"no_block": "## Summary\nNo block here\n",
+			"malformed_block": "## Summary\nAFFECTED_FILES_BEGIN\n- ../etc/passwd\nAFFECTED_FILES_END\n",
+		}
+		for reason, diagnosis in cases.items():
+			with self.subTest(reason=reason):
+				self.assert_filed_as_today(_run_upstream_route(diagnosis=diagnosis), reason)
+		too_many = _upstream_block([f"dir/file{index}.js" for index in range(21)])
+		self.assert_filed_as_today(_run_upstream_route(diagnosis=too_many), "malformed_block")
+
+	def test_unreadable_manifest_fails_open(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		self.assert_filed_as_today(_run_upstream_route(diagnosis=diagnosis, digests={}), "manifest_unavailable")
+
+	def test_dispatch_failure_files_the_consumer_issue(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		result = _run_upstream_route(diagnosis=diagnosis, dispatch_rc=1)
+		self.assertEqual(len(self._dispatches(result)), 1)
+		self.assertNotIn("routed=true", result["output"])
+		self.assertIn("upstream_route outcome=fail_open reason=dispatch_failed", result["logs"])
+		self.assertNotIn("skip reason=upstream_managed", result["logs"])
+		all_stage = _run_upstream_route(diagnosis=diagnosis, dispatch_rc=1, stage="all")
+		self.assertEqual(len(self._issue_creates(all_stage)), 1)
+
+	def test_workflow_heal_opt_out_stops_the_upstream_report(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		result = _run_upstream_route(diagnosis=diagnosis, workflow_heal_enabled="false")
+		self.assertEqual(self._dispatches(result), [])
+		self.assertIn("upstream_route outcome=fail_open reason=workflow_heal_disabled", result["logs"])
+
+	def test_ci_log_fallback_diagnosis_never_routes(self) -> None:
+		# An empty model answer makes the script embed CI-log text; a block in
+		# that untrusted text must not steer routing.
+		self.assert_filed_as_today(_run_upstream_route(diagnosis=""), "fallback_diagnosis")
+
+	def test_unpinned_support_fails_open(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		result = _run_upstream_route(diagnosis=diagnosis, wrapper_sha="")
+		self.assertEqual(self._dispatches(result), [])
+		self.assertIn("upstream_route outcome=fail_open reason=support_unpinned", result["logs"])
+
+	def test_switch_off_or_invalid_keeps_todays_behaviour(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		self.assert_filed_as_today(_run_upstream_route(diagnosis=diagnosis, switch="false"), "disabled")
+		invalid = _run_upstream_route(diagnosis=diagnosis, switch="maybe")
+		self.assert_filed_as_today(invalid, "disabled")
+		self.assertIn("::warning::CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED has an unrecognised value", invalid["logs"])
+		self.assertEqual(len(self._dispatches(_run_upstream_route(diagnosis=diagnosis, switch=None))), 1)
+
+	def test_upstream_repository_itself_never_routes(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		result = _run_upstream_route(diagnosis=diagnosis, repository="shubhodeep1/coding-workflows")
+		self.assert_filed_as_today(result, "self_repo")
+		# The classify helper does not run here, so no route file is written.
+		self.assertIsNone(result["route"])
+
+	def test_workflow_wires_the_route_step_between_diagnose_and_post(self) -> None:
+		job = _workflow()["jobs"]["triage"]
+		names = [step.get("name") for step in job["steps"]]
+		route_index = names.index("Route upstream-managed check failure")
+		self.assertLess(names.index("Diagnose check failure"), route_index)
+		self.assertLess(route_index, names.index("Post check-failure triage issue"))
+		route = _step(job, step_id="upstream_route")
+		self.assertTrue(route["continue-on-error"])
+		self.assertEqual(set(route["env"]), {"GH_TOKEN", "TG_BOT_SECRET", "CHECK_TRIAGE_STAGE", "WORKFLOW_HEAL_ENABLED"})
+		self.assertEqual(route["env"]["WORKFLOW_HEAL_ENABLED"], "${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}")
+		self.assertIn("github.repository != 'shubhodeep1/coding-workflows'", route["if"])
+		self.assertEqual(route["env"]["CHECK_TRIAGE_STAGE"], "route")
+		self.assertIn("steps.upstream_route.outputs.routed != 'true'", _step(job, name="Post check-failure triage issue")["if"])
+		self.assertNotIn("GH_TOKEN", _step(job, step_id="diagnose_triage")["env"])
+		self.assertEqual(job["env"]["CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED"], "${{ vars.CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED || 'true' }}")
+		staging = _step(job, name="Stage workflow support files")["run"]
+		self.assertLess(staging.index("build_sync_manifest.py managed-digests"), staging.index("rm -rf .codex-workflow-src"))
+		self.assertIn("CHECK_TRIAGE_WRAPPER_SHA=${SCRIPT_REF}", staging)
 
 
 if __name__ == "__main__":

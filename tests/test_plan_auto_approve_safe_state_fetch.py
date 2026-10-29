@@ -17,6 +17,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 HEAL_SCRIPT = REPO_ROOT / "scripts" / "workflow_failure_heal.py"
+PARTIAL_DELIVERY_SCRIPT = REPO_ROOT / "scripts" / "partial_delivery.py"
+HEAL_CF_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "heal_counterfactual" / "issue_8241_plan.md"
 ORDINARY_PLAN = "Implementation Plan\n\n### 1. Files likely to change\n- `src/app.py`\n- `README.md`\n"
 SECURITY_FINDING_PLAN = "Implementation Plan\n\n### 1. Files likely to change\n- `scripts/security_audit.sh`\n"
 GRANTED_PLAN = (
@@ -87,7 +89,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 	posts_out: list | None = None, patches_out: list | None = None, patch_fails: bool = False,
 	graphql: dict | None = None, graphql_fails: bool = False, heal_fix_flag: str | None = None,
 	graphql_calls_out: list | None = None, split_stub_rc: int | None = None,
-	split_env_out: dict | None = None, extra_env: dict | None = None) -> tuple[bool, str, str]:
+	split_env_out: dict | None = None, extra_env: dict | None = None,
+	heal_cf_flag: str = "false") -> tuple[bool, str, str]:
 	"""Run the shipped step against a fake gh; returns (posted, stdout, output file).
 
 	Every other API write (the hold comment) is appended to ``posts_out``;
@@ -100,6 +103,7 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		(tmp_path / "scripts").mkdir()
 		shutil.copy(GUARD_SCRIPT, tmp_path / "scripts" / "files_touched_scope_guard.py")
 		shutil.copy(HEAL_SCRIPT, tmp_path / "scripts" / "workflow_failure_heal.py")
+		shutil.copy(PARTIAL_DELIVERY_SCRIPT, tmp_path / "scripts" / "partial_delivery.py")
 		(tmp_path / "scripts" / "gh_helpers.sh").write_text(
 			'gh_retry() { "$@"; }\n'
 			'_safe_gh_jq() { gh api "$@"; }\n'
@@ -143,7 +147,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		env = os.environ.copy()
 		for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
 			"ALLOW_WORKFLOW_EDITS", "PLAN_FILE", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED",
-			"ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "PLAN_FILES_TOUCHED_GATE_ENABLED"):
+			"ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "PLAN_FILES_TOUCHED_GATE_ENABLED",
+			"HEAL_COUNTERFACTUAL_GATE_ENABLED", "HEAL_ROUTE", "PLAN_COMMENT_ID"):
 			env.pop(name, None)
 		env.update({
 			"GITHUB_OUTPUT": str(output_path),
@@ -162,6 +167,9 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			"AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true",
 			"CODEX_OUTPUT_FILE": str(plan_file),
 			"RUNNER_TEMP": str(tmp_path),
+			# The heal-scope cases below predate the #8249 counterfactual gate,
+			# so it is off unless a test turns it on.
+			"HEAL_COUNTERFACTUAL_GATE_ENABLED": heal_cf_flag,
 		})
 		if gate_flag is not None:
 			env["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] = gate_flag
@@ -178,7 +186,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		others = [entry for entry in posts if entry not in approvals]
 		# The only other write the step may make is the hold comment, and
 		# never alongside an approval.
-		assert all("<!-- ai:automation-path-plan-hold:v1 " in entry for entry in others), others
+		assert all("<!-- ai:automation-path-plan-hold:v1 " in entry or "<!-- ai:heal-counterfactual-hold:v1 " in entry
+			for entry in others), others
 		assert not (posted and others), posts
 		patches = [entry for entry in (patch_log.read_text(encoding="utf-8") if patch_log.exists() else "").split("\n<<END>>\n")
 			if entry.strip()]
@@ -512,6 +521,23 @@ def test_heal_issue_out_of_scope_plan_holds_without_a_body_write() -> None:
 	assert "auto_approve_hold_reason=heal_scope_plan_out_of_scope" in output
 	assert "outcome=defer issue=123 paths=scripts/other.sh" in stdout
 	assert len(posts) == 1 and "verified workflow-heal scope" in posts[0]
+	# Implement enforces the frozen marker whatever the approval, so the hold
+	# must not offer `/approved` as the way forward (#8064).
+	assert "`/approved` alone does not help" in posts[0]
+	assert "`/reclarify`" in posts[0]
+	assert "To proceed, a maintainer reviews the plan and replies `/approved`" not in posts[0]
+
+
+def test_heal_issue_plan_with_its_own_agents_fragment_is_approved() -> None:
+	# CLAUDE.md §30 fragments are always in the heal scope for the issue's own number (#8064).
+	plan = HEAL_PLAN + "- `agents.d/123-fix.md`\n"
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=plan, gate_flag="true", graphql=_heal_graphql())
+	assert posted, stdout
+	plan = HEAL_PLAN + "- `agents.d/124-fix.md`\n"
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=plan, gate_flag="true", graphql=_heal_graphql(), posts_out=posts)
+	assert not posted
+	assert "auto_approve_hold_reason=heal_scope_plan_out_of_scope" in output
 
 
 def test_edited_heal_issue_holds_as_unverified() -> None:
@@ -542,6 +568,40 @@ def test_heal_fix_flag_off_keeps_the_q108_write() -> None:
 	assert "PIPELINE_PLAN_GRANT issue=123 source=plan outcome=written" in stdout
 	assert len(patches) == 1
 	assert calls == []
+
+
+def test_heal_counterfactual_gate_holds_the_8241_plan() -> None:
+	# #8249: a heal plan whose counterfactual line is FAIL is never auto-approved
+	# and never gets a body write; the hold comment names the line.
+	plan = HEAL_PLAN + "\n## Counterfactual check\n\n" + HEAL_CF_FIXTURE.read_text(encoding="utf-8").split("## Counterfactual check\n", 1)[1]
+	posts: list[str] = []
+	patches: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=plan, gate_flag="true", graphql=_heal_graphql(),
+		heal_cf_flag="true", posts_out=posts, patches_out=patches)
+	assert not posted, stdout
+	assert patches == []
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in output
+	assert "gate=heal_counterfactual outcome=hold result=FAIL reason=fail issue=123" in stdout
+	assert len(posts) == 1 and "<!-- ai:heal-counterfactual-hold:v1 issue=123 plan_comment=unknown result=FAIL source=plan -->" in posts[0]
+
+
+def test_heal_counterfactual_gate_pass_reaches_the_heal_scope_gate() -> None:
+	plan = HEAL_PLAN + "\n## Counterfactual check\n\nHEAL_COUNTERFACTUAL: PASS\n"
+	posted, stdout, _ = _run_auto_approve(_HEAL_ISSUE, plan_text=plan, gate_flag="true", graphql=_heal_graphql(),
+		heal_cf_flag="true")
+	assert posted, stdout
+	assert "gate=heal_counterfactual outcome=approve result=PASS reason=pass issue=123" in stdout
+
+
+def test_heal_counterfactual_gate_leaves_ordinary_plans_alone() -> None:
+	posted, stdout, _ = _run_auto_approve(_PIPELINE_ISSUE, plan_text=ORDINARY_PLAN, heal_cf_flag="true")
+	assert posted, stdout
+	assert "gate=heal_counterfactual" not in stdout
+
+
+def test_heal_counterfactual_gate_wiring() -> None:
+	block = _step_block(_workflow_text(), "Auto-approve clear plan")
+	assert "HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}" in block
 
 
 def test_heal_fix_flag_wiring() -> None:
