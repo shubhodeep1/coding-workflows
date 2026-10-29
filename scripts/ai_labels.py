@@ -229,7 +229,8 @@ def _github_api_request(
 ) -> Any:
     # retry_transient=False makes exactly one attempt. Use it for
     # non-idempotent writes (a comment POST): a 5xx or timeout after GitHub
-    # applied the write would otherwise post the same comment again.
+    # applied the write would otherwise post the same comment again. HTTP 429
+    # is still retried: GitHub rejects a rate-limited write without applying it.
     attempt_limit = GITHUB_API_MAX_ATTEMPTS if retry_transient else 1
     token_text = _github_token()
     if require_token and token_text is None:
@@ -254,12 +255,13 @@ def _github_api_request(
         headers=request_headers,
         method=method_name,
     )
-    for attempt_index in range(attempt_limit):
+    for attempt_index in range(GITHUB_API_MAX_ATTEMPTS):
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
                 response_body = response.read()
         except urllib.error.HTTPError as exc:
-            if exc.code not in GITHUB_API_RETRY_STATUSES or attempt_index + 1 >= attempt_limit:
+            status_attempt_limit = GITHUB_API_MAX_ATTEMPTS if exc.code == 429 else attempt_limit
+            if exc.code not in GITHUB_API_RETRY_STATUSES or attempt_index + 1 >= status_attempt_limit:
                 raise
             time.sleep(_github_retry_delay_seconds(exc.headers, attempt_index))
             continue

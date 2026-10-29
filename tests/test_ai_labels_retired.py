@@ -390,6 +390,32 @@ def test_drain_comment_post_is_never_retried_and_marker_check_reads_previous_pag
 	assert "item=5 kind=issue comment=marker_present" in stderr_text
 
 
+def test_drain_comment_post_retries_a_rate_limit() -> None:
+	# GitHub rejects a rate-limited write without applying it, so a 429 on the
+	# single-attempt comment POST is still retried (a 502 is not, see above).
+	with tempfile.TemporaryDirectory(prefix="ai-label-drain-429-") as tmpdir:
+		contract_path = _write_contract(Path(tmpdir), ["ai:old-present"])
+		responses = _unchanged_responses() + [
+			_FakeHTTPResponse([_item(5)]),
+			_FakeHTTPResponse([]),
+			_http_error(f"{API}/issues/5/comments", 429, "Too Many Requests"),
+			_FakeHTTPResponse({"id": 1}),
+			_FakeHTTPResponse({"state": "closed"}),
+			_FakeHTTPResponse([]),
+			_EmptyResponse(),
+		]
+		original_sleep = ai_labels.time.sleep
+		try:
+			ai_labels.time.sleep = lambda _seconds: None
+			rc, payload, _stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+		finally:
+			ai_labels.time.sleep = original_sleep
+	assert rc == 0
+	assert payload["deleted"] == 1
+	assert payload["errors"] == []
+	assert _methods(request_log) == ["GET", "GET", "POST", "POST", "PATCH", "GET", "DELETE"]
+
+
 def test_drain_incomplete_or_failed_listing_keeps_the_label() -> None:
 	with tempfile.TemporaryDirectory(prefix="ai-label-drain-incomplete-") as tmpdir:
 		contract_path = _write_contract(Path(tmpdir), ["ai:old-present"])
