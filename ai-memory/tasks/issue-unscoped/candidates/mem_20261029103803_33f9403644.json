@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In _clone_for_memory_branch, when AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true (read with parse_bool, default true), first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\n  expected_change_site: scripts/ai_memory_lib.py `_clone_for_memory_branch` fast path (~lines 3236-3270)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The enabled path clones with `--depth 1` (scripts/ai_memory_lib.py:3259-3260, 3266-3277, 3252-3267, 3252-3264, 3258-3260), so it does not fetch full history, tests/test_memory_maintenance_contract_noop.py `_shallow_clone_args` pins the depth limit, no flag-gated full-history clone exists; the deviation is documented in changelog.d/8295-memory-single-branch-clone.md and agents.d/8295-memory-single-branch-clone.md and main already ships the #8287 depth-1 clone. Severity disagreement: MAJOR (minimax_minimax-m3, openai_gpt-6-luna) vs NIT (others); highest is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: When the flag is on, \"first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\nExpected change site: `scripts/ai_memory_lib.py` `_clone_for_memory_branch`, fast path (line 3252 onward).\nEvidence of absence: The on-path clone passes `--depth 1` (`scripts/ai_memory_lib.py:3259-3260`), so it does not fetch full history. Deviation is deliberate and documented in `changelog.d/8295-memory-single-branch-clone.md` and `agents.d/8295-memory-single-branch-clone.md`. Earlier editor rounds deferred this; no code change requested.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n\nTASK_GAP:\nRequirement: \"Keep the explicit-refspec fetch and checkout.\"\nExpected change site: `_clone_for_memory_branch`.\nEvidence of absence: Not a gap. `_full_repo_clone_for_memory_branch` keeps the fetch and `checkout -B` (`scripts/ai_memory_lib.py:3294-3296`).\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n\nTASK_GAP:\nRequirement: Add `timeout-minutes: 10` to the extraction step; tests for single-branch args, fallback, flag-off; workflow contract test; do not edit `test-and-mark-stable.yml`.\nExpected change site: `.github/workflows/memory_maintenance.yml` and `tests/test_memory_maintenance_contract_noop.py`.\nEvidence of absence: Not a gap. Timeout is covered by `test_extraction_step_has_step_timeout`; tests present; `test-and-mark-stable.yml` not changed.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\" (when AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true)\nExpected change site: scripts/ai_memory_lib.py `_clone_for_memory_branch`\nEvidence of absence: The enabled path clones with `--depth 1` (tip-only), not full history (scripts/ai_memory_lib.py:3266-3277). Documentation in agents.d/8295-memory-single-branch-clone.md and changelog.d/8295-memory-single-branch-clone.md says the deviation is intentional.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"In _clone_for_memory_branch, when AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true (read with parse_bool, default true), first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\nExpected change site: scripts/ai_memory_lib.py `_clone_for_memory_branch` fast path\nEvidence of absence: The fast-path clone at scripts/ai_memory_lib.py:3252-3267 still passes `--depth 1` and `tests/test_memory_maintenance_contract_noop.py:533-545::_shallow_clone_args` pins the depth limit; no flag-gated full-history single-branch clone exists. The last-run diff does not touch the clone arguments. Fragments acknowledge the deviation; previous editor rounds left it to a maintainer.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nReviewer notes: the env mappings (.github/workflows/memory_maintenance.yml:75 and :209), the contract test (tests/test_memory_maintenance_contract_noop.py:71-79) and fragment updates are mechanically correct; no new defects. The depth-1 gap pre-existed and is not a regression.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"When AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true, first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\nExpected change site: scripts/ai_memory_lib.py, _clone_for_memory_branch fast path.\nEvidence of absence: The enabled path at lines 3252-3264 invokes git clone with --depth 1, so it fetches only the branch tip. The clone-argument test also asserts --depth 1. The PR does not add an enabled full-history clone path.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"In _clone_for_memory_branch, when AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true (read with parse_bool, default true), first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\nExpected change site: scripts/ai_memory_lib.py `_clone_for_memory_branch` fast path (~lines 3236-3270).\nEvidence of absence: The enabled/default path clones with `--single-branch --depth 1` (scripts/ai_memory_lib.py:3258-3260), and tests/test_memory_maintenance_contract_noop.py `_shallow_clone_args` (lines ~529-540) pins the depth limit; no flag-gated full-history clone exists in the PR diff. The issue is self-contradictory with its \"flag unset keeps running unchanged\" rule, since main already ships the #8287 depth-1 clone. Documented in changelog.d/8295-memory-single-branch-clone.md and agents.d/8295-memory-single-branch-clone.md. Raised so an operator can confirm; no code change recommended.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "99b7da6eff85a29acaa1322c98c90cc8749ade6b2bebe040c3d76c40ed2d4803",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8308,
+    "run_id": "40855431227",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40855431227",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029103803_33f9403644",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8308,
+    "run_id": "40855431227"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T10:38:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
