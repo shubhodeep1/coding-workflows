@@ -246,6 +246,112 @@ def test_clone_for_memory_branch_resolves_origin_from_leaked_git_dir() -> None:
 			shutil.rmtree(clone_dir, ignore_errors=True)
 
 
+def _git_out(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["git", *args],
+		cwd=str(cwd),
+		check=False,
+		capture_output=True,
+		text=True,
+		env=_git_process_env(),
+	)
+
+
+def _init_upstream_with_memory_branch(root: Path) -> tuple[Path, Path, dict[str, str]]:
+	"""Source repo with main, a feature branch and an orphan ai-memory branch,
+	pushed to a bare upstream that the source uses as origin."""
+	source = _init_source_repo(root)
+	_git(source, "checkout", "--quiet", "-b", "feature")
+	(source / "feature.txt").write_text("feature\n", encoding="utf-8")
+	_git(source, "add", "feature.txt")
+	_git(source, "commit", "--quiet", "-m", "feature only")
+	_git(source, "checkout", "--quiet", "--orphan", "ai-memory")
+	_git(source, "rm", "-r", "--quiet", "--cached", ".")
+	for leftover in ("marker.txt", "feature.txt"):
+		(source / leftover).unlink()
+	(source / "memory.txt").write_text("remembered\n", encoding="utf-8")
+	_git(source, "add", "memory.txt")
+	_git(source, "commit", "--quiet", "-m", "memory seed")
+	_git(source, "checkout", "--quiet", "main")
+	shas = {
+		name: _git_out(source, "rev-parse", name).stdout.strip()
+		for name in ("main", "feature", "ai-memory")
+	}
+	upstream = root / "upstream.git"
+	_git(root, "clone", "--bare", "--quiet", str(source), str(upstream))
+	# file:// forces the normal transport. A plain local path makes git copy
+	# the whole object store whatever --single-branch says, unlike the https
+	# origin the workflows use.
+	_git(source, "remote", "add", "origin", upstream.as_uri())
+	return source, upstream, shas
+
+
+def test_clone_for_memory_branch_clones_only_the_existing_memory_branch() -> None:
+	# Run 40752760153: full clones of the host repo per memory write pushed
+	# memory maintenance past its 20-minute job timeout. An existing memory
+	# branch must be cloned on its own, without the other branches' objects.
+	with tempfile.TemporaryDirectory(prefix="memory-git-env-") as td:
+		root = Path(td)
+		source, upstream, shas = _init_upstream_with_memory_branch(root)
+		leaked_work_tree = root / "existing-work-tree"
+		leaked_work_tree.mkdir()
+
+		with _leaked_git_env(source / ".git", leaked_work_tree):
+			clone_dir = ai_memory_lib._clone_for_memory_branch(source, "ai-memory")
+
+		try:
+			clone = Path(clone_dir)
+			assert _git_out(clone, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "ai-memory"
+			assert (clone / "memory.txt").read_text(encoding="utf-8") == "remembered\n"
+			assert not (clone / "marker.txt").exists()
+			remote_refs = _git_out(clone, "for-each-ref", "--format=%(refname)", "refs/remotes").stdout.split()
+			assert remote_refs == ["refs/remotes/origin/ai-memory"], remote_refs
+			for absent in ("main", "feature"):
+				probe = _git_out(clone, "cat-file", "-e", shas[absent])
+				assert probe.returncode != 0, f"{absent} objects were cloned"
+
+			_git(clone, "config", "commit.gpgsign", "false")
+			_git(clone, "config", "user.email", "codex@users.noreply.github.com")
+			_git(clone, "config", "user.name", "codex-bot")
+			(clone / "memory.txt").write_text("remembered\nupdated\n", encoding="utf-8")
+			_git(clone, "commit", "--quiet", "-am", "memory update")
+			_git(clone, "push", "--quiet", "origin", "HEAD:refs/heads/ai-memory")
+			pushed = _git_out(upstream, "rev-parse", "refs/heads/ai-memory").stdout.strip()
+			assert pushed == _git_out(clone, "rev-parse", "HEAD").stdout.strip()
+		finally:
+			shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+def test_clone_for_memory_branch_falls_back_to_full_clone_when_single_branch_fails() -> None:
+	with tempfile.TemporaryDirectory(prefix="memory-git-env-") as td:
+		root = Path(td)
+		source, _upstream, shas = _init_upstream_with_memory_branch(root)
+		real_run_git = ai_memory_lib._run_git
+		single_branch_calls = []
+
+		def failing_single_branch(cwd, args, check=True, **kwargs):
+			if args[:1] == ["clone"] and "--single-branch" in args:
+				single_branch_calls.append(args)
+				return subprocess.CompletedProcess(["git", *args], 128, "", "fatal: simulated")
+			return real_run_git(cwd, args, check, **kwargs)
+
+		ai_memory_lib._run_git = failing_single_branch
+		try:
+			clone_dir = ai_memory_lib._clone_for_memory_branch(source, "ai-memory")
+		finally:
+			ai_memory_lib._run_git = real_run_git
+
+		try:
+			clone = Path(clone_dir)
+			assert len(single_branch_calls) == 1
+			assert _git_out(clone, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "ai-memory"
+			assert (clone / "memory.txt").read_text(encoding="utf-8") == "remembered\n"
+			# The legacy full clone brings every branch's objects.
+			assert _git_out(clone, "cat-file", "-e", shas["feature"]).returncode == 0
+		finally:
+			shutil.rmtree(clone_dir, ignore_errors=True)
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

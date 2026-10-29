@@ -3208,6 +3208,29 @@ def _resolve_origin_url(repo_root: Path) -> str:
 def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     origin_url = _resolve_origin_url(repo_root)
     temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
+
+    # A full clone of the host repository took 135-209 s per memory write in
+    # run 40752760153 (two writes per learning), so memory maintenance hit its
+    # 20-minute job timeout. When the memory branch already exists, clone only
+    # that branch. Keep its full history: the push loop fetches and rebases it.
+    # Any failure falls back to the full clone below, unchanged.
+    branch_probe = _run_git(temp_dir.parent, ["ls-remote", "--heads", origin_url, memory_branch], check=False)
+    if branch_probe.returncode == 0 and branch_probe.stdout.strip():
+        single_branch_clone = _run_git(
+            temp_dir.parent,
+            ["clone", "--no-tags", "--quiet", "--single-branch", "--branch", memory_branch, origin_url, str(temp_dir)],
+            check=False,
+        )
+        if single_branch_clone.returncode == 0:
+            try:
+                _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
+            except MemoryGitError:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise
+            return temp_dir
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
+
     _run_git(temp_dir.parent, ["clone", "--no-tags", "--quiet", origin_url, str(temp_dir)])
 
     branch_exists = (

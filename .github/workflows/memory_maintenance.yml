@@ -63,6 +63,9 @@ jobs:
           python-version: "3.12"
 
       - name: Extract repository learnings (fail-open)
+        # Below the 20-minute job timeout so a slow extraction fails only this
+        # step and continue-on-error applies (run 40752760153 was cancelled).
+        timeout-minutes: 10
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
