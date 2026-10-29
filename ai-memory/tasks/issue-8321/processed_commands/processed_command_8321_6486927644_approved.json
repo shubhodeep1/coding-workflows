@@ -5,13 +5,30 @@
   "entry_id": "processed_command_8321_6486927644_approved",
   "issue_number": 8321,
   "metadata": {
+    "branch": "ai/issue-8321",
+    "changed_files": [
+      "agents.d/8321-review-editor-claude-docs.md",
+      "changelog.d/8321-review-editor-claude-docs.md",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_autofix_step_post_editor_summary.sh",
+      "scripts/review_untrusted_workspace.py",
+      "scripts/workflow_failure_heal.py",
+      "tests/test_review_autofix_review_pipeline_contract.py",
+      "tests/test_review_editor_sandbox_excluded_escalation.py",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 8321,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8321",
+    "pr_number": 8326,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8326",
+    "run_attempt": "1",
+    "run_id": "40811339014",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40811339014"
   },
   "run_attempt": 1,
   "run_id": "40811339014",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T03:26:56Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T04:28:34Z",
   "workflow": "implement"
 }
