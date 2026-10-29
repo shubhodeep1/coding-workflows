@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: When the security pass reports `exhausted=true` inside the `deterministic-skip-merge` job, how should the PR reach the review-blocked judge in security-exhaustion mode?\nChoices:\nA) Send exhausted PRs back to the `codex-agent` path. The gate keeps suppressing the skip for a PR that already has the `ai:security-pass-failed` label, using the labels it already fetched (no new API call). When the skip job is the first to see `exhausted=true`, it holds and starts a new review run, like the existing freshness-CI-failed redispatch in `scripts/review_freshness_ci_failed.sh`. That run takes `codex-agent`, where today's judge steps run unchanged. Cost: one full review loop, only for exhausted PRs. (RECOMMENDED)\nB) Copy the review-blocked judge into the skip job: the `rb_judge` step, its provider-unavailable fallback and the agent setup they need, run in security-exhaustion mode. This avoids an extra review run, but it adds a second judge path to keep in sync and grows `review_autofix.yml` toward the 480,000-byte guard.\nC) On the skip path, only hold. The PR is labelled `ai:security-pass-failed`, no merge and no judge, and it is left to the unblock flow or a human. Note: this departs from requirement 3 (\"hand off exactly as the codex-agent path does\").",
+  "fingerprint": "4a6e437aa3af72e8a02ce76709278f8156d4f53784f71e8a6309ab6bf4b8cd07",
+  "lineage": {
+    "issue_number": 8333,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40831733409",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40831733409",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029065910_6023b294c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8333,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40831733409"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #8333 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T06:59:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
