@@ -228,6 +228,8 @@ def _run_scope_freeze(log_dir: Path, runtime_dir: Path) -> subprocess.CompletedP
 		"PAYLOAD_CRASH_FILE": "",
 		"CRASH_OWNERSHIP": "none",
 		"SOURCE_REPO": SELF_REPO,
+		"MAX_LINKED_RUNS": "0",
+		"SCOPE_LINKED_WORKFLOWS_ENABLED": "false",
 	}
 	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=True)
 
@@ -701,11 +703,15 @@ def test_yaml_unavailable_adds_only_the_own_workflow(monkeypatch: pytest.MonkeyP
 
 def test_scripts_per_step_are_capped() -> None:
 	tree = dict(LW_TREE)
-	body = " ".join(f"bash scripts/s{index}.sh;" for index in range(12))
+	body = " ".join(f"bash scripts/s{index}.sh;" for index in range(24))
 	tree[".github/workflows/w.yml"] = _lw_workflow({"j": {"runs-on": "ubuntu-latest", "steps": [{"name": "Many", "run": body}]}})
-	tree.update({f"scripts/s{index}.sh": "x" for index in range(12)})
+	tree.update({f"scripts/s{index}.sh": "x" for index in range(24)})
 	result = _lw_paths(_lw_run(9, ".github/workflows/w.yml"), _lw_jobs(_lw_step("Many", "failure")), tree)
-	assert result["paths"][1:] == [f"scripts/s{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP)]
+	assert result["paths"][1:] == [f"scripts/s{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP - 1)]
+	tree.pop("scripts/s0.sh")
+	result = _lw_paths(_lw_run(9, ".github/workflows/w.yml"), _lw_jobs(_lw_step("Many", "failure")), tree)
+	assert result["paths"][1:] == [f"scripts/s{index}.sh" for index in range(1, heal.HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP)]
+	assert "script_missing" in _lw_reasons(result)
 
 
 @pytest.mark.usefixtures("_lw_yaml")
@@ -713,7 +719,7 @@ def test_scripts_per_step_are_capped() -> None:
 def test_merged_runs_dedupe_keep_order_and_cap(tmp_path: Path) -> None:
 	tree = dict(LW_TREE)
 	pairs = []
-	for index in range(6):
+	for index in range(12):
 		name = f".github/workflows/w{index}.yml"
 		tree[name] = _lw_workflow({"j": {"runs-on": "ubuntu-latest", "steps": [{"name": "Gate", "run": f"bash scripts/g{index}.sh"}]}})
 		tree[f"scripts/g{index}.sh"] = "x"
@@ -724,10 +730,10 @@ def test_merged_runs_dedupe_keep_order_and_cap(tmp_path: Path) -> None:
 	pairs.insert(1, pairs[0])  # the same run twice adds nothing new
 	exists, read_file = _lw_fakes(tree)
 	result = heal.heal_scope_linked_paths_for_runs(pairs, repo=SELF_REPO, exists=exists, read_file=read_file)
-	assert result["paths"] == [path for index in range(4) for path in (f".github/workflows/w{index}.yml", f"scripts/g{index}.sh")]
+	assert result["paths"] == [path for index in range(10) for path in (f".github/workflows/w{index}.yml", f"scripts/g{index}.sh")]
 	assert len(result["paths"]) == heal.HEAL_SCOPE_LINKED_PATHS_MAX
 	assert _lw_reasons(result).count("cap_reached") == 4
-	assert result["outcome"] == "added" and result["runs"] == 7
+	assert result["outcome"] == "added" and result["runs"] == 13
 	broken = heal.heal_scope_linked_paths_for_runs([(str(tmp_path / "absent.json"), "")], repo=SELF_REPO, exists=exists, read_file=read_file)
 	assert broken == {"outcome": "none", "paths": [], "skipped": [{"run_id": "?", "reason": "cache_unreadable"}], "runs": 1}
 

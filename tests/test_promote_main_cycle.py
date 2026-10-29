@@ -11,8 +11,15 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "promote_main_cycle.sh"
+
+
+@pytest.fixture(autouse=True)
+def _executable_temp_root(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(tempfile, "tempdir", str(REPO_ROOT))
 
 TIP = "1" * 40
 TAG_COMMIT = "2" * 40
