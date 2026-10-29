@@ -273,6 +273,9 @@ def test_gate_holds_empty_section_that_does_not_say_none(tmp_path: Path) -> None
 			"## Files likely to change\nNone. Also update .npmrc.",
 			"## Files likely to change\nNone. Then edit .netrc.",
 			"## Files likely to change\nNone. Also update README.",
+			"## Files likely to change\nNone. Update the readme.",
+			"## Files likely to change\nNone. Update the makefile.",
+			"## Files likely to change\nNone. Refresh the Codeowners.",
 			"## Files likely to change\nNone. Also edit app.webmanifest.",
 			"## Files likely to change README.md\nNone.",
 			"Files likely to change in README.md: None."):

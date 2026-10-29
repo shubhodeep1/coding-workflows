@@ -1034,6 +1034,12 @@ _HEAL_PLAN_PATHLIKE_RE = re.compile(r"[\w*?\[\]-]/|/[\w*?.\[\]-]|[\w*?\]-]\.[A-Z
 # Common extensionless files the grant list does not name (README, OWNERS, ...).
 _HEAL_PLAN_EXTRA_BARE_FILE_RE = re.compile(
 	r"^(?:README|CHANGELOG|CONTRIBUTING|OWNERS|VERSION|AUTHORS|INSTALL|Caddyfile|Earthfile)$")
+# The same file names in any letter case (`readme`, `makefile`). Prose words
+# such as license, notice, version, authors and install stay uppercase-only.
+_HEAL_PLAN_BARE_FILE_ICASE_RE = re.compile(
+	r"^(?:readme|changelog|contributing|owners|codeowners|makefile|dockerfile|containerfile|gemfile|rakefile"
+	r"|procfile|justfile|vagrantfile|pipfile|jenkinsfile|brewfile|podfile|tiltfile|caddyfile|earthfile)$",
+	re.IGNORECASE)
 
 
 def _heal_plan_declares_no_file_changes(section: str | None) -> bool:
@@ -1061,7 +1067,8 @@ def _heal_plan_declares_no_file_changes(section: str | None) -> bool:
 	# dot-led name (`.env`, `.ENV`, `.envrc`, `.npmrc`) counts, so an unlisted
 	# dotfile holds the plan instead of approving it (fail closed).
 	def _names_bare_file(line: str) -> bool:
-		return any(_PLAN_GRANT_BARE_FILE_RE.match(tok) or _HEAL_PLAN_EXTRA_BARE_FILE_RE.match(tok) or tok.startswith(".")
+		return any(_PLAN_GRANT_BARE_FILE_RE.match(tok) or _HEAL_PLAN_EXTRA_BARE_FILE_RE.match(tok)
+			or _HEAL_PLAN_BARE_FILE_ICASE_RE.match(tok) or tok.startswith(".")
 			for tok in (raw.rstrip(".") for raw in re.findall(r"\.?[A-Za-z0-9_][A-Za-z0-9._-]*", line)))
 	return not any("`" in line or _HEAL_PLAN_PATHLIKE_RE.search(line) or _names_bare_file(line)
 		for line in content + raw_leadins)
