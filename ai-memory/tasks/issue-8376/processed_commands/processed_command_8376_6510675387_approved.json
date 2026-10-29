@@ -5,13 +5,25 @@
   "entry_id": "processed_command_8376_6510675387_approved",
   "issue_number": 8376,
   "metadata": {
+    "branch": "ai/issue-8376",
+    "changed_files": [
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/8376-implement-working-run-and-prepush-budget-backport.md",
+      "tests/test_test_and_mark_stable_plan_polling_guard.py",
+      "tests/test_test_and_mark_stable_review_blocked_budget.py"
+    ],
+    "issue_number": 8376,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8376",
+    "pr_number": 8407,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8407",
+    "run_attempt": "1",
+    "run_id": "40971268658",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40971268658"
   },
   "run_attempt": 1,
   "run_id": "40971268658",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T23:19:12Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T23:41:35Z",
   "workflow": "implement"
 }
