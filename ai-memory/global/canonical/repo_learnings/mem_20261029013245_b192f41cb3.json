@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "When changing how CI poll, heal, or release jobs shard tests or handle job steps, update the workflow and its sharding contract tests together. Several merged changes in this area touched both files.",
+  "fingerprint": "b0a901066d5427be4170294637433b6cbe5b54f7e9a7e7ccb5829e4beb13db42",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40799156825",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40799156825",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7072",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8265",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8268",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8269",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8279",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8267",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8270",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8271",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8283",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8289"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261029013245_b192f41cb3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "CI test-sharding behavior is coupled to .github/workflows/ci.yml and tests/test_ci_poll_test_sharding.py.",
+  "timestamps": {
+    "created_at": "2026-10-29T01:32:45Z",
+    "promoted_at": "2026-10-29T01:35:17Z",
+    "superseded_at": null
+  }
+}
