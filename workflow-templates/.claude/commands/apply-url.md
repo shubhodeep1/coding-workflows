@@ -10,7 +10,7 @@ $ARGUMENTS
 
 3. **Fetch the seed URL(s).** Pick the tool by page type (§17 Preferred Tools):
    - **Public, text-ish pages** → `WebFetch` (free, text-only) — the default.
-   - **PDFs** → download then `pdftotext` (not the `Read` tool), e.g. `(cd .claude && python scripts/safe_fetch_url.py --url <url> --output /tmp/apply-url-<n>.pdf) && pdftotext -layout /tmp/apply-url-<n>.pdf -`. Run it from the repo root with an absolute `--output` path; the helper allows only `https://` URLs, refuses private or internal hosts, and exits non-zero on any non-2xx status. Do not fall back to `curl`.
+   - **PDFs** → download then `pdftotext` (not the `Read` tool), e.g. `(cd .claude && python scripts/safe_fetch_url.py --url <url> --output /tmp/apply-url-<n>.pdf) && pdftotext -layout /tmp/apply-url-<n>.pdf -`. Run it from the repo root with an absolute `--output` path; the helper allows only `https://` URLs, refuses private or internal hosts, and exits non-zero on any non-2xx status. Do not fall back to `curl`. If `python` is not on the PATH, run the same command with `python3`.
    - **JS-rendered / auth-walled / dynamic pages** → the `agent-browser` CLI.
    Use a **distinct temp name per URL** so concurrent fetches don't overwrite each other. Retry transient errors (5xx, 429, timeouts, DNS, connection reset) with exponential backoff (up to 4 retries: 2s, 4s, 8s, 16s). Hard failures (401/403/404/410, auth-walled with no `agent-browser` access) → record the URL as inaccessible; stop and report only if **all** seed URLs are inaccessible. Do not brute past auth walls or obvious ToS/robots gates.
 

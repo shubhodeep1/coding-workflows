@@ -8,7 +8,7 @@ The three synced commands used `curl --fail-with-body -sSL -o <path> <url>` for 
 | Command files converted (template and live copy) | 3 + 3 |
 | Allowed scheme | `https://` only |
 | Redirects followed | 5 by default, 20 at most |
-| Download cap | 100 MiB and 120 s by default |
+| Cap per request (each redirect hop is one request) | 100 MiB and 120 s by default |
 
 What this means for consumer repos: after the next `@stable` sync, a fetch of an `http://` URL or of a host on a private network fails on purpose instead of downloading. Fetch GitHub Actions logs through the MCP tools or `gh run view` as before. shubhodeep1/radateeree-resort.com can turn on its `SAFE_FETCH_COMMAND_GRANT_UNSET_OPERATOR_STEP` check once the converted files reach its `main`.
 

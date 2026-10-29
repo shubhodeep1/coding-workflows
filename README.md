@@ -1515,8 +1515,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`--url <url> --output <absolute path>`) instead of raw `curl`. The helper allows only
 > `https://`, refuses any host (redirect targets included) that resolves to a
 > private, loopback, link-local, multicast or reserved address, pins the
-> connection to the IP it checked, follows at most 5 redirects, caps a download
-> at 100 MiB and 120 seconds, prints the final HTTP status, and exits 1 on any
+> connection to the IP it checked, follows at most 5 redirects, caps each request
+> (each redirect hop is one request) at 100 MiB and 120 seconds, prints the final HTTP status, and exits 1 on any
 > failure or non-2xx status without leaving the error body at the output path.
 > Nothing to configure in the consumer.
 
