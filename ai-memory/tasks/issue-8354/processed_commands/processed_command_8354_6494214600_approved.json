@@ -5,13 +5,23 @@
   "entry_id": "processed_command_8354_6494214600_approved",
   "issue_number": 8354,
   "metadata": {
+    "branch": "ai/issue-8354",
+    "changed_files": [
+      "prompts/_templates/mode-plan.txt",
+      "prompts/mode-plan.txt"
+    ],
+    "issue_number": 8354,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8354",
+    "pr_number": 8356,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8356",
+    "run_attempt": "1",
+    "run_id": "40857852671",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40857852671"
   },
   "run_attempt": 1,
   "run_id": "40857852671",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T10:38:59Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T10:51:33Z",
   "workflow": "implement"
 }
