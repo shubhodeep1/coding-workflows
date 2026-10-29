@@ -176,6 +176,7 @@ def test_plan_prompt_blocks_work_delivered_by_an_open_pr() -> None:
 		plan_prompt = _read(prompt_path)
 		assert "Implement only writes repository files and opens one pull request; it cannot post comments, close issues, or check or wait for another pull request, so never plan such steps." in plan_prompt
 		assert "emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged` and end with `STATUS: NOT_CLEAR`" in plan_prompt
+		assert "When that work is already on the planning ref, plan no edits: emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement` and end with `STATUS: NOT_CLEAR`." in plan_prompt
 
 
 def test_open_pr_blocker_routes_to_blocked() -> None:

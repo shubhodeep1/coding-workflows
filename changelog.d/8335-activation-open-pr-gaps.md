@@ -5,7 +5,7 @@ When a merge left a code gap that an open pull request was already fixing, `scri
 
 | The numbers that matter | Value |
 | --- | --- |
-| Open pull requests passed to the verifier | 50 most recently updated |
+| Open pull requests passed to the verifier | Same-repository PRs by trusted authors, among the 50 most recently updated |
 | Extra GitHub API calls per verification | 1 (`GET pulls?state=open`) |
 | Body text kept per pull request | 1500 characters |
 

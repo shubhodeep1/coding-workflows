@@ -264,7 +264,8 @@ PY
 
 # Lists the repository's open pull requests for the model, so a code gap one
 # of them already fixes is not filed again as an activation-fix issue.
-# One REST call: the 50 most recently updated open pull requests, with titles
+# One REST call: the 50 most recently updated open pull requests (trusted
+# same-repository ones are kept), with titles
 # and head refs cut to 200 characters and bodies to 1500 (untrusted text).
 # Prints {"open_pull_requests": [{number, title, head, draft, body}]}; on any
 # failure prints an empty list and one ::warning:: line, so every code gap
@@ -273,9 +274,14 @@ activation_open_prs_json()
 {
 	local activation_open_prs_response activation_open_prs_out=""
 	if activation_open_prs_response="$(gh_retry gh api "repos/${REPOSITORY}/pulls?state=open&sort=updated&direction=desc&per_page=50" 2>/dev/null)"; then
-		activation_open_prs_out="$(printf '%s' "${activation_open_prs_response}" | jq -c '
+		# Only same-repository heads from trusted authors (the trust rule used
+		# for the linked issue and fix-issue lookup), so an outside or fork PR's
+		# text cannot steer a gap out of the fix issue.
+		activation_open_prs_out="$(printf '%s' "${activation_open_prs_response}" | jq -c --arg repo "${REPOSITORY}" '
 			if type == "array" then
 				{open_pull_requests: [.[] | select(type == "object" and (.number | type) == "number")
+					| select((.head.repo.full_name // "") == $repo)
+					| select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
 					| {number, title: ((.title // "") | tostring | .[0:200]), head: ((.head.ref // "") | tostring | .[0:200]),
 						draft: (.draft == true), body: ((.body // "") | tostring | .[0:1500])}]}
 			else empty end' 2>/dev/null)"
@@ -504,11 +510,15 @@ activation_main()
 		rm -f "${activation_context_tmp}"
 	fi
 	# Fail open the same way: without the list no gap can be tagged `open_pr`.
-	activation_open_prs_context="$(activation_open_prs_json)"
-	if jq --argjson extra "${activation_open_prs_context}" '. + $extra' "${context_file}" > "${activation_context_tmp}" 2>/dev/null; then
+	# The list goes through a file: 50 bodies can exceed the per-argument limit
+	# of --argjson.
+	activation_open_prs_context="${RUNTIME_DIR}/activation_open_prs.json"
+	activation_open_prs_json > "${activation_open_prs_context}"
+	if jq --slurpfile extra "${activation_open_prs_context}" '. + $extra[0]' "${context_file}" > "${activation_context_tmp}" 2>/dev/null; then
 		mv -f "${activation_context_tmp}" "${context_file}"
 	else
 		rm -f "${activation_context_tmp}"
+		echo "::warning::ACTIVATION_VERIFY open_pull_requests unavailable reason=context_merge_failed" >&2
 	fi
 
 	prompt_file="${RUNTIME_DIR}/activation_prompt.txt"

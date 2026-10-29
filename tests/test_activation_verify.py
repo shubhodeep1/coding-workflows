@@ -838,7 +838,7 @@ def test_prompt_never_turns_exempt_files_into_gaps() -> None:
 
 # --- Code gaps an open pull request already fixes (tele-funtoken-msg-scoring#4992) ---
 
-OPEN_PR_91 = {"number": 91, "title": "Add the NIGHTLY_REPORT_ENABLED row to README", "head": {"ref": "claude/readme-row"}, "draft": False, "body": "Adds the row."}
+OPEN_PR_91 = {"number": 91, "title": "Add the NIGHTLY_REPORT_ENABLED row to README", "head": {"ref": "claude/readme-row", "repo": {"full_name": "o/r"}}, "draft": False, "body": "Adds the row.", "author_association": "OWNER", "user": {"login": "owner"}}
 
 
 def _tagged(open_pr: object) -> dict:
@@ -899,6 +899,25 @@ def test_only_untagged_code_gaps_go_into_the_fix_issue(tmp_path: Path) -> None:
 	assert "README lacks the new variable" not in fix_issue["body"]
 	assert "op=in_flight_gaps count=1 prs=91" in result.stdout
 	assert "code_gaps=2 operator_gaps=1 outcome=posted" in result.stdout
+
+
+@pytest.mark.parametrize("override", [
+	{"author_association": "NONE", "user": {"login": "outsider"}},
+	{"head": {"ref": "claude/readme-row", "repo": {"full_name": "fork/r"}}},
+	{"head": {"ref": "claude/readme-row", "repo": None}},
+])
+def test_untrusted_or_fork_open_prs_are_not_listed(tmp_path: Path, override: dict) -> None:
+	untrusted = dict(OPEN_PR_91, **override)
+	_, state = _verify(tmp_path, _tagged(91), open_prs=[untrusted])
+	assert _context(tmp_path)["open_pull_requests"] == []
+	assert len(_fix_issues(state)) == 1
+	assert "fix in progress" not in state["comments"][-1]["body"]
+
+
+def test_bot_authored_open_pr_is_listed(tmp_path: Path) -> None:
+	bot_pr = dict(OPEN_PR_91, author_association="NONE", user={"login": "github-actions[bot]"})
+	_verify(tmp_path, LIVE, open_prs=[bot_pr])
+	assert [item["number"] for item in _context(tmp_path)["open_pull_requests"]] == [91]
 
 
 def test_open_pr_lookup_failure_fails_open(tmp_path: Path) -> None:
