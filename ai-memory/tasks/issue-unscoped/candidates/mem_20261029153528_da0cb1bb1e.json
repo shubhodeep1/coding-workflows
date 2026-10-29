@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_isolated_run.sh:200-206 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In `copy()`, the widened pass-2 `except FileNotFoundError: if extra: ... return` branch silently skips a tracked file when the file or any of its parent directories is missing. It does not record the file through `exclude()`, so the file appears in neither the `CLARIFY_SNAPSHOT_EXCLUDED` stderr line nor the prompt's `=== CLARIFY SNAPSHOT EXCLUSIONS ===` block.\n  WHY: In a sparse checkout, or any checkout with a deleted-but-still-tracked file, the agent gets no signal that a tracked path is absent from /source. It can still report that file as missing, which is the failure issue #8341 targets. `test_tracked_file_under_missing_directory_is_skipped` (tests/test_clarify_isolated_run.py:211-220/211-221) shows this with `contracts/T.sol`. Both reviewers rated it SEVERITY: NIT, mapped here to low. z-ai_glm-5_3-flash notes that the previous editor run explicitly considered and declined this residual, because a new `missing` reason would change the stable log-line field set, so it is an accepted-residual decision point and not a regression.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not raised as a finding) | HARDENING_RISK_SCORE: 1\n  file: scripts/clarify_isolated_run.sh\n  location: copy(), the FileNotFoundError branch at lines 202-206\n  issue: A tracked pass-2 file that is absent from the worktree is dropped with no trace, so in a sparse checkout the agent can still report a real tracked file as missing. That is the failure mode #8341 targets.\n  suggested minimal fix: Before `return`, add the path to a separate list of listable names, with no change to the CLARIFY_SNAPSHOT_EXCLUDED field set. Then either write those names to snapshot_excluded.tsv with reason `absent`, or count them only in the prompt's \"omits N tracked file(s)\" total. The bash reader at lines 329-339 already accepts any reason token.\n  estimated lines changed: 4-6\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_isolated_run.sh:`copy()` lines 202-206 | severity=NIT | confidence=4\n  PROBLEM: When a tracked pass-2 file is absent because one of its parent directories is missing, the function silently skips it instead of recording it as excluded.\n  WHY: The snapshot proceeds without that tracked file and without adding it to the exclusion prompt, so the agent can still treat the file as missing. The added sparse-checkout test at `tests/test_clarify_isolated_run.py:211-220` exercises this path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/clarify_isolated_run.sh:lines 200-206 (`except FileNotFoundError: if extra: ... return`), interacting with the exclusion block at lines ~300-330 | severity=NIT | confidence=3\n  PROBLEM: The last run widened the pass-2 skip from \"the file itself is missing\" to \"any path component is missing\". A skipped file is not recorded through `exclude()` and appears in neither the `CLARIFY_SNAPSHOT_EXCLUDED` stderr line nor the prompt's `=== CLARIFY SNAPSHOT EXCLUSIONS ===` block, so in a sparse checkout the agent receives no signal that a tracked path is absent from /source.\n  WHY: The feature's goal (README.md line 111; issue #8341) is that agents stop reporting real tracked files as missing. `test_tracked_file_under_missing_directory_is_skipped` (tests/test_clarify_isolated_run.py:211-221) shows `contracts/T.sol` tracked, absent from the snapshot and named nowhere in the prompt. Suggested fix: one `exclude(\"missing\", path)`-style record, or a count field, before the return. The previous editor run explicitly declined this (issue comment entry[3]: a new `missing` reason would change the stable log-line field set), so treat it as an accepted-residual decision point, not a regression.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4942ce18440f8f5cdf99d2273728a8e30cde2332588e568679cada20456460d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8351,
+    "run_id": "40887591130",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40887591130",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029153528_da0cb1bb1e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8351,
+    "run_id": "40887591130"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T15:35:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
