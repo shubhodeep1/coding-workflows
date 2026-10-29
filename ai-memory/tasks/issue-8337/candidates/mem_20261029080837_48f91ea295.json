@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan: Update `tests/e2e_smoke_canary.txt` to the three specified lines\n\n**Planning ref:** `git rev-parse HEAD` = `03e2c2e50ee14c5f17a6bcd05a134e8c9fd5809d`, symbolic branch `main`. The `Integration branch mismatch:` line reads `unknown`, not `true`, so the plan goes ahead.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names exactly one file and gives its exact final content. The plan rewrites that existing file and changes nothing else. It adds no scripts, workflows, supervisors, scheduler wiring or database work (\u00a720), and needs no entry in the removal registry.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- None. This is a data-only file change.\n\n## Data structures affected\n- The content of `tests/e2e_smoke_canary.txt`. The file currently has two lines:\n  ```\n  status: ok\n  decompose-run: 40427433026\n  ```\n  It must become exactly:\n  ```\n  status: ok\n  run_id: alt-40831286935\n  updated-by: ai-pipeline\n  ```\n  The current file ends with a newline (checked with `cat -A`). Keep that trailing newline, use LF line endings, and add no extra blank lines.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Replace the whole file instead of patching single lines\n- Chosen: Write all three lines into the file in one replacement, keeping the trailing newline.\n- Alternatives considered: Replace the `decompose-run` line and add a third line after it.\n- Why: Writing the whole file guarantees the \"exactly these three lines\" result and is the simplest change.\n\n## Security considerations\n- No trust boundaries, endpoints, secrets or external input are involved. The file holds plain-text canary data that nothing executes.\n\n## Potential risks or edge cases\n- A missing or doubled trailing newline, or CRLF line endings, would break an exact-match check.\n- No conflicts between the issue and the codebase: the file exists where the issue says it does.\n\n## Testing considerations\n- `cat -A tests/e2e_smoke_canary.txt` should show exactly three lines, each ending in `$`.\n- `git diff --stat` should list only this one file.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "89755a11910e3304d6577a06fcae36ea80cb0efa0557d44cef1cdf98e3f525d8",
+  "lineage": {
+    "issue_number": 8337,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40838352128",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40838352128",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8337"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261029080837_48f91ea295",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8337,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40838352128"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8337",
+  "timestamps": {
+    "created_at": "2026-10-29T08:08:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
