@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:3225 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The post-clone `checkout -B` in `_clone_for_memory_branch` runs with the default `check=True`, so if it raises `MemoryGitError` the `ai-memory-branch-*` temp directory is not removed.\n  WHY: The caller assigns `clone_dir` only after the function returns, so its `finally` never runs; impact is small because runners are ephemeral and the legacy full-clone path leaks the same way. Reviewers rated it NIT or hardening only (minimax_minimax-m3 NIT conf 3, anthropic_claude-sonnet-5_5 NIT conf 2).\n- tests/test_ai_memory_git_env_isolation.py:356 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The diff removes the space after `=` in `test_funcs =[v for k, v in sorted(globals().items()) if k.startswith(\"test_\")]` in `main()`, an unrelated whitespace change that breaks E225 spacing.\n  WHY: Behavior is unchanged, but it is unrelated churn that CI's ruff selection (`scripts/*.py` only) will not catch. All reviewers rated it NIT.\n- scripts/ai_memory_lib.py:3222-3225 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `git clone --single-branch --branch X` already creates local branch X tracking origin/X, so the following `checkout -B` is a redundant no-op.\n  WHY: It adds unnecessary subprocess overhead but behavior stays correct. Rated NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ai_memory_lib.py:3225 | severity=NIT | confidence=2\n  PROBLEM: The `checkout -B` call in `_clone_for_memory_branch` runs with the default `check=True`; if it raises `MemoryGitError`, the temp directory is not removed.\n  WHY: The caller's `finally` never runs because `clone_dir` is assigned only after return. This is very unlikely and the impact is negligible. The legacy path has the same property.\n- tests/test_ai_memory_git_env_isolation.py:main() | severity=NIT | confidence=5\n  PROBLEM: The diff removes the space after `=` in `test_funcs =[...]`.\n  WHY: This is whitespace-only churn that breaks E225 and is unrelated to the PR. CI's ruff selection does not cover it.\n- HARDENING: scripts/ai_memory_lib.py `_clone_for_memory_branch` line 3225: wrap the call in `try/except MemoryGitError: shutil.rmtree(temp_dir, ignore_errors=True); raise` (about 4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- HARDENING: scripts/ai_memory_lib.py `_clone_for_memory_branch` line 3225: the `git checkout -B` call runs after a successful clone but outside the try/finally of `persist_memory_operation`, so the temp directory may not be removed if it fails. Suggested fix: wrap the checkout in a try block that cleans up the temp dir and re-raises `MemoryGitError` (about 4 lines). HARDENING_RISK_SCORE: 1\n- All other checklist sections: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ai_memory_git_env_isolation.py:356 | severity=NIT | confidence=5\n  PROBLEM: The diff removes the space after `=` in `test_funcs =[v ...`.\n  WHY: Behavior is unchanged, but it is unrelated churn that breaks E225 and escapes CI's ruff selection (`scripts/*.py` only).\n- scripts/ai_memory_lib.py:3222-3225 | severity=NIT | confidence=4\n  PROBLEM: After `git clone --single-branch --branch X`, the `checkout -B X refs/remotes/origin/X` is redundant because the local branch and HEAD already point there.\n  WHY: It does not fail, but it adds unnecessary subprocess overhead.\n- scripts/ai_memory_lib.py:3224 | severity=NIT | confidence=3\n  PROBLEM: `checkout -B` uses the default `check=True`; if it raises, the temp directory is leaked.\n  WHY: The legacy full-clone path leaks the same way and runners are ephemeral, so the practical impact is small.\n- HARDENING: scripts/ai_memory_lib.py `_clone_for_memory_branch` lines 3222-3226: wrap the `checkout -B` in `try/except MemoryGitError: shutil.rmtree(temp_dir, ignore_errors=True); raise` (about 4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ai_memory_git_env_isolation.py:356 | severity=NIT | confidence=5\n  PROBLEM: The diff accidentally removes the space after `=` in `test_funcs =[v ...` on an unrelated line in `main()`.\n  WHY: Behavior is unchanged. It is cosmetic churn that breaks E225 and that CI's ruff selection (`scripts/*.py` only) will not catch.\n- HARDENING: scripts/ai_memory_lib.py `_clone_for_memory_branch` line 3225: if the post-clone `checkout -B` (default `check=True`) raises `MemoryGitError`, the `ai-memory-branch-*` temp directory is not removed. Suggested fix: wrap in `try/except MemoryGitError: shutil.rmtree(temp_dir, ignore_errors=True); raise` (about 4 lines). The legacy full-clone path has the same property, so this is not a regression. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9d18700d3357c83ae59627d711d884ce3afa20f39142db917370d4ff80765da2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8309,
+    "run_id": "40799669573",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40799669573",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029021912_68d307ac0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8309,
+    "run_id": "40799669573"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T02:19:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
