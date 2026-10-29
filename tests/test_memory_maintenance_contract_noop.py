@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -50,6 +51,21 @@ def test_extraction_workflow_is_automatic_short_and_fail_open() -> None:
 	assert "exit 0" in extraction_step[disabled_notice_index:helper_index]
 	assert f"{extractor.MODEL_EXTRACTION_FAILURE_EXIT})" in extraction_step
 	assert "Repository learnings model extraction failed; continuing without extraction" in extraction_step
+
+
+def test_extraction_step_has_step_timeout() -> None:
+	memory_workflow = yaml.safe_load(_workflow_text())
+	job = memory_workflow["jobs"]["memory_maintenance"]
+	extraction_steps = [
+		step
+		for step in job["steps"]
+		if step.get("name") == "Extract repository learnings (fail-open)"
+	]
+	assert len(extraction_steps) == 1
+	extraction_step = extraction_steps[0]
+	assert extraction_step["timeout-minutes"] == 10
+	assert extraction_step["continue-on-error"] is True
+	assert job["timeout-minutes"] == 20
 
 
 def test_memory_maintenance_timeout_hierarchy() -> None:
@@ -420,6 +436,190 @@ def test_request_failure_is_classified_without_promotion_ready_output(
 	assert "model_extraction_failed" in stderr
 	assert "sensitive-request-failure" not in stderr
 	assert "sensitive-key" not in stderr
+
+
+
+# --- Single-branch memory clone (#8287 / #8295) ---------------------------
+# These live here (not in a new test file) because this file is already run by
+# .github/workflows/ci.yml and the fix-up scope does not include ci.yml, which
+# tests/test_ci_wires_every_test_file.py would require for a new file.
+
+_FAKE_ORIGIN_URL = "https://x-access-token:sekrit-token@example.test/owner/repo"
+_MEMORY_BRANCH = "ai-memory"
+_FETCH_ARGS = [
+	"fetch",
+	"--no-tags",
+	"origin",
+	f"refs/heads/{_MEMORY_BRANCH}:refs/remotes/origin/{_MEMORY_BRANCH}",
+]
+_CHECKOUT_TRACKING_ARGS = ["checkout", "-B", _MEMORY_BRANCH, f"refs/remotes/origin/{_MEMORY_BRANCH}"]
+
+
+def _install_fake_git(
+	monkeypatch: pytest.MonkeyPatch,
+	*,
+	single_branch_returncode: int = 0,
+	single_branch_stderr: str = "",
+	ls_remote_stdout: str = "",
+) -> list[dict[str, Any]]:
+	memory_lib = extractor.ai_memory_lib
+	calls: list[dict[str, Any]] = []
+	monkeypatch.setattr(memory_lib, "_resolve_origin_url", lambda _repo_root: _FAKE_ORIGIN_URL)
+
+	def fake_run_git(
+		cwd: Path,
+		args: list[str],
+		check: bool = True,
+		**_kwargs: Any,
+	) -> subprocess.CompletedProcess[str]:
+		calls.append({"cwd": cwd, "args": list(args), "check": check})
+		if args[:2] == ["clone", "--single-branch"]:
+			return subprocess.CompletedProcess(
+				["git", *args], single_branch_returncode, stdout="", stderr=single_branch_stderr
+			)
+		if args[:1] == ["ls-remote"]:
+			return subprocess.CompletedProcess(["git", *args], 0, stdout=ls_remote_stdout, stderr="")
+		return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+
+	monkeypatch.setattr(memory_lib, "_run_git", fake_run_git)
+	return calls
+
+
+def _legacy_call_args(clone_dir: str, *, branch_exists: bool) -> list[list[str]]:
+	sequence = [
+		["clone", "--no-tags", "--quiet", _FAKE_ORIGIN_URL, clone_dir],
+		["ls-remote", "--heads", "origin", _MEMORY_BRANCH],
+	]
+	if branch_exists:
+		sequence += [_FETCH_ARGS, _CHECKOUT_TRACKING_ARGS]
+	else:
+		sequence += [["checkout", "-B", _MEMORY_BRANCH]]
+	return sequence
+
+
+@pytest.mark.parametrize("flag_value", [None, "", "  ", "true", "TRUE", "1", "on"])
+def test_single_branch_clone_used_when_flag_on(
+	flag_value: str | None,
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	if flag_value is None:
+		monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
+	else:
+		monkeypatch.setenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", flag_value)
+	calls = _install_fake_git(monkeypatch)
+
+	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
+	try:
+		assert [call["args"] for call in calls] == [
+			[
+				"clone",
+				"--single-branch",
+				"--branch",
+				_MEMORY_BRANCH,
+				"--no-tags",
+				"--quiet",
+				_FAKE_ORIGIN_URL,
+				str(clone_dir),
+			],
+			_FETCH_ARGS,
+			_CHECKOUT_TRACKING_ARGS,
+		]
+		assert calls[0]["check"] is False
+		assert calls[0]["cwd"] == clone_dir.parent
+		assert all(call["cwd"] == clone_dir for call in calls[1:])
+		assert not any("--depth" in arg or arg.startswith("--filter") for call in calls for arg in call["args"])
+		assert not any(call["args"][0] == "ls-remote" for call in calls)
+		assert clone_dir.is_dir()
+	finally:
+		shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+	("stderr_text", "expected_reason"),
+	[
+		(
+			f"warning: Could not find remote branch {_MEMORY_BRANCH} to clone.\n"
+			f"fatal: Remote branch {_MEMORY_BRANCH} not found in upstream origin\n",
+			"branch_missing",
+		),
+		(f"fatal: unable to access '{_FAKE_ORIGIN_URL}/': Could not resolve host\n", "clone_failed"),
+	],
+)
+def test_single_branch_clone_failure_falls_back_to_full_clone(
+	stderr_text: str,
+	expected_reason: str,
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
+	calls = _install_fake_git(
+		monkeypatch,
+		single_branch_returncode=128,
+		single_branch_stderr=stderr_text,
+		ls_remote_stdout="",
+	)
+
+	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
+	try:
+		first_dir = Path(calls[0]["args"][-1])
+		assert calls[0]["args"][:2] == ["clone", "--single-branch"]
+		assert not first_dir.exists()
+		assert first_dir != clone_dir
+		assert [call["args"] for call in calls[1:]] == _legacy_call_args(str(clone_dir), branch_exists=False)
+		assert clone_dir.is_dir()
+		stderr = capsys.readouterr().err
+		assert f"reason={expected_reason}" in stderr
+		assert "falling back to full clone" in stderr
+		assert "sekrit-token" not in stderr
+		assert _FAKE_ORIGIN_URL not in stderr
+	finally:
+		shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+@pytest.mark.parametrize("flag_value", ["false", "FALSE", "0", "off"])
+@pytest.mark.parametrize("branch_exists", [True, False])
+def test_flag_off_runs_legacy_full_clone_exactly(
+	flag_value: str,
+	branch_exists: bool,
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	monkeypatch.setenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", flag_value)
+	ls_remote_stdout = f"deadbeef\trefs/heads/{_MEMORY_BRANCH}\n" if branch_exists else ""
+	calls = _install_fake_git(monkeypatch, ls_remote_stdout=ls_remote_stdout)
+
+	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
+	try:
+		assert [call["args"] for call in calls] == _legacy_call_args(str(clone_dir), branch_exists=branch_exists)
+		assert not any("--single-branch" in call["args"] for call in calls)
+		assert "::warning::" not in capsys.readouterr().err
+	finally:
+		shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+def test_invalid_flag_value_disables_single_branch_clone_with_warning(
+	tmp_path: Path,
+	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
+) -> None:
+	monkeypatch.setenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", "bogus" + ("x" * 200))
+	calls = _install_fake_git(monkeypatch)
+
+	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
+	try:
+		assert [call["args"] for call in calls] == _legacy_call_args(str(clone_dir), branch_exists=False)
+		captured = capsys.readouterr()
+		warning_lines = [line for line in captured.err.splitlines() if line.startswith("::warning::")]
+		assert len(warning_lines) == 1
+		assert "AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED=bogus" in warning_lines[0]
+		assert "single-branch memory clone disabled" in warning_lines[0]
+		assert "x" * 65 not in warning_lines[0]
+		assert captured.out == ""
+	finally:
+		shutil.rmtree(clone_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

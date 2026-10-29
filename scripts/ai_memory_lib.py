@@ -3205,8 +3205,29 @@ def _resolve_origin_url(repo_root: Path) -> str:
     return url
 
 
-def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
-    origin_url = _resolve_origin_url(repo_root)
+def _memory_single_branch_clone_enabled() -> bool:
+    # Off switch for the single-branch memory clone (#8287 / #8295). Unset,
+    # empty or a parse_bool true word keeps it on; a parse_bool false word
+    # turns it off; any other value also turns it off and warns on stderr
+    # (stdout carries machine-readable JSON).
+    raw = os.environ.get("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED")
+    if raw is None or not raw.strip():
+        return True
+    parsed = parse_bool(raw, default=None)  # type: ignore[arg-type]
+    if parsed is None:
+        print(
+            f"::warning::AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED={raw.strip()[:64]} "
+            "is not a boolean; single-branch memory clone disabled",
+            file=sys.stderr,
+        )
+        return False
+    return bool(parsed)
+
+
+def _full_clone_for_memory_branch(origin_url: str, memory_branch: str) -> Path:
+    # Legacy full-repo clone, unchanged. Used when the single-branch clone is
+    # disabled and as the fallback when it fails (e.g. the memory branch does
+    # not exist yet on the first write in a repository).
     temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
     _run_git(temp_dir.parent, ["clone", "--no-tags", "--quiet", origin_url, str(temp_dir)])
 
@@ -3221,6 +3242,46 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     else:
         _run_git(temp_dir, ["checkout", "-B", memory_branch])
 
+    return temp_dir
+
+
+def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
+    origin_url = _resolve_origin_url(repo_root)
+    if not _memory_single_branch_clone_enabled():
+        return _full_clone_for_memory_branch(origin_url, memory_branch)
+
+    # #8287 / #8295: every memory write used to clone the whole repository,
+    # which pushed memory_maintenance past its 20-minute job cap. Clone only
+    # the memory branch (full history, no tags). Any failure, including a
+    # memory branch that does not exist yet, falls back to the legacy full
+    # clone. The clone args and git stderr are never logged because the
+    # origin URL may embed GH_TOKEN; only the classified reason is printed.
+    temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
+    clone = _run_git(
+        temp_dir.parent,
+        [
+            "clone",
+            "--single-branch",
+            "--branch",
+            memory_branch,
+            "--no-tags",
+            "--quiet",
+            origin_url,
+            str(temp_dir),
+        ],
+        check=False,
+    )
+    if clone.returncode != 0:
+        reason = "branch_missing" if "not found in upstream" in (clone.stderr or "") else "clone_failed"
+        print(
+            f"AI memory single-branch clone unavailable (reason={reason}); falling back to full clone",
+            file=sys.stderr,
+        )
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return _full_clone_for_memory_branch(origin_url, memory_branch)
+
+    _run_git(temp_dir, ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"])
+    _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
     return temp_dir
 
 

@@ -235,6 +235,12 @@ def _run_persist(
 		def _op(_clone_dir: Path) -> dict:
 			return {"claimed": True}
 
+		# These tests pin the push-retry loop and script its fetch results, so
+		# keep the clone on the legacy full-clone path (#8295): the
+		# single-branch path runs its own clone-time fetch, which would consume
+		# the scripted retry-fetch results.
+		original_single_branch_flag = ai_memory_lib.os.environ.get("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED")
+		ai_memory_lib.os.environ["AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED"] = "false"
 		try:
 			result = ai_memory_lib.persist_memory_operation(
 				repo_root,
@@ -251,6 +257,10 @@ def _run_persist(
 			ai_memory_lib._run_git = original_run_git
 			ai_memory_lib._push_retry_backoff_seconds = original_backoff
 			ai_memory_lib.time.sleep = original_sleep
+			if original_single_branch_flag is None:
+				ai_memory_lib.os.environ.pop("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", None)
+			else:
+				ai_memory_lib.os.environ["AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED"] = original_single_branch_flag
 	finally:
 		tempfile.tempdir = work_tempdir
 		if work is not None:
