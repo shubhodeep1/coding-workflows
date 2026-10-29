@@ -67,7 +67,7 @@ Next step: <e.g. "/write-plan on rec #1 to turn it into a plan", then "/implemen
 - **`agent-browser` CLI** (via `Bash`) — for JS-rendered, dynamic, or auth-walled pages where `WebFetch` returns shell HTML or a login wall (§17).
 - **`Read` / `Grep` / `Glob`** — load repo context (step 2) and find the exact `file:line` anchors that ground every recommendation. **No edits.**
 - **`WebSearch`** — optional, and only to resolve a redirect / shortlink to its canonical page or to locate the right entry point when the seed URL is ambiguous. Not for broad open-ended research — this command stays anchored to the seed URL(s).
-- **`Bash`** — only for `scripts/safe_fetch_url.py` downloads (run as `(cd .claude && python scripts/safe_fetch_url.py --url <url> --output <absolute path>)`), `pdftotext`, `agent-browser`, and temp-file handling. Never fetch a URL with raw `curl`. This command performs **no** git writes.
+- **`Bash`** — only for `scripts/safe_fetch_url.py` downloads (run as `(cd .claude && python scripts/safe_fetch_url.py --url <url> --output <absolute path>)`, or the same command with `python3` if `python` is not on the PATH), `pdftotext`, `agent-browser`, and temp-file handling. Never fetch a URL with raw `curl`. This command performs **no** git writes.
 
 ## Rules
 

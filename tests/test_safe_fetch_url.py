@@ -329,6 +329,7 @@ def test_apply_url_bash_permission_names_the_helper_not_curl(base: str):
 	bash_bullet = next(line for line in apply_url_text.splitlines() if line.startswith("- **`Bash`**"))
 	assert "scripts/safe_fetch_url.py" in bash_bullet
 	assert "pdftotext" in bash_bullet
+	assert "python3" in bash_bullet
 
 
 def test_live_helper_matches_the_synced_template():
