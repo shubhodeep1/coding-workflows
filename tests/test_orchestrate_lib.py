@@ -3985,6 +3985,18 @@ def test_wave1_deferral_logs_auto_serialize_hot_file_after_write_back():
 	assert "README.md" in reasons[0]["files"], reasons
 
 
+def test_wave1_deferral_logs_all_shared_files_for_mixed_hot_overlap():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["README.md", "shared.py", "a.py"], ["README.md", "shared.py", "b.py"], [])
+	orchestrate_lib.compute_waves(data, hot_files={"README.md"})
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert len(reasons) == 1 and reasons[0]["overlap_type"] == "hot_file", reasons
+	assert reasons[0]["files"] == ["README.md", "shared.py"], reasons
+
+
 def test_wave1_deferral_logs_auto_serialize_without_write_back():
 	if not _wave1_tools_available():
 		return
