@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/build_sync_manifest.py:262-263,330 and scripts/workflow_failure_heal.py:5742 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The code does not validate that `seed_only` is a boolean, so a string `\"true\"` is treated as not seed-only.\n  WHY: A misconfigured contract would treat the seed-only target as managed and overwrite consumer data on sync (severity MAJOR, reported only by this reviewer; other reviewers judged the state unreachable because the applier validates `seed_only` first).\n- scripts/apply_audit_gate_assets.py:151-152 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The seed-only skip silently ignores an existing directory at the target path, with no diagnostic.\n  WHY: A misconfigured repo state is masked instead of surfaced (both reviewers rated it NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/build_sync_manifest.py:262-263,330 | severity=MAJOR | confidence=4\n  PROBLEM: The code does not validate that `seed_only` is a boolean.\n  WHY: A `\"seed_only\": \"true\"` string makes `item.get(\"seed_only\") is True` false, so the seed-only target is treated as managed and consumer data is overwritten on sync.\n- scripts/workflow_failure_heal.py:5742 | severity=MAJOR | confidence=4\n  PROBLEM: The code does not validate that `seed_only` is a boolean.\n  WHY: A misconfigured string `\"true\"` bypasses the security gate, leading to inconsistency and misidentification of managed assets.\n- scripts/apply_audit_gate_assets.py:151 | severity=NIT | confidence=2\n  PROBLEM: `if seed_only and (target_path.exists() or target_path.is_symlink()): continue` skips the target even when it is a directory.\n  WHY: The tool silently skips the update with no diagnostic, which can mask an incorrect deployment state.\n- HARDENING: tests/test_audit_gate_template_atomicity.py (test_reapply_preserves_a_consumer_allowlist) | HARDENING_RISK_SCORE=1\n  PROBLEM: The tests do not cover a symlink at the seed-only target path.\n  WHY: Suggested fix is to add a test asserting that apply_assets preserves the symlink (about 5-10 lines).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/apply_audit_gate_assets.py:152 | severity=NIT | confidence=2\n  PROBLEM: A directory at the target path of a seed-only entry is silently skipped, with no warning.\n  WHY: The skip masks a misconfigured repo state that the pre-PR code would have raised on, so the failure is no longer visible.\n- HARDENING: scripts/apply_audit_gate_assets.py:152 | HARDENING_RISK_SCORE=2\n  PROBLEM: A broken symlink at the seed-only target is skipped forever, so a sync can never recover it.\n  WHY: Suggested fix is to unlink a broken symlink before the copy logic (about 4 lines).\n- HARDENING: scripts/build_sync_manifest.py:262,330 and scripts/workflow_failure_heal.py:5742 | HARDENING_RISK_SCORE=2\n  PROBLEM: A non-boolean `seed_only` is silently treated as false, while the applier at scripts/apply_audit_gate_assets.py:62-63 rejects it.\n  WHY: Suggested fix is to mirror the applier's boolean validation, or share one validator (about 6 lines).\n- HARDENING: tests/test_audit_gate_template_atomicity.py:228-268 | HARDENING_RISK_SCORE=1\n  PROBLEM: The new test does not exercise the `is_symlink()` branch of the seed-only skip.\n  WHY: Suggested fix is to add a symlink sub-case asserting the applier leaves it untouched (about 8 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING: scripts/apply_audit_gate_assets.py:152 | HARDENING_RISK_SCORE=1\n  PROBLEM: A dangling symlink or a directory at the seed-only target is skipped forever and silently.\n  WHY: Suggested fix is to print a one-line stderr warning when skipping (about 2 lines).\n- HARDENING: scripts/build_sync_manifest.py:330 and scripts/workflow_failure_heal.py:5742 | HARDENING_RISK_SCORE=1\n  PROBLEM: A non-boolean `seed_only` is silently treated as not seed-only, while scripts/apply_audit_gate_assets.py:62-63 rejects it.\n  WHY: The state is unreachable through the sync path, so this is defense-in-depth only; the fix is to mirror the boolean check in `derive_managed_digests` (about 3 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1e11a558a555b667d3048bcd7838cb1a4af36ae02cd2e01367a77e49e465e77b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8355,
+    "run_id": "40863423203",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40863423203",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029121919_1eabd4df3e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8355,
+    "run_id": "40863423203"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T12:19:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
