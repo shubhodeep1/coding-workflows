@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-29T12:30:26Z",
+  "issue_number": 8352,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=tests/test_orchestrate_poll_process.py:n/a; cited_path=CI run for commit 28f87cb (orchestrate-poll matrix re-run); files_touched=changelog.d/8352-security-pass-create-race-test-diagnostics.md, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 8358,
+  "record_id": "lesson_20261029123026_a91312a630",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CI run for commit 28f87cb (orchestrate-poll matrix re-run)",
+    "tests/test_orchestrate_poll_process.py",
+    "changelog.d/8352-security-pass-create-race-test-diagnostics.md"
+  ]
+}
