@@ -69,6 +69,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/internal-orchestrate.yml` — GitHub Actions workflow: Internal: AI Orchestrate.
 - `.github/workflows/internal-plan.yml` — GitHub Actions workflow: Internal: AI Plan.
 - `.github/workflows/internal-review.yml` — GitHub Actions workflow: Internal: AI Review & Autofix.
+- `.github/workflows/internal-sync-ai-labels.yml` — GitHub Actions workflow: Internal: Sync AI Labels.
 - `.github/workflows/internal-validate.yml` — GitHub Actions workflow: Internal: AI Validate.
 - `.github/workflows/internal-workflow-failure-heal.yml` — GitHub Actions workflow: Internal: AI Workflow Failure Heal.
 - `.github/workflows/issue_pr_status.yml` — GitHub Actions workflow: AI Issue PR Status Sync.
