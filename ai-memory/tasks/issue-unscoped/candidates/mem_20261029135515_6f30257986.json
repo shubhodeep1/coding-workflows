@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_isolated_run.sh:200-205 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In `copy()`, the sparse-checkout handling for a pass-2 file is skipped only when the file itself is missing; if its parent directory is missing, `lstat()` raises at the parent, `node == root / path` is false, and the `raise` on line 205 runs.\n  WHY: The exception reaches the outer handler at lines 308-309 and becomes `SystemExit(\"clarify source snapshot rejected\")`, so a source tree that leaves out a tracked directory fails the whole snapshot instead of recording the file as excluded (both reviewers rated it MAJOR; anthropic_claude-sonnet-5_5 judged the same code path hardening-only because no current caller snapshots a sparse root).\n- scripts/clarify_isolated_run.sh:147-154 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Sparse-checkout handling rejects the entire snapshot if a tracked file's parent directory is missing.\n  WHY: `node == root / path` is checked only on `FileNotFoundError` and is true only for the file itself, so a missing intermediate directory triggers `raise` and the snapshot fails (no severity stated; the line range differs from the 200-205 finding above, so the two are not merged).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING: scripts/clarify_isolated_run.sh | location: copy(), lines 202-205 (FileNotFoundError handler)\n  PROBLEM: For a pass-2 file, only a missing final node is skipped; a missing parent directory, as a cone-mode sparse checkout produces, re-raises and rejects the whole snapshot.\n  WHY: Robustness only, because no current caller snapshots a sparse root (`sparse-checkout: scripts` at `clarify.yml:2433` and `plan.yml:3555` check out `.codex-workflow-src`). Suggested fix: change the condition to `if extra:`, optionally `exclude(\"missing\", path)`; estimated lines changed 1-3. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/clarify_isolated_run.sh:147-154 | confidence=5\n  PROBLEM: Sparse-checkout handling rejects the entire snapshot if a tracked file's parent directory is missing.\n  WHY: On `FileNotFoundError`, the `node == root / path` check is true only for the file itself; a missing intermediate directory makes `lstat()` raise at that level, the `if` is false, and the `raise` makes snapshotting fail for a sparse checkout.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_isolated_run.sh:Lines 200-205, `copy()` missing-path handling | severity=MAJOR | confidence=4\n  PROBLEM: A missing tracked file is skipped only when the file itself is absent; if a pass-2 file's parent directory is absent, `lstat()` raises for that parent and `node == root / path` is false.\n  WHY: The `FileNotFoundError` reaches the outer handler and rejects the entire snapshot, so a sparse source tree that leaves out a tracked directory fails clarification instead of recording the file as excluded.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/clarify_isolated_run.sh:lines 200-205 (`try: info = node.lstat() except FileNotFoundError: if extra and node == root / path: return ... raise`) inside `copy()` | severity=MAJOR | confidence=4\n  PROBLEM: The new pass-2 sparse-checkout skip fires only when the tracked file itself is missing; if its parent directory is absent, `lstat()` raises at the parent, `node == root / path` is false, and the `raise` on line 205 runs.\n  WHY: The exception reaches the outer handler at lines 308-309 and becomes `SystemExit(\"clarify source snapshot rejected\")`, rejecting the entire snapshot and contradicting the inline comment at line 204. A checkout that omits a tracked directory (e.g. `contracts/T.sol`) makes every clarify/plan/triage run fail.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0c2c21b3defa8dce78d45a30f740afae3ca360d2af64596ca8940e2420b0358e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8351,
+    "run_id": "40874365085",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40874365085",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029135515_6f30257986",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8351,
+    "run_id": "40874365085"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T13:55:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
