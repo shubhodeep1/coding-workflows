@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. The only change is to the content of one data file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue gives the exact final content and allows edits to only `tests/e2e_smoke_canary.txt`. The plan overwrites that existing file and adds no new helpers, tests or other files. Nothing is left that could be shrunk or expanded.\n\n## Steps\n1. Overwrite `tests/e2e_smoke_canary.txt` so it contains exactly these three lines, each ending in a newline:\n   `status: ok`\n   `run_id: 40831286935`\n   `updated-by: ai-pipeline`\n   One way is `printf 'status: ok\\nrun_id: 40831286935\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n2. Check the result:\n   - `git diff --stat` lists only this file.\n   - `wc -l` reports 3 lines.\n   - `tail -c1` shows the file ends in a newline.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the whole file\n- Chosen: Overwrite the entire file with the three lines from the issue.\n- Alternatives considered: Patching only the lines that differ.\n- Why: The issue asks for an exact full replacement, and a full write is guaranteed to leave no stray content.\n\n## Security considerations\n- No trust boundary, endpoint or authorization surface is touched.\n- The file holds no secrets or external input.\n- No money-handling code is involved.\n\n## Potential risks or edge cases\n- Missing trailing newline, or Windows CRLF line endings. Using `printf` with `\\n` avoids both.\n- Accidentally editing another file. The `git diff --stat` check in step 2 catches this.\n- Integration branch mismatch is `unknown`, not `true`, so the plan is not blocked. It is planned against `main` at `03e2c2e50ee14c5f17a6bcd05a134e8c9fd5809d`.\n- No conflicts were found between the issue and the codebase.\n\n## Testing considerations\n- No new tests are needed.\n- Compare the file byte-for-byte with the expected content, for example `printf '...' | cmp - tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\nThe edit is fully specified, touches one existing file, and needs no code, dependencies or other files.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "401b757a4039fb949cf22a05725f11c62667dd587998e20c09eeb65954c34d3f",
+  "lineage": {
+    "issue_number": 8338,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40838469926",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40838469926",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8338"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261029081258_ffd9f983be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8338,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40838469926"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8338",
+  "timestamps": {
+    "created_at": "2026-10-29T08:12:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
