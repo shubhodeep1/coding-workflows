@@ -5,13 +5,23 @@
   "entry_id": "processed_command_8380_6502110523_approved",
   "issue_number": 8380,
   "metadata": {
+    "branch": "ai/issue-8380",
+    "changed_files": [
+      "agents.d/8330-superseded-host-merge-operator-step.md",
+      "changelog.d/8330-superseded-host-merge-operator-step.md"
+    ],
+    "issue_number": 8380,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8380",
+    "pr_number": 8381,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8381",
+    "run_attempt": "1",
+    "run_id": "40909981905",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40909981905"
   },
   "run_attempt": 1,
   "run_id": "40909981905",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T16:19:08Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T16:27:25Z",
   "workflow": "implement"
 }
