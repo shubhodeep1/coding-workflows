@@ -1,7 +1,7 @@
 <!-- changelog: changed -->
 - **Interactive Claude sessions now plan non-trivial tasks and hand them to the pipeline, and `CLAUDE.md` is about a third smaller.** New `CLAUDE.md` §31 limits in-session implementation to small fixes. Anything larger is clarified and planned in the session, shown to the user, and then opened as `ai:engine-claude` issues (one per repo) or, for multi-PR work, handed to the orchestrator with `/write-plan` and `/implement-plan-claude`.
 
-`CLAUDE.md` is loaded into every interactive session in coding-workflows and in every consumer repo, so its size is paid on every turn. The full text of §21, §22, §23, §24, §25 and §29 now lives in `.claude/docs/`, and `CLAUDE.md` keeps a shorter version of §21–§24, §25.D and §29 with a pointer (the rest of §25 stays in full). Every section number and subsection letter is unchanged (§6), and the moved text is copied verbatim, so no rule was dropped. The unattended pipelines never load `CLAUDE.md`, so they are not affected.
+`CLAUDE.md` is loaded into every interactive session in coding-workflows and in every consumer repo, so its size is paid on every turn. The full text of §21, §22, §23, §24, §25.D and §29 now lives in `.claude/docs/`, and `CLAUDE.md` keeps a shorter version of each with a pointer (the rest of §25 stays in full in `CLAUDE.md`). Every section number and subsection letter is unchanged (§6). The moved text is copied verbatim, plus one new sentence in §23.C saying the user's go on a §31 plan approves the hand-off, so no rule was dropped. The unattended pipelines never load `CLAUDE.md`, so they are not affected.
 
 | The numbers that matter | Value |
 | --- | --- |

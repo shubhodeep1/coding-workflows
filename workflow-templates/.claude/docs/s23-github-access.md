@@ -132,7 +132,8 @@ command whose documented job is to dispatch a workflow — `/implement-plan-ai`,
 `/apply-analysis`, and any successor that says so in its own file — that
 invocation *is* the approval for the dispatch the command describes. Do not
 re-ask; the ask-first rule above covers dispatches you would be initiating on
-your own judgement.
+your own judgement. Likewise, the user's go on a §31 plan
+approves opening the issues (or the orchestrator dispatch) that plan names.
 
 ### D) Transport & Tool Precedence
 
