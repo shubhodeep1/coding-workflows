@@ -1,15 +1,6 @@
 <!-- changelog: fixed -->
-- **The workflow sync no longer empties a consumer's npm audit allowlist.** `security/dependency-audit-allowlist.json` is now written only when a consumer repo does not have one yet, and is never overwritten after that.
+- **A malformed `seed_only` flag in the audit-gate contract now stops the sync manifest build instead of being read as `false`.** This extends the seed-only allowlist fix described in `changelog.d/8334-audit-gate-seed-only-allowlist.md` (Refs shubhodeep1/multi-user-ai-agent#322).
 
-Until now `update_workflows.yml` treated the allowlist like the audit script: whenever the consumer's copy differed from upstream's empty `[]`, the "Apply canonical audit-gate assets" step replaced it. Every justified entry a consumer added was wiped on the next `@stable` sync, and the consumer's `npm Audit Gate` then failed on every pull request. In `shubhodeep1/multi-user-ai-agent` this happened five times in a row: each AI fix restored 18 entries and the next sync removed them (Refs shubhodeep1/multi-user-ai-agent#322). The audit-gate contract (`workflow-templates/audit-gate/contract.json`) now marks the allowlist `"seed_only": true`, and `scripts/apply_audit_gate_assets.py` skips a seed-only target that already exists. `scripts/security/check-npm-audit.js` is still refreshed on every sync.
+`scripts/build_sync_manifest.py` (`allowed-paths`, `managed-paths` and `managed-digests`) now fails when a `managed_files` entry has a `seed_only` value that is not a boolean, as `scripts/apply_audit_gate_assets.py` already did. Before, a value such as the string `"true"` would have made the npm audit allowlist a managed file again, so the sync would overwrite it. `scripts/workflow_failure_heal.py` no longer maps an upstream source to a seed-only target, so a security finding on a consumer's allowlist is not filed as a coding-workflows fix. When the existing seed-only target is a symlink or a directory, the "Apply canonical audit-gate assets" step now prints a warning and still leaves it untouched.
 
-| The numbers that matter | Value |
-| --- | --- |
-| Allowlist wipes in multi-user-ai-agent before this fix | 5 (multi-user-ai-agent sync PRs 284, 289, 293, 297, 302) |
-| Findings the live audit reports there today | 35 |
-
-What this means for consumer repos: an allowlist you restore or edit now survives the next sync. A repo whose allowlist was already emptied still has to restore it once, from a live `npm run audit:ci -- --write` run.
-
-### For contributors
-
-`seed_only` is an optional boolean on a `managed_files` entry; the applier rejects any other type. Seed-only targets stay in `build_sync_manifest.py allowed-paths` (the updater may still create them) but are left out of `managed-paths` and `managed-digests`, because the consumer owns them. For the same reason `workflow_failure_heal.py` maps no upstream source to a seed-only target.
+What this means for consumer repos: nothing changes for a correct contract. The allowlist stays consumer-owned once it exists.

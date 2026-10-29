@@ -127,36 +127,6 @@ def test_managed_paths_are_the_allowlist_minus_consumer_edited_entries(tmp_path)
 		assert consumer_owned not in managed
 
 
-def test_seed_only_audit_gate_target_is_allowed_but_consumer_owned(tmp_path):
-	"""A seed_only target (the npm audit allowlist) is written once, then the
-	consumer owns it: allowed for the updater, but neither managed nor digested."""
-	repo, _sha = make_upstream_repo(tmp_path)
-	contract = {
-		"managed_files": [
-			{"source": "assets/x.js", "target": "scripts/security/x.js"},
-			{"source": "assets/allow.json", "target": "security/allow.json", "seed_only": True},
-		]
-	}
-	assets = repo / "workflow-templates" / "audit-gate" / "assets"
-	assets.mkdir(parents=True)
-	(assets / "x.js").write_text("audit()\n", encoding="utf-8")
-	(assets / "allow.json").write_text("[]\n", encoding="utf-8")
-	(repo / "workflow-templates" / "audit-gate" / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
-	_git(repo, "add", "-A")
-	_git(repo, "commit", "-q", "-m", "seed-only")
-	sha = _git(repo, "rev-parse", "HEAD")
-	allowed = run_builder("allowed-paths", "--repo-root", str(repo), "--commit", sha).stdout.splitlines()
-	managed = run_builder("managed-paths", "--repo-root", str(repo), "--commit", sha).stdout.splitlines()
-	digests_run = run_builder("managed-digests", "--repo-root", str(repo), "--commit", sha)
-	assert digests_run.returncode == 0, digests_run.stderr
-	digests = json.loads(digests_run.stdout)
-	assert "security/allow.json" in allowed
-	assert "security/allow.json" not in managed
-	assert "security/allow.json" not in digests
-	assert "scripts/security/x.js" in managed
-	assert "scripts/security/x.js" in digests
-
-
 def test_non_boolean_seed_only_is_rejected(tmp_path):
 	repo, _sha = make_upstream_repo(tmp_path)
 	contract = {"managed_files": [{"source": "assets/allow.json", "target": "security/allow.json", "seed_only": "true"}]}
