@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: .github/workflows/ci.yml, step selection and destination job assignment (steps moved into `tests-release-and-log-analysis`)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The step timings for run 40752698170 could not be read, so the four steps were chosen by estimated cost and the destination job's headroom is also an estimate (ci.yml lines 2153-2158 and the changelog fragment say so). The diff does not establish that the moved steps are the slowest or that `tests-release-and-log-analysis` has the most measured headroom. All three reviewers rated it SEVERITY NIT. `budget-watch` reopens an issue if either job nears its timeout, so the gap is residual.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (SEVERITY: NIT, ISSUE_CONFIDENCE: 2)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, where the steps are chosen and assigned to a destination job.\n  Evidence of absence: The step timings for run 40752698170 could not be read, so the four steps were chosen by estimated cost. The target job's headroom is an estimate too. The comment at `ci.yml` lines 2153-2158 and the changelog fragment both say this. The issue forbids raising `timeout-minutes` or adding jobs, and `budget-watch` opens a new issue if either job nears its timeout. Earlier review rounds and two judge decisions accepted this as residual risk. The last run's changelog edit does not change that.\n- All other checklist categories: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (SEVERITY: NIT, ISSUE_CONFIDENCE: 4)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, step selection and destination job assignment\n  Evidence of absence: The PR moves four steps into `tests-release-and-log-analysis`. The ci.yml comment at lines 2153-2158 and the changelog at line 11 state the steps were picked by \"estimated cost because the run's step timings could not be read\", and the destination job's headroom is also an estimate. The diff does not establish that the chosen steps are the slowest four in `tests-hooks-and-orchestrator`, nor that `tests-release-and-log-analysis` has the most measured headroom. The LAST RUN DIFF is a documentation correction (line 11 word-count and #8268/#8278 wording) and does not change this. The estimate is disclosed and `budget-watch` will reopen an issue if either job nears its timeout, so the gap is residual rather than blocking.\n- All other checklist categories: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP (SEVERITY: NIT, ISSUE_CONFIDENCE: 4)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, step selection and destination job assignment.\n  Evidence of absence: The workflow says the four steps were selected by estimated cost because the run's step timings could not be read, and that the destination job's headroom is an estimate. The diff therefore does not establish that the moved steps are the slowest or that `tests-release-and-log-analysis` has the most headroom.\n- All other checklist categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "76ed85f5ae03c713463946fb7b6ee42b24e58d4bdbc33e1dd00bcba00bf3fee0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8285,
+    "run_id": "40933960087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40933960087",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029195524_0fafdff497",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8285,
+    "run_id": "40933960087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T19:55:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
