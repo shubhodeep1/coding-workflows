@@ -2180,7 +2180,7 @@ jobs:
         run: |
           # Issue #8427 (P2): fail-open; only a valid done-check gets a marker.
           rm -f "${RUNTIME_DIR}/acceptance.json" "${RUNTIME_DIR}/acceptance_marker.txt"
-          [ -f scripts/acceptance_check.py ] || { echo "PERSIST acceptance outcome=skipped reason=helper_absent"; exit 0; }
+          { [ -f scripts/acceptance_check.py ] && [ -f scripts/targeted_file_context.py ]; } || { echo "PERSIST acceptance outcome=skipped reason=helper_absent"; exit 0; }
           python3 -I -B scripts/acceptance_check.py validate --plan-file "${CODEX_OUTPUT_FILE}" \
             --repo-root "${GITHUB_WORKSPACE}" --out "${RUNTIME_DIR}/acceptance.json" || true
           if [ -s "${RUNTIME_DIR}/acceptance.json" ]; then
