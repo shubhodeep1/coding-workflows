@@ -310,6 +310,7 @@ def test_plan_catch_up_recovers_same_commit_both_changed(tmp_path: Path, capsys)
 	assert sync_mod.plan(root, before, after) == ["commands/other.md", "hooks/guard.py"]
 	assert "both_changed path=.claude/hooks/guard.py action=template_wins" in capsys.readouterr().err
 	assert sync_mod.plan(root, before, after, recover_both_changed=False) == ["commands/other.md"]
+	assert "both_changed path=.claude/hooks/guard.py action=left_for_parity" in capsys.readouterr().err
 	# A later live-only edit is deliberate and stays untouched.
 	_commit(root, ".claude/hooks/guard.py", "custom\n")
 	before, after = _commit(root, "workflow-templates/.claude/commands/other.md", "other v2\n")
