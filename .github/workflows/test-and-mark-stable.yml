@@ -614,8 +614,10 @@ jobs:
       # Phase 3b inactivity limit while the watched Implement run's current
       # step is "Pre-push affected-test gate" (issue #8244). That one step
       # ran 31 minutes in run 40610855593 (two gate runs plus a repair turn);
-      # implement.yml gives it timeout-minutes: 60 and
-      # scripts/implement_step_prepush_test_gate.sh sizes it to 3300 s. The
+      # on main, implement.yml gives it timeout-minutes: 60 and
+      # scripts/implement_step_prepush_test_gate.sh sizes it to 3300 s (this
+      # backport, #8376, ships neither; the limit applies only when the
+      # watched Implement run reports a step with exactly this name). The
       # default is 35, not 60: 60 would push the conservative serial budget
       # below past the 300-minute job timeout, which #8244 forbids raising.
       # To give the gate its full 55 minutes, raise this value and
