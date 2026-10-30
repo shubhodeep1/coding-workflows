@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_engine_fallback_report.sh:341-364 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pool reason token is validated by regex after assignment, and the variable is not re-initialized or handled consistently if `report_pool_reason_token` returns an invalid token.\n  WHY: The reviewer says the later check looks safe, but the handling is brittle and may behave unexpectedly. The source did not state a severity, so low is used.\n- scripts/ai_engine_fallback_report.sh:83-107 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `report_pool_reason_token` uses `head -c 64`, which could truncate or corrupt a token if the file content is longer than expected.\n  WHY: The reviewer says this is unlikely because tokens are limited to 60 characters, but the function should read and handle the content correctly. The source did not state a severity, so low is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ai_engine_fallback_report.sh:341-364 | confidence=3\n  PROBLEM: The pool reason token is validated by regex after assignment, and the variable is not re-initialized or handled consistently if `report_pool_reason_token` returns an invalid token.\n  WHY: The reviewer says the later check looks safe, but the handling is brittle and may behave unexpectedly.\n- scripts/ai_engine_fallback_report.sh:83-107 | confidence=2\n  PROBLEM: `report_pool_reason_token` uses `head -c 64`, which could truncate or corrupt a token if the file content is longer than expected.\n  WHY: The reviewer says this is unlikely because tokens are limited to 60 characters, but the function should read and handle the content correctly.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "68303831e06f9ddad627948edfad133be45f92756f37d88384bae5d840de93b2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8403,
+    "run_id": "41001155626",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41001155626",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030045744_8234d19fc0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8403,
+    "run_id": "41001155626"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T04:57:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
