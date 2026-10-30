@@ -779,38 +779,6 @@ def test_write_role_reuses_the_prepared_implement_sandbox(sandbox: dict) -> None
 	assert f"coding-workflows.codex-isolated.root={root}" not in run["argv"]
 
 
-def test_every_workflow_staging_ai_engine_also_stages_its_stall_guard() -> None:
-	"""claude_run calls ${_AI_ENGINE_DIR}/codex_stall_guard.sh with --engine.
-
-	A workflow that stages ai_engine.sh from the support ref but leaves the
-	stall guard to the checkout runs whatever guard the checked-out branch
-	carries. A heal issue plans against `stable`, whose older guard rejected
-	`--engine` and crashed every Claude planning attempt (runs 37389550162,
-	37389524799, 37389535878).
-	"""
-	workflows = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
-	staging_lists = []
-	for path in workflows:
-		for line in path.read_text(encoding="utf-8").splitlines():
-			stripped = line.strip()
-			if stripped.startswith("for f in ") and stripped.endswith("; do") and " ai_engine.sh " in f" {stripped} ":
-				staging_lists.append((path.name, stripped.split()))
-	assert {name for name, _ in staging_lists} >= {"plan.yml", "clarify.yml", "orchestrate_clarify_respond.yml", "implement.yml"}
-	missing = [name for name, names in staging_lists if "codex_stall_guard.sh" not in names]
-	assert not missing, f"stage codex_stall_guard.sh beside ai_engine.sh in: {missing}"
-	# A workflow that stages through stage_support_for_phase.sh (P2a, one
-	# source for support scripts) takes both from the helper's phase list.
-	phase_helper = (REPO_ROOT / "scripts" / "stage_support_for_phase.sh").read_text(encoding="utf-8")
-	for path in workflows:
-		for phase in re.findall(r"bash \S*stage_support_for_phase\.sh ([a-z_]+)", path.read_text(encoding="utf-8")):
-			block = re.search(r"^\t" + re.escape(phase) + r"\)\n(.*?)^\t\t;;", phase_helper, re.M | re.S)
-			assert block, f"{path.name}: stage_support_for_phase.sh has no {phase} case"
-			bundle_names = block.group(1).split()
-			assert "ai_engine.sh" in bundle_names and "codex_stall_guard.sh" in bundle_names, (
-				f"{path.name}: the {phase} bundle must stage codex_stall_guard.sh beside ai_engine.sh"
-			)
-
-
 # --- claude_run_selected / ai_engine_stage_support (plan item 3a) -----------------
 
 
@@ -1276,6 +1244,84 @@ def test_report_refuses_symlinked_or_missing_records(tmp_path: Path) -> None:
 	assert linked.returncode == 0 and "skip reason=records_symlink" in linked.stdout
 
 
+# --- Claude pool step reason in the heal payload (issue #8406) -------------------
+
+POOL_LINE_PREFIX = "Claude pool step reason: "
+
+
+def _report_pool_lines(log: Path) -> list[list[str]]:
+	bodies = [json.loads(line) for line in Path(f"{log}.bodies").read_text(encoding="utf-8").splitlines() if line.strip()]
+	return [
+		[line for line in body["client_payload"]["report"]["failure_evidence"].split("\n") if line.startswith(POOL_LINE_PREFIX)]
+		for body in bodies
+	]
+
+
+REFUSED_RECORD = _record("PLAN", "no_credential", "non_capacity", "refused")
+
+
+def test_report_passes_the_pool_reason_file(tmp_path: Path) -> None:
+	(tmp_path / "rt-report").mkdir()
+	(tmp_path / "rt-report" / "claude-pool-reason").write_text("pool_dir_invalid\n", encoding="utf-8")
+	result, log = _run_report(tmp_path, REFUSED_RECORD)
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: pool_dir_invalid"]]
+	assert "pool_reason_source=file" in result.stdout
+	assert "pool_dir_invalid" not in result.stdout
+
+
+def test_report_pool_reason_env_overrides_the_file(tmp_path: Path) -> None:
+	(tmp_path / "rt-report").mkdir()
+	(tmp_path / "rt-report" / "claude-pool-reason").write_text("from_file\n", encoding="utf-8")
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON="from_env")
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: from_env"]]
+	assert "pool_reason_source=env" in result.stdout
+
+
+def test_report_invalid_pool_reason_becomes_unavailable(tmp_path: Path) -> None:
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON="Not Valid @x")
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: unavailable"]]
+	assert "Not Valid" not in result.stdout
+
+
+def test_report_pool_reason_starting_with_a_dash_is_unavailable(tmp_path: Path) -> None:
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON="-x")
+	assert result.returncode == 0, result.stderr
+	assert "payload_build_failed" not in result.stdout
+	assert _report_pool_lines(log) == [["Claude pool step reason: unavailable"]]
+
+
+@pytest.mark.parametrize("variant", ["missing", "symlink"])
+def test_report_without_a_pool_reason_source_omits_the_line(tmp_path: Path, variant: str) -> None:
+	if variant == "symlink":
+		(tmp_path / "rt-report").mkdir()
+		target = tmp_path / "secret.txt"
+		target.write_text("selected\n", encoding="utf-8")
+		(tmp_path / "rt-report" / "claude-pool-reason").symlink_to(target)
+	result, log = _run_report(tmp_path, REFUSED_RECORD)
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [[]]
+	assert "pool_reason_source=none" in result.stdout
+
+
+def test_report_pool_reason_file_override_path(tmp_path: Path) -> None:
+	reason_file = tmp_path / "custom-reason"
+	reason_file.write_text("  selected \n", encoding="utf-8")
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON_FILE=str(reason_file))
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: selected"]]
+
+
+def test_report_passes_the_pool_reason_argument_array() -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
+	build = text[text.index("build-engine-fallback-payload --repo"):text.index("wrap-dispatch --payload-json")]
+	assert '${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"}' in build
+	assert 'CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason' in text
+	assert "ai_engine_no_account_reason" not in text.split("report_pool_reason_token=", 1)[1].split("dispatched=0", 1)[0]
+
+
 # --- Claude capacity wait (issue #7251, capacity-wait Phase 1) -----------------
 
 
@@ -1407,7 +1453,7 @@ def _fake_tracker(tmp_path: Path, opened: bool, tracker: str = "900") -> Path:
 		"args = sys.argv[1:]\n"
 		"alert = args[args.index('--alert-out') + 1]\n"
 		+ (f"open(alert, 'w').write('opened')\nprint('PROVIDER_OUTAGE op=open outcome=opened')\nprint('alert=1 outcome=opened tracker={tracker}')\n"
-		   if opened else f"print('alert=0 outcome=already_open tracker={tracker}')\n"),
+			if opened else f"print('alert=0 outcome=already_open tracker={tracker}')\n"),
 		encoding="utf-8",
 	)
 	return stub

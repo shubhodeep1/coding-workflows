@@ -96,6 +96,13 @@ ENGINE_FALLBACK_CAPACITY_REASONS: tuple[str, ...] = ("all_gated", "all_usage_lim
 _ENGINE_ROLE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
 _ENGINE_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
 ENGINE_FALLBACK_MAX_RECORDS = 20
+# The Claude pool step's reason token (scripts/claude_pool_token.sh), carried
+# as one evidence line of an engine_fallback report when the reporter has a
+# source for it (issue #8406). Anything outside the pattern becomes
+# "unavailable"; the line is diagnostic only and never enters the fingerprint.
+_ENGINE_POOL_REASON_RE = re.compile(r"^[a-z0-9_]{1,60}$")
+ENGINE_POOL_REASON_EVIDENCE_PREFIX = "Claude pool step reason: "
+ENGINE_POOL_REASON_UNAVAILABLE = "unavailable"
 # The heal scope of an engine_fallback issue: the engine support code that
 # decides, runs or reports a Claude fallback. Fixed, so neither the report nor
 # the diagnosis can widen it; each path is kept only when it exists at the
@@ -1607,6 +1614,35 @@ def engine_fallback_fingerprint(role: str, reason: str) -> str:
 	return fingerprint("ai-engine-fallback", role, reason)
 
 
+def _engine_pool_reason_token(value: str | None) -> str:
+	"""The pool reason token when it matches the pattern, else "unavailable"."""
+	if isinstance(value, str) and _ENGINE_POOL_REASON_RE.fullmatch(value):
+		return value
+	return ENGINE_POOL_REASON_UNAVAILABLE
+
+
+def _filter_engine_pool_reason_lines(evidence: str) -> str:
+	"""Keep at most one valid ``Claude pool step reason:`` evidence line.
+
+	Evidence without such a line is returned unchanged (byte-identical).
+	Otherwise the first line whose token matches the pattern is kept and every
+	other prefixed line (invalid or duplicate) is dropped. Idempotent.
+	"""
+	lines = evidence.split("\n")
+	if not any(line.startswith(ENGINE_POOL_REASON_EVIDENCE_PREFIX) for line in lines):
+		return evidence
+	kept: list[str] = []
+	seen = False
+	for line in lines:
+		if line.startswith(ENGINE_POOL_REASON_EVIDENCE_PREFIX):
+			token = line[len(ENGINE_POOL_REASON_EVIDENCE_PREFIX):]
+			if seen or not _ENGINE_POOL_REASON_RE.fullmatch(token):
+				continue
+			seen = True
+		kept.append(line)
+	return "\n".join(kept)
+
+
 def build_engine_fallback_payload(
 	*,
 	repo: str,
@@ -1619,6 +1655,7 @@ def build_engine_fallback_payload(
 	records: Iterable[str],
 	now: datetime | None = None,
 	run_attempt: str | None = None,
+	pool_reason: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a refused (non-capacity) AI engine fallback.
 
@@ -1627,6 +1664,10 @@ def build_engine_fallback_payload(
 	the heal prompt. ``reporter_run`` names the reporting run and attempt
 	(``GITHUB_RUN_ID`` / ``GITHUB_RUN_ATTEMPT``, attempt 1 when unset); the
 	intake verifies it before using it as the heal scope's run.
+	``pool_reason`` (issue #8406), when not None, adds one
+	``Claude pool step reason: <token>`` evidence line; a token outside
+	``^[a-z0-9_]{1,60}$`` becomes "unavailable". None leaves the payload
+	exactly as before, and the fingerprint (role, reason) never changes.
 	"""
 	now = now or _utc_now()
 	if not _ENGINE_ROLE_RE.match(role or ""):
@@ -1646,7 +1687,10 @@ def build_engine_fallback_payload(
 		if len(kept) >= ENGINE_FALLBACK_MAX_RECORDS:
 			break
 	run_number = _positive_int(run_id)
-	evidence = "\n".join(["AI engine fallback records (v1 epoch role reason class action policy):", *kept])
+	evidence_lines = ["AI engine fallback records (v1 epoch role reason class action policy):", *kept]
+	if pool_reason is not None:
+		evidence_lines.append(f"{ENGINE_POOL_REASON_EVIDENCE_PREFIX}{_engine_pool_reason_token(pool_reason)}")
+	evidence = "\n".join(evidence_lines)
 	return {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -2497,7 +2541,9 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	}
 	if kind == "engine_fallback":
 		normalized.update({"engine_role": payload["engine_role"], "engine_reason": payload["engine_reason"],
-			"reporter_run": _engine_reporter_run(payload.get("reporter_run"))})
+			"reporter_run": _engine_reporter_run(payload.get("reporter_run")),
+			# At most one valid pool reason line survives (issue #8406).
+			"failure_evidence": _filter_engine_pool_reason_lines(normalized["failure_evidence"])})
 	if kind == "synced_security_finding":
 		# Only validated fields: no title, excerpt, label, branch or conclusion
 		# text from the report reaches the public issue (Q245).
@@ -6791,6 +6837,7 @@ def _cmd_build_engine_fallback_payload(args: argparse.Namespace) -> int:
 		reporter_run_url=args.reporter_run_url or None,
 		records=[line for line in records if f"\t{args.role}\t{args.reason}\t" in line],
 		run_attempt=args.run_attempt or None,
+		pool_reason=args.pool_reason,
 	)
 	validate_payload(payload)
 	_write_json(payload)
@@ -8030,6 +8077,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--reporter-run-url", default="")
 	p.add_argument("--records-file", default="")
 	p.add_argument("--run-attempt", default="", help="GITHUB_RUN_ATTEMPT of the reporting run (default 1)")
+	# Default None, not "": omitted keeps today's payload; "" means a source
+	# existed but was empty, which becomes "unavailable" (issue #8406).
+	p.add_argument("--pool-reason", default=None, help="Claude pool step reason token ([a-z0-9_]{1,60}; anything else becomes 'unavailable')")
 	p.set_defaults(func=_cmd_build_engine_fallback_payload)
 
 	p = sub.add_parser("verify-engine-reporter-run", help="Bind an engine_fallback report's reporter_run to the fetched run object; exit 1 when it does not bind")
