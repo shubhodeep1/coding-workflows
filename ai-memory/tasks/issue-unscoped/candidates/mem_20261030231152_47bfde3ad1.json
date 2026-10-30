@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (none found; requirement fully met)\n  Requirement: \"Update its content so it is exactly these three lines... status: ok / run_id: 40608957733 / updated-by: ai-pipeline\" and \"Only modify tests/e2e_smoke_canary.txt\".\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none \u2014 the PR diff hunk at tests/e2e_smoke_canary.txt:1-3 introduces exactly the required three-line content, and pr_changed_files.txt lists only that file.\n  ISSUE_CONFIDENCE: 5 (requirement fully met; no gap)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8ec4d67c8dacaa3b1aa0c570edeb06ff7ac84508df38c2c3e7443bed1d03d5a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41141826052",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41141826052",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030231152_47bfde3ad1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41141826052"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T23:11:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
