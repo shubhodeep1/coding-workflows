@@ -419,3 +419,22 @@ def test_named_test_absent_from_incomplete_names_is_unverified(h: Env, shape: st
 	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
 	assert (data["status"], data["reason"]) == ("unverified", "names_incomplete")
 	h.assert_clean(err)
+
+
+def test_bare_name_in_failed_script_unit_is_reproduced(h: Env) -> None:
+	# Script-style and unittest units report bare names (FAIL: test_x (...)).
+	fail = _fail(names=["test_x"])
+	fail["tail"] = "FAIL: test_x (__main__.T)\n"
+	h.gate(_gate("fail", failures=[fail]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
+	assert (data["status"], data["reason"]) == ("reproduced", "regression")
+	h.assert_clean(err)
+
+
+def test_error_text_mid_line_does_not_count(h: Env) -> None:
+	fail = _fail(names=["tests/test_a.py::test_other"])
+	fail["tail"] = "FAILED tests/test_a.py::test_other - assert 0\nlog: ERROR tests/test_a.py::test_x - noise\n"
+	h.gate(_gate("fail", failures=[fail]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
+	assert (data["status"], data["reason"]) == ("not_reproduced", "passes_at_failing_sha")
+	h.assert_clean(err)

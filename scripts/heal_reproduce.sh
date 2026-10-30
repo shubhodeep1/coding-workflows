@@ -187,13 +187,18 @@ def map_entry(data, number, test_path, name):
 			names = [n for n in (item.get("names") or []) if isinstance(n, str)]
 			if name is not None and names:
 				node = f"{test_path}::{name}"
-				if not any(n == node or n.startswith(node + "[") for n in names):
+				# Script-style and unittest units report bare names (test_x), and
+				# every name in this item belongs to test_path.
+				short = name.split("::")[-1]
+				if not any(n in (node, short) or n.startswith((node + "[", short + "[")) for n in names):
 					# Absence from the gate's parsed names proves a pass only when
 					# that list is complete: the gate keeps the last TAIL_BYTES
 					# (4096) of output, at most 50 names, and matches only FAILED
 					# lines, so an `ERROR <node>` setup/teardown error is missed.
 					tail = item.get("tail") if isinstance(item.get("tail"), str) else ""
-					if re.search(r"\bERROR\s+" + re.escape(node) + r"(?:\[|\s|$)", tail, re.M):
+					# Only pytest's summary line (optionally after a log timestamp)
+					# counts, not the same text printed mid-line by a test.
+					if re.search(r"^(?:\d{4}-\d{2}-\d{2}T\S+\s+)?ERROR\s+" + re.escape(node) + r"(?:\[|\s|$)", tail, re.M):
 						return "reproduced", "regression"
 					if not tail or len(names) >= GATE_NAMES_MAX or len(tail.encode("utf-8")) >= GATE_TAIL_COMPLETE_BYTES:
 						return "unverified", "names_incomplete"
