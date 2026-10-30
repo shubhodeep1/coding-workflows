@@ -732,7 +732,7 @@
     {
       "slug": "qwen/qwen3.7-plus",
       "display_name": "Qwen 3.7 Plus",
-      "description": "Alibaba Qwen 3.7 Plus - 1M context, multimodal (text/image), tool calling ($0.32/$1.28 per M). Replaces qwen3.6-plus as the live reviewer and lite-tier slot.",
+      "description": "Alibaba Qwen 3.7 Plus - 1M context, multimodal (text/image), tool calling ($0.32/$1.28 per M). Former live reviewer slot (left the panel in the #8194 cost cut); kept for operator overrides.",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},

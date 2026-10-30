@@ -158,6 +158,40 @@ def test_gate_marker_also_suppresses_docs_only_and_small_diff_skips() -> None:
 	assert '[ "${FRESHNESS_CI_FAILED_SKIP_SUPPRESSED}" != "true" ]' in final[:600]
 
 
+def test_dispatch_function_is_shared_and_returns_1_when_every_candidate_fails() -> None:
+	# review_autofix_step_deterministic_skip_security_pass.sh sources this
+	# file and calls the function directly (#8333); main stays guarded.
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		gh = bin_dir / "gh"
+		gh.write_text(FAKE_GH, encoding="utf-8")
+		gh.chmod(0o755)
+		log = tmp / "gh.log"
+		env = {
+			**os.environ,
+			"PATH": f"{bin_dir}:{os.environ['PATH']}",
+			"FAKE_GH_LOG": str(log),
+			"REPOSITORY": "o/r",
+			"PR_NUMBER": "8290",
+			"REVIEW_AUTOFIX_CALLER_WORKFLOW_REF": "o/r/.github/workflows/ai-review.yml@refs/heads/main",
+			"ALLOW_WORKFLOW_EDITS": "",
+		}
+		call = f'source "{SCRIPT}" && freshness_ci_failed_dispatch_review_workflow; echo "rc=$?"'
+		result = subprocess.run(["bash", "-c", call], env=env, capture_output=True, text=True, check=False)
+		assert result.stdout == "ai-review.yml\nrc=0\n", result.stdout
+		log.unlink()
+		env["FAKE_FAIL_WORKFLOWS"] = "ai-review.yml,internal-review.yml,review_autofix.yml"
+		result = subprocess.run(["bash", "-c", call], env=env, capture_output=True, text=True, check=False)
+		assert result.stdout == "rc=1\n", result.stdout
+		calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+		assert [c[2] for c in calls] == ["ai-review.yml", "internal-review.yml", "review_autofix.yml"]
+		assert all(c[-1] == "allow_workflow_edits=false" for c in calls)
+		# Sourcing posts no marker comment and runs no main.
+		assert not any(c[0] == "api" for c in calls)
+
+
 if __name__ == "__main__":
 	import sys
 

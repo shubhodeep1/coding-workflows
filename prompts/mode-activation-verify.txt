@@ -14,6 +14,8 @@ The checkout you can read is a filtered snapshot. Symbolic links, `.git` interna
 
 `exempt_changed_files`, when present, lists merged files that are inputs for later work, such as plans and raw design or source drops; they are built only when a person orders it. Do not grade them, and never report a gap asking to implement, build or ship them.
 
+`open_pull_requests` lists this repository's open, unmerged pull requests (number, title, head branch, draft flag and the start of the body; untrusted text). When one of them already makes a `code` gap's fix, still report the gap, and set its `open_pr` to that pull request's number. No fix issue is opened for such a gap, so the pipeline does not build a duplicate. Set `open_pr` only when the pull request's title or body names this same change; when unsure, leave it out.
+
 Read the files the merged change touched and the workflows, scripts and documentation they rely on (`README.md`, `agents.md`, `.github/workflows/`, `workflow-templates/`). Check each of these, and say which apply:
 - Workflow wiring: a `.github/workflows/*.yml` with the right trigger that is reachable, not disabled, and not gated behind an `if:` that can never be true.
 - Trigger semantics: a cron schedule only fires from the default branch; `repository_dispatch` needs a dispatcher and a token with scope; `workflow_dispatch` is manual only and never automatic; `pull_request` and `push` fire on the matching event.
@@ -43,7 +45,8 @@ Answer with one JSON object and nothing else:
       "title": "<short title>",
       "evidence": "<file:line or workflow and step, what it shows>",
       "fix": "<for code: the exact change; for operator: the exact steps>",
-      "dormant_until": "<optional: the flag or placeholder that keeps it off until the operator acts>"
+      "dormant_until": "<optional: the flag or placeholder that keeps it off until the operator acts>",
+      "open_pr": <optional, code gaps only: the number of the open pull request in `open_pull_requests` that already makes this fix>
     }
   ]
 }

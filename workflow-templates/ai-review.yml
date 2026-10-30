@@ -41,6 +41,11 @@ on:
         required: false
         default: false
         type: boolean
+      post_sync_test_repair:
+        description: "Integration branch only: gate and repair post-sync test failures"
+        required: false
+        default: false
+        type: boolean
 permissions:
   actions: write
   contents: write
@@ -62,6 +67,7 @@ jobs:
       pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
       force_rb_judge: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true' }}
+      post_sync_test_repair: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.post_sync_test_repair == 'true' }}
     # Least privilege: forward only the secrets the reusable workflow
     # declares, never inherit them all (consumer repos hold other secrets).
     secrets:

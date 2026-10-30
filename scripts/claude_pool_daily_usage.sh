@@ -7,7 +7,7 @@
 #
 #   slot  Runs in the poll job on every tick. Prints in_slot=true|false and
 #         date=YYYY-MM-DD (UTC) to $GITHUB_OUTPUT. in_slot is true from
-#         CLAUDE_POOL_DAILY_USAGE_HOUR_UTC (default 4, i.e. 12:00 SGT) to the
+#         CLAUDE_POOL_DAILY_USAGE_HOUR_UTC (default 0, i.e. 08:00 SGT) to the
 #         end of the UTC day, when the report is enabled, Telegram is
 #         configured and ALERT_MSG_LEVEL is not SILENT. The workflow then
 #         looks up the day's actions/cache marker; the report job runs only
@@ -21,7 +21,7 @@
 #
 # Env:
 #   CLAUDE_POOL_DAILY_USAGE_ENABLED   `false` disables the report (default true)
-#   CLAUDE_POOL_DAILY_USAGE_HOUR_UTC  first UTC hour of the daily slot, 0-23 (default 4)
+#   CLAUDE_POOL_DAILY_USAGE_HOUR_UTC  first UTC hour of the daily slot, 0-23 (default 0)
 #   CLAUDE_POOL_DAILY_USAGE_NOW       epoch seconds to use as "now" (tests)
 #   CLAUDE_POOL_PROBES                send: JSON list from the action's `probes` output
 #   CLAUDE_POOL_REASON                send: the action's `reason` output, shown when no probes ran
@@ -51,9 +51,9 @@ daily_usage_slot()
 	[[ "${now}" =~ ^[0-9]+$ ]] || now="$(date -u +%s)"
 	hour=$((10#$(date -u -d "@${now}" +%H)))
 	date_utc="$(date -u -d "@${now}" +%Y-%m-%d)"
-	start_hour="${CLAUDE_POOL_DAILY_USAGE_HOUR_UTC:-4}"
+	start_hour="${CLAUDE_POOL_DAILY_USAGE_HOUR_UTC:-0}"
 	if ! [[ "${start_hour}" =~ ^[0-9]+$ ]] || [ "$((10#${start_hour}))" -gt 23 ]; then
-		start_hour=4
+		start_hour=0
 	fi
 	start_hour=$((10#${start_hour}))
 	case "$(printf '%s' "${CLAUDE_POOL_DAILY_USAGE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in

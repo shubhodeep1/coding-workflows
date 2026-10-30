@@ -859,6 +859,8 @@ jobs:
 
       - name: Pre-assemble static context (cacheable across runs)
         if: steps.check_orchestrator.outputs.respond == 'true'
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
 
@@ -876,6 +878,20 @@ jobs:
           fi
           clarify_respond_readme_context="$(mktemp "${RUNNER_TEMP}/clarify-respond-readme.XXXXXX")"
           bash scripts/build_static_context.sh readme "${clarify_respond_readme_context}"
+          # Issue #8269: index the agents file instead of inlining it unless
+          # STATIC_CONTEXT_AGENTS_MODE says inline (same rules as build_static_context.sh).
+          clarify_respond_agents_mode="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          case "${clarify_respond_agents_mode}" in
+            ""|index) clarify_respond_agents_mode=index ;;
+            inline) clarify_respond_agents_mode=inline ;;
+            *)
+              echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+              clarify_respond_agents_mode=inline
+              ;;
+          esac
+          clarify_respond_agents_effective_mode="${clarify_respond_agents_mode}"
+          clarify_respond_agents_fallback_reason=""
+          clarify_respond_agents_absent=false
 
           # Keep an identical static prefix at the start of every request so
           # provider-side prompt prefix caching can be reused across runs.
@@ -898,7 +914,29 @@ jobs:
             elif [ -f agents.md ] && [ ! -L agents.md ]; then
               clarify_respond_agents_file="agents.md"
             fi
-            if [ -n "${clarify_respond_agents_file}" ]; then
+            clarify_respond_agents_indexed=false
+            if [ -n "${clarify_respond_agents_file}" ] && [ "${clarify_respond_agents_mode}" = index ]; then
+              if clarify_respond_agents_index_tmp="$(mktemp "${RUNNER_TEMP}/clarify-respond-agents-index.XXXXXX" 2>/dev/null)"; then
+                if bash scripts/build_static_context.sh agents-index "${clarify_respond_agents_index_tmp}" "${clarify_respond_agents_file}" && [ -s "${clarify_respond_agents_index_tmp}" ]; then
+                  cat "${clarify_respond_agents_index_tmp}"
+                  echo
+                  clarify_respond_agents_indexed=true
+                else
+                  clarify_respond_agents_fallback_reason=index_unavailable
+                fi
+                rm -f "${clarify_respond_agents_index_tmp}"
+              else
+                clarify_respond_agents_fallback_reason=tmp_unavailable
+              fi
+              if [ "${clarify_respond_agents_indexed}" != true ]; then
+                clarify_respond_agents_effective_mode=inline
+                echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+              fi
+            fi
+            if [ -z "${clarify_respond_agents_file}" ]; then
+              clarify_respond_agents_absent=true
+            fi
+            if [ -n "${clarify_respond_agents_file}" ] && [ "${clarify_respond_agents_indexed}" != true ]; then
               echo "=== AGENTS.MD ==="
               # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
               if [ -d agents.d ] && [ ! -L agents.d ] && clarify_respond_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${clarify_respond_agents_file}" 2>/dev/null)"; then
@@ -918,6 +956,14 @@ jobs:
             fi
           } > ./pre_assembled_static.txt
           rm -f "${clarify_respond_readme_context}"
+          clarify_respond_size_line="STATIC_CONTEXT_SIZE phase=clarify_respond mode=${clarify_respond_agents_effective_mode} bytes=$(wc -c < ./pre_assembled_static.txt | tr -d '[:space:]')"
+          if [ -n "${clarify_respond_agents_fallback_reason}" ]; then
+            clarify_respond_size_line="${clarify_respond_size_line} fallback=inline reason=${clarify_respond_agents_fallback_reason}"
+          fi
+          if [ "${clarify_respond_agents_absent}" = true ]; then
+            clarify_respond_size_line="${clarify_respond_size_line} agents=absent"
+          fi
+          echo "${clarify_respond_size_line}" >&2
 
       - name: Retrieve issue memory context
         if: steps.check_orchestrator.outputs.respond == 'true'

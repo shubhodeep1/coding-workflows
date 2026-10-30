@@ -997,7 +997,81 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 # when every path the plan lists is inside them. The matcher is the one the heal
 # route's commit check uses (strict: no lockfile allowance). No body is written.
 HEAL_PLAN_APPROVE_REASON = "heal_scope_verified"
+
+
+# A heal issue's own agents.md fragment (#8064). CLAUDE.md §30 requires an
+# `agents.d/<N>-<slug>.md` fragment for any agents.md addition, and the intake
+# scope marker only carries `tests/**` and `changelog.d/*.md`, so every heal
+# that documented its change was held and then refused at implement. The heal
+# plan gate and implement_heal_preflight.sh (which writes HEAL_SCOPE_FILE for
+# the isolated transfer and the commit guard) add this one entry for the
+# issue's own number; review_untrusted_workspace.py accepts exactly this shape.
+# The marker format is unchanged, so issues filed before this fix benefit too.
+def heal_own_agents_fragment_entry(issue_number: object) -> str:
+	"""``agents.d/<N>-*.md`` for a positive decimal issue number, else ``""``."""
+	number = str(issue_number or "").strip()
+	if not re.fullmatch(r"[1-9][0-9]{0,9}", number):
+		return ""
+	return f"agents.d/{number}-*.md"
 _HEAL_BARE_GLOB_RE = re.compile(r"[A-Za-z0-9_.*?/\[\]-]+")
+
+
+# A heal plan that changes no file (#8241). After a partial delivery merges,
+# the re-plan can find every in-scope change already on the base branch and
+# answer "Files likely to change: None." Holding it parked the issue until
+# stall recovery posted /approved an hour later, and implement then closed it
+# through its success-no-op path. Only an explicit "None" counts: it must be
+# the first text under the section's single lead-in, no other line may be a
+# bullet, and no line may carry a backtick or a path- or filename-shaped token.
+# Anything else keeps the heal_scope_plan_paths_missing hold.
+HEAL_PLAN_NO_CHANGES_REASON = "heal_scope_plan_no_changes"
+_HEAL_PLAN_EMPHASIS = r"(?:\*\*|__|\*|_)?"
+_HEAL_PLAN_NONE_RE = re.compile(
+	r"^\s*(?:[-*+]\s+)?" + _HEAL_PLAN_EMPHASIS + r"none" + _HEAL_PLAN_EMPHASIS
+	+ r"(?:[.!:;]" + _HEAL_PLAN_EMPHASIS + r"(?:\s|$)|\s+(?:—|–|--?)\s|\s*$)", re.IGNORECASE)
+_HEAL_PLAN_LEADIN_REST_RE = re.compile(r"\bchange\w*\b[^:\n]*:\s*(?:\*\*|__)?\s*(.*)$", re.IGNORECASE)
+_HEAL_PLAN_PATHLIKE_RE = re.compile(r"[\w*?\[\]-]/|/[\w*?.\[\]-]|[\w*?\]-]\.[A-Za-z][A-Za-z0-9]{0,31}\b")
+# Common extensionless files the grant list does not name (README, OWNERS, ...).
+_HEAL_PLAN_EXTRA_BARE_FILE_RE = re.compile(
+	r"^(?:README|CHANGELOG|CONTRIBUTING|OWNERS|VERSION|AUTHORS|INSTALL|Caddyfile|Earthfile)$")
+# The same file names in any letter case (`readme`, `makefile`). Prose words
+# such as license, notice, version, authors and install stay uppercase-only.
+_HEAL_PLAN_BARE_FILE_ICASE_RE = re.compile(
+	r"^(?:readme|changelog|contributing|owners|codeowners|makefile|dockerfile|containerfile|gemfile|rakefile"
+	r"|procfile|justfile|vagrantfile|pipfile|jenkinsfile|brewfile|podfile|tiltfile|caddyfile|earthfile)$",
+	re.IGNORECASE)
+
+
+def _heal_plan_declares_no_file_changes(section: str | None) -> bool:
+	"""True when a Files section explicitly says the plan changes no file."""
+	if section is None:
+		return False
+	content: list[str] = []
+	raw_leadins: list[str] = []
+	leadins = 0
+	for line in section.splitlines():
+		if _PLAN_FILES_LEADIN_RE.match(line):
+			leadins += 1
+			# A file named on the lead-in line itself is checked below too.
+			raw_leadins.append(line)
+			rest = _HEAL_PLAN_LEADIN_REST_RE.search(line)
+			line = rest.group(1) if rest else ""
+		if line.strip():
+			content.append(line)
+	if leadins != 1 or not content or not _HEAL_PLAN_NONE_RE.match(content[0]):
+		return False
+	if any(_PLAN_GRANT_BULLET_RE.match(line) for line in content[1:]):
+		return False
+	# Extensionless names (`Makefile`, `CODEOWNERS`) and root dotfiles
+	# (`.gitignore`) are files too, though the path regex misses them. Any
+	# dot-led name (`.env`, `.ENV`, `.envrc`, `.npmrc`) counts, so an unlisted
+	# dotfile holds the plan instead of approving it (fail closed).
+	def _names_bare_file(line: str) -> bool:
+		return any(_PLAN_GRANT_BARE_FILE_RE.match(tok) or _HEAL_PLAN_EXTRA_BARE_FILE_RE.match(tok)
+			or _HEAL_PLAN_BARE_FILE_ICASE_RE.match(tok) or tok.startswith(".")
+			for tok in (raw.rstrip(".") for raw in re.findall(r"\.?[A-Za-z0-9_][A-Za-z0-9._-]*", line)))
+	return not any("`" in line or _HEAL_PLAN_PATHLIKE_RE.search(line) or _names_bare_file(line)
+		for line in content + raw_leadins)
 
 
 def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: str,
@@ -1012,6 +1086,9 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 			raise ValueError("empty plan")
 		protected = extract_plan_automation_paths(plan_text)
 		scope = normalize_allowlist(_read_allowlist(heal_scope_file)) if heal_scope_file else []
+		own_agents_fragment = heal_own_agents_fragment_entry(issue_number)
+		if scope and own_agents_fragment and own_agents_fragment not in scope:
+			scope.append(own_agents_fragment)
 		files = extract_plan_file_paths(plan_text)
 		if not scope:
 			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_check_unavailable", protected
@@ -1020,7 +1097,12 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 		elif protected and allow_workflow_edits != "true":
 			# Same switch check_automation_paths applies at implement time.
 			decision, reason, denied = PLAN_DECISION_HOLD, "workflow_edits_disabled", protected
-		elif _plan_files_section(plan_text) is None or (not files and not protected):
+		elif _plan_files_section(plan_text) is None:
+			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_plan_paths_missing", protected
+		elif not files and not protected and _heal_plan_declares_no_file_changes(_plan_files_section(plan_text)):
+			# The empty change set is inside any scope (#8241).
+			decision, reason, denied = PLAN_DECISION_APPROVE, HEAL_PLAN_NO_CHANGES_REASON, []
+		elif not files and not protected:
 			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_plan_paths_missing", protected
 		else:
 			# extract_plan_file_paths drops directory and glob tokens, so read

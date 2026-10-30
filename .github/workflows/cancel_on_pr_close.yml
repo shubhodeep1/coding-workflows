@@ -12,7 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
-      group: cancel-on-pr-close-${{ github.repository }}
+      # Each PR-close run gets its own group; scheduled sweeps keep the
+      # repository group. GitHub keeps one pending run per group and cancels
+      # the older one when another queues, so in a shared group a close event
+      # was dropped whenever another PR closed within a minute (release run
+      # 40794181365: run 40814653574 cancelled after 51 s, issue #8327).
+      # Overlapping runs are safe: cancel POSTs are idempotent and
+      # `review_merge_train.sh release` claims each PR by deleting its label.
+      group: cancel-on-pr-close-${{ github.repository }}${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || '' }}
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}

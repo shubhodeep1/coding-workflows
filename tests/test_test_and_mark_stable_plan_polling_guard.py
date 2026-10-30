@@ -73,7 +73,7 @@ elif "/actions/runs?" in path:
 elif re.search(r"/actions/runs/\d+$", path):
 	payload = json.loads(os.environ.get("STUB_ACTIVE_RUN_JSON", "null"))
 elif re.search(r"/actions/runs/\d+/jobs\?", path):
-	payload = json.loads(os.environ.get("STUB_JOBS_JSON", '{"jobs": []}'))
+	payload = json.loads(os.environ.get("STUB_JOBS_JSON") or '{"jobs": []}')
 elif "/commits?" in path:
 	payload = []
 else:
@@ -460,8 +460,7 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 			"TEST_REPO": "owner/repo",
 			"ISSUE_NUMBER": ISSUE_NUMBER,
 			"ISSUE_TITLE": issue_title,
-			# wait-implement reads its window start from env: (issue #8376).
-			"IMPL_WINDOW_CREATED_AFTER": APPROVED_AT,
+			"IMPL_CREATED_AFTER_INPUT": APPROVED_AT,
 			"PHASE_TIMEOUT": "60",
 			"POLL_INTERVAL": "0",
 			"GITHUB_OUTPUT": str(output_file),
@@ -764,7 +763,7 @@ def test_implement_stall_diagnostics_only_on_stall_path() -> None:
 	script = _phase_step_script("wait-implement")
 	assert "INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))" in script
 	assert script.count(STALL_DIAG_CALL) == 1
-	error_at = script.index('echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}"')
+	error_at = script.index('echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}$(e2e_watched_run_urls)"')
 	status_at = script.index('echo "status=timeout" >> "$GITHUB_OUTPUT"', error_at)
 	call_at = script.index(STALL_DIAG_CALL)
 	assert error_at < status_at < call_at < script.index("exit 1", status_at)
@@ -799,8 +798,8 @@ def test_implement_stall_warning_uses_fresh_run_status() -> None:
 def test_implement_window_start_comes_from_step_env() -> None:
 	doc = yaml.safe_load(_read_workflow())
 	step = next(s for s in doc["jobs"]["e2e-smoke-test"]["steps"] if s.get("id") == "wait-implement")
-	assert step["env"]["IMPL_WINDOW_CREATED_AFTER"] == IMPL_CREATED_AFTER_EXPR, step.get("env")
-	assert 'IMPL_CREATED_AFTER="${IMPL_WINDOW_CREATED_AFTER:-}"' in step["run"]
+	assert step["env"]["IMPL_CREATED_AFTER_INPUT"] == IMPL_CREATED_AFTER_EXPR, step.get("env")
+	assert 'IMPL_CREATED_AFTER="${IMPL_CREATED_AFTER_INPUT:-}"' in step["run"]
 	assert IMPL_CREATED_AFTER_EXPR not in step["run"]
 
 
@@ -860,8 +859,8 @@ def test_implement_step_lookup_falls_back_to_latest_run_when_none_in_progress() 
 
 
 def test_implement_step_lookup_finds_in_progress_run_on_later_page() -> None:
-	# The counter stops at the first matching page, so a pending peer on a
-	# full page 1 must not hide the in_progress run on page 2.
+	# Review of PR for #8241: the counter stops at the first matching page, so
+	# a pending peer on a full page 1 must not hide the in_progress run on page 2.
 	pending = _run(778, name="Internal: AI Implement", conclusion=None, status="pending", created_at="2026-09-28T03:55:00Z")
 	working = _run(777, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-09-28T03:50:56Z")
 	pages = [[pending] + _noise_page(1000, 99), [working]]
@@ -922,7 +921,7 @@ def test_implement_other_steps_keep_the_normal_stall_limit() -> None:
 		extra_env={"PREPUSH_GATE_STEP_STALL_MINUTES": "3"},
 	)
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
-	assert "::error::Implement phase stalled — no activity for 1 minutes\n" in log + "\n", log
+	assert "::error::Implement phase stalled — no activity for 1 minutes (watched runs: https://github.com/owner/repo/actions/runs/777)\n" in log + "\n", log
 	assert "pre-push gate step" not in log, log
 	assert "idle 120s" not in log, log
 
@@ -958,6 +957,7 @@ def test_implement_prepush_gate_limit_keys_on_the_working_run_step_only() -> Non
 	assert 'PREPUSH_GATE_STEP_STALL_MINUTES="${PREPUSH_GATE_STEP_STALL_MINUTES:-35}"' in script
 	assert 'if [ "$IMPL_STEP_NAME" = "$PREPUSH_GATE_STEP_NAME" ] && [ "$PREPUSH_GATE_STALL_LIMIT" -gt "$INACTIVITY_LIMIT" ]; then' in script
 	assert 'if [ "$IDLE" -ge "$EFFECTIVE_LIMIT" ]; then' in script
+	# The activity signals and the #8241 working-run lookup are unchanged.
 	assert "actions/runs/${IMPL_RUN_ID_WORKING}/jobs?per_page=10" in script
 	cur_state = next(line for line in script.splitlines() if line.strip().startswith("CUR_STATE="))
 	assert cur_state.strip() == 'CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT};working=${IMPL_RUN_ID_WORKING}"', cur_state
@@ -966,12 +966,9 @@ def test_implement_prepush_gate_limit_keys_on_the_working_run_step_only() -> Non
 	doc = yaml.safe_load(_read_workflow())
 	assert doc["jobs"]["e2e-smoke-test"]["env"]["PREPUSH_GATE_STEP_STALL_MINUTES"] == 35
 	# The literal must match the step implement.yml runs, or the extended
-	# limit silently stops applying (skipped when the sandbox hides the file).
-	# stable's implement.yml does not carry the step yet (it ships from main,
-	# issue #8376), so only check uniqueness when the step is present.
-	implement_path = REPO_ROOT / ".github" / "workflows" / "implement.yml"
-	if implement_path.is_file():
-		assert implement_path.read_text(encoding="utf-8").count(f"- name: {PREPUSH_GATE_STEP}\n") in (0, 1)
+	# limit silently stops applying.
+	implement = (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	assert implement.count(f"- name: {PREPUSH_GATE_STEP}\n") == 1
 
 
 def test_implement_replay_40876853022_working_run_through_prepush_gate() -> None:
@@ -996,6 +993,92 @@ def test_implement_replay_40876853022_working_run_through_prepush_gate() -> None
 	assert "Implement phase stalled — no activity for 30 minutes\n" not in log + "\n", log
 	assert "Implement phase stalled — no activity for 35 minutes (pre-push gate step: limit 35m)" in log, log
 	assert "stall-diag latest-run:" in log, log
+
+
+# --- Watched run URLs (issue #8248) -----------------------------------------
+# Heal #8241 could not see the Implement run behind release run 40608957733:
+# the e2e job's log never printed its id. The waits now name the scoped runs
+# they poll, from ids already fetched, so the heal intake can follow them.
+
+WAIT_REVIEW_SCRIPT = REPO_ROOT / "scripts" / "stable_e2e_step_wait_review.sh"
+
+
+def test_implement_terminal_failure_names_the_watched_run() -> None:
+	pages = [[_run(99, name="Internal: AI Implement", title=ALT_TITLE), _run(777, name="Internal: AI Implement", conclusion="failure")]]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "implement_failed", (outputs, log)
+	assert "::error::All 1 implement workflow run(s) completed but no PR was created (issue run_id=777 conclusion=failure) (watched runs: https://github.com/owner/repo/actions/runs/777)" in log, log
+	assert log.count("↳ Watching Implement run 777: https://github.com/owner/repo/actions/runs/777") == 1, log
+	assert "actions/runs/99" not in log
+
+
+def test_implement_stall_names_the_watched_run() -> None:
+	pages = [[_run(1000 + i, name="Internal: AI Implement", title=ALT_TITLE) for i in range(100)], [_run(777, name="Internal: AI Implement", conclusion=None, status="in_progress")]]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "::error::Implement phase stalled — no activity for 0 minutes (watched runs: https://github.com/owner/repo/actions/runs/777)" in log, log
+
+
+def test_implement_stall_without_a_watched_run_keeps_the_old_line() -> None:
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[]], terminal=True)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "::error::Implement phase stalled — no activity for 0 minutes\n" in log, log
+
+
+def test_wait_review_errors_append_the_watched_run_urls() -> None:
+	text = WAIT_REVIEW_SCRIPT.read_text(encoding="utf-8")
+	assert 'echo "::error::Review phase stalled — no activity for ${REVIEW_TIMEOUT} minutes$(e2e_watched_run_urls)"' in text
+	assert 'echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget$(e2e_watched_run_urls)"' in text
+	assert 'e2e_note_watched_run "$RUN_ID" Review' in text
+	workflow = _read_workflow()
+	assert 'echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}$(e2e_watched_run_urls)"' in workflow
+	assert 'e2e_note_watched_run "${IMPL_RUN_ID_LATEST:-}" Implement' in workflow
+	# The in-progress run the loop polls when a newer queued run is the latest.
+	assert 'e2e_note_watched_run "${IMPL_RUN_ID_WORKING:-}" Implement' in workflow
+
+
+def test_watched_run_helpers_ignore_unknown_skip_repeats_and_keep_five() -> None:
+	text = WAIT_REVIEW_SCRIPT.read_text(encoding="utf-8")
+	start = text.index('E2E_WATCHED_RUN_IDS=""\n')
+	end = text.index("\n}\n", text.index("e2e_watched_run_urls() {")) + 3
+	script = text[start:end] + (
+		"e2e_note_watched_run unknown Review\n"
+		"e2e_note_watched_run '' Review\n"
+		"printf 'empty=[%s]\\n' \"$(e2e_watched_run_urls)\"\n"
+		"for id in 1 2 3 4 5 6 7 3; do e2e_note_watched_run \"$id\" Review; done\n"
+		"printf 'urls=[%s]\\n' \"$(e2e_watched_run_urls)\"\n"
+	)
+	proc = subprocess.run(["bash", "-euo", "pipefail", "-c", script], env={**os.environ, "TEST_REPO": "owner/repo"}, capture_output=True, text=True, timeout=30, check=True)
+	lines = proc.stdout.splitlines()
+	assert lines[0] == "empty=[]"
+	assert lines[1:8] == [f"  ↳ Watching Review run {i}: https://github.com/owner/repo/actions/runs/{i}" for i in range(1, 8)]
+	# The repeated id 3 prints nothing and moves to the newest slot.
+	assert lines[8] == "urls=[ (watched runs: " + " ".join(f"https://github.com/owner/repo/actions/runs/{i}" for i in (4, 5, 6, 7, 3)) + ")]"
+	assert len(lines) == 9
+
+
+def test_watched_run_helper_keeps_a_repeatedly_seen_run_past_the_cap() -> None:
+	# An older run still being polled is seen every tick; newer ids must not evict it.
+	text = WAIT_REVIEW_SCRIPT.read_text(encoding="utf-8")
+	start = text.index('E2E_WATCHED_RUN_IDS=""\n')
+	end = text.index("\n}\n", text.index("e2e_watched_run_urls() {")) + 3
+	script = text[start:end] + (
+		"for id in 10 11 12 13 14 15 16; do e2e_note_watched_run 9 Implement; e2e_note_watched_run \"$id\" Implement; done\n"
+		"printf 'urls=[%s]\\n' \"$(e2e_watched_run_urls)\"\n"
+	)
+	proc = subprocess.run(["bash", "-euo", "pipefail", "-c", script], env={**os.environ, "TEST_REPO": "owner/repo"}, capture_output=True, text=True, timeout=30, check=True)
+	lines = proc.stdout.splitlines()
+	assert lines.count("  ↳ Watching Implement run 9: https://github.com/owner/repo/actions/runs/9") == 1
+	assert "https://github.com/owner/repo/actions/runs/9 " in lines[-1] and "actions/runs/10 " not in lines[-1]
+
+
+def test_wait_implement_takes_its_window_start_from_env() -> None:
+	# The value moved to env: so the run body holds no ${{ }} (expression guard).
+	text = _read_workflow()
+	assert f"          IMPL_CREATED_AFTER_INPUT: {IMPL_CREATED_AFTER_EXPR}\n" in text
+	script = _phase_step_script("wait-implement")
+	assert 'IMPL_CREATED_AFTER="${IMPL_CREATED_AFTER_INPUT:-}"' in script
+	assert "${{" not in script
 
 
 def main() -> int:

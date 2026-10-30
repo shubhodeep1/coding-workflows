@@ -614,10 +614,8 @@ jobs:
       # Phase 3b inactivity limit while the watched Implement run's current
       # step is "Pre-push affected-test gate" (issue #8244). That one step
       # ran 31 minutes in run 40610855593 (two gate runs plus a repair turn);
-      # on main, implement.yml gives it timeout-minutes: 60 and
-      # scripts/implement_step_prepush_test_gate.sh sizes it to 3300 s (this
-      # backport, #8376, ships neither; the limit applies only when the
-      # watched Implement run reports a step with exactly this name). The
+      # implement.yml gives it timeout-minutes: 60 and
+      # scripts/implement_step_prepush_test_gate.sh sizes it to 3300 s. The
       # default is 35, not 60: 60 would push the conservative serial budget
       # below past the 300-minute job timeout, which #8244 forbids raising.
       # To give the gate its full 55 minutes, raise this value and
@@ -1014,6 +1012,13 @@ jobs:
               exit 0
             fi
 
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Clarify phase paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
             # Check for failure: look for error comments from bot
             LAST_BOT_COMMENT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=5&direction=desc" \
               --jq '[.[] | select(.user.login == "github-actions[bot]")] | .[0].body // ""' || echo "")
@@ -1236,6 +1241,13 @@ jobs:
               exit 0
             fi
 
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Plan phase paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
             # Detect plan workflow failure (completed but no expected label)
             if [ "$PLAN_RUN_STATUS" = "completed" ]; then
               # Plan finished but didn't produce awaiting-approval or implementing
@@ -1367,9 +1379,10 @@ jobs:
           # display_title (the issue title for issues / issue_comment runs).
           # Release run 36374918973 recorded another issue's Clarify run without it.
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
-          # Issue #8376: passed through env: so the run: body carries no ${{ }}
-          # and stays clear of the 21,000-character expression limit.
-          IMPL_WINDOW_CREATED_AFTER: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}
+          # Passed through env so the run body holds no ${{ }} expression and
+          # stays clear of the 18,000-character expression guard
+          # (tests/test_workflow_file_size_limit.py, #8248).
+          IMPL_CREATED_AFTER_INPUT: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}
         run: |
           set -euo pipefail
           echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
@@ -1417,7 +1430,7 @@ jobs:
           # stale runs triggered by AUTO_IMPLEMENT_ON_CLEAR_PLAN auto-approval
           # during the plan phase. Fall back to issue creation time if Phase 3a
           # was skipped (plan auto-approved directly to ai:implementing).
-          IMPL_CREATED_AFTER="${IMPL_WINDOW_CREATED_AFTER:-}"
+          IMPL_CREATED_AFTER="${IMPL_CREATED_AFTER_INPUT:-}"
 
           # The progress-counter metrics below are only progress signals. A terminal
           # decision needs every page of this issue's runs (not other issues'
@@ -1513,6 +1526,27 @@ jobs:
             exit 1
           }
 
+          # Watched run URLs (#8248): ids already read, no API calls.
+          E2E_WATCHED_RUN_IDS=""
+          e2e_note_watched_run() {
+            local -a ids=()
+            local watched_id watched_seen=0 watched_rest=""
+            [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
+            # A repeat moves to the newest slot (no new line), so the cap never evicts a run still polled.
+            for watched_id in ${E2E_WATCHED_RUN_IDS}; do
+              if [ "$watched_id" = "$1" ]; then watched_seen=1; else watched_rest+=" $watched_id"; fi
+            done
+            read -r -a ids <<< "${watched_rest} $1"
+            [ "${#ids[@]}" -le 5 ] || ids=("${ids[@]: -5}")
+            E2E_WATCHED_RUN_IDS="${ids[*]}"
+            [ "$watched_seen" = 1 ] || echo "  ↳ Watching ${2:-} run $1: https://github.com/${TEST_REPO}/actions/runs/$1"
+          }
+          e2e_watched_run_urls() {
+            local id urls=""
+            for id in ${E2E_WATCHED_RUN_IDS}; do urls+=" https://github.com/${TEST_REPO}/actions/runs/${id}"; done
+            [ -z "$urls" ] || printf ' (watched runs:%s)' "$urls"
+          }
+
           # Progress counter (issue #7968). Counts only THIS issue's non-skipped
           # Implement runs, with the selection and validation rules of
           # scoped_implement_runs_complete, walking pages of the created=>
@@ -1554,6 +1588,36 @@ jobs:
             IMPL_RUN_IN_PROGRESS=$(printf '%s' "$progress_matches" | jq -r '[.[] | select(.status != "completed")] | length') || IMPL_RUN_IN_PROGRESS="0"
             IMPL_RUN_STATUS=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .status // "unknown"') || IMPL_RUN_STATUS="unknown"
             IMPL_RUN_ID_LATEST=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .id // empty') || IMPL_RUN_ID_LATEST=""
+            # Watch the newest in_progress run: a peer held pending by the
+            # ai-implement-<repo>-<issue> concurrency group has no jobs and hid
+            # the working run's steps (run 40608957733, issue #8241).
+            IMPL_RUN_ID_WORKING=$(printf '%s' "$progress_matches" | jq -r '[.[] | select(.status == "in_progress")] | sort_by(.created_at) | last | .id // empty') || IMPL_RUN_ID_WORKING=""
+            # The matching page held only a pending/queued run and was full, so
+            # the older in_progress run may sit on a later page. Look for it
+            # there (bounded by the page cap); counts stay from the first page,
+            # and a failed read keeps the latest-run fallback.
+            if [ -z "$IMPL_RUN_ID_WORKING" ] && [ "$IMPL_RUN_IN_PROGRESS" != "0" ] && [ "$progress_count" -ge 100 ]; then
+              local working_page=$((progress_page + 1))
+              local working_json=""
+              local working_found=""
+              while [ "$working_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
+                working_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${working_page}&created=>${IMPL_CREATED_AFTER}") || break
+                working_found=$(printf '%s' "$working_json" | jq -sre --arg title "$ISSUE_TITLE" '
+                  if length != 1 or (.[0].workflow_runs | type) != "array" then error("invalid runs page") else .[0].workflow_runs end
+                  | {count: length, id: ([.[] | select((.name | type) == "string" and (.name | test("Implement"; "i"))) | select(.display_title == $title) | select(.status == "in_progress") | select(.id | type == "number" and . > 0 and floor == .)] | sort_by(.created_at) | last | .id // "")}
+                  | "\(.count) \(.id)"
+                ' 2>/dev/null) || break
+                if [ -n "${working_found#* }" ]; then
+                  IMPL_RUN_ID_WORKING="${working_found#* }"
+                  break
+                fi
+                if [ "${working_found%% *}" -lt 100 ]; then
+                  break
+                fi
+                working_page=$((working_page + 1))
+              done
+            fi
+            if [ -z "$IMPL_RUN_ID_WORKING" ]; then IMPL_RUN_ID_WORKING="$IMPL_RUN_ID_LATEST"; fi
             IMPL_RUN_CONCLUSION_LATEST=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .conclusion // "unknown"') || IMPL_RUN_CONCLUSION_LATEST="unknown"
             # Watch the newest in_progress run: a peer held pending by the
             # ai-implement-<repo>-<issue> concurrency group has no jobs and hid
@@ -1680,12 +1744,22 @@ jobs:
               fi
             fi
 
+            e2e_note_watched_run "${IMPL_RUN_ID_LATEST:-}" Implement
+            e2e_note_watched_run "${IMPL_RUN_ID_WORKING:-}" Implement
+
             if [ "$IMPL_RETURNED_TO_APPROVAL" = true ]; then
               echo "  ↩ Issue #${ISSUE_NUMBER} returned to ai:awaiting-approval — latest scoped Implement run: id=${IMPL_RUN_ID_LATEST:-unknown} status=${IMPL_RUN_STATUS} conclusion=${IMPL_RUN_CONCLUSION_LATEST}"
             fi
             # A failed label read returns "" and must not erase the last observation.
             if [ -n "$LABELS" ]; then
               IMPL_PREV_LABELS="$LABELS"
+            fi
+
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Implement phase paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
             fi
 
             # ── Adaptive signals: step name + commit count ──
@@ -1749,7 +1823,8 @@ jobs:
                     continue
                   fi
                   if scoped_implement_runs_complete; then
-                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})"
+                    e2e_note_watched_run "${SCOPED_IMPL_RUN_ID:-}" Implement
+                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})$(e2e_watched_run_urls)"
                     echo "status=implement_failed" >> "$GITHUB_OUTPUT"
                     exit 1
                   fi
@@ -1764,6 +1839,9 @@ jobs:
               echo "  ⏳ All ${IMPL_RUN_TOTAL} implement run(s) completed but grace period active (${ELAPSED_SECS}s/${MIN_GRACE_SECONDS}s) — waiting for /approved-triggered run to start"
             fi
 
+            e2e_note_watched_run "${SCOPED_IMPL_RUN_ID:-}" Implement
+            e2e_note_watched_run "${SCOPED_IMPL_ACTIVE_ID:-}" Implement
+
             # Inactivity timeout (extended while the pre-push gate step runs)
             EFFECTIVE_LIMIT=$INACTIVITY_LIMIT
             EFFECTIVE_LIMIT_MINUTES=$PHASE_TIMEOUT
@@ -1774,7 +1852,7 @@ jobs:
               LIMIT_SUFFIX=" (pre-push gate step: limit ${PREPUSH_GATE_STEP_STALL_MINUTES}m)"
             fi
             if [ "$IDLE" -ge "$EFFECTIVE_LIMIT" ]; then
-              echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}"
+              echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}$(e2e_watched_run_urls)"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               ( log_implement_stall_diagnostics ) || echo "  stall-diag: diagnostics failed (ignored)"
               exit 1
@@ -3427,6 +3505,16 @@ jobs:
             echo "status=no_run" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          # A run was found but never reached `completed` inside the budget
+          # (for example still `pending` behind its concurrency group). This
+          # used to write an empty `status=`, which the results table showed
+          # as SKIPPED (run 40794181365).
+          if [ "${STATUS:-}" != "completed" ]; then
+            echo "::error::cancel-on-close run #${NEW_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS:-?})"
+            echo "status=timeout" >> "$GITHUB_OUTPUT"
+            echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if [ "${NEW_CONCLUSION}" != "success" ]; then
             echo "::error::cancel-on-close run #${NEW_RUN_ID} concluded ${NEW_CONCLUSION}"
             echo "status=${NEW_CONCLUSION}" >> "$GITHUB_OUTPUT"
@@ -3620,7 +3708,14 @@ jobs:
           if [ "$CANCEL" = "success" ]; then
             echo "  ✓ Cancel-PR .. PASSED (cancel_on_pr_close ran successfully; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
           elif [ -z "$CANCEL" ]; then
-            echo "  - Cancel-PR .. SKIPPED (no PR to close)"
+            if [ -n "${PR_NUMBER:-}" ]; then
+              # A smoke PR exists, so Phase 7 should have written a status;
+              # an empty one means it aborted or never ran. Fail closed.
+              echo "  ✗ Cancel-PR .. FAILED (no status; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
+              PASSED=false
+            else
+              echo "  - Cancel-PR .. SKIPPED (no PR to close)"
+            fi
           else
             echo "  ✗ Cancel-PR .. FAILED (${CANCEL}; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
             PASSED=false
@@ -4073,7 +4168,8 @@ jobs:
             tests/test_security_pass_skip.py \
             tests/test_claude_md_section_numbers.py \
             tests/test_audit_plans_command.py \
-            tests/test_deploy_activate_command.py
+            tests/test_deploy_activate_command.py \
+            tests/test_safe_fetch_url.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
 
       - name: Prompt files integrity
@@ -4569,6 +4665,48 @@ jobs:
               sed 's/^/  /' "${TRACKING_ERR_FILE}" || true
             fi
             rm -f "${TRACKING_ERR_FILE}"
+            # A decomposer paused on Claude capacity (#7370) creates no tracking
+            # issue: report it as claude_capacity instead (#8217). Logs are only matched, never printed.
+            CAP_EVIDENCE=""
+            CAP_LOG_FAILS=0
+            ORCH_RUN_ID=$(sed -n 's/^run_id=//p' "$GITHUB_OUTPUT" | tail -n 1)
+            if [[ "${ORCH_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              if ! CAP_JOB_IDS=$(gh api "repos/${TEST_REPO}/actions/runs/${ORCH_RUN_ID}/jobs?per_page=100" --jq '.jobs[].id' 2>/dev/null); then
+                CAP_JOB_IDS=""
+                echo "::warning::Could not list the jobs of orchestrate run ${ORCH_RUN_ID} while checking for a Claude capacity wait"
+              fi
+              for JOB_ID in ${CAP_JOB_IDS}; do
+                [[ "${JOB_ID}" =~ ^[0-9]+$ ]] || continue
+                # Job logs carry ANSI codes; gh refuses them without the flag.
+                if ! JOB_LOG=$(gh api --allow-escape-sequences "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null); then
+                  CAP_LOG_FAILS=$((CAP_LOG_FAILS + 1))
+                  continue
+                fi
+                # "Z " (end of the log timestamp) matches only the emitted line, not the echoed run: source.
+                if [[ "${JOB_LOG}" == *"Z AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred"* ]]; then
+                  CAP_EVIDENCE="run_log"
+                  break
+                fi
+              done
+              if [ -z "${CAP_EVIDENCE}" ] && [ "${CAP_LOG_FAILS}" -gt 0 ]; then
+                echo "::warning::Could not read ${CAP_LOG_FAILS} job log(s) of orchestrate run ${ORCH_RUN_ID} while checking for a Claude capacity wait"
+              fi
+            else
+              ORCH_RUN_ID=""
+            fi
+            # TEST_REPO's own poller files its capacity tracker in TEST_REPO.
+            if [ -z "${CAP_EVIDENCE}" ]; then
+              CAP_TRACKERS=$(gh api "repos/${TEST_REPO}/issues?state=open&labels=ai:provider-outage&per_page=20" \
+                --jq '[.[] | select(.pull_request == null) | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR")) | select((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))] | length' 2>/dev/null || echo "0")
+              if [[ "${CAP_TRACKERS}" =~ ^[0-9]+$ ]] && [ "${CAP_TRACKERS}" -gt 0 ]; then
+                CAP_EVIDENCE="capacity_tracker"
+              fi
+            fi
+            if [ -n "${CAP_EVIDENCE}" ]; then
+              echo "::error::Orchestrate decomposer paused — Claude pool at capacity (evidence=${CAP_EVIDENCE}, run=${ORCH_RUN_ID:-unknown}); no tracking issue is created until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID} after 90s polling (label=ai:orchestrator-tracking, since=${DISPATCH_START_ISO}, body must contain ${GITHUB_RUN_ID})"
             exit 1
           fi
@@ -5118,18 +5256,33 @@ jobs:
           # 40831286935 (08:08:20-08:31:55); each one starts every
           # issue_comment workflow, and the extra implement runs queue in
           # ai-implement-<repo>-<issue> (cancel-in-progress: false). A failed
-          # POST leaves the flag at 0 so the next poll retries.
+          # POST leaves the flag at 0 so the next poll retries. An issue still
+          # awaiting approval 600s after a post gets one more post, because
+          # implement can skip before it changes the label (metadata read or
+          # dependency hold) and nothing else re-triggers it.
           ALT_APPROVED_POSTED=0
+          ALT_APPROVED_POSTED_AT=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
             echo "  labels: ${LABELS:-none}"
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Alt-model run paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             # Auto-approve the plan when the issue lands in awaiting-approval.
             if echo "${LABELS}" | grep -q 'ai:awaiting-approval'; then
+              if [ "${ALT_APPROVED_POSTED}" = "1" ] && [ $(( $(date +%s) - ALT_APPROVED_POSTED_AT )) -ge 600 ]; then
+                echo "  still awaiting approval 600s after /approved; posting again"
+                ALT_APPROVED_POSTED=0
+              fi
               if [ "${ALT_APPROVED_POSTED}" = "0" ]; then
                 if gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
                     -f body="/approved" >/dev/null 2>&1; then
                   ALT_APPROVED_POSTED=1
+                  ALT_APPROVED_POSTED_AT=$(date +%s)
                   echo "  posted /approved (once per arrival)"
                 else
                   echo "::warning::Posting /approved failed; retrying on the next poll"

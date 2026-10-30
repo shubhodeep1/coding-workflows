@@ -450,6 +450,98 @@ _pr_checks_completed()
 }
 
 # ---------------------------------------------------------------------------
+# _pr_ruleset_required_check_blockers HEAD_SHA BASE_REF
+#
+# Names the repository-ruleset required status checks that are not passing
+# on HEAD_SHA. _pr_checks_completed reads required names only from classic
+# branch protection and judges only check-runs, so a ruleset-required commit
+# status (for example `coding-workflows/workflow-integrity`) is invisible to
+# it. shubhodeep1/fun-token-multi-chain#579 spent all three final-merge
+# attempts on a PR GitHub reported as mergeable_state=blocked for exactly
+# that reason.
+#
+# Input:  HEAD_SHA (40 hex), BASE_REF (branch name; URL-encoded here).
+# Output: PR_RULESET_BLOCKERS_SUMMARY, a comma list of "context (state)"
+#         where state is failure / error / pending / missing.
+# Return: 0 no blockers (or the base has no ruleset-required checks),
+#         1 at least one blocker,
+#         2 a lookup failed; callers fail open and keep their old behaviour.
+# API calls (§15): 1 (GET rules/branches/<base>) when no required checks
+# are configured; otherwise +1 (GET commits/<sha>/status) and +1
+# (GET commits/<sha>/check-runs) only when some context has no commit
+# status. Callers should invoke it only when GitHub already reports the PR
+# as mergeable_state=blocked, so unblocked merges pay nothing.
+# Matching is by context name. A context is satisfied by its commit status
+# (success) or, when it has none, by its newest check-run of that name
+# (success / neutral / skipped). Neither present counts as `missing`, which
+# GitHub also treats as blocking.
+# ---------------------------------------------------------------------------
+_pr_ruleset_required_check_blockers()
+{
+	PR_RULESET_BLOCKERS_SUMMARY=""
+	local head_sha="$1"
+	local base_ref="$2"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 2
+	[ -n "${base_ref}" ] && [ -n "${repo}" ] || return 2
+
+	local ruleset_base_enc
+	ruleset_base_enc="$(printf '%s' "${base_ref}" | jq -sRr '@uri' 2>/dev/null || echo "")"
+	[ -n "${ruleset_base_enc}" ] || return 2
+
+	local rules_json ruleset_contexts_json
+	rules_json="$(gh_retry _safe_gh_jq "repos/${repo}/rules/branches/${ruleset_base_enc}?per_page=100" 2>/dev/null)" || return 2
+	ruleset_contexts_json="$(printf '%s' "${rules_json}" | jq -c '
+		if type == "array" then
+			[.[] | select(type == "object" and .type == "required_status_checks")
+				| (.parameters.required_status_checks // [])[] | .context // empty | strings]
+			| unique
+		else error("unexpected rules payload") end
+	' 2>/dev/null)" || return 2
+	[ -n "${ruleset_contexts_json}" ] || return 2
+	if [ "${ruleset_contexts_json}" = "[]" ]; then
+		return 0
+	fi
+
+	local combined_status_json
+	combined_status_json="$(gh_retry _safe_gh_jq "repos/${repo}/commits/${head_sha}/status?per_page=100" 2>/dev/null)" || return 2
+	printf '%s' "${combined_status_json}" | jq -e 'type == "object"' >/dev/null 2>&1 || return 2
+
+	# Check-runs are fetched only when a required context has no commit status.
+	local ruleset_check_runs_json='[]'
+	if printf '%s' "${combined_status_json}" | jq -e --argjson req "${ruleset_contexts_json}" '
+		[(.statuses // [])[] | .context] as $seen | [$req[] as $ctx | select(($seen | index($ctx)) == null)] | length > 0
+	' >/dev/null 2>&1; then
+		ruleset_check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/commits/${head_sha}/check-runs?per_page=100" 2>/dev/null)" || return 2
+		ruleset_check_runs_json="$(printf '%s' "${ruleset_check_runs_json}" | jq -c '
+			if type == "array" then [.[]? | select(type == "object") | (.check_runs // [])[]]
+			elif (type == "object" and (.check_runs | type == "array")) then .check_runs
+			else error("unexpected check-runs payload") end
+		' 2>/dev/null)" || return 2
+	fi
+
+	PR_RULESET_BLOCKERS_SUMMARY="$(printf '%s' "${combined_status_json}" | jq -r \
+		--argjson req "${ruleset_contexts_json}" --argjson runs "${ruleset_check_runs_json}" '
+		(.statuses // []) as $statuses |
+		[$req[] as $ctx |
+			([$statuses[] | select(.context == $ctx)] | first) as $st |
+			if $st != null then
+				(if $st.state == "success" then empty else "\($ctx) (\($st.state))" end)
+			else
+				([$runs[] | select(.name == $ctx)] | max_by([(.id // 0), (.started_at // "")])) as $run |
+				if $run == null then "\($ctx) (missing)"
+				elif $run.status != "completed" then "\($ctx) (pending)"
+				elif ($run.conclusion == "success" or $run.conclusion == "neutral" or $run.conclusion == "skipped") then empty
+				else "\($ctx) (\($run.conclusion // "unknown"))" end
+			end
+		] | join(", ")
+	' 2>/dev/null)" || { PR_RULESET_BLOCKERS_SUMMARY=""; return 2; }
+
+	[ -n "${PR_RULESET_BLOCKERS_SUMMARY}" ] && return 1
+	return 0
+}
+
+# ---------------------------------------------------------------------------
 # Required-checks wait before enabling auto-merge (2026-10-09).
 #
 # `gh pr merge --auto` merges as soon as the base branch's required status

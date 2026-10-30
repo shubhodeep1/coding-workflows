@@ -116,8 +116,10 @@ def test_utility_roles_use_sonnet_and_the_rest_opus() -> None:
 		expected = "claude-sonnet-5-5" if role in ce.UTILITY_ROLES or role in ce.SONNET_DEFAULT_ROLES else "claude-opus-5-5"
 		assert config["role_defaults"][role]["claude_model"] == expected, role
 	assert set(config["utility_roles"]) == {"LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE"}
-	# The review-panel slot reviews on Sonnet but is not a utility role.
-	assert ce.SONNET_DEFAULT_ROLES == ("PANEL_REVIEWER",)
+	# The review-panel slot and the review consolidator run on Sonnet but are
+	# not utility roles.
+	assert ce.SONNET_DEFAULT_ROLES == ("PANEL_REVIEWER", "REVIEW_CONSOLIDATOR")
+	assert config["role_defaults"]["REVIEW_CONSOLIDATOR"]["claude_model"] == "claude-sonnet-5-5"
 	assert "PANEL_REVIEWER" in ce.READ_ROLES
 	assert config["role_defaults"]["PANEL_REVIEWER"]["profile"] == "read"
 

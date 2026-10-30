@@ -179,6 +179,7 @@ case "${method}" in
     ;;
   POST)
     if [[ "${path}" == repos/*/issues/*/labels ]] && [ -f "${FAKE_GH_DIR}/label_post_fail" ]; then exit 1; fi
+    if [[ "${path}" == repos/*/issues/*/comments ]] && [ -f "${FAKE_GH_DIR}/comment_post_fail" ]; then exit 1; fi
     exit 0
     ;;
   PATCH)
@@ -1873,6 +1874,19 @@ def test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe() -> None:
 	assert "BASE_BRANCH: ${{ github.event.pull_request.base.ref }}" in workflow
 
 
+def test_cancel_on_close_event_runs_get_their_own_concurrency_group() -> None:
+	# A shared group let a second PR close cancel the first close's pending
+	# run (release run 40794181365, issue #8327). Event runs are keyed by PR;
+	# scheduled sweeps keep the repository group so they still run one at a time.
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8"))
+	concurrency = workflow["jobs"]["cancel-active-runs"]["concurrency"]
+	assert concurrency["group"] == (
+		"cancel-on-pr-close-${{ github.repository }}"
+		"${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || '' }}"
+	)
+	assert concurrency["cancel-in-progress"] is False
+
+
 def test_usage_error_for_unknown_subcommand(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	result, _log_text, _env = _run("bogus", tmp_path, bin_dir, fixtures, log)
@@ -2538,3 +2552,124 @@ def test_scheduled_cancel_sweep_lists_unlinked_runs_safely(tmp_path: Path) -> No
 		for value in re.findall(r"=(\S*)", line):
 			assert len(value) <= 200, line
 	assert "head_branch=" + "b" * 200 + " " in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# _mt_upsert_comment reports the status of its write (issue #8127)
+# ---------------------------------------------------------------------------
+
+def _extract_upsert_function() -> str:
+	lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+	start = lines.index("_mt_upsert_comment() {")
+	end = lines.index("}", start)
+	return "\n".join(lines[start:end + 1])
+
+
+def _run_upsert_helper(tmp_path: Path, bin_dir: Path, fixtures: Path, log: Path, *args: str,
+		lookup_fails: bool = False) -> tuple[int, str]:
+	lookup = "return 1" if lookup_fails else "printf ''"
+	program = "\n".join([
+		"set -euo pipefail",
+		'gh_retry() { "$@"; }',
+		f"_mt_find_marker_comment_id() {{ {lookup}; }}",
+		_extract_upsert_function(),
+		'rc=0; _mt_upsert_comment "$@" || rc=$?',
+		'echo "UPSERT_RC=${rc}"',
+	])
+	run_env = dict(os.environ)
+	run_env.update({
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"FAKE_GH_DIR": str(fixtures),
+		"FAKE_GH_LOG": str(log),
+		"MT_REPO": "acme/consumer",
+	})
+	result = subprocess.run(["bash", "-c", program, "upsert", *args], env=run_env,
+		capture_output=True, text=True, cwd=tmp_path)
+	assert result.returncode == 0, result.stderr
+	rc_lines = [line for line in result.stdout.splitlines() if line.startswith("UPSERT_RC=")]
+	assert rc_lines, result.stdout
+	return int(rc_lines[-1].split("=", 1)[1]), log.read_text(encoding="utf-8")
+
+
+def test_upsert_failed_post_returns_nonzero(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "comment_post_fail").touch()
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "body", "")
+	assert rc != 0
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+
+
+def test_upsert_failed_patch_returns_nonzero(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "comment_body.json").write_text(json.dumps({"body": "old body"}), encoding="utf-8")
+	(fixtures / "comment_patch_fail").touch()
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "new body", "555")
+	assert rc != 0
+	assert "PATCH repos/acme/consumer/issues/comments/555" in log_text
+
+
+def test_upsert_identical_body_returns_zero_without_write(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "comment_body.json").write_text(json.dumps({"body": "same body"}), encoding="utf-8")
+	(fixtures / "comment_patch_fail").touch()
+	(fixtures / "comment_post_fail").touch()
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "same body", "555")
+	assert rc == 0
+	assert "-X PATCH" not in log_text
+	assert "-X POST" not in log_text
+
+
+def test_upsert_successful_writes_return_zero(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "body", "")
+	assert rc == 0
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+	(fixtures / "comment_body.json").write_text(json.dumps({"body": "old body"}), encoding="utf-8")
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "new body", "555")
+	assert rc == 0
+	assert "PATCH repos/acme/consumer/issues/comments/555" in log_text
+
+
+def test_upsert_lookup_failure_returns_one_without_write(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "body",
+		lookup_fails=True)
+	assert rc == 1
+	assert "-X PATCH" not in log_text
+	assert "-X POST" not in log_text
+
+
+def test_release_released_comment_post_failure_warns_and_counts_release(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	(fixtures / "comment_post_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "could not upsert the released comment for PR #4077" in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=1" in result.stdout
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+
+
+def test_gate_queued_comment_post_failure_warns_and_still_queues(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	(fixtures / "comment_post_fail").touch()
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+	assert "could not upsert the queued comment for PR #4077; continuing." in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text

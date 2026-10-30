@@ -29,6 +29,11 @@ Mitigation policy:
 
 Output contract:
 - Output one JSON array and nothing else.
+- Your final message is parsed as JSON, so it must be the array alone: no heading, summary, explanation or closing remark before or after it. One ```json fence around the whole array is the only wrapper allowed.
+- When the audit finds nothing, your final message is exactly `[]`. Do not add a sentence saying the audit is clean or listing what you checked: the parser rejects `[]` followed by any text, and the audit fails.
+- Your FINAL message must be only that JSON array: no prose, headings or summary before or after it.
+- A clean audit (no supported findings) is exactly `[]`.
+- Every array element must use the key `finding_id` for its identifier (not `id`, `name` or `title`).
 - Each array element must be an object with exactly these fields:
   - `finding_id`
   - `owasp_or_stride_category`

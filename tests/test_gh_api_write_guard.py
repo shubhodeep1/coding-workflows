@@ -54,6 +54,7 @@ def _load_guard():
 guard = _load_guard()
 # The autouse fixture patches this; the remote-resolution unit tests call the real one.
 _REAL_PLACEHOLDER_REPO_SLUG = guard.placeholder_repo_slug
+_REAL_SETTINGS_FILES = guard._settings_files
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +65,8 @@ def _fixed_local_slug(monkeypatch):
 	monkeypatch.setattr(guard, "placeholder_repo_slug", lambda cwd: LOCAL_SLUG)
 	for name in ("GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE"):
 		monkeypatch.delenv(name, raising=False)
+	# Auto mode reads the allow rules; use the shipped ones, not the runner's.
+	monkeypatch.setattr(guard, "_settings_files", lambda: [str(TEMPLATE_SETTINGS_PATH)])
 
 
 def _decide(command: str) -> str | None:
@@ -1038,12 +1041,14 @@ def test_internal_exception_asks(monkeypatch, capsys):
 def test_hook_has_no_environment_escape_hatch():
 	# The guard reads only the variables that tell it where gh sends a call
 	# (issue #7555); each can only turn a routine write into a prompt.
+	# CLAUDE_PROJECT_DIR only adds settings files whose allow rules keep the
+	# Auto-mode asks, so it can only add prompts too.
 	import re as _re
 
 	source = GUARD_PATH.read_text(encoding="utf-8")
 	assert "getenv" not in source
 	reads = _re.findall(r"os\.environ\.get\(\"([A-Z_]+)\"", source)
-	assert set(reads) == {"GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE"}
+	assert set(reads) == {"GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE", "CLAUDE_PROJECT_DIR", "CLAUDE_CONFIG_DIR"}
 	assert source.count("os.environ") == len(reads)
 
 
@@ -1109,7 +1114,9 @@ def test_template_parity():
 	if "hooks/gh_api_write_guard.py" not in pending:
 		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	if "settings.json" not in pending:
-		assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(encoding="utf-8")
+		assert claude_template_drift.settings_match_template(
+			TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"), SETTINGS_PATH.read_text(encoding="utf-8")
+		)
 
 
 def test_claude_md_documents_the_guard():
@@ -1502,3 +1509,308 @@ def test_flag_between_gh_and_api_asks(command):
 
 def test_flag_before_other_gh_subcommand_gets_no_decision():
 	assert _decide("gh -R a/b issue comment 1 --body 'api change'") is None
+
+
+# ──────────────────────────────────────────────────────────────────
+# Auto mode: shell-shape doubts step aside, writes still ask
+# ──────────────────────────────────────────────────────────────────
+
+def _decide_in_mode(command: str, mode: str | None) -> tuple[str | None, str]:
+	payload: dict = {"tool_name": "Bash", "tool_input": {"command": command}}
+	if mode is not None:
+		payload["permission_mode"] = mode
+	return guard.evaluate(payload)
+
+
+# Each of these is a read whose shell shape the guard cannot trust, shaped like
+# the commands from the permission prompts that held up Auto-mode sessions. They
+# use endpoints that no shipped `Bash(gh api ...)` allow rule matches, so a
+# no-decision really reaches the Auto-mode classifier.
+_SHAPE_DOUBT_READS = [
+	# ANSI-C quoting in a later pipeline stage
+	"gh api 'orgs/o/teams?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2",
+	# brace expansion
+	"gh api orgs/o/teams/{1,2}",
+	# gh api hidden inside a backtick substitution or handed to bash -c
+	"x=`gh api orgs/o`; echo $x",
+	"bash -c \"gh api orgs/o\"",
+	# a command the tokenizer cannot parse
+	"gh api orgs/o 'unterminated",
+]
+
+_ANSI_C_SHAPE_DOUBT = _SHAPE_DOUBT_READS[0]
+assert "$'" in _ANSI_C_SHAPE_DOUBT
+
+# Shape doubts on commands that the shipped `Bash(gh api repos/*)` or
+# `Bash(gh api user *)` allow rule could match. Auto mode resolves that allow
+# rule before its classifier, so a no-decision would approve these unprompted;
+# they must keep asking in Auto mode too.
+_ALLOW_RULE_SHAPE_DOUBTS = [
+	"for i in 6031951051 6084132710; do gh api repos/o/r/issues/comments/$i > got_$i.json; done; python3 -I -c \"print(1)\"",
+	"gh api 'repos/o/r/issues/4599/comments?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2",
+	"gh api repos/o/r/pulls/{1,2}",
+	"gh api repos/o/r/git/refs/heads/x {-X,DELETE}",
+	"gh api repos/o/r/pulls/1 $(gh api -X DELETE repos/o/r/git/refs/heads/x)",
+	"x=`gh api repos/o/r/pulls/1`; echo $x",
+	"gh api repos/o/r/pulls/1 -X DELETE 'unterminated",
+	"gh api user $(gh api -X DELETE repos/o/r/git/refs/heads/x)",
+]
+
+
+def _assert_auto_shape_deny(decision, reason):
+	# Auto mode turns a shape ask that would reach a human into a deny with
+	# rewrite instructions: still never an allow, and nothing runs.
+	assert decision == guard.DECISION_DENY
+	assert "Auto mode: nothing ran" in reason
+
+
+@pytest.mark.parametrize("command", _ALLOW_RULE_SHAPE_DOUBTS)
+def test_allow_rule_covered_shape_doubts_still_ask_in_auto_mode(command):
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	decision, reason = _decide_in_mode(command, None)
+	assert decision == guard.DECISION_ASK
+	assert reason and "Auto mode" not in reason
+
+
+@pytest.mark.parametrize("command", _SHAPE_DOUBT_READS)
+def test_shape_doubts_still_ask_outside_auto_mode(command):
+	for mode in (None, "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "AUTO", ""):
+		assert _decide_in_mode(command, mode)[0] == guard.DECISION_ASK, mode
+
+
+@pytest.mark.parametrize("command", _SHAPE_DOUBT_READS)
+def test_shape_doubts_give_no_decision_in_auto_mode(command):
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
+
+
+@pytest.mark.parametrize("command", [
+	"gh api -X PATCH repos/{owner}/{repo}/issues/1 -f state=closed",
+	"gh api -X DELETE repos/o/r/git/refs/heads/x",
+	"gh api repos/o/r/issues/1/comments -F body=@notes.md",
+	"gh api --bogus-flag repos/o/r/pulls/1",
+	"gh -R evil/repo api repos/o/r/pulls/1",
+])
+def test_writes_and_flag_before_api_still_ask_in_auto_mode(command):
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	assert decision == guard.DECISION_ASK
+	assert reason
+
+
+def test_auto_mode_keeps_allows_and_the_malformed_jq_deny():
+	assert _decide_in_mode("gh api repos/o/r/pulls/1", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ALLOW
+	assert _decide_in_mode("gh api repos/o/r/pulls/1 --jq -r", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_DENY
+	assert _decide_in_mode("for i in 1 2; do gh api repos/o/r/pulls/$i; done", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ALLOW
+
+
+def test_auto_mode_hook_subprocess_emits_nothing_for_a_shape_doubt(tmp_path, monkeypatch):
+	# The child reads real settings files; keep the operator's own allow rules out.
+	monkeypatch.setenv("HOME", str(tmp_path))
+	monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+	monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+	payload = {"tool_name": "Bash", "tool_input": {"command": _ANSI_C_SHAPE_DOUBT}, "permission_mode": "auto"}
+	proc = _run_hook(json.dumps(payload))
+	assert proc.returncode == 0 and proc.stdout.strip() == ""
+
+
+# An unquoted `$` or backtick in a direct `gh api` argument: Bash can split the
+# word into a method flag the guard read as a GET endpoint, so Auto mode denies
+# (issue #8198). None of these match a shipped allow rule.
+_AUTO_DENY_UNQUOTED_EXPANSIONS = [
+	'EP="-XDELETE repos/o/r/git/refs/heads/x"; gh api $EP',
+	"EP='-XDELETE repos/o/r/git/refs/heads/x'; gh api $EP",
+	"gh api $EP",
+	"gh api orgs/o/teams/$X",
+	"gh api orgs/o/teams/${n} --jq .name",
+	"gh api orgs/o/teams/`printf 1`",
+	# unvetted loops: a file redirect plus a python3 step, or a grep filter
+	"for i in 6031951051 6084132710; do gh api orgs/o/teams/$i > got_$i.json; done; python3 -I -c \"print(1)\"",
+	"for id in 6114886899 6193924757; do echo \"=== $id\"; gh api orgs/o/teams/$id --jq .name | grep -n '^- '; done",
+]
+
+
+@pytest.mark.parametrize("command", _AUTO_DENY_UNQUOTED_EXPANSIONS)
+def test_auto_mode_denies_unquoted_gh_api_expansion(tmp_path, monkeypatch, command):
+	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": []}}))
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	_assert_auto_shape_deny(decision, reason)
+	assert "unquoted gh api argument" in reason
+	for mode in (None, "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "AUTO", ""):
+		decision, reason = _decide_in_mode(command, mode)
+		assert decision == guard.DECISION_ASK, mode
+		assert reason and "Auto mode" not in reason, mode
+
+
+@pytest.mark.parametrize("command", [
+	"for i in 1 2; do gh api orgs/o/teams/$i; done",
+	"for r in 1 2; do gh api repos/o/r/issues/$r --jq .; done",
+])
+def test_auto_mode_still_allows_the_validated_literal_loop(command):
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ALLOW
+
+
+def test_auto_mode_denies_a_write_loop_with_an_unquoted_expansion():
+	# The unquoted-expansion check runs before the write ask, so Auto mode denies
+	# with rewrite steps (nothing runs); outside Auto mode it still asks.
+	command = "for i in 1 2; do gh api -X DELETE repos/o/r/git/refs/heads/x$i; done"
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	assert _decide_in_mode(command, None)[0] == guard.DECISION_ASK
+
+
+def test_auto_mode_hook_subprocess_denies_an_unquoted_gh_api_expansion(tmp_path, monkeypatch):
+	monkeypatch.setenv("HOME", str(tmp_path))
+	monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+	monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+	payload = {
+		"tool_name": "Bash",
+		"tool_input": {"command": _AUTO_DENY_UNQUOTED_EXPANSIONS[0]},
+		"permission_mode": "auto",
+	}
+	proc = _run_hook(json.dumps(payload))
+	assert proc.returncode == 0
+	output = json.loads(proc.stdout)["hookSpecificOutput"]
+	assert output["permissionDecision"] == guard.DECISION_DENY
+
+
+def test_headless_pipelines_never_run_claude_in_auto_mode():
+	# The Auto-mode step-aside relies on headless pipeline runs using another
+	# mode, where a hook "ask" is a denial. A pipeline switched to Auto mode
+	# would turn those denials into classifier decisions.
+	import re
+	scripts = REPO_ROOT / "scripts"
+	literal = re.compile(r"""--permission-mode[ =]["']?auto\b""")
+	offenders = [
+		str(path.relative_to(REPO_ROOT))
+		for path in sorted(scripts.rglob("*"))
+		if path.is_file() and literal.search(path.read_text(encoding="utf-8", errors="replace"))
+	]
+	assert offenders == []
+	allowed = {"dontAsk", "bypassPermissions"}
+	engine = (scripts / "ai_engine.sh").read_text(encoding="utf-8")
+	assert '--permission-mode "${mode}"' in engine
+	engine_modes = set(re.findall(r'\bmode="([A-Za-z]+)"; isolation_mode=', engine))
+	assert engine_modes and engine_modes <= allowed, engine_modes
+	sandbox = (scripts / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert '--permission-mode "${CLAUDE_PERMISSIONS}"' in sandbox
+	sandbox_modes = set(re.findall(r"\bclaude_permissions=([A-Za-z]+)", sandbox))
+	assert sandbox_modes and sandbox_modes <= allowed, sandbox_modes
+
+
+
+# Hidden writes inside commands that another allow rule could match. Auto mode
+# would approve the outer command by that rule without its classifier.
+_OTHER_ALLOW_RULE_SHAPE_DOUBTS = [
+	'test "$(gh api -X DELETE orgs/o/teams/1)" = x',
+	'git commit -m "$(gh api -X DELETE orgs/o/teams/1)"',
+	'cd sub && git log "$(gh api -X DELETE orgs/o/teams/1)"',
+	"'gh' api repos/o/r/git/refs/heads/x {-X,DELETE}",
+	"g''h api repos/o/r/pulls/1 {-X,DELETE}",
+	# wrappers in front of a command an allow rule matches (`Bash(git diff *)`,
+	# `Bash(git log *)`, `Bash(git status *)`, `Bash(test *)`)
+	'timeout 60 git diff "$(gh api -X DELETE orgs/o/teams/1)"',
+	'nice -n 5 git log "$(gh api -X DELETE orgs/o/teams/1)"',
+	'env A=1 git status "$(gh api -X DELETE orgs/o/teams/1)"',
+	'nohup timeout 5 test "$(gh api -X DELETE orgs/o/teams/1)" = x',
+]
+
+
+@pytest.mark.parametrize("command", _OTHER_ALLOW_RULE_SHAPE_DOUBTS)
+def test_shape_doubts_under_any_allow_rule_still_ask_in_auto_mode(command):
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+
+
+@pytest.mark.parametrize("command", [
+	"gh api user; x=$(gh api -X DELETE orgs/o/teams/1)",
+	"gh api user|grep $(gh api -X DELETE orgs/o/teams/1)",
+])
+def test_auto_mode_still_asks_for_a_readable_write_in_an_unquoted_substitution(command):
+	# The guard reads the inner call and classifies it as a write: a person decides.
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	assert decision == guard.DECISION_ASK
+	assert "DELETE orgs/o/teams/1" in reason
+
+
+def test_auto_mode_denies_a_write_hidden_behind_a_shell_hazard():
+	# The hazard is checked before the write, so the session first rewrites the
+	# shape; the plain write then asks as usual.
+	command = "gh api repos/o/r/issues/1/comments -f body=x | sort -t$'\\t' -k2"
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	assert _decide_in_mode("gh api -X DELETE repos/o/r/git/refs/heads/x", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	# The prompts from the 2026-10-26 activation sessions.
+	"D=/tmp/s; for id in 6113664576 6111267295; do gh api repos/o/r/issues/comments/$id > $D/fresh_$id.json; done",
+	(
+		"cd /tmp/s && for id in 6016877098 6035928540; do gh api repos/o/r/issues/comments/$id > live_$id.json; done; "
+		"python3 -I -c \"print(1)\""
+	),
+	"python3 - docs/log.md <<'EOF'\nimport sys\nprint('gh api repos/o/r --jq .permissions.admin')\nEOF",
+])
+def test_auto_mode_denies_the_activation_session_prompts_with_rewrite_steps(command):
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	_assert_auto_shape_deny(decision, reason)
+	assert "own plain command" in reason and "Edit or Write tool" in reason
+	assert _decide_in_mode(command, None)[0] == guard.DECISION_ASK
+
+
+def _settings_file(tmp_path, monkeypatch, text: str) -> None:
+	path = tmp_path / "settings.json"
+	path.write_text(text, encoding="utf-8")
+	monkeypatch.setattr(guard, "_settings_files", lambda: [str(path)])
+
+
+@pytest.mark.parametrize("rule", ["Bash(echo:*)", "Bash(echo *)", "Bash", "Bash(*)"])
+def test_auto_mode_reads_user_allow_rules(tmp_path, monkeypatch, rule):
+	command = 'echo "$(gh api -X DELETE orgs/o/teams/1)"'
+	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": [rule]}}))
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": ["Bash(ls *)"]}}))
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
+
+
+@pytest.mark.parametrize("text", ["{not json", json.dumps({"permissions": {"allow": "Bash(*)"}})])
+def test_auto_mode_keeps_asks_when_settings_cannot_be_checked(tmp_path, monkeypatch, text):
+	_settings_file(tmp_path, monkeypatch, text)
+	_assert_auto_shape_deny(*_decide_in_mode(_ANSI_C_SHAPE_DOUBT, guard.AUTO_PERMISSION_MODE))
+
+
+def test_settings_files_cover_project_local_and_user(tmp_path, monkeypatch):
+	monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path / "proj"))
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	paths = _REAL_SETTINGS_FILES()
+	for directory in (tmp_path / "proj" / ".claude", tmp_path / "home" / ".claude"):
+		for name in ("settings.json", "settings.local.json"):
+			assert os.path.realpath(directory / name) in paths
+
+
+def test_settings_files_cover_config_dir_and_managed_settings(tmp_path, monkeypatch):
+	monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+	paths = _REAL_SETTINGS_FILES()
+	for name in ("settings.json", "settings.local.json"):
+		assert os.path.realpath(tmp_path / "cfg" / name) in paths
+	for managed in guard._MANAGED_SETTINGS_FILES:
+		assert os.path.realpath(managed) in paths
+
+
+@pytest.mark.parametrize("command", [
+	"gh api orgs/o/teams -F{'q=1','x=@/etc/passwd'}",
+	"gh api orgs/o/teams -F{'q=1','x=\\x40/etc/passwd'}",
+	"gh api orgs/o/teams $'-F\\100x=/etc/passwd'",
+	"gh api orgs/o/teams -F x=@/etc/passwd # trailing comment",
+])
+def test_auto_mode_hazard_that_could_hide_a_file_field_still_asks(command):
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	assert _decide_in_mode(command, None)[0] == guard.DECISION_ASK
+
+
+def test_auto_mode_hazard_without_a_file_field_still_steps_aside():
+	command = "gh api 'orgs/o/teams?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2"
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
+
+
+def test_every_shipped_gh_api_allow_rule_is_recognised():
+	rules = json.loads(TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"))["permissions"]["allow"]
+	gh_api_rules = [rule for rule in rules if rule.startswith("Bash(gh api ")]
+	assert gh_api_rules
+	for rule in gh_api_rules:
+		assert guard._GH_API_ALLOW_RULE_RE.search(rule[5:-1].replace("*", "x")), rule

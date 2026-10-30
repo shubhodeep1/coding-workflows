@@ -814,7 +814,7 @@ def test_integration_guidance_is_head_and_base_bound_and_untrusted(tmp_path: Pat
 		"commit", "--allow-empty", "-qm", "initial"], env=git_env, check=True)
 	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, env=git_env, text=True).strip()
 	subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head_sha], cwd=tmp_path, env=git_env, check=True)
-	selector = 'INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ' + prepare.split('INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ', 1)[1].split('    _state_payload=', 1)[0]
+	selector = 'INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ' + prepare.split('INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ', 1)[1].split('      _state_json=""', 1)[0]
 	marker = f"<!-- ai:integration-judge-guidance:v1 pr=77 head={head_sha} base={head_sha} -->"
 	comment = "## Integration conflict diagnosis\n\nFinal PR #77: conflict\n\nResolver guidance: preserve both changes\n\n"
 	for suffix, expected in ((marker, True), (marker.replace("pr=77", "pr=78"), False),
