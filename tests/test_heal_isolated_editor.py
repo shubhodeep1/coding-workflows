@@ -786,6 +786,11 @@ case "$1" in
     printf 'result %s\n' "${n}" > "${results}/output"
     if [ "${n}" = 1 ]; then
       printf 'new\n' > "${source_dir}/scripts/fix.py"
+      # A host file changed after the snapshot, and an extra editor write.
+      if [ -e "__LOG__.host_touch" ]; then printf 'changed\n' >> "$(cat "__LOG__.host_touch")"; fi
+      if [ -e "__LOG__.extra_write" ]; then
+        extra="$(cat "__LOG__.extra_write")"; mkdir -p "${source_dir}/$(dirname "${extra}")"; printf 'x\n' > "${source_dir}/${extra}"
+      fi
     else
       mkdir -p "${source_dir}/tests"
       printf 'repaired\n' > "${source_dir}/tests/test_fix.py"
@@ -831,7 +836,7 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 		repro_enabled: bool | None = None, approval_body: str | None = None, plan_text: str | None = None,
 		issue_body: str | None = None, repro_results: dict | None = None, record_gate: bool = False,
 		with_prepare: bool = False, comments_text: str | None = None, scope_text: str | None = None,
-		untracked_host_file: bool = False) -> dict:
+		untracked_host_file: bool = False, host_changed_after_snapshot: bool = False, editor_extra_write: str = "") -> dict:
 	host = tmp_path / "host"
 	(host / "scripts").mkdir(parents=True)
 	(host / "tests").mkdir()
@@ -918,6 +923,10 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 		Path(str(log) + ".syntax_fail").write_text("1")
 	if validator_down_after_repair:
 		Path(str(log) + ".validator_down").write_text("1")
+	if host_changed_after_snapshot:
+		Path(str(log) + ".host_touch").write_text(str(host / "scripts/extra.py"))
+	if editor_extra_write:
+		Path(str(log) + ".extra_write").write_text(editor_extra_write)
 	result = subprocess.run(["bash", str(ROOT / "scripts/heal_isolated_implement.sh"), str(prompt), str(output)],
 		env=env, capture_output=True, text=True, check=False, timeout=300)
 	lines = log.read_text().splitlines() if log.exists() else []
@@ -1220,10 +1229,11 @@ def test_repro_out_of_scope_edit_keeps_exit_42(tmp_path: Path) -> None:
 
 
 def test_repro_out_of_scope_edit_keeps_exit_42_behind_a_host_baseline_mismatch(tmp_path: Path) -> None:
-	# An untracked host file makes the repro-tree transfer fail its baseline
-	# check (host_baseline_changed) before the scope check; the scope-only
-	# check still classifies the out-of-scope edit as exit 42.
-	run = _repro_run(tmp_path, scope_text="tests/**\nchangelog.d/*.md\n", untracked_host_file=True)
+	# A host file changed after the snapshot makes the repro-tree transfer fail
+	# its baseline check (host_baseline_changed) before the scope check; the
+	# scope-only check still classifies the out-of-scope edit as exit 42.
+	run = _repro_run(tmp_path, scope_text="tests/**\nchangelog.d/*.md\n", untracked_host_file=True,
+		host_changed_after_snapshot=True)
 	assert run["rc"] == 42, run["stderr"]
 	assert run["repro_calls"] == []
 	assert "phase=transfer engine=codex outcome=failed reason=out_of_heal_scope" in run["stderr"]
@@ -1231,10 +1241,33 @@ def test_repro_out_of_scope_edit_keeps_exit_42_behind_a_host_baseline_mismatch(t
 	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
 
 
-def test_repro_tree_transfer_failure_logs_its_reason_token(tmp_path: Path) -> None:
-	# In-scope edit, but the clean HEAD tree lacks the untracked host file:
-	# the hold names the transfer's fixed reason token in the log.
+def test_repro_untracked_host_file_is_seeded_and_reaches_fixed(tmp_path: Path) -> None:
+	# The clean HEAD repro tree gets the untracked host file the snapshot
+	# baseline recorded, so the transfer passes and the heal is fixed.
 	run = _repro_run(tmp_path, untracked_host_file=True)
+	assert run["rc"] == 0, run["stderr"]
+	assert len(run["repro_calls"]) == 2
+	assert run["repro_result"]["outcome"] == "fixed"
+	assert "phase=repro_transfer" not in run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+	assert (run["host"] / "scripts/extra.py").read_text() == "local\n"
+
+
+def test_repro_rejected_path_behind_a_host_baseline_mismatch_keeps_exit_42(tmp_path: Path) -> None:
+	# A rejected new path (.github/ai/) that strict enumeration refuses is out
+	# of scope for the host transfer too, so exit 42 is kept.
+	run = _repro_run(tmp_path, untracked_host_file=True, host_changed_after_snapshot=True,
+		editor_extra_write=".github/ai/extra.json")
+	assert run["rc"] == 42, run["stderr"]
+	assert run["repro_calls"] == []
+	assert "phase=transfer engine=codex outcome=failed reason=out_of_heal_scope" in run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
+
+
+def test_repro_tree_transfer_failure_logs_its_reason_token(tmp_path: Path) -> None:
+	# In-scope edit, but a host file changed after the snapshot: the hold
+	# names the transfer's fixed reason token in the log.
+	run = _repro_run(tmp_path, untracked_host_file=True, host_changed_after_snapshot=True)
 	assert run["rc"] == 43, run["stderr"]
 	assert run["repro_calls"] == []
 	assert "HEAL_ISOLATED_EDITOR phase=repro_transfer outcome=failed reason=host_baseline_changed" in run["stderr"]

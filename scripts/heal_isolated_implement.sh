@@ -617,14 +617,21 @@ def cmd_scope(support, workspace, manifest, scope_file):
 		man = Path(manifest)
 		commands = ruw.load_admitted_commands(man)
 		baseline = json.loads(man.read_text(encoding="utf-8"))
-		results = {name: (data, mode) for name, data, mode in ruw.enumerate_workspace(Path(workspace), None, commands, strict=True)}
+		try:
+			results = {name: (data, mode) for name, data, mode in ruw.enumerate_workspace(Path(workspace), None, commands, strict=True)}
+		except ValueError:
+			# The host transfer enumerates the same snapshot strictly and
+			# fails the same way, which the caller maps to exit 42.
+			print("out_of_scope")
+			return 0
 		for name in sorted(set(baseline) | set(results)):
 			old = baseline.get(name)
 			new = results.get(name)
 			if new is not None and old == [hashlib.sha256(new[0]).hexdigest(), new[1]]:
 				continue
 			if not ruw.allowed(name, None, commands):
-				print("unknown")
+				# The host transfer refuses it as unsafe_result_path (exit 42).
+				print("out_of_scope")
 				return 0
 			git_control = any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in name.split("/"))
 			if name.startswith((".github/ai/", ".claude/")) or git_control or not any(entry_matches(entry, name) for entry in scope):
@@ -640,7 +647,53 @@ def cmd_scope(support, workspace, manifest, scope_file):
 	return 0
 
 
+def cmd_seed(support, host, tree, manifest):
+	# The repro tree is a clean HEAD checkout, but the snapshot baseline also
+	# holds the host's untracked, non-ignored files and uncommitted edits, so
+	# the transfer's baseline check would always fail on such a host. Copy
+	# each baseline file whose host copy still matches the baseline into the
+	# repro tree. The host checkout is trusted (the editor never wrote it);
+	# symlinks are never followed and any mismatch is left to the transfer's
+	# own check. Fail-open per file; prints the number of files copied.
+	copied = 0
+	try:
+		from pathlib import Path
+		sys.path.insert(0, support)
+		import review_untrusted_workspace as ruw
+		baseline = json.loads(Path(manifest).read_text(encoding="utf-8"))
+	except Exception:  # noqa: BLE001 - seeding is best effort
+		print(copied)
+		return 0
+	for name, old in baseline.items():
+		try:
+			data, mode = ruw.read_regular(ruw.checked_path(Path(host), name))
+			if [hashlib_sha256(data), mode] != old:
+				continue
+			target = ruw.checked_path(Path(tree), name)
+			if target.exists() or target.is_symlink():
+				if ruw.fingerprint(target) == old:
+					continue
+			target.parent.mkdir(parents=True, exist_ok=True)
+			ruw.checked_path(Path(tree), name)
+			fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+			with os.fdopen(fd, "wb") as handle:
+				handle.write(data)
+			os.chmod(target, mode)
+			copied += 1
+		except (OSError, ValueError):
+			continue
+	print(copied)
+	return 0
+
+
+def hashlib_sha256(data):
+	import hashlib
+	return hashlib.sha256(data).hexdigest()
+
+
 def main(argv):
+	if argv[0] == "seed":
+		return cmd_seed(*argv[1:5])
 	if argv[0] == "scope":
 		return cmd_scope(*argv[1:5])
 	if argv[0] == "tests":
@@ -749,6 +802,9 @@ heal_impl_repro_check()
 		heal_impl_repro_finish repro_tree_unavailable "${failing_sha}"
 	fi
 	heal_impl_repro_tree_added=true
+	# Untracked host files and uncommitted host edits recorded in the snapshot
+	# baseline (cmd_seed); without them the transfer below always fails.
+	heal_impl_repro_py_run seed "${support}" "${WORKSPACE_PATH:-${PWD}}" "${root}/repro-tree" "${root}/manifest.json" >/dev/null 2>&1 || true
 	for manifest_part in "${root}"/manifest.json*; do
 		[ -f "${manifest_part}" ] || continue
 		cp -f "${manifest_part}" "${root}/manifest.repro.json${manifest_part#"${root}/manifest.json"}" 2>/dev/null || true
