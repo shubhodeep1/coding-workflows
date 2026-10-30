@@ -378,3 +378,38 @@ def test_helper_defaults_its_switch_and_is_ascii():
 	assert 'os.environ.get("PERSIST_JOURNAL_ENABLED", "false")' in text
 	assert text.isascii()
 	assert os.access(SCRIPT, os.X_OK)
+
+
+def test_failing_gate_result_fills_failure_key_and_is_stable(fake_gh, tmp_path):
+	state, env = fake_gh
+	env["GITHUB_WORKFLOW"] = "Implement"
+	gate = tmp_path / "result.json"
+	gate.write_text(json.dumps({"status": "fail", "failures": [
+		{"test": "tests/test_b.py", "names": ["test_y", "test_x"], "tail": "volatile 123"},
+		{"test": "tests/test_a.py", "names": []},
+	]}), encoding="utf-8")
+	assert aj.gate_failure_text(str(gate)).splitlines() == [
+		"::error::FAILED tests/test_a.py", "::error::FAILED tests/test_b.py test_x", "::error::FAILED tests/test_b.py test_y"]
+	for run_id in ("201", "202"):
+		env["GITHUB_RUN_ID"] = run_id
+		proc = _cli(env, "append", "--repo", "o/r", "--issue", "5", "--stage", "implement", "--outcome", "fail", "--gate-result", str(gate))
+		assert proc.returncode == 0, proc.stderr
+	_, entries = aj.parse(json.loads((state / "comments.json").read_text(encoding="utf-8")), LOGIN)
+	keys = {e["failure_key"] for e in entries}
+	assert len(keys) == 1 and len(keys.pop()) == 12
+
+
+def test_passing_or_missing_gate_result_leaves_failure_key_empty(tmp_path):
+	gate = tmp_path / "result.json"
+	gate.write_text(json.dumps({"status": "pass", "failures": []}), encoding="utf-8")
+	assert aj.gate_failure_text(str(gate)) == ""
+	assert aj.gate_failure_text(str(tmp_path / "missing.json")) == ""
+	assert aj.gate_failure_text(None) == ""
+
+
+def test_parse_keeps_an_older_id_when_the_newest_journal_has_none():
+	older = _journal_comment([_entry()], cid=4, shape="graphql")
+	newest = _journal_comment([_entry(stage="review", run_id="2")], shape="graphql")
+	newest.pop("databaseId")
+	cid, entries = aj.parse([older, newest], LOGIN)
+	assert cid == 4 and len(entries) == 2

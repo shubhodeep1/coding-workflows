@@ -229,7 +229,7 @@ def parse(comments: Any, trusted_login: str) -> tuple[int | None, list[dict]]:
 		if not isinstance(data, dict) or data.get("schema") != SCHEMA or not isinstance(data.get("entries"), list):
 			continue
 		collected = merge(collected, [e for e in (normalise_entry(raw) for raw in data["entries"]) if e])
-		newest_id = _comment_id(comment)
+		newest_id = _comment_id(comment) or newest_id
 		found = True
 	return (newest_id, collected) if found else (None, [])
 
@@ -466,6 +466,32 @@ def gate_fields(path: str | None) -> dict:
 	return gate
 
 
+GATE_FAILURE_STEP = "Pre-push affected-test gate"
+
+
+def gate_failure_text(path: str | None) -> str:
+	"""Failure text from a failing pre-push gate result.json: one
+	`::error::FAILED <test> <name>` line per failing test, sorted, so the
+	failure_key is stable across runs (output tails are left out)."""
+	if not path:
+		return ""
+	try:
+		data = json.loads(Path(path).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return ""
+	if not isinstance(data, dict) or data.get("status") != "fail" or not isinstance(data.get("failures"), list):
+		return ""
+	lines = set()
+	for item in data["failures"]:
+		if not isinstance(item, dict):
+			continue
+		test = " ".join(str(item.get("test") or item.get("file") or "").split())[:300]
+		names = [n for n in (item.get("names") or []) if isinstance(n, str)] if isinstance(item.get("names"), list) else []
+		for name in names[:20] or [""]:
+			lines.add(" ".join(f"::error::FAILED {test} {name}".split()))
+	return "\n".join(sorted(lines))
+
+
 def commit_deletions() -> list[dict]:
 	out = []
 	for line in _git("diff", "--numstat", "HEAD~1", "HEAD").splitlines():
@@ -547,6 +573,13 @@ def cmd_append(args: argparse.Namespace) -> None:
 		except OSError:
 			text = ""
 		fkey = failure_key(args.failure_workflow, args.failure_step or "", text) if text else ""
+	if not fkey and args.gate_result:
+		# No explicit failure text: a failing pre-push gate result supplies it,
+		# so the implement and review writers record a failure_key (plan P1).
+		text = gate_failure_text(args.gate_result)
+		if text:
+			fkey = failure_key(args.failure_workflow or os.environ.get("GITHUB_WORKFLOW", "") or args.stage,
+				args.failure_step or GATE_FAILURE_STEP, text)
 	entry = normalise_entry({
 		"ts": now_ts(),
 		"stage": args.stage,
