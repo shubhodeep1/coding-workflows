@@ -382,6 +382,32 @@ def test_gate_subcommand_without_image_is_unverified(tmp_path):
 	assert _docker_runs(tmp_path) == 0
 
 
+def test_summary_subcommand_keeps_unverified_failing_names(tmp_path):
+	# baseline_timeout / baseline_error entries carry the names that failed on
+	# the change; the summary mode must pass them through to write_summary.
+	result = tmp_path / "result.json"
+	result.write_text(json.dumps(_result("unverified", unverified=[
+		{"item": "tests/test_slow.py", "reason": "baseline_timeout", "names": ["test_x", 7, "test_y"]},
+		{"item": "tests/test_other.py", "reason": "timeout"},
+	])), encoding="utf-8")
+	out = tmp_path / "summary.md"
+	env = {k: v for k, v in os.environ.items() if k not in ("RUNTIME_DIR", "SUPPORT_SCRIPTS_DIR", "SUPPORT_PROMPTS_DIR")}
+	env["RUNNER_TEMP"] = str(tmp_path)
+	proc = subprocess.run(["bash", str(STEP_SCRIPT), "summary", str(result), str(out)], cwd=tmp_path, env=env,
+		capture_output=True, text=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	text = out.read_text(encoding="utf-8")
+	assert "`tests/test_slow.py`: baseline_timeout (failed on this change: `test_x`, `test_y`)" in text
+	assert "- `tests/test_other.py`: timeout\n" in text
+
+
+def test_step_scripts_share_the_unverified_summary_mapping():
+	implement = REPO_ROOT / "scripts" / "implement_step_prepush_test_gate.sh"
+	mapping = [line.strip() for line in STEP_SCRIPT.read_text(encoding="utf-8").splitlines() if line.strip().startswith('"unverified": [{"item": str(')]
+	assert len(mapping) == 1 and '"names"' in mapping[0]
+	assert mapping[0] in implement.read_text(encoding="utf-8")
+
+
 def test_repair_prompt_subcommand_fences_the_failures(tmp_path):
 	repo, env = _setup(tmp_path, [FAIL])
 	script = tmp_path / "support" / "scripts" / STEP_SCRIPT.name

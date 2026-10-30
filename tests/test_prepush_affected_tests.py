@@ -363,6 +363,44 @@ def test_run_gate_classifies_inherited_and_pr_caused_failures(tmp_path):
 	assert sorted(result["ran"]) == ["tests/test_new.py", "tests/test_ok.py", "tests/test_old.py"]
 
 
+@pytest.mark.parametrize("baseline_status", ["timeout", "error"])
+def test_run_gate_reports_unfinished_baseline_rerun_as_unverified(tmp_path, monkeypatch, baseline_status):
+	# Release v1.40.3: a slow test failed on the PR tree, its baseline re-run hit
+	# the deadline, and the gate blamed the change (repair turn + second run).
+	root = _repo(tmp_path, {"tests/test_slow.py": FAILING, "tests/test_new.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_slow.py": FAILING}, name="baseline")
+
+	def fake_run_units(units, cwd, deadline, shards):
+		status = baseline_status if Path(cwd).resolve() == baseline.resolve() else "fail"
+		return [{**u, "status": status, "rc": None if status != "fail" else 1, "tail": "FAIL: test_x (m.C)"} for u in units]
+
+	monkeypatch.setattr(gate, "run_units", fake_run_units)
+	selection = {"changed_files": [], "affected_tests": [{"path": p, "reasons": []} for p in ("tests/test_slow.py", "tests/test_new.py")]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=1, shards=1)
+	# test_new.py has no baseline copy, so it is still caused by the change.
+	assert [f["test"] for f in result["failures"]] == ["tests/test_new.py"]
+	assert result["inherited"] == []
+	assert result["unverified"] == [{"item": "tests/test_slow.py", "reason": f"baseline_{baseline_status}", "names": ["test_x"]}]
+	assert result["status"] == "fail"
+	assert f"`tests/test_slow.py`: baseline_{baseline_status} (failed on this change: `test_x`)" in gate.write_summary(result)
+
+
+def test_run_gate_unfinished_baseline_only_is_unverified_not_fail(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_slow.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_slow.py": FAILING}, name="baseline")
+
+	def fake_run_units(units, cwd, deadline, shards):
+		status = "timeout" if Path(cwd).resolve() == baseline.resolve() else "fail"
+		return [{**u, "status": status, "rc": None, "tail": ""} for u in units]
+
+	monkeypatch.setattr(gate, "run_units", fake_run_units)
+	result = gate.run_gate(root, {"changed_files": [], "affected_tests": [{"path": "tests/test_slow.py", "reasons": []}]}, baseline, timeout_minutes=1, shards=1)
+	assert result["status"] == "unverified"
+	assert result["failures"] == [] and result["inherited"] == []
+	assert result["unverified"] == [{"item": "tests/test_slow.py", "reason": "baseline_timeout", "names": []}]
+	assert result["ran"] == ["tests/test_slow.py"]
+
+
 def test_run_gate_inherited_only_passes(tmp_path):
 	root = _repo(tmp_path, {"tests/test_old.py": FAILING})
 	baseline = _repo(tmp_path, {"tests/test_old.py": FAILING}, name="baseline")
