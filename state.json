@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-30T10:35:39Z",
+  "tick_at": "2026-10-30T10:47:49Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 6
+    "tracking_issues": 7
   },
   "tracking_issues": [
     {
@@ -76,7 +76,7 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "41",
+      "integration_ahead_by": "42",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -97,7 +97,7 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "10",
+      "integration_ahead_by": "11",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -118,12 +118,12 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "7",
+      "integration_ahead_by": "8",
       "issue_counts": {
         "closed": 0,
-        "done": 0,
+        "done": 1,
         "implementation_failed": 0,
-        "in_progress": 2,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -135,6 +135,27 @@
       "status": "in-progress",
       "title": "[Orchestrator] Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)",
       "total_waves": 15,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "0",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 1,
+        "skipped": 0
+      },
+      "number": 8463,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 41024895457)",
+      "total_waves": 1,
       "wave_complete": false
     }
   ]
