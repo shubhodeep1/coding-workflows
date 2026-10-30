@@ -4956,3 +4956,83 @@ def test_earlier_failure_skip_logs_label_none_for_a_missing_label(tmp_path: Path
 def test_dispatch_error_file_is_removed(tmp_path: Path) -> None:
 	_result, _state, _tg, runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), FAKE_GH_FAIL_HEAL_DISPATCH="1")
 	assert not (runtime / "heal_dispatch_error.txt").exists()
+
+
+# #8470: a stop whose planning reason is "nothing to implement" is closed as
+# completed when its fix-up is done; `/answer` would only reach the same block.
+NOTHING_TO_IMPLEMENT_BLOCK = (
+	"Planning blocked: human input required.\n\n"
+	"Reason: work is already on the planning ref; nothing to implement\n\n"
+	"Auto-answer has been paused to avoid unsatisfiable clarification loops.\n"
+	"Provide the required input, then reply with /answer.\n\n"
+	"Run: https://github.com/o/r/actions/runs/1"
+)
+NOTHING_TO_IMPLEMENT_MARKER = "<!-- ai:unblock-nothing-to-implement:v1 item=7 fixup=50 -->"
+MERGED_FIXUP = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
+
+
+def _nothing_to_implement_comments(block_body: str = NOTHING_TO_IMPLEMENT_BLOCK, block_login: str = BOT, extra: list | None = None) -> list:
+	wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", BOT, "2026-10-04T11:00:00Z")
+	wait["id"] = 123
+	return [_comment(block_body, block_login, "2026-10-04T09:00:00Z"), *(extra or []), wait]
+
+
+def _closed_completed(state: dict) -> bool:
+	return any(endpoint == "repos/o/r/issues/7" and fields.get("state") == "closed" and fields.get("state_reason") == "completed"
+		for endpoint, fields in state["patched"])
+
+
+def test_merged_fixup_closes_a_nothing_to_implement_issue_instead_of_resuming(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=_nothing_to_implement_comments(), issues=MERGED_FIXUP)
+	assert "fixup=50 op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
+	assert "fixup=50 outcome=followup" not in result.stdout
+	assert not any(comment["body"].startswith("/answer") for comment in state["comments"])
+	assert state["comments"][-1]["body"].endswith(NOTHING_TO_IMPLEMENT_MARKER)
+	assert "fix-up #50 merged" in state["comments"][-1]["body"]
+	assert state["labels_added"] == [["repos/o/r/issues/7/labels", "ai:closed"]]
+	assert _closed_completed(state)
+	assert state["patched"][-1][0] == "repos/o/r/issues/comments/123"
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+
+
+def test_success_noop_fixup_also_closes_a_nothing_to_implement_issue(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=_nothing_to_implement_comments(), issues=NOOP_CLOSED_FIXUP,
+		FAKE_GH_FIXUP_COMMENTS=json.dumps([_comment("Already implemented.\n\n" + NOOP_MARKER, BOT)]))
+	assert "fixup=50 op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
+	assert "fix-up #50 closed as already implemented" in state["comments"][-1]["body"]
+	assert _closed_completed(state)
+
+
+@pytest.mark.parametrize("case", ["other_reason", "untrusted_block", "newer_other_block", "disabled", "project_item"])
+def test_nothing_to_implement_close_keeps_the_resume_otherwise(tmp_path: Path, case: str) -> None:
+	item, env, comments = ISSUE, {}, _nothing_to_implement_comments()
+	if case == "other_reason":
+		comments = _nothing_to_implement_comments(NOTHING_TO_IMPLEMENT_BLOCK.replace("work is already on the planning ref; nothing to implement", "missing API key"))
+	elif case == "untrusted_block":
+		comments = _nothing_to_implement_comments(block_login="someone-else")
+	elif case == "newer_other_block":
+		newer = _comment("Planning blocked: human input required.\n\nReason: missing API key\n", BOT, "2026-10-04T10:00:00Z")
+		comments = _nothing_to_implement_comments(extra=[newer])
+	elif case == "disabled":
+		env["UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] = " False "
+	else:
+		item = dict(ISSUE, body="- Tracking issue: #40", labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+		env["FAKE_GH_PROJECT_COMMENTS"] = _project_comments_for_item(7)
+	result, state = _judge(tmp_path, item, comments=comments, issues=MERGED_FIXUP, **env)
+	assert "op=nothing_to_implement" not in result.stdout, result.stdout
+	assert "fixup=50 outcome=followup" in result.stdout, result.stdout + result.stderr
+	assert any(comment["body"].startswith("/answer") for comment in state["comments"])
+	assert not _closed_completed(state)
+
+
+def test_nothing_to_implement_close_failure_keeps_the_wait_and_posts_the_marker_once(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, comments=_nothing_to_implement_comments(), issues=MERGED_FIXUP, FAKE_GH_FAIL_CLOSE="1")
+	assert "fixup=50 op=nothing_to_implement outcome=skip reason=close_failed" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].startswith("/answer") for comment in state["comments"])
+	assert not any("ai:unblock-wait:v1 item=7 fixup=50 done" in fields.get("body", "") for _, fields in state["patched"])
+	# The next run finds its own marker and does not post it again.
+	prior = _nothing_to_implement_comments(extra=[_comment("Closing as completed.\n\n" + NOTHING_TO_IMPLEMENT_MARKER, BOT, "2026-10-04T11:30:00Z")])
+	result, state = _judge(tmp_path, ISSUE, comments=prior, issues=MERGED_FIXUP)
+	assert "fixup=50 op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].endswith(NOTHING_TO_IMPLEMENT_MARKER) for comment in state["comments"])
+	assert _closed_completed(state)

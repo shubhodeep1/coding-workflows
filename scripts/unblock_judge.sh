@@ -67,6 +67,9 @@
 # project hold request).
 # UNBLOCK_CREATED_ISSUES_FILE (optional, default unset): unblock_run_ops
 # appends each issue number it creates to this file.
+# UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #8470): once a
+# fix-up is done, a standalone issue whose planning stop was "nothing to
+# implement" is closed as completed instead of resumed; `false` resumes it.
 #
 # Both engines run in a network-isolated container with a host-side provider relay;
 # its output is data, and verdicts containing literal or encoded credentials
@@ -105,6 +108,7 @@
 #      UNBLOCK_JUDGE item= kind= stop= fingerprint= op=instruction_sandbox_check outcome=reasked|refused_after_reask reason=
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
+#      UNBLOCK_JUDGE item= kind= stop= fixup= op=nothing_to_implement outcome=closed|skip reason=comment_failed|label_failed|close_failed
 #      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
 #      UNBLOCK_JUDGE item= op=hold_request issue= outcome=posted|failed|skip reason=
 #      UNBLOCK_TARGET_REPO_GUARD item= verdict= outcome=consumer|harness|mixed|disabled paths=
@@ -416,6 +420,59 @@ unblock_check_triage_resolved()
 	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=triage_resolution outcome=judge status=${status:-error} rc=${rc}"
 	return 1
+}
+
+# The plan-phase blocker (prompts/mode-plan.txt) for an issue with no edits left.
+UNBLOCK_NOTHING_TO_IMPLEMENT_REASON="work is already on the planning ref; nothing to implement"
+
+# unblock_nothing_to_implement_close <fixup> <done text> (#8470): when the
+# newest trusted "Planning blocked" comment on a standalone issue gives the
+# nothing-to-implement reason, the issue is closed as completed once its
+# fix-up is done, instead of getting `/answer`: planning would only reach the
+# same block again (#8470 blocked twice, before and after fix-up #8471).
+# Orchestrator items (a tracking issue) resume as before. Returns 0 when this
+# run must stop (closed, or a write failed: the fix-up wait stays open so the
+# next run retries, and the trusted marker is posted once only); 1 to resume
+# as usual; it sets UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT to `closed` after a
+# close. UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false (default true)
+# restores the resume.
+# API budget: at most three writes (comment, label, close), no reads.
+unblock_nothing_to_implement_close()
+{
+	local fixup="$1" done_text="$2" tracking_issue="$3" marker
+	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT=""
+	if [ "$(printf '%s' "${UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+		return 1
+	fi
+	[ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "blocked" ] && [ -z "${tracking_issue}" ] || return 1
+	jq -e --arg login "${UNBLOCK_LOGIN}" --arg reason "Reason: ${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}" '
+		[.[] | select((.user.login // "") == $login)
+			| ((.body // "") | split("\n") | map(rtrimstr("\r"))) as $lines
+			| select(($lines | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
+			| {at: (.created_at // ""), match: ($lines | index($reason) != null)}]
+		| sort_by(.at) | last // {match: false} | .match
+	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1 || return 1
+	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
+	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
+		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+		:
+	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and fix-up #${fixup} ${done_text}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing.
+
+${marker}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=comment_failed"
+		return 0
+	fi
+	if ! gh api -X POST "repos/${REPOSITORY}/issues/${ITEM}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=label_failed"
+		return 0
+	fi
+	if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${ITEM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=close_failed"
+		return 0
+	fi
+	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT="closed"
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=closed"
+	return 0
 }
 
 # Q148: a blocked heal issue whose failure was already fixed through a
@@ -1638,6 +1695,15 @@ unblock_main()
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} op=hold hold=placeholder_retired ref=${step_placeholder} outcome=held"
+					return 0
+				fi
+				# #8470: nothing-to-implement stops are closed, not resumed into the same block.
+				if unblock_nothing_to_implement_close "${wait_fixup}" "${fixup_done_text}" "${tracking}"; then
+					if [ "${UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT:-}" = "closed" ]; then
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; planning had found nothing to implement here, so the unblock judge closed this item as completed instead of posting a resume command.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+					fi
 					return 0
 				fi
 				ops_file="${RUNTIME_DIR}/followup_ops.json"
