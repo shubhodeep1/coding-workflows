@@ -1167,6 +1167,8 @@ def test_tests_file_bypasses_select_tests(tmp_path, monkeypatch):
 	("tests/test_ok.py::--zz", "tests_file_invalid_name"),
 	("tests/test_ok.py::", "tests_file_invalid_name"),
 	("tests/test_zz.py::" + "a" * 1100, "tests_file_line_too_long"),
+	("tests/test_zz.py\x0c", "tests_file_control_character"),
+	("\ttests/test_zz.py", "tests_file_control_character"),
 ])
 def test_tests_file_rejects_invalid_entries(tmp_path, line, reason):
 	root = _repo(tmp_path, {"tests/test_ok.py": "", "lib/zz_helper.py": ""})
@@ -1355,3 +1357,27 @@ def test_wrapper_trailing_tests_file_without_value_is_a_usage_error(tmp_path):
 	assert proc.returncode == 0
 	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "usage_error"
 	assert not log.exists()
+
+
+TF_PR_MIXED = "def test_added():\n\tpass\n\n\ndef test_old_break():\n\tassert False\n"
+TF_BASE_MIXED = "def test_old_break():\n\tassert False\n"
+
+
+def test_tests_file_multi_name_unit_missing_node_on_baseline_is_unverified(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_MIXED})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_MIXED}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_added\ntests/test_a.py::test_old_break\n", baseline)
+	# pytest exits 4 on the baseline (test_added missing) without running
+	# test_old_break, so the inherited failure cannot be told apart.
+	assert result["failures"] == [] and result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]
+	assert result["status"] == "unverified"
+
+
+def test_tests_file_named_test_missing_on_pr_tree_only_is_unverified(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW + "\n\ndef test_gone():\n\tassert False\n"}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_gone\n", baseline)
+	# The requested test never ran on this change's tree: not inherited.
+	assert result["failures"] == [] and result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]

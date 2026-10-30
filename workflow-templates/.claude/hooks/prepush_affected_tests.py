@@ -828,8 +828,21 @@ def classify_baseline(
 		pr_rcs = {unit["id"]: unit.get("rc") for unit in rerun}
 		reran = run_units(rerun, baseline, deadline, shards)
 		baseline_statuses = {unit["id"]: unit.get("status") for unit in reran}
+		baseline_rcs = {unit["id"]: unit.get("rc") for unit in reran}
+		ambiguous_ids: set[str] = set()
 		for unit in rerun:
 			unit["baseline_status"] = baseline_statuses.get(unit["id"])
+			# Named `--tests-file` nodes where only one tree exits 4/5 cannot be
+			# compared: a merged multi-name unit's baseline 4/5 hides whether its
+			# other nodes fail there too, and a node missing on this change's tree
+			# never ran here. Report it unverified (baseline_error), not caused or
+			# inherited. A single node missing on the baseline only stays caused.
+			pr_missing = pr_rcs.get(unit["id"]) in (4, 5)
+			if unit.get("tests_file_nodes") and pr_missing != (baseline_rcs.get(unit["id"]) in (4, 5)) and (
+				pr_missing or sum(1 for arg in unit.get("argv", []) if "::" in arg) > 1
+			):
+				unit["baseline_status"] = "error"
+				ambiguous_ids.add(unit["id"])
 		# pytest exits 4 (node not found) or 5 (nothing collected) when a named
 		# `--tests-file` test does not exist on the baseline, for example a test
 		# the change added. That is not an inherited failure. A node missing on
@@ -838,7 +851,7 @@ def classify_baseline(
 			unit["id"] for unit in reran
 			if unit.get("status") == "fail" and not (
 				unit.get("tests_file_nodes") and unit.get("rc") in (4, 5) and pr_rcs.get(unit["id"]) not in (4, 5)
-			)
+			) and unit["id"] not in ambiguous_ids
 		}
 	if repo is not None:
 		for unit in failed:
@@ -1433,6 +1446,8 @@ def parse_tests_file(repo: Path, text: str) -> tuple[list[dict], list[dict]]:
 		line = raw.strip()
 		if not line or line.startswith("#"):
 			continue
+		# strip() drops edge control characters (\t, \f, \v, ...); check the raw line.
+		edge_control = bool(_TESTS_FILE_CONTROL_RE.search(raw.rstrip("\r").strip(" ")))
 		if count >= MAX_TESTS_FILE_ENTRIES:
 			rejected.append({"item": "tests_file", "reason": "tests_file_too_many_entries"})
 			break
@@ -1440,7 +1455,7 @@ def parse_tests_file(repo: Path, text: str) -> tuple[list[dict], list[dict]]:
 		path, separator, name = line.partition("::")
 		if len(line) > MAX_TESTS_FILE_LINE:
 			reason = "tests_file_line_too_long"
-		elif _TESTS_FILE_CONTROL_RE.search(line):
+		elif edge_control or _TESTS_FILE_CONTROL_RE.search(line):
 			reason = "tests_file_control_character"
 		else:
 			reason = _tests_file_path_reason(repo, path)
