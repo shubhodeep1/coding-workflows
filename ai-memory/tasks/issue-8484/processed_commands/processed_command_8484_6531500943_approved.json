@@ -5,13 +5,25 @@
   "entry_id": "processed_command_8484_6531500943_approved",
   "issue_number": 8484,
   "metadata": {
+    "branch": "ai/issue-8484",
+    "changed_files": [
+      "changelog.d/8484-claude-pool-oidc-retry.md",
+      "scripts/claude_pool_token.sh",
+      "scripts/workflow_failure_heal.py",
+      "tests/test_claude_pool_token.py"
+    ],
+    "issue_number": 8484,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8484",
+    "pr_number": 8486,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8486",
+    "run_attempt": "1",
+    "run_id": "41113848189",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41113848189"
   },
   "run_attempt": 1,
   "run_id": "41113848189",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-30T19:17:41Z",
+  "status": "completed",
+  "timestamp": "2026-10-30T19:39:42Z",
   "workflow": "implement"
 }
