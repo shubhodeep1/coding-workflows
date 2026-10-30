@@ -106,7 +106,8 @@ ENGINE_POOL_REASON_UNAVAILABLE = "unavailable"
 # The heal scope of an engine_fallback issue: the engine support code that
 # decides, runs or reports a Claude fallback. Fixed, so neither the report nor
 # the diagnosis can widen it; each path is kept only when it exists at the
-# scope commit (render_heal_scope_marker).
+# scope commit (render_heal_scope_marker). The pool token step is included
+# because its OIDC request decides no_credential fallbacks (#8481).
 ENGINE_FALLBACK_SCOPE_PATHS: tuple[str, ...] = (
 	"scripts/ai_engine.sh",
 	"scripts/claude_engine.py",
@@ -116,6 +117,7 @@ ENGINE_FALLBACK_SCOPE_PATHS: tuple[str, ...] = (
 	"scripts/ai_engine_fallback_report.sh",
 	".github/actions/install-claude/action.yml",
 	".github/actions/claude-pool-token/action.yml",
+	"scripts/claude_pool_token.sh",
 )
 _ENGINE_REPORTER_RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
 _ENGINE_REPORTER_RUN_ATTEMPT_RE = re.compile(r"^[1-9][0-9]{0,3}$")
