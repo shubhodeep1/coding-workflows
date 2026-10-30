@@ -120,6 +120,11 @@ GIT_SAFE = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
 RUFF_CHECK_ARGS = ("check", "--select", "E,F", "--ignore", "E501")
 SHELLCHECK_ARGS = ("--severity=error",)
 MAX_NEW_STATIC_FINDINGS_LISTED = 20
+# Lint messages that cite another line (ruff F811 "from line 12", F402) are
+# normalised so a finding that only moved still matches the baseline.
+_STATIC_MESSAGE_LINE_RE = re.compile(r"\bline \d+\b")
+# Dropped from a failing-stamp reason when another finding holds the push.
+STAMP_FAILURES_NOT_HELD = " The push was not held for this."
 
 _TEST_JS_RE = re.compile(r".+\.(?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs)$")
 _ASSERTION_RE = re.compile(r"\bassert\b|self\.assert\w*\(|\bexpect\(|pytest\.raises|\bxfail\b|\bskip\b")
@@ -736,10 +741,14 @@ def _static_findings(tool: str, files: list[str], cwd: Path, deadline: float) ->
 	for entry in entries:
 		if not isinstance(entry, dict):
 			return None
-		name = str(entry.get("filename") if tool == "ruff" else entry.get("file") or "")
+		name = str((entry.get("filename") if tool == "ruff" else entry.get("file")) or "")
+		if not name:
+			return None
 		if os.path.isabs(name):
 			name = os.path.relpath(os.path.realpath(name), root)
-		findings.append((PurePosixPath(name).as_posix(), str(entry.get("code")), str(entry.get("message"))))
+		code = "" if entry.get("code") is None else str(entry.get("code"))
+		message = _STATIC_MESSAGE_LINE_RE.sub("line N", str(entry.get("message")))
+		findings.append((PurePosixPath(name).as_posix(), code, message))
 	return findings
 
 
@@ -782,6 +791,11 @@ def classify_baseline(
 	given: a static unit whose findings all exist on the baseline too is
 	inherited, otherwise it stays caused by the change and its tail lists the
 	added findings.
+
+	Each re-run unit gets `baseline_status` (the re-run's status). A unit
+	whose re-run timed out or could not start stays in pr_caused here;
+	run_gate reports it as unverified, because nothing showed the change
+	caused it.
 	"""
 	if baseline is None or not baseline.is_dir():
 		return failed, []
@@ -789,6 +803,9 @@ def classify_baseline(
 	rerun = [unit for unit in failed if unit.get("kind") != "static" and (unit.get("file") is None or (baseline / unit["file"]).is_file())]
 	if rerun:
 		reran = run_units(rerun, baseline, deadline, shards)
+		baseline_statuses = {unit["id"]: unit.get("status") for unit in reran}
+		for unit in rerun:
+			unit["baseline_status"] = baseline_statuses.get(unit["id"])
 		inherited_ids = {unit["id"] for unit in reran if unit.get("status") == "fail"}
 	if repo is not None:
 		for unit in failed:
@@ -852,6 +869,15 @@ def run_gate(
 	# run used the whole budget, so a late failure can still be confirmed as
 	# inherited (the container wrapper allows 120 s past the budget).
 	pr_caused, inherited = classify_baseline(failed, baseline, max(deadline, time.monotonic() + BASELINE_MIN_SECS), shards, repo)
+	# A failure whose baseline re-run did not finish is unverified, not caused
+	# by the change: a slow test that fails on both trees would otherwise
+	# trigger a repair turn and a second full gate run (release v1.40.3).
+	baseline_unfinished = [r for r in pr_caused if r.get("baseline_status") in ("timeout", "error")]
+	if baseline_unfinished:
+		pr_caused = [r for r in pr_caused if r not in baseline_unfinished]
+		for r in baseline_unfinished:
+			# Keep the PR-side failing test names (not the tail) for diagnosis.
+			unverified.append({"item": r["id"], "reason": f"baseline_{r['baseline_status']}", "names": failing_names(r.get("tail", ""))})
 	changed_assertions = assertion_diff(repo, baseline, selection.get("changed_files", [])) if baseline is not None and baseline.is_dir() else []
 	if pr_caused:
 		status = "fail"
@@ -899,7 +925,9 @@ def write_summary(result: dict) -> str:
 				lines.append(f"- `{_sanitize_name(str(entry.get('test')))}`" + (f": {names}" if names else ""))
 	if result.get("unverified"):
 		lines += ["", "### Unverified", ""]
-		lines += [f"- `{_sanitize_name(str(u.get('item')))}`: {_sanitize_name(str(u.get('reason')))}" for u in result["unverified"]]
+		for u in result["unverified"]:
+			names = ", ".join(f"`{_sanitize_name(n)}`" for n in [n for n in (u.get("names") or []) if isinstance(n, str)][:10])
+			lines.append(f"- `{_sanitize_name(str(u.get('item')))}`: {_sanitize_name(str(u.get('reason')))}" + (f" (failed on this change: {names})" if names else ""))
 	if result.get("changed_assertions"):
 		lines += ["", "### Changed pre-existing assertions", ""]
 		lines += [f"- `{_sanitize_name(str(a.get('file')))}` ({a.get('kind')}): `{_sanitize_name(str(a.get('line')))}`" for a in result["changed_assertions"]]
@@ -1227,7 +1255,21 @@ def _hook_findings(payload: object) -> tuple[list[tuple[str, str]], str]:
 			))
 			continue
 		status = stamp.get("status")
+		# A non-string status (list, object) is unhashable; treat it as missing.
+		if not isinstance(status, str):
+			status = None
 		if status in PASSING_STAMP_STATUSES:
+			continue
+		if status != "fail":
+			# A stamp with a missing or unknown status records no gate result,
+			# so it holds the push like before instead of passing as failures.
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"The pre-push test stamp for {head[:12]} has no valid status, so it records no gate result. "
+					f"Run `{STAMP_COMMAND}` again, or confirm to push anyway."
+				),
+			))
 			continue
 		failures = stamp.get("failures") if isinstance(stamp.get("failures"), list) else []
 		listed = ", ".join(_sanitize_name(str(f.get("test"))) for f in failures[:MAX_HOOK_FAILURES_LISTED] if isinstance(f, dict))
@@ -1235,7 +1277,7 @@ def _hook_findings(payload: object) -> tuple[list[tuple[str, str]], str]:
 			FINDING_STAMP_FAILURES,
 			(
 				f"The pre-push test stamp for {head[:12]} records {len(failures)} failure(s) this change caused"
-				+ (f": {listed}" if listed else "") + ". The push was not held for this. Fix them and push again, "
+				+ (f": {listed}" if listed else "") + "." + STAMP_FAILURES_NOT_HELD + " Fix them and push again, "
 				"or tell the user why they are not this change's to fix."
 			),
 		))
@@ -1276,6 +1318,8 @@ def hook_decision(payload: object) -> tuple[str, str, str]:
 	reason = "\n\n".join(text for _kind, text in all_findings)
 	if not findings:
 		return DECISION_CONTEXT_ONLY, reason, warning
+	# Another finding holds (or stops) the push, so do not say it was not held.
+	reason = reason.replace(STAMP_FAILURES_NOT_HELD, "")
 	if is_auto_permission_mode(payload) and all(kind in SESSION_FIXABLE_FINDINGS for kind, _text in findings):
 		return "deny", (
 			reason.replace(" " + GATE_OFF_HINT, "") + "\n\nAuto mode: nothing ran (any branch or commit in this command was not "

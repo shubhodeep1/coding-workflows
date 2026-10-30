@@ -1622,6 +1622,48 @@ jobs:
             return 0
           }
 
+          # Issue #8376 (run 40876853022): on the stall exit only, log why the
+          # scoped Implement run made no progress. Fail-open: called in a
+          # subshell after status=timeout is written. API strings go through
+          # tojson and every line starts with "stall-diag", so no workflow command.
+          # API audit: the paged window reads (scoped_implement_progress_counts)
+          # carry no by-ID run/jobs detail and no repo-wide in-progress list;
+          # these four reads run once, on the stall exit only.
+          log_implement_stall_diagnostics() {
+            set +e
+            local stall_diag_id="${IMPL_RUN_ID_LATEST:-}" stall_diag_json="" stall_diag_out="" stall_diag_status="${IMPL_RUN_STATUS:-}"
+            local stall_diag_defs='def s: (if type == "string" then .[:120] else . end) | tojson;'
+            local stall_diag_runs='def runs($k): if (.workflow_runs | type) != "array" then error("bad") else [.workflow_runs[] | select((.name | type) == "string" and (.name | test("Implement"; "i")) and (.id | tostring) != $id) | select($k == "in-progress-run" or .status != "completed")] | if length == 0 then "  stall-diag \($k): none" else (.[:20][] | "  stall-diag \($k): id=\(.id | s) title_matches=\(.display_title == $title) title=\(.display_title | s) status=\(.status | s) event=\(.event | s) created_at=\(.created_at | s) run_started_at=\(.run_started_at | s)"), (if length > 20 then "  stall-diag \($k): truncated, \(length - 20) more" else empty end) end end;'
+            echo "Implement stall diagnostics (cause unverified; may be environmental): window created>${IMPL_CREATED_AFTER:-}"
+            if [[ "$stall_diag_id" =~ ^[0-9]+$ ]]; then
+              stall_diag_json=$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs/${stall_diag_id}" 2>/dev/null || true)
+              stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r --argjson id "$stall_diag_id" "$stall_diag_defs"' if type == "object" and .id == $id then "  stall-diag latest-run: id=\(.id) name=\(.name | s) event=\(.event | s) status=\(.status | s) conclusion=\(.conclusion | s) created_at=\(.created_at | s) run_started_at=\(.run_started_at | s) updated_at=\(.updated_at | s) run_attempt=\(.run_attempt | s)" else empty end' 2>/dev/null)
+              echo "${stall_diag_out:-  stall-diag latest-run: unavailable}"
+              # Prefer the fresh status over the 30s-cached one for the warning.
+              stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r --argjson id "$stall_diag_id" 'if type == "object" and .id == $id and (.status | type) == "string" then .status else empty end' 2>/dev/null)
+              stall_diag_status="${stall_diag_out:-$stall_diag_status}"
+              stall_diag_json=$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs/${stall_diag_id}/jobs?per_page=30" 2>/dev/null || true)
+              stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r "$stall_diag_defs"' if (.jobs | type) != "array" then error("bad") elif (.jobs | length) == 0 then "  stall-diag jobs: none" else .jobs[:30][] | "  stall-diag job: name=\(.name | s) status=\(.status | s) conclusion=\(.conclusion | s) started_at=\(.started_at | s) runner=\(.runner_name | s) step=\([.steps[]? | select(.status == "in_progress")] | last | .name // null | s)" end' 2>/dev/null)
+              echo "${stall_diag_out:-  stall-diag jobs: unavailable}"
+            else
+              stall_diag_id=""
+              echo "  stall-diag latest-run: none (no scoped Implement run in window)"
+            fi
+            stall_diag_json=$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${IMPL_CREATED_AFTER:-}" 2>/dev/null || true)
+            stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r --arg id "$stall_diag_id" --arg title "${ISSUE_TITLE:-}" "$stall_diag_defs$stall_diag_runs"' runs("window-run")' 2>/dev/null)
+            echo "${stall_diag_out:-  stall-diag window-run: unavailable}"
+            # One page of 100 runs only: say so when it is full, so "none" is not read as absence.
+            if printf '%s' "$stall_diag_json" | jq -e '(.workflow_runs | type) == "array" and (.workflow_runs | length) >= 100' >/dev/null 2>&1; then
+              echo "  stall-diag window-run: note: only the newest 100 runs in the window were read"
+            fi
+            stall_diag_json=$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs?status=in_progress&per_page=100" 2>/dev/null || true)
+            stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r --arg id "$stall_diag_id" --arg title "${ISSUE_TITLE:-}" "$stall_diag_defs$stall_diag_runs"' runs("in-progress-run")' 2>/dev/null)
+            echo "${stall_diag_out:-  stall-diag in-progress-run: unavailable}"
+            if [[ ",${IMPL_PREV_LABELS:-}," == *",ai:implementing,"* ]] && [[ "$stall_diag_status" =~ ^(pending|queued|waiting|requested)$ ]]; then
+              echo "::warning::Issue #${ISSUE_NUMBER} carries ai:implementing but its latest scoped Implement run ${stall_diag_id:-unknown} is still ${stall_diag_status} at the stall — the run never started; see the stall-diag lines for a concurrency holder (cause unverified, may be environmental)"
+            fi
+          }
+
           IMPL_PREV_LABELS=""
           # The counter can read up to SCOPED_RUN_LOOKUP_MAX_PAGES pages, so it
           # re-reads at most every 30s and the last counts are reused in between.
@@ -1782,6 +1824,7 @@ jobs:
             if [ "$IDLE" -ge "$EFFECTIVE_LIMIT" ]; then
               echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}$(e2e_watched_run_urls)"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
+              ( log_implement_stall_diagnostics ) || echo "  stall-diag: diagnostics failed (ignored)"
               exit 1
             fi
 
@@ -3432,6 +3475,16 @@ jobs:
             echo "status=no_run" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          # A run was found but never reached `completed` inside the budget
+          # (for example still `pending` behind its concurrency group). This
+          # used to write an empty `status=`, which the results table showed
+          # as SKIPPED (run 40794181365).
+          if [ "${STATUS:-}" != "completed" ]; then
+            echo "::error::cancel-on-close run #${NEW_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS:-?})"
+            echo "status=timeout" >> "$GITHUB_OUTPUT"
+            echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if [ "${NEW_CONCLUSION}" != "success" ]; then
             echo "::error::cancel-on-close run #${NEW_RUN_ID} concluded ${NEW_CONCLUSION}"
             echo "status=${NEW_CONCLUSION}" >> "$GITHUB_OUTPUT"
@@ -3625,7 +3678,14 @@ jobs:
           if [ "$CANCEL" = "success" ]; then
             echo "  ✓ Cancel-PR .. PASSED (cancel_on_pr_close ran successfully; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
           elif [ -z "$CANCEL" ]; then
-            echo "  - Cancel-PR .. SKIPPED (no PR to close)"
+            if [ -n "${PR_NUMBER:-}" ]; then
+              # A smoke PR exists, so Phase 7 should have written a status;
+              # an empty one means it aborted or never ran. Fail closed.
+              echo "  ✗ Cancel-PR .. FAILED (no status; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
+              PASSED=false
+            else
+              echo "  - Cancel-PR .. SKIPPED (no PR to close)"
+            fi
           else
             echo "  ✗ Cancel-PR .. FAILED (${CANCEL}; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
             PASSED=false

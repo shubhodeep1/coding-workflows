@@ -96,6 +96,13 @@ ENGINE_FALLBACK_CAPACITY_REASONS: tuple[str, ...] = ("all_gated", "all_usage_lim
 _ENGINE_ROLE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
 _ENGINE_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
 ENGINE_FALLBACK_MAX_RECORDS = 20
+# The Claude pool step's reason token (scripts/claude_pool_token.sh), carried
+# as one evidence line of an engine_fallback report when the reporter has a
+# source for it (issue #8406). Anything outside the pattern becomes
+# "unavailable"; the line is diagnostic only and never enters the fingerprint.
+_ENGINE_POOL_REASON_RE = re.compile(r"^[a-z0-9_]{1,60}$")
+ENGINE_POOL_REASON_EVIDENCE_PREFIX = "Claude pool step reason: "
+ENGINE_POOL_REASON_UNAVAILABLE = "unavailable"
 # The heal scope of an engine_fallback issue: the engine support code that
 # decides, runs or reports a Claude fallback. Fixed, so neither the report nor
 # the diagnosis can widen it; each path is kept only when it exists at the
@@ -762,7 +769,12 @@ def extract_run_refs(texts: Iterable[str], repo: str, limit: int = MAX_RUN_REFS)
 # A failed release-gate job often only polls or dispatches the run where the
 # failure really happened. The intake follows same-repository run links found
 # in the failed jobs' filtered logs and renders their step timelines for the
-# network-isolated diagnosis. Evidence only: never a heal-scope input.
+# network-isolated diagnosis. The timelines and logs are evidence only. A
+# linked run feeds the heal scope only through `heal-scope
+# linked-workflow-paths` (issue #8360): for a release or promotion source in
+# this repository, before the scope freeze, its workflow file (API `.path`),
+# the reusable workflows that file calls and the scripts its failed or longest
+# step runs, all read from the scope-commit tree. The diagnosis never adds a path.
 
 LINKED_RUN_LONG_STEP_SECS = 600
 LINKED_RUN_MAX_JOBS = 20
@@ -1602,6 +1614,35 @@ def engine_fallback_fingerprint(role: str, reason: str) -> str:
 	return fingerprint("ai-engine-fallback", role, reason)
 
 
+def _engine_pool_reason_token(value: str | None) -> str:
+	"""The pool reason token when it matches the pattern, else "unavailable"."""
+	if isinstance(value, str) and _ENGINE_POOL_REASON_RE.fullmatch(value):
+		return value
+	return ENGINE_POOL_REASON_UNAVAILABLE
+
+
+def _filter_engine_pool_reason_lines(evidence: str) -> str:
+	"""Keep at most one valid ``Claude pool step reason:`` evidence line.
+
+	Evidence without such a line is returned unchanged (byte-identical).
+	Otherwise the first line whose token matches the pattern is kept and every
+	other prefixed line (invalid or duplicate) is dropped. Idempotent.
+	"""
+	lines = evidence.split("\n")
+	if not any(line.startswith(ENGINE_POOL_REASON_EVIDENCE_PREFIX) for line in lines):
+		return evidence
+	kept: list[str] = []
+	seen = False
+	for line in lines:
+		if line.startswith(ENGINE_POOL_REASON_EVIDENCE_PREFIX):
+			token = line[len(ENGINE_POOL_REASON_EVIDENCE_PREFIX):]
+			if seen or not _ENGINE_POOL_REASON_RE.fullmatch(token):
+				continue
+			seen = True
+		kept.append(line)
+	return "\n".join(kept)
+
+
 def build_engine_fallback_payload(
 	*,
 	repo: str,
@@ -1614,6 +1655,7 @@ def build_engine_fallback_payload(
 	records: Iterable[str],
 	now: datetime | None = None,
 	run_attempt: str | None = None,
+	pool_reason: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a refused (non-capacity) AI engine fallback.
 
@@ -1622,6 +1664,10 @@ def build_engine_fallback_payload(
 	the heal prompt. ``reporter_run`` names the reporting run and attempt
 	(``GITHUB_RUN_ID`` / ``GITHUB_RUN_ATTEMPT``, attempt 1 when unset); the
 	intake verifies it before using it as the heal scope's run.
+	``pool_reason`` (issue #8406), when not None, adds one
+	``Claude pool step reason: <token>`` evidence line; a token outside
+	``^[a-z0-9_]{1,60}$`` becomes "unavailable". None leaves the payload
+	exactly as before, and the fingerprint (role, reason) never changes.
 	"""
 	now = now or _utc_now()
 	if not _ENGINE_ROLE_RE.match(role or ""):
@@ -1641,7 +1687,10 @@ def build_engine_fallback_payload(
 		if len(kept) >= ENGINE_FALLBACK_MAX_RECORDS:
 			break
 	run_number = _positive_int(run_id)
-	evidence = "\n".join(["AI engine fallback records (v1 epoch role reason class action policy):", *kept])
+	evidence_lines = ["AI engine fallback records (v1 epoch role reason class action policy):", *kept]
+	if pool_reason is not None:
+		evidence_lines.append(f"{ENGINE_POOL_REASON_EVIDENCE_PREFIX}{_engine_pool_reason_token(pool_reason)}")
+	evidence = "\n".join(evidence_lines)
 	return {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -2492,7 +2541,9 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	}
 	if kind == "engine_fallback":
 		normalized.update({"engine_role": payload["engine_role"], "engine_reason": payload["engine_reason"],
-			"reporter_run": _engine_reporter_run(payload.get("reporter_run"))})
+			"reporter_run": _engine_reporter_run(payload.get("reporter_run")),
+			# At most one valid pool reason line survives (issue #8406).
+			"failure_evidence": _filter_engine_pool_reason_lines(normalized["failure_evidence"])})
 	if kind == "synced_security_finding":
 		# Only validated fields: no title, excerpt, label, branch or conclusion
 		# text from the report reaches the public issue (Q245).
@@ -3575,6 +3626,14 @@ def heal_scope_guard_subjects(test_files: Iterable[str], exists: Any, oversized_
 
 # Explicit scope slots reserved for failing-test subjects ahead of changed_files.
 HEAL_SCOPE_SUBJECT_RESERVE = 8
+# Linked-run scope paths (issue #8360) one intake may add to self_workflows.
+# They count toward the marker's 20 explicit slots but sit ahead of the subject
+# reserve in workflow_paths, so this sub-cap keeps HEAL_SCOPE_SUBJECT_RESERVE
+# slots free: without it linked runs could take every explicit slot and confine
+# a test-failure heal to tests/** again (#6907/#6916). The intake's scope freeze
+# also subtracts the source workflow, engine and crash paths already ahead of
+# the subjects, so the reserve holds when those are present too.
+HEAL_SCOPE_LINKED_PATHS_MAX = 20 - HEAL_SCOPE_SUBJECT_RESERVE
 
 
 def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = ()) -> str:
@@ -5745,7 +5804,8 @@ def synced_security_source_paths(file: str, audit_gate_contract: Any = None) -> 
 	Same mapping as build_sync_manifest.derive_managed_digests: a top-level
 	wrapper comes from workflow-templates/<name>.yml, a .claude/ file from
 	workflow-templates/.claude/, CLAUDE.md from CLAUDE.md, an audit-gate target
-	from its contract source. A retired file maps to nothing.
+	from its contract source. A retired file and a ``seed_only`` audit-gate
+	target (consumer-owned once created) map to nothing.
 	"""
 	paths: list[str] = []
 	prefix = ".github/workflows/"
@@ -5757,7 +5817,7 @@ def synced_security_source_paths(file: str, audit_gate_contract: Any = None) -> 
 		paths.append("CLAUDE.md")
 	contract = audit_gate_contract if isinstance(audit_gate_contract, dict) else {}
 	for item in contract.get("managed_files") or []:
-		if not isinstance(item, dict):
+		if not isinstance(item, dict) or item.get("seed_only") is True:
 			continue
 		source, target = item.get("source"), item.get("target")
 		if target == file and isinstance(source, str) and source and is_valid_repo_path("workflow-templates/audit-gate/" + source):
@@ -6777,6 +6837,7 @@ def _cmd_build_engine_fallback_payload(args: argparse.Namespace) -> int:
 		reporter_run_url=args.reporter_run_url or None,
 		records=[line for line in records if f"\t{args.role}\t{args.reason}\t" in line],
 		run_attempt=args.run_attempt or None,
+		pool_reason=args.pool_reason,
 	)
 	validate_payload(payload)
 	_write_json(payload)
@@ -7187,6 +7248,271 @@ def _heal_regular_file_at_ref(checkout: str, ref: str, path: str) -> bool:
 		and result.stdout.startswith((b"100644 blob ", b"100755 blob ")) and result.stdout.count(b"\0") == 1)
 
 
+# --- Linked-run heal scope (issue #8360) ------------------------------------
+# A release-gate step often only dispatches or polls another workflow, and the
+# defect sits in that workflow. For a release or promotion source in this
+# repository, each same-repository linked run (already read by the intake for
+# its timeline, #8248) adds to the frozen scope: (1) its own workflow file,
+# from the run's API `.path`; (2) the reusable workflows in this repository
+# that file calls in a `jobs.<id>.uses:` line, one hop only; (3) the
+# `scripts/...` paths named in the `run:` body of its first failed step, else
+# its longest step, matched by exact name. Every path is read from the tree at
+# the scope commit and must pass _safe_heal_path and exist there as a regular
+# file; none comes from the diagnosis. Files reached only through imports or
+# `source` lines are not followed.
+_LINKED_SCOPE_WORKFLOW_PATH_RE = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
+_LINKED_SCOPE_LOCAL_USES_RE = re.compile(r"^\./(\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)$")
+_LINKED_SCOPE_REMOTE_USES_RE = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)@[A-Za-z0-9_./-]+$")
+_LINKED_SCOPE_FAILED_CONCLUSIONS = ("failure", "timed_out")
+HEAL_SCOPE_LINKED_YAML_MAX_BYTES = 600_000
+# Existing script paths kept per matched step (counted after the existence check).
+# Equal to the linked-path cap, so only that cap (and the marker's 20 slots)
+# bounds a step's scripts; issue #8360 asks for no narrower per-step limit.
+HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP = HEAL_SCOPE_LINKED_PATHS_MAX
+
+
+def heal_scope_linked_workflows_gate(*, enabled: Any, source_kind: Any, source_repo: Any, self_repo: Any, source_workflow_paths: Iterable[Any]) -> str:
+	"""``disabled``, ``eligible`` or ``ineligible`` for linked-run scope paths.
+
+	Eligible only for a ``workflow_run`` report from this repository whose
+	verified run is a release or promotion workflow (RELEASE_WORKFLOW_FILES,
+	read from the authenticated run ``.path``). Only the literal ``false``
+	(any case) disables it; an empty value keeps it on.
+	"""
+	if str(enabled if enabled is not None else "").strip().lower() == "false":
+		return "disabled"
+	if source_kind != "workflow_run" or not isinstance(source_repo, str) or not isinstance(self_repo, str) \
+		or not source_repo or source_repo.casefold() != self_repo.casefold():
+		return "ineligible"
+	for path in source_workflow_paths or ():
+		if isinstance(path, str) and _run_workflow_file({"path": path}) in RELEASE_WORKFLOW_FILES:
+			return "eligible"
+	return "ineligible"
+
+
+def _linked_scope_step_name(run: dict[str, Any], jobs: dict[str, Any]) -> str | None:
+	"""The first failed step's name in job order, else the longest step's.
+
+	Durations follow render_linked_run_timeline: a step still running ends at
+	the run's ``updated_at``; a step without a usable start or end is ignored.
+	"""
+	job_list = [job for job in jobs.get("jobs") or [] if isinstance(job, dict)]
+	step_lists = [[step for step in (job.get("steps") or []) if isinstance(step, dict) and step.get("conclusion") != "skipped"] for job in job_list]
+	for steps in step_lists:
+		for step in steps:
+			if step.get("conclusion") in _LINKED_SCOPE_FAILED_CONCLUSIONS and isinstance(step.get("name"), str) and step["name"]:
+				return step["name"]
+	run_updated = _parse_actions_ts(run.get("updated_at"))
+	longest_name: str | None = None
+	longest_secs = -1
+	for steps in step_lists:
+		for step in steps:
+			start = _parse_actions_ts(step.get("started_at"))
+			end = _parse_actions_ts(step.get("completed_at"))
+			if start is None:
+				continue
+			if end is None and step.get("status") != "completed" and run_updated is not None:
+				end = run_updated
+			if end is None or end < start:
+				continue
+			duration = int((end - start).total_seconds())
+			if duration > longest_secs and isinstance(step.get("name"), str) and step["name"]:
+				longest_secs = duration
+				longest_name = step["name"]
+	return longest_name
+
+
+def _linked_scope_workflow_steps(doc: Any) -> list[dict[str, Any]]:
+	steps: list[dict[str, Any]] = []
+	workflow_jobs = doc.get("jobs") if isinstance(doc, dict) else None
+	if isinstance(workflow_jobs, dict):
+		for job in workflow_jobs.values():
+			if isinstance(job, dict) and isinstance(job.get("steps"), list):
+				steps.extend(step for step in job["steps"] if isinstance(step, dict))
+	return steps
+
+
+def heal_scope_linked_workflow_paths(run: Any, jobs: Any, *, repo: str, exists: Any, read_file: Any) -> dict[str, Any]:
+	"""Scope paths one linked run adds (issue #8360), with skip reasons.
+
+	``exists(path)`` checks for a regular file at the scope commit and
+	``read_file(path)`` returns its text (``None`` when unreadable). Returns
+	``{"paths": [...], "skipped": [{"run_id", "reason"}]}``; paths are unique
+	and in order (own workflow, called workflows, step scripts). The caller
+	applies HEAL_SCOPE_LINKED_PATHS_MAX.
+	"""
+	paths: list[str] = []
+	skipped: list[dict[str, str]] = []
+	run_id = "?"
+	if isinstance(run, dict) and isinstance(run.get("id"), int) and not isinstance(run.get("id"), bool) and run["id"] > 0:
+		run_id = str(run["id"])
+
+	def _skip(reason: str) -> None:
+		skipped.append({"run_id": run_id, "reason": reason})
+
+	def _result() -> dict[str, Any]:
+		return {"paths": paths, "skipped": skipped}
+
+	if run_id == "?":
+		_skip("run_malformed")
+		return _result()
+	repository = run.get("repository")
+	full_name = repository.get("full_name") if isinstance(repository, dict) else None
+	if not isinstance(full_name, str) or not full_name:
+		_skip("run_malformed")
+		return _result()
+	if full_name.casefold() != str(repo).casefold():
+		_skip("other_repository")
+		return _result()
+	head_repository = run.get("head_repository")
+	head_name = head_repository.get("full_name") if isinstance(head_repository, dict) else None
+	if isinstance(head_name, str) and head_name and head_name.casefold() != str(repo).casefold():
+		_skip("fork_head")
+		return _result()
+	raw_path = run.get("path")
+	own_path = raw_path.split("@", 1)[0] if isinstance(raw_path, str) else ""
+	if not _LINKED_SCOPE_WORKFLOW_PATH_RE.fullmatch(own_path) or ".." in own_path:
+		_skip("path_malformed")
+		return _result()
+	if not _safe_heal_path(own_path):
+		_skip("path_unsafe")
+		return _result()
+	if not exists(own_path):
+		_skip("file_missing")
+		return _result()
+	paths.append(own_path)
+	try:
+		import yaml  # noqa: PLC0415 - optional; without it only the run's own workflow is added
+	except ImportError:
+		_skip("yaml_unavailable")
+		return _result()
+
+	def _load(path: str) -> dict[str, Any] | None:
+		try:
+			text = read_file(path)
+		except (OSError, ValueError):
+			return None
+		if not isinstance(text, str) or len(text.encode("utf-8", errors="replace")) > HEAL_SCOPE_LINKED_YAML_MAX_BYTES:
+			return None
+		try:
+			doc = yaml.safe_load(text)
+		except (yaml.YAMLError, ValueError, RecursionError):
+			return None
+		return doc if isinstance(doc, dict) else None
+
+	own_doc = _load(own_path)
+	if own_doc is None:
+		_skip("yaml_unreadable")
+		return _result()
+	docs = [own_doc]
+	own_jobs = own_doc.get("jobs")
+	for job in (own_jobs.values() if isinstance(own_jobs, dict) else ()):
+		uses = job.get("uses") if isinstance(job, dict) else None
+		if not isinstance(uses, str):
+			continue
+		uses = uses.strip()
+		callee = None
+		local_match = _LINKED_SCOPE_LOCAL_USES_RE.fullmatch(uses)
+		remote_match = _LINKED_SCOPE_REMOTE_USES_RE.fullmatch(uses)
+		if local_match:
+			callee = local_match.group(1)
+		elif remote_match and remote_match.group(1).casefold() == str(repo).casefold():
+			callee = remote_match.group(2)
+		if callee is None or ".." in callee:
+			_skip("uses_foreign")
+			continue
+		if not _safe_heal_path(callee) or not exists(callee):
+			_skip("file_missing")
+			continue
+		if callee in paths:
+			continue
+		paths.append(callee)
+		# One hop: the callee is read for its steps only, never for its own uses:.
+		callee_doc = _load(callee)
+		if callee_doc is None:
+			_skip("yaml_unreadable")
+		else:
+			docs.append(callee_doc)
+	if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
+		_skip("jobs_malformed")
+		return _result()
+	step_name = _linked_scope_step_name(run, jobs)
+	matching = [step for doc in docs for step in _linked_scope_workflow_steps(doc) if step_name is not None and step.get("name") == step_name]
+	if not matching:
+		_skip("step_unmatched")
+		return _result()
+	for step in matching:
+		body = step.get("run")
+		if not isinstance(body, str):
+			continue
+		candidates: list[str] = []
+		for match in _CRASH_ERROR_PATH_RE.finditer(body):
+			candidate = match.group("path")
+			if candidate.startswith("scripts/") and candidate not in candidates:
+				candidates.append(candidate)
+		step_scripts = 0
+		for candidate in candidates:
+			if step_scripts >= HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP:
+				_skip("cap_reached")
+				break
+			if not _safe_heal_path(candidate) or not exists(candidate):
+				_skip("script_missing")
+			elif candidate not in paths:
+				paths.append(candidate)
+				step_scripts += 1
+	return _result()
+
+
+def heal_scope_linked_paths_for_runs(pairs: Iterable[tuple[str, str]], *, repo: str, exists: Any, read_file: Any) -> dict[str, Any]:
+	"""Merge heal_scope_linked_workflow_paths over cached (run, jobs) files.
+
+	Paths are de-duplicated in run order and capped at
+	HEAL_SCOPE_LINKED_PATHS_MAX (each dropped path adds ``cap_reached``); an
+	unreadable cache file adds ``cache_unreadable``.
+	"""
+	pair_list = list(pairs)
+	paths: list[str] = []
+	skipped: list[dict[str, str]] = []
+	for run_file, jobs_file in pair_list:
+		try:
+			run = _load_json_file(run_file)
+			jobs = _load_json_file(jobs_file)
+		except (OSError, ValueError):
+			skipped.append({"run_id": "?", "reason": "cache_unreadable"})
+			continue
+		found = heal_scope_linked_workflow_paths(run, jobs, repo=repo, exists=exists, read_file=read_file)
+		skipped.extend(found["skipped"])
+		for path in found["paths"]:
+			if path in paths:
+				continue
+			if len(paths) >= HEAL_SCOPE_LINKED_PATHS_MAX:
+				skipped.append({"run_id": str(run.get("id")) if isinstance(run, dict) else "?", "reason": "cap_reached"})
+				continue
+			paths.append(path)
+	return {"outcome": "added" if paths else "none", "paths": paths, "skipped": skipped, "runs": len(pair_list)}
+
+
+def _heal_scope_linked_workflow_paths_cli(args: argparse.Namespace) -> dict[str, Any]:
+	gate = heal_scope_linked_workflows_gate(enabled=args.enabled, source_kind=args.source_kind, source_repo=args.source_repo,
+		self_repo=args.self_repo, source_workflow_paths=args.source_workflow_paths or [])
+	if gate != "eligible" or not _SHA_RE.match(args.ref or ""):
+		return {"outcome": "disabled" if gate == "disabled" else "skipped", "paths": [], "skipped": [], "runs": 0}
+	run_files = list(args.run_json or [])
+	jobs_files = list(args.jobs_json or [])
+	pairs = [(run_file, jobs_files[index] if index < len(jobs_files) else "") for index, run_file in enumerate(run_files)]
+
+	def _exists(path: str) -> bool:
+		return _heal_regular_file_at_ref(args.checkout, args.ref, path)
+
+	def _read_file(path: str) -> str | None:
+		result = subprocess.run(["git", "show", f"{args.ref}:{path}"], cwd=args.checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+		if result.returncode != 0 or len(result.stdout) > HEAL_SCOPE_LINKED_YAML_MAX_BYTES:
+			return None
+		return result.stdout.decode("utf-8", errors="replace")
+
+	return heal_scope_linked_paths_for_runs(pairs, repo=args.repo or args.self_repo, exists=_exists, read_file=_read_file)
+
+
 def _heal_test_files_for_names(checkout: str, ref: str, names: Iterable[str]) -> list[str]:
 	"""Test files under tests/ at ``ref`` that define one of the failing test functions."""
 	found: list[str] = []
@@ -7273,6 +7599,14 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 					if item not in merged[key] and len(merged[key]) < FAILING_TEST_LIMIT:
 						merged[key].append(item)
 		_write_json(merged)
+	elif args.operation == "linked-workflow-paths":
+		# Fail open (issue #8360): any error adds no path, which is the
+		# behaviour without this operation.
+		try:
+			linked_result = _heal_scope_linked_workflow_paths_cli(args)
+		except Exception:  # noqa: BLE001 - never block the scope freeze
+			linked_result = {"outcome": "skipped", "paths": [], "skipped": [{"run_id": "?", "reason": "helper_failed"}], "runs": 0}
+		_write_json(linked_result)
 	elif args.operation == "check-marker":
 		result = check_heal_scope_marker_file(args.marker_file)
 		_write_json(result)
@@ -7743,6 +8077,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--reporter-run-url", default="")
 	p.add_argument("--records-file", default="")
 	p.add_argument("--run-attempt", default="", help="GITHUB_RUN_ATTEMPT of the reporting run (default 1)")
+	# Default None, not "": omitted keeps today's payload; "" means a source
+	# existed but was empty, which becomes "unavailable" (issue #8406).
+	p.add_argument("--pool-reason", default=None, help="Claude pool step reason token ([a-z0-9_]{1,60}; anything else becomes 'unavailable')")
 	p.set_defaults(func=_cmd_build_engine_fallback_payload)
 
 	p = sub.add_parser("verify-engine-reporter-run", help="Bind an engine_fallback report's reporter_run to the fetched run object; exit 1 when it does not bind")
@@ -8022,8 +8359,17 @@ def build_parser() -> argparse.ArgumentParser:
 	p.set_defaults(func=_cmd_heal_queue)
 
 	p = sub.add_parser("heal-scope")
-	p.add_argument("operation", choices=("render", "verify", "verify-edits", "carry", "strip", "failing-tests", "check-marker"))
+	p.add_argument("operation", choices=("render", "verify", "verify-edits", "carry", "strip", "failing-tests", "check-marker", "linked-workflow-paths"))
 	p.add_argument("--log-files", nargs="*")
+	# linked-workflow-paths (issue #8360): cached linked run / jobs JSON pairs.
+	p.add_argument("--run-json", action="append", default=[])
+	p.add_argument("--jobs-json", action="append", default=[])
+	p.add_argument("--repo", default="")
+	p.add_argument("--source-kind", default="")
+	p.add_argument("--source-repo", default="")
+	p.add_argument("--self-repo", default="")
+	p.add_argument("--source-workflow-paths", nargs="*", default=[])
+	p.add_argument("--enabled", default="true")
 	p.add_argument("--marker-file", default="")
 	p.add_argument("--input-json", default="")
 	p.add_argument("--body-file", default="")
