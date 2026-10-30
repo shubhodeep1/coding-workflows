@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-10-30T16:45:33Z",
+  "issue_number": 8474,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 010 as out-of-scope; anchor=tests/test_agents_fragment_contract.py:74-82; cited_path=tests/test_agents_fragment_contract.py, tests/test_changelog_fragment_contract.py; files_touched=.github/workflows/ci.yml, agents.d/heal-reproduce.md, changelog.d/heal-reproduce.md, docs/INVENTORY.md, docs/scripts-pending-removal.md, scripts/heal_reproduce.sh, tests/test_heal_reproduce.py, tests/test_heal_reproduce_docker_e2e.py.",
+  "phase": "review_autofix",
+  "pr_number": 8477,
+  "record_id": "lesson_20261030164533_2323896994",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_agents_fragment_contract.py, tests/test_changelog_fragment_contract.py",
+    "tests/test_agents_fragment_contract.py",
+    ".github/workflows/ci.yml",
+    "agents.d/heal-reproduce.md",
+    "changelog.d/heal-reproduce.md",
+    "docs/INVENTORY.md",
+    "docs/scripts-pending-removal.md",
+    "scripts/heal_reproduce.sh",
+    "tests/test_heal_reproduce.py",
+    "tests/test_heal_reproduce_docker_e2e.py"
+  ]
+}
