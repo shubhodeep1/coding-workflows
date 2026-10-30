@@ -714,9 +714,14 @@ heal_impl_repro_check()
 	# The repro tree is a clean HEAD checkout while the manifest baseline is the
 	# host workspace, so this transfer can fail (host baseline changed) where the
 	# host transfer would not. Hold with an accurate reason (exit 43); the heal
-	# is held and handed to a person either way.
+	# is held and handed to a person either way. A real scope violation keeps
+	# the host transfer's exit 42 / out_of_heal_scope.
 	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer \
-		"${root}/repro-tree" "${root}/source" "${root}/manifest.repro.json" --scope-file "${scope}" >/dev/null 2>&1; then
+		"${root}/repro-tree" "${root}/source" "${root}/manifest.repro.json" --scope-file "${scope}" >/dev/null 2>"${root}/results/repro-transfer.err"; then
+		if grep -q 'reason=out_of_heal_scope' "${root}/results/repro-transfer.err" 2>/dev/null; then
+			echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope" >&2
+			exit 42
+		fi
 		heal_impl_repro_finish repro_tree_unavailable "${failing_sha}"
 	fi
 	# Run 1: the edited tree, baseline the failing SHA.

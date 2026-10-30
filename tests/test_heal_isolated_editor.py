@@ -830,7 +830,7 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 		with_step: bool = True, validator_down_after_repair: bool = False, gate_budget: str = "", job_start_age: int = 0,
 		repro_enabled: bool | None = None, approval_body: str | None = None, plan_text: str | None = None,
 		issue_body: str | None = None, repro_results: dict | None = None, record_gate: bool = False,
-		with_prepare: bool = False, comments_text: str | None = None) -> dict:
+		with_prepare: bool = False, comments_text: str | None = None, scope_text: str | None = None) -> dict:
 	host = tmp_path / "host"
 	(host / "scripts").mkdir(parents=True)
 	(host / "tests").mkdir()
@@ -881,7 +881,7 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 	prompt = tmp_path / "prompt"
 	prompt.write_text("Edit the file")
 	scope = tmp_path / "scope"
-	scope.write_text("scripts/fix.py\ntests/**\nchangelog.d/*.md\n")
+	scope.write_text(scope_text if scope_text is not None else "scripts/fix.py\ntests/**\nchangelog.d/*.md\n")
 	output = tmp_path / "output"
 	env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PREPUSH_", "SUPPORT_", "RUNTIME_DIR"))}
 	for name in ("APPROVAL_COMMENT_ID", "WORKFLOW_HEAL_REPRODUCE_ENABLED", "ISSUE_COMMENTS_FILE", "PLAN_FILE", "ISSUE_BODY_FILE",
@@ -1202,3 +1202,14 @@ def test_repro_parametrized_id_with_comma_stays_whole(tmp_path: Path) -> None:
 	run = _repro_run(tmp_path, plan_text=plan, repro_results={"edited": _repro("unverified", "timeout")})
 	assert run["rc"] == 43, run["stderr"]
 	assert [row["test"] for row in run["repro_result"]["tests"]] == [param, _REPRO_TEST]
+
+
+def test_repro_out_of_scope_edit_keeps_exit_42(tmp_path: Path) -> None:
+	# The repro-tree transfer applies the heal scope: an out-of-scope edit keeps
+	# the host transfer's exit 42 / out_of_heal_scope, not exit 43.
+	run = _repro_run(tmp_path, scope_text="tests/**\nchangelog.d/*.md\n")
+	assert run["rc"] == 42, run["stderr"]
+	assert run["repro_calls"] == []
+	assert "phase=transfer engine=codex outcome=failed reason=out_of_heal_scope" in run["stderr"]
+	assert "phase=repro_check" not in run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
