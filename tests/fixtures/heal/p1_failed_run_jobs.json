@@ -1,0 +1,50 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 116021700411,
+      "run_id": 40876853022,
+      "name": "prepare",
+      "workflow_name": "Test & Mark Stable Release",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-27T09:40:20Z",
+      "completed_at": "2026-10-27T09:41:02Z",
+      "steps": [
+        {"name": "Set up job", "status": "completed", "conclusion": "success", "number": 1, "started_at": "2026-10-27T09:40:20Z", "completed_at": "2026-10-27T09:40:22Z"},
+        {"name": "Checkout repository", "status": "completed", "conclusion": "success", "number": 2, "started_at": "2026-10-27T09:40:22Z", "completed_at": "2026-10-27T09:40:31Z"},
+        {"name": "Resolve release candidate", "status": "completed", "conclusion": "success", "number": 3, "started_at": "2026-10-27T09:40:31Z", "completed_at": "2026-10-27T09:41:00Z"}
+      ]
+    },
+    {
+      "id": 116021700412,
+      "run_id": 40876853022,
+      "name": "e2e-smoke-test",
+      "workflow_name": "Test & Mark Stable Release",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-10-27T09:41:10Z",
+      "completed_at": "2026-10-27T11:02:40Z",
+      "steps": [
+        {"name": "Set up job", "status": "completed", "conclusion": "success", "number": 1, "started_at": "2026-10-27T09:41:10Z", "completed_at": "2026-10-27T09:41:12Z"},
+        {"name": "Checkout repository", "status": "completed", "conclusion": "success", "number": 2, "started_at": "2026-10-27T09:41:12Z", "completed_at": "2026-10-27T09:41:20Z"},
+        {"name": "Phase 1: Create smoke canary issues", "status": "completed", "conclusion": "success", "number": 3, "started_at": "2026-10-27T09:41:20Z", "completed_at": "2026-10-27T09:43:05Z"},
+        {"name": "Phase 2: Wait for orchestrate decomposition", "status": "completed", "conclusion": "success", "number": 4, "started_at": "2026-10-27T09:43:05Z", "completed_at": "2026-10-27T09:58:40Z"},
+        {"name": "Phase 3: Wait for implement PRs", "status": "completed", "conclusion": "failure", "number": 5, "started_at": "2026-10-27T09:58:40Z", "completed_at": "2026-10-27T11:00:02Z"},
+        {"name": "Phase 4: Verify review canary", "status": "completed", "conclusion": "skipped", "number": 6, "started_at": null, "completed_at": null},
+        {"name": "Post Checkout repository", "status": "completed", "conclusion": "success", "number": 7, "started_at": "2026-10-27T11:02:30Z", "completed_at": "2026-10-27T11:02:31Z"}
+      ]
+    },
+    {
+      "id": 116021700413,
+      "run_id": 40876853022,
+      "name": "mark-stable",
+      "workflow_name": "Test & Mark Stable Release",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2026-10-27T11:02:42Z",
+      "completed_at": "2026-10-27T11:02:42Z",
+      "steps": []
+    }
+  ]
+}
