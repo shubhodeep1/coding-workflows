@@ -476,8 +476,8 @@ jobs:
       # from recorded group totals: group 3 has not been named by budget-watch
       # since #8072, after which its unblock step left and its slice shrank to
       # a fifth (#8113). Group 3 also took "Validation self-test unit tests"
-      # from static-checks in #8394; with this step it pins four steps (see
-      # below). Name and body unchanged; still once per CI run.
+      # from static-checks in #8394; with this step it then pinned four steps
+      # (two since #8472, below). Name and body unchanged; still once per CI run.
       # Moved again, from orchestrate-poll (3) to static-checks:
       # orchestrate-poll (3) took 19m30s of its 20 minutes on main (run
       # 41071474282, budget-watch issue #8472) after it gained this step
@@ -2002,11 +2002,14 @@ jobs:
       # orchestrate-poll (3) took 19m30s of its 20 minutes on main (run
       # 41071474282, budget-watch issue #8472) after it gained this step and
       # the single-file module step together. It cannot return to
-      # static-checks (#8394 moved it out). This job had the most recorded
-      # room of the 20-minute jobs (#8278, #8394; its last own budget-watch
-      # issue was #7677). The pick is an estimate, not measured. The matrix
-      # guard was dropped because this job has no matrix; name and body
-      # unchanged.
+      # static-checks (#8394 moved it out). This job's last own budget-watch
+      # issue is #8466 (15m33s of 20 minutes, run 41042353484), which moved
+      # three steps out of it to tests-release-and-log-analysis; its time
+      # since then is not measured. Every other 20-minute job also had a
+      # recent budget-watch issue (#8278, #8279, #8281, #8395), so the pick is
+      # an estimate, not measured: re-check this job's duration after the
+      # first runs on this layout. The matrix guard was dropped because this
+      # job has no matrix; name and body unchanged.
       - name: Validation self-test unit tests
         run: |
           set -euo pipefail
