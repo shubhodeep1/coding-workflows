@@ -45,6 +45,14 @@ jobs:
     # wiring, agents.d fragments) and the "Prompt tier budget" check
     # (tests/prompt_size_budget.py); the test steps moved in by #7250 and
     # #7334 are gone, so re-measure the job before moving steps here again.
+    # orchestrate-poll (3) then took 19m30s of its 20 minutes (run
+    # 41071474282, budget-watch issue #8472), so its "Validation self-test
+    # unit tests" step moved back in here. That step ran here in run
+    # 40954844196 together with two other test steps, and the job took
+    # 11m17s, so this job with only that step stays under that figure and
+    # under its 15-minute timeout; it may still pass budget-watch's 11m15s
+    # warning line. The first pick for that step, tests-promote-stall-and-review,
+    # was cancelled at its 20-minute timeout on the PR head run 41097621008.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -456,6 +464,57 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
+
+      # Moved from tests-heal-plan-and-validation, which measured 15m04s of
+      # its 20 minutes on main (run 38481381592, issue #7334). Per-step
+      # timings for that run were not available when these steps were
+      # chosen. Step names and bodies are unchanged.
+      # Moved on from static-checks, which took 11m17s of its 15 minutes on
+      # main (run 40954844196, budget-watch issue #8394). The pick is an
+      # estimate from test and subprocess counts (the largest of the three
+      # moved steps), not measured. Pinned to group 3: its only other pinned
+      # steps were then two single-module steps (#8396 later added the
+      # orchestrate-poll single-file module step), its last budget-watch issue was
+      # #8072, and since then it lost the unblock step (#8072, #8091, #8118)
+      # and its slice shrank from 1/4 to 1/5 (#8113). Name and body unchanged.
+      # Moved again, from orchestrate-poll (3), back to static-checks:
+      # orchestrate-poll (3) took 19m30s of its 20 minutes on main (run
+      # 41071474282, budget-watch issue #8472) after it gained this step and
+      # the single-file module step together. This step is the slower of the
+      # two: on the PR head run 41097621008, tests-promote-stall-and-review
+      # was cancelled at its 20-minute timeout while this step was still in
+      # tests/test_security_audit_workflow_contract.py, almost six minutes
+      # after the module before it finished, with eleven modules left to run.
+      # Every 20-minute job sits near budget-watch's 15-minute line (#8278,
+      # #8279, #8281, #8395, #8466), so none has that much room. This job is
+      # the only one with a measured bound: it took 11m17s with this step and
+      # two other test steps (run 40954844196), so with this step alone it
+      # stays under that and under its 15-minute timeout. Name and body
+      # unchanged; it has no matrix guard because this job has no matrix.
+      - name: Validation self-test unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_status.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_integration_ref_ci_triage.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_audit_upstream_report.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_integrity.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_resolver_union.py
 
   tests-hooks-and-orchestrator:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -2271,6 +2330,8 @@ jobs:
     # 20 minutes (run 40165437476, budget-watch issue #8113). Group 4 runs
     # its slice and, since #8118, the unblock judge step; every other
     # group-pinned step keeps its group.
+    # Since #8472, group 3 pins the single-file module step, the Claude
+    # engine judges and the validation harness sandbox steps.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -2787,8 +2848,13 @@ jobs:
       # from recorded group totals: group 3 has not been named by budget-watch
       # since #8072, after which its unblock step left and its slice shrank to
       # a fifth (#8113). Group 3 also took "Validation self-test unit tests"
-      # from static-checks in #8394; with this step it pins four steps (see
-      # below). Name and body unchanged; still once per CI run.
+      # from static-checks in #8394; with this step it pinned four steps.
+      # Name and body unchanged; still once per CI run.
+      # Budget-watch issue #8472 (group 3 took 19m30s of its 20 minutes, run
+      # 41071474282) kept this step in group 3 and moved "Validation self-test
+      # unit tests", the slower of the two steps group 3 gained, to
+      # static-checks; group 3 then runs this step, its slice and the two
+      # steps below.
       - name: Orchestrate poll single-file module tests
         if: strategy.job-index == 3
         run: |
@@ -2826,44 +2892,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
-
-      # Moved from tests-heal-plan-and-validation, which measured 15m04s of
-      # its 20 minutes on main (run 38481381592, issue #7334). Per-step
-      # timings for that run were not available when these steps were
-      # chosen. Step names and bodies are unchanged.
-      # Moved on from static-checks, which took 11m17s of its 15 minutes on
-      # main (run 40954844196, budget-watch issue #8394). The pick is an
-      # estimate from test and subprocess counts (the largest of the three
-      # moved steps), not measured. Pinned to group 3: its only other pinned
-      # steps were then two single-module steps (#8396 later added the
-      # orchestrate-poll single-file module step), its last budget-watch issue was
-      # #8072, and since then it lost the unblock step (#8072, #8091, #8118)
-      # and its slice shrank from 1/4 to 1/5 (#8113). Name and body unchanged.
-      - name: Validation self-test unit tests
-        if: strategy.job-index == 3
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_runner.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_status.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_integration_ref_ci_triage.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_audit_upstream_report.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_integrity.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_resolver_union.py
 
   budget-watch:
     # Early warning for the two budgets CI has hit without notice (workflow
