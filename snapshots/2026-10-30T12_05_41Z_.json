@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-29T13:09:51Z",
+  "tick_at": "2026-10-30T12:05:41Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 4
+    "tracking_issues": 6
   },
   "tracking_issues": [
     {
@@ -76,13 +76,13 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "13",
+      "integration_ahead_by": "43",
       "issue_counts": {
         "closed": 0,
-        "done": 2,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 1,
-        "merged": 0,
+        "merged": 2,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -93,6 +93,48 @@
       "status": "in-progress",
       "title": "[Orchestrator] Unattended pipeline: remove stuck states (plan P2a-P13 remainder)",
       "total_waves": 20,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "11",
+      "issue_counts": {
+        "closed": 0,
+        "done": 1,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8427,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Keep unattended work going until the change is delivered and verified (persistent-unattended-workflows plan P1-P11)",
+      "total_waves": 11,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 2,
+      "integration_ahead_by": "8",
+      "issue_counts": {
+        "closed": 0,
+        "done": 2,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8434,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)",
+      "total_waves": 15,
       "wave_complete": false
     }
   ]
