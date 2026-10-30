@@ -1381,3 +1381,14 @@ def test_tests_file_named_test_missing_on_pr_tree_only_is_unverified(tmp_path):
 	# The requested test never ran on this change's tree: not inherited.
 	assert result["failures"] == [] and result["inherited"] == []
 	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]
+
+
+def test_tests_file_multi_name_unit_missing_node_on_both_trees_is_unverified(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": "def test_x():\n\tassert False\n"})
+	baseline = _repo(tmp_path, {"tests/test_a.py": "def test_x():\n\tpass\n"}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_stale\ntests/test_a.py::test_x\n", baseline)
+	# test_stale is missing on both trees, so pytest exits 4 on both without
+	# running test_x: the change-caused test_x failure must not pass as inherited.
+	assert result["failures"] == [] and result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]
+	assert result["status"] == "unverified"

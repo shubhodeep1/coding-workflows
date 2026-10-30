@@ -832,21 +832,24 @@ def classify_baseline(
 		ambiguous_ids: set[str] = set()
 		for unit in rerun:
 			unit["baseline_status"] = baseline_statuses.get(unit["id"])
-			# Named `--tests-file` nodes where only one tree exits 4/5 cannot be
-			# compared: a merged multi-name unit's baseline 4/5 hides whether its
-			# other nodes fail there too, and a node missing on this change's tree
-			# never ran here. Report it unverified (baseline_error), not caused or
-			# inherited. A single node missing on the baseline only stays caused.
+			# Named `--tests-file` nodes cannot be compared when a 4/5 exit hides
+			# results: in a merged multi-name unit a 4/5 on either tree means its
+			# other nodes never ran there, and a node missing on this change's tree
+			# only never ran here. Report it unverified (baseline_error), not caused
+			# or inherited. A single node missing on the baseline only stays caused,
+			# and a single node missing on both trees stays inherited.
 			pr_missing = pr_rcs.get(unit["id"]) in (4, 5)
-			if unit.get("tests_file_nodes") and pr_missing != (baseline_rcs.get(unit["id"]) in (4, 5)) and (
-				pr_missing or sum(1 for arg in unit.get("argv", []) if "::" in arg) > 1
+			base_missing = baseline_rcs.get(unit["id"]) in (4, 5)
+			multi_node = sum(1 for arg in unit.get("argv", []) if "::" in arg) > 1
+			if unit.get("tests_file_nodes") and (
+				(multi_node and (pr_missing or base_missing)) or (pr_missing and not base_missing)
 			):
 				unit["baseline_status"] = "error"
 				ambiguous_ids.add(unit["id"])
 		# pytest exits 4 (node not found) or 5 (nothing collected) when a named
 		# `--tests-file` test does not exist on the baseline, for example a test
 		# the change added. That is not an inherited failure. A node missing on
-		# both trees (4/5 on the PR tree too) is still inherited.
+		# both trees (4/5 on the PR tree too) is still inherited for single-name units.
 		inherited_ids = {
 			unit["id"] for unit in reran
 			if unit.get("status") == "fail" and not (
@@ -1446,8 +1449,9 @@ def parse_tests_file(repo: Path, text: str) -> tuple[list[dict], list[dict]]:
 		line = raw.strip()
 		if not line or line.startswith("#"):
 			continue
-		# strip() drops edge control characters (\t, \f, \v, ...); check the raw line.
-		edge_control = bool(_TESTS_FILE_CONTROL_RE.search(raw.rstrip("\r").strip(" ")))
+		# strip() drops edge control and Unicode whitespace (\t, \f, \x85, \u2028, ...)
+		# that the regex may not cover; anything but spaces and a trailing CR rejects.
+		edge_control = raw.rstrip("\r").strip(" ") != line
 		if count >= MAX_TESTS_FILE_ENTRIES:
 			rejected.append({"item": "tests_file", "reason": "tests_file_too_many_entries"})
 			break
