@@ -427,7 +427,7 @@ def _phase_step_script(step_id: str) -> str:
 	raise AssertionError(f"{step_id} step not found")
 
 
-def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, terminal: bool = False, failed_page: int | None = None, pr_recheck_number: int | None = None, active_run: dict | None = None, later_pages: list | None = None, terminal_timeout: str = "0", labels_later: str | None = None, switch_after: int = 0, jobs_json: dict | None = None, in_progress_runs: list | None = None, jobs: dict | None = None, extra_env: dict[str, str] | None = None) -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, terminal: bool = False, failed_page: int | None = None, pr_recheck_number: int | None = None, active_run: dict | None = None, later_pages: list | None = None, terminal_timeout: str = "0", labels_later: str | None = None, switch_after: int = 0, in_progress_runs: list | None = None, jobs: dict | None = None, extra_env: dict[str, str] | None = None) -> tuple[int, dict[str, str], list[list[str]], str]:
 	# Runs the real wait-clarify / wait-implement script against the stub gh
 	# and returns its exit code, GITHUB_OUTPUT, gh calls, and combined output.
 	with tempfile.TemporaryDirectory() as tmp:
@@ -485,8 +485,6 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 		if labels_later is not None:
 			env["STUB_LABELS_LATER"] = labels_later
 			env["STUB_LABELS_SWITCH_AFTER"] = str(switch_after)
-		if jobs_json is not None:
-			env["STUB_JOBS_JSON"] = json.dumps(jobs_json)
 		if in_progress_runs is not None:
 			env["STUB_IN_PROGRESS_RUNS"] = json.dumps(in_progress_runs)
 		if jobs is not None:
@@ -718,7 +716,7 @@ def test_implement_stall_logs_pending_run_diagnostics() -> None:
 	active = pending | {"run_started_at": None, "event": "issue_comment", "updated_at": "2026-09-29T00:49:00Z", "run_attempt": 1}
 	jobs = {"jobs": [{"name": "implement", "status": "queued", "conclusion": None, "started_at": None, "runner_name": None, "steps": []}]}
 	holder = _run(700, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-09-29T00:40:00Z") | {"run_started_at": "2026-09-29T00:40:05Z", "event": "issue_comment"}
-	rc, outputs, calls, log = _run_phase_step("wait-implement", [[pending]], labels="ai:implementing", terminal=True, terminal_timeout="2", active_run=active, jobs_json=jobs, in_progress_runs=[holder, pending])
+	rc, outputs, calls, log = _run_phase_step("wait-implement", [[pending]], labels="ai:implementing", terminal=True, terminal_timeout="2", active_run=active, jobs=jobs, in_progress_runs=[holder, pending])
 	assert rc == 1, log
 	assert outputs == {"status": "timeout"}, outputs
 	assert "::error::Implement phase stalled — no activity for 2 minutes" in log, log

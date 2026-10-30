@@ -1,0 +1,2 @@
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `AI_ENGINE_FALLBACK_REPORT` also adds `pool_reason=<token>` to the `dispatched` and `skip_dispatch` lines of a `fallback_reason=no_credential` pair (before `detail=` on `skip_dispatch`), read from the Claude pool step's reason file (`CLAUDE_POOL_REASON_FILE`, default `${RUNNER_TEMP}/claude-pool-reason`; regular file, no symlink, at most 64 bytes, only `^[a-z0-9_]{1,60}$` printed, else `pool_reason=unavailable`). Diagnostic only: routing, the heal payload and its fingerprint are unchanged (#8392).
