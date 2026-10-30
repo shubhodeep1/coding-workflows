@@ -1,7 +1,8 @@
 # Fixed, trusted build context; never COPY a PR checkout into this image.
 FROM node:22.16.0-bookworm-slim
 ARG OPENCODE_VERSION=1.18.23
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv git ca-certificates gawk shellcheck \
+# jq: the review-side pre-push gate runs shell-script tests that call jq.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv git ca-certificates gawk shellcheck jq \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" --no-audit --no-fund
 # Pre-push affected-test gate lint (plan P4). Non-fatal: a failed install must
