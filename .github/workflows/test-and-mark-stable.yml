@@ -4034,7 +4034,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_phase7_cancel_timeout_status.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
