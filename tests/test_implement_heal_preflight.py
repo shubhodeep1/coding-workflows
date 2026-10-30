@@ -445,3 +445,56 @@ def test_invalid_flag_warns_and_refuses(tmp_path: Path) -> None:
 	assert "::warning::HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED has invalid value; treating as off" in result.stdout
 	assert "maybe" not in result.stdout
 	assert not any("userContentEdits" in line for line in _graphql_calls(calls))
+
+
+# --- refuse repro_not_fixed (Refs #8434, P2 step 8) ------------------------------------
+
+def _repro_result(outcome: str = "not_fixed", count: int = 1) -> dict:
+	tests = [{"test": "tests/test_x.py::x`@user<b>|\nnext", "at_failing_sha": "passes", "on_edited_tree": "passes"}]
+	tests += [{"test": f"tests/test_{n}.py", "at_failing_sha": "fails", "on_edited_tree": "passes"} for n in range(count - 1)]
+	return {"schema": "heal_implement_repro.v1", "outcome": outcome, "reason": "passes_at_failing_sha",
+		"failing_sha": "a" * 40, "tests": tests}
+
+
+def test_repro_not_fixed_refusal_comments_the_result_and_labels(tmp_path: Path) -> None:
+	# Default path: ${RUNNER_TEMP}/heal-repro-result-${GITHUB_RUN_ID}.json.
+	(tmp_path / "heal-repro-result-91.json").write_text(json.dumps(_repro_result(count=25)))
+	result, env_file, calls = _run(tmp_path, {}, args=["refuse", "repro_not_fixed"], extra_env={"HEAL_REPRO_RESULT_FILE": ""})
+	_assert_refused(result, env_file, calls, "repro_not_fixed", "not_fixed")
+	text = calls.read_text()
+	assert "**Heal reproduction check**" in text
+	assert "- Outcome: `not_fixed`" in text and "- Reason: `passes_at_failing_sha`" in text
+	assert "- Failing SHA: `" + "a" * 40 + "`" in text
+	# The untrusted test id is neutralised: no backtick, mention, HTML or pipe.
+	assert "- `tests/test_x.py::xuserbnext` - at failing SHA: passes; on edited tree: passes" in text
+	assert "@user" not in text and "<b>" not in text
+	assert "- ... and 5 more" in text
+	assert text.count(" - at failing SHA: ") == 20
+
+
+@pytest.mark.parametrize("setup,detail", [
+	("missing", "result_unavailable"),
+	("invalid", "result_unavailable"),
+	("symlink", "result_unavailable"),
+	("unverified", "unverified"),
+])
+def test_repro_not_fixed_refusal_details(tmp_path: Path, setup: str, detail: str) -> None:
+	result_file = tmp_path / "repro.json"
+	if setup == "invalid":
+		result_file.write_text("{not json")
+	elif setup == "symlink":
+		(tmp_path / "real.json").write_text(json.dumps(_repro_result()))
+		result_file.symlink_to(tmp_path / "real.json")
+	elif setup == "unverified":
+		result_file.write_text(json.dumps(_repro_result("unverified")))
+	result, env_file, calls = _run(tmp_path, {}, args=["refuse", "repro_not_fixed"], extra_env={"HEAL_REPRO_RESULT_FILE": str(result_file)})
+	_assert_refused(result, env_file, calls, "repro_not_fixed", detail)
+	if detail == "result_unavailable":
+		assert "- Outcome: `result_unavailable`" in calls.read_text()
+
+
+def test_out_of_heal_scope_comment_has_no_repro_block(tmp_path: Path) -> None:
+	(tmp_path / "heal-repro-result-91.json").write_text(json.dumps(_repro_result()))
+	result, env_file, calls = _run(tmp_path, {}, args=["refuse", "out_of_heal_scope"])
+	_assert_refused(result, env_file, calls, "out_of_heal_scope", None)
+	assert "issue comment 42 --repo owner/repo --body Workflow heal scope verification failed (out_of_heal_scope); implementation was refused. <!-- ai:workflow-heal-scope-unverified:v1 reason=out_of_heal_scope -->\n" in calls.read_text()

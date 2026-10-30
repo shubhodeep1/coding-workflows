@@ -39,12 +39,38 @@ gate_tree_added=false
 # Set only for the pre-push gate's repair turn: run_editor's codex fallback
 # after a Claude exit 75 gets what is left of it, not a second full wall.
 heal_repair_deadline=""
+# Heal reproduction check (Refs #8434, P2 steps 5 and 8), behind
+# WORKFLOW_HEAL_REPRODUCE_ENABLED (default false; only `true` turns it on).
+heal_impl_repro_enabled=false
+case "$(printf '%s' "${WORKFLOW_HEAL_REPRODUCE_ENABLED:-false}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+	true) heal_impl_repro_enabled=true ;;
+esac
+heal_impl_repro_result_file="${HEAL_REPRO_RESULT_FILE:-${RUNNER_TEMP:-/tmp}/heal-repro-result-${GITHUB_RUN_ID:-local}.json}"
+heal_impl_repro_tree_added=false
+heal_gate_prep_root=""
+heal_gate_venv_args=()
+# Allowlisted environment for prepare --deps and heal_reproduce.sh (the same
+# list heal_reproduce.sh uses): no GitHub token and no model API key.
+heal_impl_repro_clean_env=(env -i "PATH=${PATH}" "HOME=${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1)
+for heal_impl_repro_name in RUNNER_TEMP TMPDIR DOCKER_HOST DOCKER_CONFIG SANDBOX_IMAGE_REGISTRY SANDBOX_IMAGE_PULL_TIMEOUT_SECS \
+	CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS CODEX_ISOLATED_IMAGE_BUILD_RETRY_SLEEP_SECS CODEX_VERSION DEPENDENCY_PROXY_ALLOWED_HOSTS; do
+	if [ -n "${!heal_impl_repro_name:-}" ]; then
+		heal_impl_repro_clean_env+=("${heal_impl_repro_name}=${!heal_impl_repro_name}")
+	fi
+done
 cleanup()
 {
 	[ -z "${broker_pid}" ] || { kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; }
 	if [ "${gate_tree_added}" = true ]; then
 		git -C "${WORKSPACE_PATH:-${PWD}}" worktree remove --force "${root}/gate-tree" >/dev/null 2>&1 || true
 		git -C "${WORKSPACE_PATH:-${PWD}}" worktree prune >/dev/null 2>&1 || true
+	fi
+	if [ "${heal_impl_repro_tree_added}" = true ]; then
+		git -C "${WORKSPACE_PATH:-${PWD}}" worktree remove --force "${root}/repro-tree" >/dev/null 2>&1 || true
+		git -C "${WORKSPACE_PATH:-${PWD}}" worktree prune >/dev/null 2>&1 || true
+	fi
+	if [ -n "${heal_gate_prep_root}" ]; then
+		"${heal_impl_repro_clean_env[@]}" bash "${support}/codex_isolated_exec.sh" cleanup --root "${heal_gate_prep_root}" </dev/null >/dev/null 2>&1 || true
 	fi
 	env -i PATH="${PATH}" docker rm -f "${container}" >/dev/null 2>&1 || true
 	rm -rf -- "${root}"
@@ -285,12 +311,30 @@ heal_prepush_test_gate()
 		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=unverified reason=gate_tree_unavailable' >&2
 		return 0
 	fi
+	# Switch on: the gate gets the dependency venv from prepare --deps (as
+	# heal_reproduce.sh does), so pytest units are not `pytest_unavailable`.
+	# Fail-open: without a venv the gate runs exactly as with the switch off.
+	if [ "${heal_impl_repro_enabled}" = true ]; then
+		local gate_prep=""
+		if [ -f "${support}/codex_isolated_exec.sh" ] && [ ! -L "${support}/codex_isolated_exec.sh" ]; then
+			gate_prep="$("${heal_impl_repro_clean_env[@]}" bash "${support}/codex_isolated_exec.sh" prepare --workdir "${root}/gate-tree" --deps </dev/null | tail -n 1)" || gate_prep=""
+		fi
+		if [[ "${gate_prep}" == /* ]] && [ -d "${gate_prep}" ]; then
+			heal_gate_prep_root="${gate_prep}"
+		fi
+		if [ -n "${heal_gate_prep_root}" ] && [ -d "${gate_prep}/venv/bin" ] && [ ! -L "${gate_prep}/venv" ]; then
+			heal_gate_venv_args=(--venv "${gate_prep}/venv")
+			echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate_deps outcome=ok' >&2
+		else
+			echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate_deps outcome=unavailable' >&2
+		fi
+	fi
 	# An exported GIT_DIR / GIT_WORK_TREE would point the gate's git at the heal
 	# checkout instead of the gate tree.
 	gate_base="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${root}/gate-tree" rev-parse HEAD 2>/dev/null || true)"
 	# PREPUSH_TEST_GATE_TIMEOUT_MINUTES=10 matches validate_snapshot's 600 s bound.
 	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE PREPUSH_TEST_GATE_TIMEOUT_MINUTES=10 bash "${gate_step}" gate --phase heal --worktree "${root}/gate-tree" --base "${gate_base}" --image "${image}" \
-		--out "${root}/results/prepush" > "${root}/results/prepush.status" || true
+		--out "${root}/results/prepush" ${heal_gate_venv_args[@]+"${heal_gate_venv_args[@]}"} > "${root}/results/prepush.status" || true
 	read -r gate_status gate_pr gate_inh < "${root}/results/prepush.status" || true
 	if [ "${gate_status}" != fail ] || ! [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null || [ "${gate_mode}" != repair ]; then
 		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=${gate_status:-unverified} failures=${gate_pr:-0} inherited=${gate_inh:-0} repair=none" >&2
@@ -348,6 +392,325 @@ heal_prepush_test_gate()
 	return 0
 }
 heal_prepush_test_gate || true
+# Heal reproduction check (Refs #8434, P2 step 8). Runs only when the approving
+# comment (APPROVAL_COMMENT_ID in ISSUE_COMMENTS_FILE) carries
+# [repro-required]; without it nothing below runs. Every listed test must fail
+# at the failing SHA and pass on the edited tree, else the script exits 43
+# before the host transfer and implement.yml maps 43 to
+# `implement_heal_preflight.sh refuse repro_not_fixed`. heal_reproduce.sh runs
+# a test at its baseline only when it failed on the tested tree, so one run
+# (edited tree vs failing SHA) cannot show the "fails at the failing SHA" half:
+# run 1 tests the edited tree, run 2 (`--sha F --baseline F`) the failing SHA,
+# where a failing test comes back `not_reproduced/pre_existing`. The result
+# (heal_implement_repro.v1) goes to HEAL_REPRO_RESULT_FILE for the preflight.
+IFS= read -r -d '' heal_impl_repro_py <<'PY' || true
+import json
+import os
+import re
+import sys
+
+TOKEN_RE = re.compile(r"^[a-z0-9_:.-]{1,64}$")
+STATUSES = ("reproduced", "not_reproduced", "unverified")
+PATH_RE = re.compile(r"^[A-Za-z0-9_./+-]+$")
+NAME_RE = re.compile(r"^[^\s`<>]+$")
+
+
+def tok(value, fallback="invalid_reason"):
+	return value if isinstance(value, str) and TOKEN_RE.match(value) else fallback
+
+
+def listed(path):
+	try:
+		with open(path, encoding="utf-8") as handle:
+			return [line.strip() for line in handle if line.strip()]
+	except (OSError, UnicodeDecodeError):
+		return []
+
+
+def load(path):
+	if not path:
+		return None
+	try:
+		with open(path, encoding="utf-8") as handle:
+			data = json.load(handle)
+	except (OSError, ValueError):
+		return None
+	if not isinstance(data, dict) or data.get("schema") != "heal_repro.v1" or data.get("status") not in STATUSES:
+		return None
+	if not isinstance(data.get("tests"), list):
+		return None
+	return data
+
+
+def per_test(data):
+	out = {}
+	for item in data["tests"]:
+		if isinstance(item, dict) and isinstance(item.get("test"), str):
+			out.setdefault(item["test"], (item.get("status"), item.get("reason")))
+	return out
+
+
+def on_edited(pair):
+	# Run 1 tested the edited tree against the failing SHA: its
+	# `passes_at_failing_sha` token means "passes on the edited tree".
+	if pair == ("not_reproduced", "passes_at_failing_sha"):
+		return "passes", ""
+	if pair == ("not_reproduced", "pre_existing"):
+		return "fails", "still_failing"
+	if pair == ("reproduced", "regression"):
+		return "fails", "regression"
+	if pair[0] == "unverified":
+		return "unverified", tok(pair[1])
+	return "unverified", "unexpected_result"
+
+
+def at_failing(pair):
+	# Run 2 used the failing SHA as both tree and baseline.
+	if pair == ("not_reproduced", "pre_existing"):
+		return "fails", ""
+	if pair == ("not_reproduced", "passes_at_failing_sha"):
+		return "passes", "passes_at_failing_sha"
+	if pair == ("reproduced", "regression"):
+		# Failed, then passed on the same commit: flaky, not a proof.
+		return "unverified", "flaky_at_failing_sha"
+	if pair[0] == "unverified":
+		return "unverified", tok(pair[1])
+	return "unverified", "unexpected_result"
+
+
+def cmd_tests(support, plan, out):
+	sys.path.insert(0, support)
+	from partial_delivery import HEAL_CF_LINE_RE, _unfenced_lines
+	try:
+		with open(plan, encoding="utf-8") as handle:
+			lines = handle.read().splitlines()
+	except (OSError, UnicodeDecodeError):
+		return 1
+	found = [m.group(1) for m in (HEAL_CF_LINE_RE.match(line) for line in _unfenced_lines(lines)) if m]
+	if len(found) != 1:
+		return 1
+	match = re.match(r"^REPRODUCIBLE[ \t]*:[ \t]*(.*)$", found[0])
+	if not match:
+		return 1
+	# Assumed list format (the sibling parser is not on this ref): ids split on
+	# commas and/or whitespace; one pair of surrounding backticks is dropped.
+	ids = []
+	for raw in re.split(r"[,\s]+", match.group(1)):
+		if raw.startswith("`") and raw.endswith("`") and len(raw) > 2:
+			raw = raw[1:-1]
+		if raw:
+			ids.append(raw)
+	if not 1 <= len(ids) <= 50:
+		return 1
+	for item in ids:
+		path, sep, name = item.partition("::")
+		if not PATH_RE.match(path) or path.startswith("/") or ".." in path.split("/"):
+			return 1
+		if sep and not NAME_RE.match(name):
+			return 1
+	with open(out, "w", encoding="utf-8") as handle:
+		handle.write("\n".join(ids) + "\n")
+	return 0
+
+
+def cmd_edited_ok(tests_file, edited):
+	tests = listed(tests_file)
+	data = load(edited)
+	ok = bool(tests) and data is not None and data["status"] != "unverified"
+	if ok:
+		mapped = per_test(data)
+		ok = all(on_edited(mapped.get(t, ("missing", "missing")))[0] == "passes" for t in tests)
+	print("yes" if ok else "no")
+	return 0
+
+
+def cmd_final(tests_file, edited, failing, sha, out, forced):
+	tests = listed(tests_file)
+	rows = []
+	unverified = ""
+	mismatch = ""
+	if forced or not tests:
+		unverified = tok(forced or "no_tests")
+		rows = [{"test": t, "at_failing_sha": "not_run", "on_edited_tree": "not_run"} for t in tests]
+	else:
+		run1 = load(edited)
+		run2 = load(failing) if failing else None
+		if run1 is None:
+			unverified = "result_invalid"
+		elif run1["status"] == "unverified":
+			unverified = tok(run1.get("reason"))
+		if failing and run2 is None and not unverified:
+			unverified = "result_invalid"
+		elif run2 is not None and run2["status"] == "unverified" and not unverified:
+			unverified = tok(run2.get("reason"))
+		map1 = per_test(run1) if run1 is not None else {}
+		map2 = per_test(run2) if run2 is not None else {}
+		for test in tests:
+			on, reason1 = on_edited(map1.get(test, ("unverified", "test_missing"))) if run1 is not None else ("unverified", "result_invalid")
+			at = "not_run"
+			if on == "unverified":
+				unverified = unverified or reason1
+			elif on == "fails":
+				mismatch = mismatch or reason1
+			elif run2 is not None:
+				at, reason2 = at_failing(map2.get(test, ("unverified", "test_missing")))
+				if at == "unverified":
+					unverified = unverified or reason2
+				elif at == "passes":
+					mismatch = mismatch or reason2
+			else:
+				unverified = unverified or "not_run_at_failing_sha"
+			rows.append({"test": test, "at_failing_sha": at, "on_edited_tree": on})
+	if unverified:
+		outcome, reason = "unverified", unverified
+	elif mismatch:
+		outcome, reason = "not_fixed", mismatch
+	elif rows and all(r["at_failing_sha"] == "fails" and r["on_edited_tree"] == "passes" for r in rows):
+		outcome, reason = "fixed", "fixed"
+	else:
+		outcome, reason = "unverified", "incomplete"
+	result = {"schema": "heal_implement_repro.v1", "outcome": outcome, "reason": reason,
+		"failing_sha": sha if re.fullmatch(r"[0-9a-f]{40}", sha or "") else "", "tests": rows}
+	tmp = out + ".tmp"
+	try:
+		fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+		with os.fdopen(fd, "w", encoding="utf-8") as handle:
+			json.dump(result, handle)
+			handle.write("\n")
+		os.replace(tmp, out)
+	except OSError:
+		print("HEAL_ISOLATED_EDITOR phase=repro_check outcome=warning reason=result_unwritable", file=sys.stderr)
+	print(outcome, reason, len(rows))
+	return 0
+
+
+def main(argv):
+	if argv[0] == "tests":
+		return cmd_tests(*argv[1:4])
+	if argv[0] == "edited_ok":
+		return cmd_edited_ok(*argv[1:3])
+	if argv[0] == "final":
+		return cmd_final(*argv[1:7])
+	return 2
+
+
+sys.exit(main(sys.argv[1:]))
+PY
+heal_impl_repro_py_run()
+{
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c "${heal_impl_repro_py}" "$@"
+}
+# Prints none, required or unreadable. An unreadable approval holds.
+heal_impl_repro_required()
+{
+	local comment_id="${APPROVAL_COMMENT_ID:-}" comments="${ISSUE_COMMENTS_FILE:-}" first_line
+	if [ -z "${comment_id}" ]; then
+		echo none
+		return 0
+	fi
+	if ! [[ "${comment_id}" =~ ^[1-9][0-9]{0,19}$ ]] || [ ! -f "${comments}" ] || [ -L "${comments}" ]; then
+		echo unreadable
+		return 0
+	fi
+	first_line="$(jq -r --arg id "${comment_id}" '[.[] | select((.id | tostring) == $id)] | if length == 1 then (.[0].body // "" | split("\n")[0] | rtrimstr("\r")) else error("missing") end' "${comments}" 2>/dev/null)" || { echo unreadable; return 0; }
+	if [[ "${first_line}" == /approved* ]] && [[ "${first_line}" == *"[repro-required]"* ]]; then
+		echo required
+	else
+		echo none
+	fi
+}
+# The pipeline-written `- **Head SHA:** `<sha>`` line of the heal issue body
+# (scripts/workflow_failure_heal.py); exactly one match, else nothing.
+heal_impl_repro_failing_sha()
+{
+	local body="${ISSUE_BODY_FILE:-}" matches
+	[ -f "${body}" ] && [ ! -L "${body}" ] || return 1
+	matches="$(tr -d '\r' < "${body}" | grep -E '^- \*\*Head SHA:\*\* `[0-9a-f]{40}`$')" || return 1
+	[ "$(printf '%s\n' "${matches}" | wc -l)" -eq 1 ] || return 1
+	printf '%s' "${matches}" | sed -E 's/^.*`([0-9a-f]{40})`$/\1/'
+}
+# The trusted support copy has no gate module next to it; the verified
+# .codex-workflow-src checkout does (the same fallback the gate step uses).
+heal_impl_repro_script()
+{
+	local candidate dir
+	for candidate in "${support}/heal_reproduce.sh" "${GITHUB_WORKSPACE:-.}/.codex-workflow-src/scripts/heal_reproduce.sh"; do
+		[ -f "${candidate}" ] && [ ! -L "${candidate}" ] || continue
+		dir="$(dirname "${candidate}")"
+		if [ -f "${dir}/prepush_affected_tests.py" ] || [ -f "${dir}/../workflow-templates/.claude/hooks/prepush_affected_tests.py" ]; then
+			printf '%s' "${candidate}"
+			return 0
+		fi
+	done
+	return 1
+}
+heal_impl_repro_finish()
+{
+	local forced="$1" failing_sha="${2:-}" summary outcome reason count
+	summary="$(heal_impl_repro_py_run final "${root}/repro-tests.txt" "${root}/results/repro-edited.json" \
+		"$( [ -f "${root}/results/repro-failing.json" ] && printf '%s' "${root}/results/repro-failing.json" )" \
+		"${failing_sha}" "${heal_impl_repro_result_file}" "${forced}")" || summary=""
+	read -r outcome reason count <<<"${summary}" || true
+	case "${outcome:-}" in
+		fixed|not_fixed|unverified) ;;
+		*) outcome=unverified reason=interpret_failed count=0 ;;
+	esac
+	echo "HEAL_ISOLATED_EDITOR phase=repro_check outcome=${outcome} reason=${reason:-unknown} tests=${count:-0}" >&2
+	[ "${outcome}" = fixed ] && [ -z "${forced}" ] && return 0
+	exit 43
+}
+heal_impl_repro_check()
+{
+	local required failing_sha="" reproduce="" budget remaining per_run manifest_part
+	required="$(heal_impl_repro_required)"
+	[ "${required}" = none ] && return 0
+	: > "${root}/repro-tests.txt"
+	rm -f -- "${root}/results/repro-edited.json" "${root}/results/repro-failing.json"
+	[ "${required}" = required ] || heal_impl_repro_finish approval_unreadable
+	heal_impl_repro_py_run tests "${support}" "${PLAN_FILE:-}" "${root}/repro-tests.txt.new" 2>/dev/null \
+		&& mv -f -- "${root}/repro-tests.txt.new" "${root}/repro-tests.txt" || true
+	# Fail closed: [repro-required] with the switch off holds, never skips.
+	[ "${heal_impl_repro_enabled}" = true ] || heal_impl_repro_finish reproduction_disabled
+	[ -s "${root}/repro-tests.txt" ] || heal_impl_repro_finish plan_tests_unreadable
+	failing_sha="$(heal_impl_repro_failing_sha)" || failing_sha=""
+	[[ "${failing_sha}" =~ ^[0-9a-f]{40}$ ]] || heal_impl_repro_finish failing_sha_unavailable
+	reproduce="$(heal_impl_repro_script)" || heal_impl_repro_finish reproduce_unavailable "${failing_sha}"
+	budget="${HEAL_PREPUSH_GATE_BUDGET_SECS:-9000}"
+	[[ "${budget}" =~ ^[1-9][0-9]{0,5}$ ]] || budget=9000
+	# Same 630 s transfer reserve as the gate's repair turn; two runs at most.
+	remaining=$(( budget - $(heal_gate_elapsed) - 630 ))
+	per_run=$(( remaining / 2 ))
+	[ "${per_run}" -le 3600 ] || per_run=3600
+	[ "${per_run}" -ge 120 ] || heal_impl_repro_finish step_budget "${failing_sha}"
+	if ! git -C "${WORKSPACE_PATH:-${PWD}}" -c core.hooksPath=/dev/null worktree add --detach "${root}/repro-tree" HEAD >/dev/null 2>&1; then
+		heal_impl_repro_finish repro_tree_unavailable "${failing_sha}"
+	fi
+	heal_impl_repro_tree_added=true
+	for manifest_part in "${root}"/manifest.json*; do
+		[ -f "${manifest_part}" ] || continue
+		cp -f "${manifest_part}" "${root}/manifest.repro.json${manifest_part#"${root}/manifest.json"}" 2>/dev/null || true
+	done
+	# The same scoped transfer as the host's below: a failure here is the one
+	# the host transfer would hit, so it keeps that exit code (42).
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer \
+		"${root}/repro-tree" "${root}/source" "${root}/manifest.repro.json" --scope-file "${scope}" >/dev/null 2>&1; then
+		echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope" >&2
+		exit 42
+	fi
+	# Run 1: the edited tree, baseline the failing SHA.
+	"${heal_impl_repro_clean_env[@]}" WORKFLOW_HEAL_REPRODUCE_TIMEOUT_SECS="${per_run}" bash "${reproduce}" \
+		--tests-file "${root}/repro-tests.txt" --worktree "${root}/repro-tree" --repo "${root}/repro-tree" \
+		--baseline "${failing_sha}" --out "${root}/results/repro-edited.json" </dev/null >&2 || true
+	if [ "$(heal_impl_repro_py_run edited_ok "${root}/repro-tests.txt" "${root}/results/repro-edited.json" 2>/dev/null)" = yes ]; then
+		# Run 2: the failing SHA itself (only when every test passed in run 1).
+		"${heal_impl_repro_clean_env[@]}" WORKFLOW_HEAL_REPRODUCE_TIMEOUT_SECS="${per_run}" bash "${reproduce}" \
+			--tests-file "${root}/repro-tests.txt" --sha "${failing_sha}" --repo "${root}/repro-tree" \
+			--baseline "${failing_sha}" --out "${root}/results/repro-failing.json" </dev/null >&2 || true
+		[ -f "${root}/results/repro-failing.json" ] || : > "${root}/results/repro-failing.json"
+	fi
+	heal_impl_repro_finish "" "${failing_sha}"
+}
+heal_impl_repro_check
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" --scope-file "${scope}"; then
 	echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope" >&2
 	exit 42

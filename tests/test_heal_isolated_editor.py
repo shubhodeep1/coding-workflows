@@ -797,8 +797,40 @@ esac
 '''
 
 
+# Fake codex_isolated_exec.sh: `prepare` prints a prep root holding venv/bin.
+_FAKE_EXEC = r'''#!/bin/bash
+printf '%s\n' "$*" >> "__TMP__/prep-calls"
+env | cut -d= -f1 >> "__TMP__/repro-env"
+case "$1" in
+  prepare) mkdir -p "__TMP__/prep-root/venv/bin"; echo "noise"; echo "__TMP__/prep-root" ;;
+  cleanup) ;;
+esac
+'''
+
+# Fake heal_reproduce.sh: logs its argv, env names and the tested tree's
+# scripts/fix.py, then copies the canned heal_repro.v1 result for the run.
+_FAKE_REPRODUCE = r'''#!/bin/bash
+printf '%s\n' "$*" >> "__TMP__/repro-calls"
+env | cut -d= -f1 >> "__TMP__/repro-env"
+out="" kind="failing" tree=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --out) out="$2"; shift 2 ;;
+    --worktree) kind="edited"; tree="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -z "${tree}" ] || cat "${tree}/scripts/fix.py" > "__TMP__/repro-saw"
+[ ! -f "__TMP__/repro-${kind}.json" ] || cp "__TMP__/repro-${kind}.json" "${out}"
+exit 0
+'''
+
+
 def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_fail_after_repair: bool = False,
-		with_step: bool = True, validator_down_after_repair: bool = False, gate_budget: str = "", job_start_age: int = 0) -> dict:
+		with_step: bool = True, validator_down_after_repair: bool = False, gate_budget: str = "", job_start_age: int = 0,
+		repro_enabled: bool | None = None, approval_body: str | None = None, plan_text: str | None = None,
+		issue_body: str | None = None, repro_results: dict | None = None, record_gate: bool = False,
+		with_prepare: bool = False, comments_text: str | None = None) -> dict:
 	host = tmp_path / "host"
 	(host / "scripts").mkdir(parents=True)
 	(host / "tests").mkdir()
@@ -812,8 +844,21 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 	(tmp_path / "support" / "prompts").mkdir()
 	for name in ("review_untrusted_workspace.py", "files_touched_scope_guard.py", "prepush_test_gate_run.sh"):
 		shutil.copy(ROOT / "scripts" / name, support / name)
-	if with_step:
+	if with_step and record_gate:
+		# A recording wrapper in front of a real copy of the gate step.
+		shutil.copy(ROOT / "scripts/review_autofix_step_prepush_test_gate.sh", support / "prepush_gate_real.sh")
+		(support / "review_autofix_step_prepush_test_gate.sh").write_text(
+			"#!/bin/bash\n[ \"$1\" != gate ] || printf '%s\\n' \"$*\" >> \"" + str(tmp_path / "gate-argv") + "\"\n"
+			"exec bash \"$(dirname \"$0\")/prepush_gate_real.sh\" \"$@\"\n")
+	elif with_step:
 		shutil.copy(ROOT / "scripts/review_autofix_step_prepush_test_gate.sh", support / "review_autofix_step_prepush_test_gate.sh")
+	shutil.copy(ROOT / "scripts/partial_delivery.py", support / "partial_delivery.py")
+	if with_prepare:
+		(support / "codex_isolated_exec.sh").write_text(_FAKE_EXEC.replace("__TMP__", str(tmp_path)))
+	if repro_results is not None:
+		for key, value in repro_results.items():
+			(tmp_path / f"repro-{key}.json").write_text(json.dumps(value))
+		(support / "heal_reproduce.sh").write_text(_FAKE_REPRODUCE.replace("__TMP__", str(tmp_path)))
 	shutil.copy(ROOT / "workflow-templates/.claude/hooks/prepush_affected_tests.py", support / "prepush_affected_tests.py")
 	shutil.copy(ROOT / "prompts/mode-implement-repair-tests.txt", tmp_path / "support" / "prompts" / "mode-implement-repair-tests.txt")
 	(support / "validate_changed_files_syntax.sh").write_text("#!/bin/bash\nexit 0\n")
@@ -839,6 +884,21 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 	scope.write_text("scripts/fix.py\ntests/**\nchangelog.d/*.md\n")
 	output = tmp_path / "output"
 	env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PREPUSH_", "SUPPORT_", "RUNTIME_DIR"))}
+	for name in ("APPROVAL_COMMENT_ID", "WORKFLOW_HEAL_REPRODUCE_ENABLED", "ISSUE_COMMENTS_FILE", "PLAN_FILE", "ISSUE_BODY_FILE",
+			"HEAL_REPRO_RESULT_FILE", "HEAL_PREPUSH_GATE_BUDGET_SECS"):
+		env.pop(name, None)
+	if repro_enabled is not None:
+		env["WORKFLOW_HEAL_REPRODUCE_ENABLED"] = "true" if repro_enabled else "false"
+	if approval_body is not None:
+		(tmp_path / "comments.json").write_text(comments_text if comments_text is not None else json.dumps([{"id": 1, "body": "/approved"}, {"id": 777, "body": approval_body}]))
+		env.update(APPROVAL_COMMENT_ID="777", ISSUE_COMMENTS_FILE=str(tmp_path / "comments.json"))
+	if plan_text is not None:
+		(tmp_path / "plan.txt").write_text(plan_text)
+		env["PLAN_FILE"] = str(tmp_path / "plan.txt")
+	if issue_body is not None:
+		(tmp_path / "issue_body.txt").write_text(issue_body)
+		env["ISSUE_BODY_FILE"] = str(tmp_path / "issue_body.txt")
+	env["HEAL_REPRO_RESULT_FILE"] = str(tmp_path / "heal-repro-result.json")
 	env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", GH_PAT="fake-private-pat", GH_TOKEN="fake-private-pat",
 		OPENROUTER_API_KEY="fake-model-key", HEAL_SCOPE_FILE=str(scope), HEAL_TRUSTED_SUPPORT_DIR=str(support),
 		RUNNER_TEMP=str(tmp_path), GITHUB_WORKSPACE=str(tmp_path), WORKSPACE_PATH=str(host), PYTHONDONTWRITEBYTECODE="1")
@@ -858,8 +918,14 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 		env=env, capture_output=True, text=True, check=False, timeout=300)
 	lines = log.read_text().splitlines() if log.exists() else []
 	worktrees = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=host, capture_output=True, text=True, env=git_env).stdout
+	repro_result = tmp_path / "heal-repro-result.json"
 	return {
 		"rc": result.returncode, "stderr": result.stderr, "host": host, "lines": lines, "log": log, "worktrees": worktrees,
+		"gate_argv": (tmp_path / "gate-argv").read_text().splitlines() if (tmp_path / "gate-argv").exists() else [],
+		"repro_calls": (tmp_path / "repro-calls").read_text().splitlines() if (tmp_path / "repro-calls").exists() else [],
+		"repro_env": (tmp_path / "repro-env").read_text() if (tmp_path / "repro-env").exists() else "",
+		"repro_result": json.loads(repro_result.read_text()) if repro_result.exists() else None,
+		"prep_calls": (tmp_path / "prep-calls").read_text().splitlines() if (tmp_path / "prep-calls").exists() else [],
 	}
 
 
@@ -952,3 +1018,157 @@ def test_heal_gate_budget_counts_from_the_job_start(tmp_path: Path) -> None:
 	assert run["rc"] == 0, run["stderr"]
 	assert run["lines"] == ["editor", "validator"]
 	assert "phase=prepush_gate outcome=skipped reason=step_budget" in run["stderr"]
+
+
+# --- heal reproduction check (Refs #8434, P2 steps 5 and 8) ----------------------------
+
+_REPRO_TEST = "tests/test_fix.py::test_fix"
+_FAILING_SHA = "a" * 40
+_REPRO_PLAN = "## Counterfactual check\n\nHEAL_COUNTERFACTUAL: REPRODUCIBLE: " + _REPRO_TEST + "\n"
+_REPRO_BODY = "Heal this.\n- **Head SHA:** `" + _FAILING_SHA + "`\n"
+_REPRO_APPROVAL = "/approved [auto-approved-by-plan] [repro-required]\n\nAuto approval."
+
+
+def _repro(status: str, reason: str, test_status: str | None = None, test_reason: str | None = None) -> dict:
+	return {"schema": "heal_repro.v1", "status": status, "reason": reason, "failing_at": "", "passing_at": "",
+		"tests": [{"test": _REPRO_TEST, "status": test_status or status, "reason": test_reason or reason}]}
+
+
+_EDITED_PASSES = _repro("not_reproduced", "passes_at_failing_sha")
+_FAILING_FAILS = _repro("not_reproduced", "pre_existing")
+
+
+def _repro_run(tmp_path: Path, **kwargs) -> dict:
+	defaults = dict(status="pass", repro_enabled=True, approval_body=_REPRO_APPROVAL, plan_text=_REPRO_PLAN,
+		issue_body=_REPRO_BODY, repro_results={"edited": _EDITED_PASSES, "failing": _FAILING_FAILS})
+	defaults.update(kwargs)
+	return _gate_heal_run(tmp_path, **defaults)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_heal_gate_gets_venv_only_with_the_reproduce_switch(tmp_path: Path, enabled: bool) -> None:
+	run = _gate_heal_run(tmp_path, status="pass", repro_enabled=enabled, record_gate=True, with_prepare=True)
+	assert run["rc"] == 0, run["stderr"]
+	assert len(run["gate_argv"]) == 1
+	gate_base = run["gate_argv"][0]
+	out_dir = gate_base.split("--out ", 1)[1].split()[0]
+	assert out_dir.endswith("/results/prepush")
+	expected_prefix = "gate --phase heal --worktree "
+	assert gate_base.startswith(expected_prefix)
+	if enabled:
+		assert gate_base.endswith(f"--out {out_dir} --venv {tmp_path}/prep-root/venv")
+		assert "phase=prepush_gate_deps outcome=ok" in run["stderr"]
+		assert run["prep_calls"][0].startswith("prepare --workdir ") and run["prep_calls"][0].endswith("/gate-tree --deps")
+		assert any(call.startswith(f"cleanup --root {tmp_path}/prep-root") for call in run["prep_calls"])
+		for name in ("GH_PAT", "GH_TOKEN", "OPENROUTER_API_KEY"):
+			assert name not in run["repro_env"].split()
+	else:
+		# Byte-identical to the call before the switch existed.
+		assert gate_base.endswith(f"--out {out_dir}")
+		assert "--venv" not in gate_base
+		assert run["prep_calls"] == []
+	# No [repro-required] approval: no reproduction run.
+	assert run["repro_calls"] == []
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+
+
+def test_heal_gate_venv_prepare_failure_is_fail_open(tmp_path: Path) -> None:
+	run = _gate_heal_run(tmp_path, status="pass", repro_enabled=True, record_gate=True)
+	assert run["rc"] == 0, run["stderr"]
+	assert "phase=prepush_gate_deps outcome=unavailable" in run["stderr"]
+	assert "--venv" not in run["gate_argv"][0]
+
+
+def test_repro_required_fail_then_pass_hands_back_normally(tmp_path: Path) -> None:
+	run = _repro_run(tmp_path)
+	assert run["rc"] == 0, run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+	assert len(run["repro_calls"]) == 2
+	edited, failing = run["repro_calls"]
+	assert f"--worktree " in edited and f"--baseline {_FAILING_SHA}" in edited and "/repro-tree" in edited
+	assert f"--sha {_FAILING_SHA}" in failing and f"--baseline {_FAILING_SHA}" in failing
+	# Run 1 tested the edited tree, before the host transfer.
+	assert (tmp_path / "repro-saw").read_text() == "new\n"
+	for name in ("GH_PAT", "GH_TOKEN", "OPENROUTER_API_KEY"):
+		assert name not in run["repro_env"].split()
+	assert run["repro_result"]["schema"] == "heal_implement_repro.v1"
+	assert run["repro_result"]["outcome"] == "fixed"
+	assert run["repro_result"]["failing_sha"] == _FAILING_SHA
+	assert run["repro_result"]["tests"] == [{"test": _REPRO_TEST, "at_failing_sha": "fails", "on_edited_tree": "passes"}]
+	assert "HEAL_ISOLATED_EDITOR phase=repro_check outcome=fixed reason=fixed tests=1" in run["stderr"]
+	assert run["worktrees"].count("worktree ") == 1
+
+
+@pytest.mark.parametrize("results,runs,outcome,reason", [
+	({"edited": _EDITED_PASSES, "failing": _repro("not_reproduced", "passes_at_failing_sha")}, 2, "not_fixed", "passes_at_failing_sha"),
+	({"edited": _repro("not_reproduced", "pre_existing"), "failing": _FAILING_FAILS}, 1, "not_fixed", "still_failing"),
+	({"edited": _repro("unverified", "timeout"), "failing": _FAILING_FAILS}, 1, "unverified", "timeout"),
+	({"edited": _EDITED_PASSES, "failing": _repro("unverified", "no_merge_base")}, 2, "unverified", "no_merge_base"),
+	({"edited": _EDITED_PASSES}, 2, "unverified", "result_invalid"),
+])
+def test_repro_mismatch_or_unverified_exits_43_before_transfer(tmp_path: Path, results: dict, runs: int, outcome: str, reason: str) -> None:
+	run = _repro_run(tmp_path, repro_results=results)
+	assert run["rc"] == 43, run["stderr"]
+	assert len(run["repro_calls"]) == runs
+	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
+	assert run["repro_result"]["outcome"] == outcome
+	assert run["repro_result"]["reason"] == reason
+	assert f"phase=repro_check outcome={outcome} reason={reason} tests=1" in run["stderr"]
+	assert run["worktrees"].count("worktree ") == 1
+
+
+@pytest.mark.parametrize("kwargs,reason", [
+	({"repro_enabled": False}, "reproduction_disabled"),
+	({"repro_enabled": None}, "reproduction_disabled"),
+	({"plan_text": "No counterfactual line.\n"}, "plan_tests_unreadable"),
+	({"plan_text": _REPRO_PLAN + _REPRO_PLAN}, "plan_tests_unreadable"),
+	({"plan_text": "HEAL_COUNTERFACTUAL: REPRODUCIBLE: ../outside.py\n"}, "plan_tests_unreadable"),
+	({"plan_text": "```\n" + _REPRO_PLAN + "```\n"}, "plan_tests_unreadable"),
+	({"issue_body": "Heal this.\n"}, "failing_sha_unavailable"),
+	({"issue_body": _REPRO_BODY + _REPRO_BODY}, "failing_sha_unavailable"),
+	({"gate_budget": "800"}, "step_budget"),
+])
+def test_repro_required_holds_without_running_reproduce(tmp_path: Path, kwargs: dict, reason: str) -> None:
+	run = _repro_run(tmp_path, **kwargs)
+	assert run["rc"] == 43, run["stderr"]
+	assert run["repro_calls"] == []
+	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
+	assert run["repro_result"]["outcome"] == "unverified"
+	assert run["repro_result"]["reason"] == reason
+	assert f"phase=repro_check outcome=unverified reason={reason}" in run["stderr"]
+
+
+@pytest.mark.parametrize("comments_text", ["[]", "not json", json.dumps([{"id": 1, "body": "/approved"}])])
+def test_repro_unreadable_approval_holds(tmp_path: Path, comments_text: str) -> None:
+	# APPROVAL_COMMENT_ID is set but that comment cannot be read: hold.
+	run = _repro_run(tmp_path, comments_text=comments_text)
+	assert run["rc"] == 43, run["stderr"]
+	assert run["repro_calls"] == []
+	assert run["repro_result"]["reason"] == "approval_unreadable"
+	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
+
+
+def test_repro_without_marker_runs_nothing_even_with_switch_on(tmp_path: Path) -> None:
+	run = _repro_run(tmp_path, approval_body="/approved [auto-approved-by-plan]\n")
+	assert run["rc"] == 0, run["stderr"]
+	assert run["repro_calls"] == []
+	assert run["repro_result"] is None
+	assert "phase=repro_check" not in run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+
+
+def test_implement_workflow_maps_exit_43_to_repro_not_fixed() -> None:
+	workflow_path = ROOT / ".github/workflows/implement.yml"
+	workflow = workflow_path.read_text()
+	support = '"${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE}/.codex-workflow-src/scripts}'
+	block_42 = ('if [ "${cmd_rc}" -eq 42 ]; then\n                bash ' + support + '/implement_heal_preflight.sh" refuse out_of_heal_scope\n'
+		"                exit 0\n              fi\n")
+	block_43 = ('if [ "${cmd_rc}" -eq 43 ]; then\n                bash ' + support + '/implement_heal_preflight.sh" refuse repro_not_fixed\n'
+		"                exit 0\n              fi\n")
+	assert workflow.count(block_42) == 1
+	assert workflow.count(block_43) == 1
+	assert workflow.index(block_42) < workflow.index(block_43)
+	assert "          WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}\n" in workflow
+	assert len(workflow.encode()) < 480_000
+	runner = (ROOT / "scripts/heal_isolated_implement.sh").read_text()
+	assert "exit 43" in runner and 'WORKFLOW_HEAL_REPRODUCE_ENABLED:-false' in runner
