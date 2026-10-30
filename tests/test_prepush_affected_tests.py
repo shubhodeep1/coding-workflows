@@ -852,14 +852,14 @@ def test_wrapper_rejects_a_result_when_the_container_exits_non_zero(tmp_path):
 def test_wrapper_lists_uncommitted_tracked_edits_and_overlays_command_inputs(tmp_path):
 	worktree = _worktree(tmp_path)
 	(worktree / "Makefile").write_text("test:\n\ttrue\n", encoding="utf-8")
-	_commit(worktree, {".ai/validate.yml": "prepush_test_command: make test\n", ".github/ai/label_contract.v1.json": "{}\n"})
+	_commit(worktree, {".ai/validate.yml": "prepush_test_command: make test\n"})
 	(worktree / "tests" / "test_a.py").write_text("# edited, not committed\n", encoding="utf-8")
 	env, log = _wrapper_env(tmp_path)
 	fake = tmp_path / "bin" / "docker"
 	capture = tmp_path / "capture"
 	fake.write_text(fake.read_text(encoding="utf-8").replace(
 		'\tprintf \'{"schema"',
-		'\tsrc="${results%/results}/source"; cp "$results/changed.txt" "__CAP__.changed"; ls -a "$src" > "__CAP__.ls"; ls -a "$src/.ai" >> "__CAP__.ls"; ls -a "$src/.github/ai" >> "__CAP__.ls"\n\tprintf \'{"schema"',
+		'\tsrc="${results%/results}/source"; cp "$results/changed.txt" "__CAP__.changed"; ls -a "$src" > "__CAP__.ls"; ls -a "$src/.ai" >> "__CAP__.ls"\n\tprintf \'{"schema"',
 	).replace("__CAP__", str(capture)), encoding="utf-8")
 	proc, _ = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
 	assert proc.returncode == 0, proc.stderr
@@ -867,8 +867,6 @@ def test_wrapper_lists_uncommitted_tracked_edits_and_overlays_command_inputs(tmp
 	assert "M\ttests/test_a.py" in changed
 	listing = (tmp_path / "capture.ls").read_text(encoding="utf-8").split()
 	assert "Makefile" in listing and "validate.yml" in listing
-	# Tracked .github/ai/ data files match the git-archive baseline.
-	assert "label_contract.v1.json" in listing
 
 
 def test_resolution_configured_pytest_without_pytest_is_unverified(tmp_path, monkeypatch):

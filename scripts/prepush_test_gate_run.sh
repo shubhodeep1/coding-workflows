@@ -225,19 +225,6 @@ for overlay in Makefile .ai/validate.yml; do
 		mkdir -p "${root}/source/$(dirname "${overlay}")" && install -m 0644 "${worktree_real}/${overlay}" "${root}/source/${overlay}" || { synthetic_result snapshot_failed; exit 0; }
 	fi
 done
-# The snapshot filter also leaves out tracked .github/ai/ data files that tests
-# read (label_contract.v1.json in tests/test_orchestrate_lib.py). The
-# git-archive baseline has them, so such a test failed on the PR tree only and
-# was reported as caused by the change. Copy the tracked, regular, top-level
-# .github/ai/ files in; the container already sees the merge-base copies.
-if [ -d "${worktree_real}/.github/ai" ] && [ ! -L "${worktree_real}/.github" ] && [ ! -L "${worktree_real}/.github/ai" ]; then
-	while IFS= read -r -d '' overlay; do
-		case "${overlay}" in .github/ai/*/*|.github/ai/) continue ;; esac
-		if [ -f "${worktree_real}/${overlay}" ] && [ ! -L "${worktree_real}/${overlay}" ]; then
-			mkdir -p "${root}/source/.github/ai" && install -m 0644 "${worktree_real}/${overlay}" "${root}/source/${overlay}" || { synthetic_result snapshot_failed; exit 0; }
-		fi
-	done < <("${git_safe[@]}" ls-files -z -- .github/ai 2>/dev/null)
-fi
 
 mounts=(
 	--mount "type=bind,src=${root}/source,dst=/source"
