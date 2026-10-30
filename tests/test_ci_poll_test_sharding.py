@@ -1119,6 +1119,8 @@ GROUP_PINNED_STEPS = {
 	"Review sandbox image build retry tests": 2,
 	# Moved from group 0 to group 1 in #8080.
 	"Orchestrate poll single-file module tests": 1,
+	# Moved from static-checks into group 3 in budget-watch issue #8394.
+	"Validation self-test unit tests": 3,
 }
 # The only steps pinned to the last matrix group (#8118).
 LAST_GROUP_PINNED_STEPS = (
@@ -2394,6 +2396,64 @@ class MovedHealToReleaseStepsContractTest(unittest.TestCase):
 				self.assertLess(setup_index, names.index(name))
 
 
+# Steps moved out of static-checks, which took 11m17s of its 15 minutes (run
+# 40954844196, budget-watch issue #8394): step name -> (new job id, module
+# paths its body names). The pick is an estimate from test and subprocess
+# counts; the run's step timings were not readable. The orchestrate-poll
+# step's group guard is checked through GROUP_PINNED_STEPS.
+STATIC_8394_SOURCE_JOB_ID = "static-checks"
+STATIC_8394_SETUP_STEP = "Install Python CI dependencies"
+MOVED_STATIC_8394_STEPS = {
+	"Implement post-Codex recovery unit tests": (
+		"tests-hooks-and-orchestrator",
+		("tests/test_implement_post_codex_recovery.py",),
+	),
+	"Validation self-test unit tests": (
+		POLL_JOB_ID,
+		(
+			"tests/test_validation_selftest_runner.py",
+			"tests/test_validation_selftest_status.py",
+			"tests/test_nightly_validation_selftest_workflow_contract.py",
+			"tests/test_validation_refresh_runner.py",
+			"tests/test_validation_discovery_bootstrap.py",
+			"tests/test_validation_refresh_workflow_contract.py",
+			"tests/test_workflow_checkout_integration_ref_audit.py",
+			"tests/test_resolve_integration_ref_ci_triage.py",
+			"tests/test_drift_audit_job.py",
+			"tests/test_security_audit_workflow_contract.py",
+			"tests/test_security_audit_upstream_report.py",
+			"tests/test_security_audit_prompt_policy.py",
+			"tests/test_audit_consumer_drift.py",
+			"tests/test_workflow_integrity.py",
+			"tests/test_fingerprint_quarantine.py",
+			"tests/test_review_conflict_resolve_retry_state.py",
+			"tests/test_touched_set_symlink_aware.py",
+			"tests/test_consumer_artifact_cleanup_preserves_tracked.py",
+			"tests/test_verify_integration_fingerprints_tiers.py",
+			"tests/test_verify_integration_fingerprints_post_capture_evolution.py",
+			"tests/test_verify_integration_fingerprints_resolver_union.py",
+		),
+	),
+	"Validation bootstrap and family direct-run tests": (
+		"tests-promote-stall-and-review",
+		(
+			"tests/test_validate_workflow_validate_bootstrap.py",
+			"tests/test_codex_thread_reuse_core.py",
+			"tests/test_codex_skip_git_repo_check_contract.py",
+			"tests/test_codex_stall_guard_scripts.py",
+			"tests/test_workspace_init.py",
+			"tests/test_workspace_safety_check.py",
+			"tests/test_workspace_hooks.py",
+			"tests/test_workspace_cache_maintenance.py",
+			"tests/test_family_node_runtime.py",
+			"tests/test_orchestrate_poll_workflow_contract.py",
+			"tests/test_workflow_overlay_orchestrator.py",
+			"tests/test_workflow_overlay_core.py",
+		),
+	),
+}
+
+
 # Step moved out of tests-heal-plan-and-validation, which took 15m10s of its 20 minutes (run 40954844196, budget-watch issue #8395): step name -> module paths its body names.
 HEAL_TO_HOOKS_SOURCE_JOB_ID = "tests-heal-plan-and-validation"
 HEAL_TO_HOOKS_TARGET_JOB_ID = "tests-hooks-and-orchestrator"
@@ -2411,6 +2471,59 @@ MOVED_HEAL_TO_HOOKS_STEPS = {
 		"tests/test_review_apply_fixes_reviewer_manifest_validation.py",
 	),
 }
+
+
+class MovedStatic8394StepsContractTest(unittest.TestCase):
+	"""The test steps moved out of static-checks run once, in one job (#8394)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_STATIC_8394_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_only_the_poll_step_has_a_matrix_guard(self) -> None:
+		for name, (job_id, _modules) in MOVED_STATIC_8394_STEPS.items():
+			with self.subTest(step=name):
+				if job_id == POLL_JOB_ID:
+					# The exact guard is asserted by PollGroupPinnedStepsTest.
+					self.assertIn(name, GROUP_PINNED_STEPS)
+					continue
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_STATIC_8394_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[STATIC_8394_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_STATIC_8394_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _modules) in MOVED_STATIC_8394_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(STATIC_8394_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(STATIC_8394_SETUP_STEP), names.index(name))
 
 
 class MovedHealToHooksStepsContractTest(unittest.TestCase):
