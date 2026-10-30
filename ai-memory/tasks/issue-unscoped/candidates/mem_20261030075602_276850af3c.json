@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue says to \"Leave the rest of that test and test_cancel_on_close_event_runs_get_their_own_concurrency_group unchanged\", and it is test-only. The repo's minimal-change rule also forbids reformatting.\n  expected_change_site: tests/test_review_merge_train.py should differ from the base only inside test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe, about lines 1858-1866.\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The re-indentation of unrelated tests is still on the head. Thirteen `\"path\": ...` continuation lines were changed from two tabs plus a space to three tabs (lines 1166, 1168, 1280, 1360, 1419, 1524, 1558, 1602, 1621, 1740, 1913 and 1915, plus 1512 with four tabs). A grep for `^\\t+ \"path\"` now matches nothing in the file. The edits are in test_release_ignores_ref_suffixed_runs_of_other_workflows, test_release_reads_every_page_before_deciding, test_release_leaves_pr_queued_when_listing_shifts, test_listing_shift_retry_budget_is_configurable_and_validated, _in_progress_runs_with_review_at, test_release_holds_pr_when_listing_grows_between_pages, test_release_leaves_pr_queued_when_listing_exceeds_ten_pages, test_release_leaves_pr_queued_when_bounded_query_adds_no_run, test_release_leaves_pr_queued_on_fractional_total_count, and the parametrize lists near lines 1280 and 1913-1915. The pre-push gate flagged the file under \"Changed pre-existing assertions\". The earlier autofix comment says it restored the indentation but reports \"Files changed / commit status: none\", so the revert never landed. Fix: restore two tabs plus one space on those lines and three tabs plus one space on line 1512. Reviewer severity: MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5)\n  Requirement: The issue says to \"Leave the rest of that test and test_cancel_on_close_event_runs_get_their_own_concurrency_group unchanged\", and it is test-only. The repo's minimal-change rule also forbids reformatting.\n  Expected change site: tests/test_review_merge_train.py should differ from the base only inside test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe, about lines 1858-1866.\n  Evidence of absence: Unrelated tests were re-indented (lines 1166, 1168, 1280, 1360, 1419, 1524, 1558, 1602, 1621, 1740, 1913, 1915, and 1512 with four tabs); the autofix revert never landed.\n- Other categories (security, correctness, concurrency, error paths, performance, DB rules, naming, trust-boundary): NONE. HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "09a21d374884d0e450e2e8823f8762b1040ecf1349b80c18204d43d6585dff8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8414,
+    "run_id": "41017095569",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41017095569",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030075602_276850af3c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8414,
+    "run_id": "41017095569"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T07:56:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
