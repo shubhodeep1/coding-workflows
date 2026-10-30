@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:4543 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Direct modification of agents.md violates \u00a725 (agents.md Fragments), causing tests/test_agents_fragment_contract.py to fail in CI.\n  WHY: The repository workflow requires documenting changes via fragments in agents.d/ and rejects direct edits to agents.md (source severity BLOCKER).\n- .github/workflows/ci.yml:2773, 2818 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Moving Orchestrate poll single-file module tests to group 3 invalidated contract tests (tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_implement_post_codex_recovery.py, tests/test_orchestrate_poll_process.py), which fail in CI.\n  WHY: These contract tests depend on specific job/step configurations in .github/workflows/ci.yml that are no longer met (source severity BLOCKER; z-ai_glm-5_3-flash disputes this, stating the failures are environmental and cannot come from the comment-only hunks).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:4543 | severity=BLOCKER | confidence=5\n  PROBLEM: Direct modification of agents.md violates \u00a725 (agents.md Fragments), causing tests/test_agents_fragment_contract.py to fail in CI.\n  WHY: The repository workflow requires documenting changes via fragments in agents.d/ and rejects direct edits to agents.md.\n- .github/workflows/ci.yml:2773, 2818 | severity=BLOCKER | confidence=4\n  PROBLEM: The change in job/step configuration (moving Orchestrate poll single-file module tests to group 3) has invalidated repository-wide contract tests (tests/test_gh_api_write_guard.py, tests/test_pr_watch_guard.py, tests/test_implement_post_codex_recovery.py, tests/test_orchestrate_poll_process.py), which are failing in CI.\n  WHY: These contract tests depend on specific job/step configurations in .github/workflows/ci.yml which are no longer met.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7096c2ec44fcf904d8e82e82bb6176659bfd4613ea64539ade00c2d161a10321",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8402,
+    "run_id": "41056254560",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41056254560",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030131740_f2bbbd7eca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8402,
+    "run_id": "41056254560"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T13:17:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
