@@ -315,6 +315,10 @@ jobs:
       skip_reason: ${{ steps.evaluate.outputs.skip_reason }}
       deterministic_skip: ${{ steps.evaluate.outputs.deterministic_skip }}
       det_skip_reason: ${{ steps.evaluate.outputs.det_skip_reason }}
+      # Skip-path security pass (#8333); written only with
+      # AUTOFIX_SKIP_RUNS_SECURITY_PASS=true.
+      det_skip_security_pass: ${{ steps.evaluate.outputs.det_skip_security_pass }}
+      det_skip_security_pass_pr_json: ${{ steps.evaluate.outputs.det_skip_security_pass_pr_json }}
       claude_branch_review: ${{ steps.evaluate.outputs.claude_branch_review }}
       force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}
       retargeted_base_ref: ${{ steps.evaluate.outputs.retargeted_base_ref }}
@@ -683,6 +687,12 @@ jobs:
           AUTOFIX_SKIP_MAX_ADDITIONS: ${{ vars.AUTOFIX_SKIP_MAX_ADDITIONS }}
           AUTOFIX_SKIP_MAX_DELETIONS: ${{ vars.AUTOFIX_SKIP_MAX_DELETIONS }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          # #8333: an eligible docs-only / small-diff / freshness_sync PR keeps
+          # the deterministic skip, and deterministic-skip-merge runs the
+          # single-issue security pass before it labels or merges. A PR
+          # labelled ai:security-pass-failed stays on codex-agent (review-blocked
+          # judge). `false` restores the old suppression exactly.
+          AUTOFIX_SKIP_RUNS_SECURITY_PASS: ${{ vars.AUTOFIX_SKIP_RUNS_SECURITY_PASS || 'true' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           # No-PR claude-branch-review path inputs (push-without-PR caller).
@@ -721,7 +731,9 @@ jobs:
           PR_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_HEAD_SHA: ${{ steps.evaluate.outputs.head_sha }}
           GATE_AUTO_MERGE_ENABLED: ${{ steps.evaluate.outputs.auto_merge_enabled }}
-          DETERMINISTIC_SKIP: ${{ steps.evaluate.outputs.deterministic_skip }}
+          # #8333: a skip whose security pass is still required gets its
+          # success status from the skip job, only after hold=false.
+          DETERMINISTIC_SKIP: ${{ steps.evaluate.outputs.det_skip_security_pass != 'true' && steps.evaluate.outputs.deterministic_skip || 'false' }}
           REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
           REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1130,6 +1142,10 @@ jobs:
             scripts/pr_checks_lib.sh
             scripts/gh_helpers.sh
             scripts/review_freshness_ci_failed.sh
+            scripts/review_single_issue_security_pass.sh
+            scripts/security_pass_skip.py
+            scripts/review_autofix_step_deterministic_skip_security_pass.sh
+            scripts/review_head_gate.sh
           sparse-checkout-cone-mode: false
 
       - name: Record GH_PAT budget at deterministic-skip-merge start
@@ -1146,7 +1162,61 @@ jobs:
           fi
           echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=unknown"
 
+      - name: Checkout PR head for security pass
+        # #8333: the pass verifies extension ancestry against the audited head
+        # with git plumbing only; no PR code runs (the pass's Python runs with
+        # PYTHONSAFEPATH=1, so PR modules in this cwd are never imported).
+        # Same-repo heads only (the gate refuses fork heads), pinned to the
+        # gate-observed SHA.
+        if: ${{ needs.gate.outputs.det_skip_security_pass == 'true' }}
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.gate.outputs.head_sha }}
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-skip-pr-head
+          fetch-depth: 1
+
+      - name: Single-issue security pass (deterministic skip)
+        # #8333: the same pass as codex-agent's "Single-issue security pass",
+        # run for the gate head before any label or auto-merge. hold=false lets
+        # the merge step run; hold=true skips it. exhausted=true re-dispatches
+        # review once; the gate keeps that run on codex-agent through the
+        # ai:security-pass-failed label, where the review-blocked judge runs.
+        id: det_skip_security_pass
+        if: ${{ needs.gate.outputs.det_skip_security_pass == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
+          SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_PENDING_MARKER_ATTEMPTS: ${{ vars.SECURITY_PASS_PENDING_MARKER_ATTEMPTS || '3' }}
+          SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS: ${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}
+          SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+          DET_SKIP_SECURITY_PASS_PR_JSON: ${{ needs.gate.outputs.det_skip_security_pass_pr_json }}
+          FRESHNESS_HELPER_CHECKOUT_OUTCOME: ${{ steps.checkout_freshness_helper.outcome }}
+          REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
+          REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits }}
+          REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-freshness-src/scripts/review_autofix_step_deterministic_skip_security_pass.sh"
+          if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" != "success" ] || ! [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-freshness-src" rev-parse HEAD 2>/dev/null)" != "${REVIEW_SUPPORT_SHA}" ] || [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::Verified support checkout does not provide scripts/review_autofix_step_deterministic_skip_security_pass.sh; holding the merge."
+            exit 1
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
+        # #8333: with the skip-path pass required, only an explicit hold=false
+        # authorizes labels and auto-merge; a skipped or failed pass step never does.
+        if: ${{ needs.gate.outputs.det_skip_security_pass != 'true' || steps.det_skip_security_pass.outputs.hold == 'false' }}
         env:
           FRESHNESS_HELPER_CHECKOUT_OUTCOME: ${{ steps.checkout_freshness_helper.outcome }}
           REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
