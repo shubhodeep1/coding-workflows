@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When changing a workflow, check for its corresponding contract or security tests under `tests/` and update them alongside the workflow. If behavior lives in a helper script, test that script\u2019s behavior separately; merged changes often touch both layers.",
+  "fingerprint": "33f453a07f0d914077e3066bb9a2b7031e3a15833a9a8334bfd7cfe12a2697b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40987888191",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40987888191",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8281",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8314",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8333",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8369",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8380",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8285",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8324",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8345",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8375",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8381"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261030015208_87c3dfda77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes are commonly validated through contract tests as well as tests of the supporting scripts.",
+  "timestamps": {
+    "created_at": "2026-10-30T01:52:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
