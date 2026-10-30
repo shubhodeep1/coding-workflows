@@ -34,6 +34,11 @@
 #      runs, read from the scope-commit tree, never from the diagnosis.
 #      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED=false (default true)
 #      turns that scope part off and leaves the frozen inputs as before.
+#      After the scope freeze, WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED=true
+#      (default false) renders an `## Evidence pack` for the issue body: the
+#      failed runs' step timelines and the linked runs' timelines with their
+#      head refs, from JSON already saved (no API call), capped at
+#      WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES (default 12000).
 #   3. Fingerprints the failure (workflow + failing step + normalised error
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
@@ -121,6 +126,9 @@
 #                                         workflow_run report's linked runs add their workflow,
 #                                         called workflows and step scripts to the frozen scope
 #                                         (#8360); "false" (any case) turns that off
+#   WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED   default "false": only "true" adds the `## Evidence pack`
+#                                         (failed-run and linked-run step timelines) to the issue body
+#   WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES evidence pack byte cap (default 12000, clamped 1024-20000)
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
@@ -288,6 +296,10 @@ MAX_LINKED_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_LINKED_RUNS:-}" 4)"
 LINKED_RUN_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_LINKED_RUN_LOG_BYTES:-}" 30000)"
 # Linked-run scope paths (#8360): only the literal 'false' turns them off.
 SCOPE_LINKED_WORKFLOWS_ENABLED="${WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED:-true}"
+# Evidence pack (P1): only the literal 'true' turns it on.
+EVIDENCE_PACK_ENABLED="${WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED:-false}"
+EVIDENCE_PACK_MAX_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES:-}" 12000)"
+EVIDENCE_PACK_FILE=""
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
@@ -2762,6 +2774,75 @@ _heal_collect_linked_runs()
 }
 _heal_collect_linked_runs || log "warn linked_runs_failed"
 
+# --- Evidence pack (P1, evidence only) --------------------------------------
+
+# _heal_build_evidence_pack
+#   Renders ${RUNTIME_DIR}/evidence_pack.md for the heal issue body through
+#   `workflow_failure_heal.py evidence-pack`: the step timeline of each
+#   reported run (${LOG_DIR}/run-<id>-info.json + run-<id>-jobs.json) and of
+#   each linked run (${RUNTIME_DIR}/linked_runs/run-<id>.json + -jobs.json)
+#   with head_sha / head_branch. Runs after SCOPE_INPUTS_FROZEN is written and
+#   read-only; nothing reads the pack into the scope, the marker or the
+#   fingerprint, and the diagnosis prompt does not see it.
+#   Batching contract (CLAUDE.md §14): 0 GitHub API calls. Input is the run and
+#   jobs JSON the reported-run loop and _heal_fetch_linked_runs already saved;
+#   a run without both files is left out. Output is the pack file plus one
+#   `evidence_pack outcome=ok|partial|skipped bytes=<n> [reason=<token>]` line.
+#   Fails open: a helper failure empties the pack and the issue is composed
+#   exactly as with the switch off.
+_heal_build_evidence_pack()
+{
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
+	local pack_json="" pack_outcome="" pack_reason="" pack_bytes="" pack_run_id="" pack_seen_ids=" "
+	local -a pack_args=() pack_parent_logs=()
+	EVIDENCE_PACK_FILE="${RUNTIME_DIR}/evidence_pack.md"
+	: > "${EVIDENCE_PACK_FILE}"
+	if [ "${EVIDENCE_PACK_ENABLED}" != true ]; then
+		log "evidence_pack outcome=skipped bytes=0 reason=disabled"
+		return 0
+	fi
+	if [ -s "${SUMMARIES_FILE:-}" ]; then
+		while IFS= read -r pack_run_id; do
+			[[ "${pack_run_id}" =~ ^[0-9]+$ ]] || continue
+			case "${pack_seen_ids}" in *" ${pack_run_id} "*) continue ;; esac
+			pack_seen_ids="${pack_seen_ids}${pack_run_id} "
+			if [ -s "${LOG_DIR}/run-${pack_run_id}-info.json" ] && [ -s "${LOG_DIR}/run-${pack_run_id}-jobs.json" ]; then
+				pack_args+=(--failed-run "${LOG_DIR}/run-${pack_run_id}-info.json" "${LOG_DIR}/run-${pack_run_id}-jobs.json")
+			fi
+		done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+		# The parent logs, for the stall-window hints ([LONG] marks).
+		mapfile -t pack_parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+	fi
+	if [ -s "${fetched_ids_file}" ]; then
+		while IFS= read -r pack_run_id; do
+			[[ "${pack_run_id}" =~ ^[0-9]+$ ]] || continue
+			if [ -s "${linked_dir}/run-${pack_run_id}.json" ] && [ -s "${linked_dir}/run-${pack_run_id}-jobs.json" ]; then
+				pack_args+=(--linked-run "${linked_dir}/run-${pack_run_id}.json" "${linked_dir}/run-${pack_run_id}-jobs.json")
+			fi
+		done < "${fetched_ids_file}"
+	fi
+	if [ "${#pack_args[@]}" -eq 0 ]; then
+		log "evidence_pack outcome=skipped bytes=0 reason=no_data"
+		return 0
+	fi
+	if ! pack_json="$(python3 "${HEAL_PY}" evidence-pack "${pack_args[@]}" --repo "${SOURCE_REPO}" \
+		--max-bytes "${EVIDENCE_PACK_MAX_BYTES}" --out "${EVIDENCE_PACK_FILE}" --stall-hint-files "${pack_parent_logs[@]}" 2>/dev/null)" \
+		|| ! jq -e 'type == "object" and (.outcome | type == "string")' <<< "${pack_json}" >/dev/null 2>&1; then
+		: > "${EVIDENCE_PACK_FILE}"
+		log "evidence_pack outcome=partial bytes=0 reason=helper_failed"
+		return 0
+	fi
+	pack_outcome="$(jq -r '.outcome' <<< "${pack_json}" | tr -cd 'a-z_' | head -c 40)"
+	case "${pack_outcome}" in ok|partial|skipped) ;; *) pack_outcome="partial" ;; esac
+	pack_reason="$(jq -r '.reason // ""' <<< "${pack_json}" | tr -cd 'a-z_' | head -c 40)"
+	pack_bytes="$(jq -r '(.bytes // 0) | tostring' <<< "${pack_json}" 2>/dev/null || true)"
+	[[ "${pack_bytes}" =~ ^[0-9]+$ ]] || pack_bytes=0
+	log "evidence_pack outcome=${pack_outcome} bytes=${pack_bytes}${pack_reason:+ reason=${pack_reason}}"
+	return 0
+}
+_heal_build_evidence_pack || { : > "${RUNTIME_DIR}/evidence_pack.md"; log "evidence_pack outcome=partial bytes=0 reason=helper_failed"; }
+
 # --- Run the diagnosis model -----------------------------------------------
 
 PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
@@ -3233,6 +3314,12 @@ _open_issue()
 	rm -f "${title_file}" "${body_file}"
 	local compose_payload_file
 	compose_payload_file="$(_compose_payload_file)" || compose_payload_file="${PAYLOAD_FILE}"
+	# Evidence pack (P1): passed only when it is on and has text, so a
+	# switch-off body is byte-identical. compose-issue validates it with the body.
+	local -a evidence_pack_args=()
+	if [ "${EVIDENCE_PACK_ENABLED}" = true ] && [ -s "${EVIDENCE_PACK_FILE:-}" ]; then
+		evidence_pack_args=(--evidence-pack-file "${EVIDENCE_PACK_FILE}")
+	fi
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${compose_payload_file}" \
 		--diagnosis-file "${DIAG_FILE}" \
@@ -3247,7 +3334,7 @@ _open_issue()
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
-		--body-out "${body_file}"; then
+		--body-out "${body_file}" "${evidence_pack_args[@]}"; then
 		log "error issue_compose_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
 		tg_send_msg "Workflow failure heal FAILED to compose a safe issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		return 1
