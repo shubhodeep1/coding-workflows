@@ -5,13 +5,25 @@
   "entry_id": "processed_command_8480_6530055299_approved",
   "issue_number": 8480,
   "metadata": {
+    "branch": "ai/issue-8480",
+    "changed_files": [
+      ".github/workflows/review_autofix_sweep.yml",
+      "README.md",
+      "changelog.d/8480-sweep-forward-action-resolution-switch.md",
+      "tests/test_ci_cancelled_rerun.py"
+    ],
+    "issue_number": 8480,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8480",
+    "pr_number": 8483,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8483",
+    "run_attempt": "1",
+    "run_id": "41104436188",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41104436188"
   },
   "run_attempt": 1,
   "run_id": "41104436188",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-30T18:14:56Z",
+  "status": "completed",
+  "timestamp": "2026-10-30T18:54:04Z",
   "workflow": "implement"
 }
