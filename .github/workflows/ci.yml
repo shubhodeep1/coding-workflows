@@ -41,8 +41,9 @@ jobs:
     # tests-hooks-and-orchestrator, orchestrate-poll (3) and
     # tests-promote-stall-and-review. Its remaining test steps are the small
     # contract tests for its own guards (shell-block, CI job split, CI test
-    # wiring, agents.d fragments); the test steps moved in by #7250 and #7334
-    # are gone, so re-measure the job before moving steps here again.
+    # wiring, agents.d fragments) and the "Prompt tier budget" check
+    # (tests/prompt_size_budget.py); the test steps moved in by #7250 and
+    # #7334 are gone, so re-measure the job before moving steps here again.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
