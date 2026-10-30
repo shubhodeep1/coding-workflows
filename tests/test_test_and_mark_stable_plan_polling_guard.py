@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -48,9 +49,13 @@ elif "/pulls?" in path:
 		pr_reads = sum(1 for line in log if "/pulls?" in json.loads(line)[1])
 	pr_number = os.environ.get("STUB_PR_RECHECK_NUMBER") if pr_reads > 1 else os.environ.get("STUB_PR_NUMBER")
 	payload = [{"number": int(pr_number)}] if pr_number else []
+elif "/actions/runs?" in path and "status=in_progress" in path:
+	# wait-implement's stall diagnostics read of every in-progress run.
+	payload = {"workflow_runs": json.loads(os.environ.get("STUB_IN_PROGRESS_RUNS", "[]"))}
 elif "/actions/runs?" in path and os.environ.get("STUB_UNPAGED_RUNS_INVALID") and "&page=" not in path:
-	# The other-active check's page-1 read (fetch_plan_runs_json) is the only
-	# runs request without &page=; this makes just that read unreadable.
+	# Unpaged runs reads: the other-active check's page-1 read
+	# (fetch_plan_runs_json) and wait-implement's stall-diagnostics window read
+	# (the in-progress read is answered above); this makes them unreadable.
 	payload = {"workflow_runs": None}
 elif "/actions/runs?" in path:
 	pages = json.loads(open(os.environ["STUB_RUN_PAGES"], encoding="utf-8").read())
@@ -191,6 +196,16 @@ def _run_latest_scoped_run_field(pages: list, fail_page: int | None = None) -> t
 
 def _run_pages_requested(calls: list[list[str]]) -> list[str]:
 	return [call[1] for call in calls if "/actions/runs?" in call[1]]
+
+
+def _poll_run_pages_requested(calls: list[list[str]]) -> list[str]:
+	# Only the paged polling reads; wait-implement's stall diagnostics read
+	# runs lists without &page= (issue #8376).
+	return [path for path in _run_pages_requested(calls) if "&page=" in path]
+
+
+def _stall_diag_reads(calls: list[list[str]]) -> list[str]:
+	return [path for path in _run_pages_requested(calls) if "&page=" not in path]
 
 
 def test_plan_label_without_a_captured_run_id_fails_at_plan_capture() -> None:
@@ -413,7 +428,7 @@ def _phase_step_script(step_id: str) -> str:
 	raise AssertionError(f"{step_id} step not found")
 
 
-def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, terminal: bool = False, failed_page: int | None = None, pr_recheck_number: int | None = None, active_run: dict | None = None, later_pages: list | None = None, terminal_timeout: str = "0", labels_later: str | None = None, switch_after: int = 0, jobs: dict | None = None, extra_env: dict[str, str] | None = None) -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, terminal: bool = False, failed_page: int | None = None, pr_recheck_number: int | None = None, active_run: dict | None = None, later_pages: list | None = None, terminal_timeout: str = "0", labels_later: str | None = None, switch_after: int = 0, jobs_json: dict | None = None, in_progress_runs: list | None = None, extra_env: dict[str, str] | None = None) -> tuple[int, dict[str, str], list[list[str]], str]:
 	# Runs the real wait-clarify / wait-implement script against the stub gh
 	# and returns its exit code, GITHUB_OUTPUT, gh calls, and combined output.
 	with tempfile.TemporaryDirectory() as tmp:
@@ -470,8 +485,10 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 		if labels_later is not None:
 			env["STUB_LABELS_LATER"] = labels_later
 			env["STUB_LABELS_SWITCH_AFTER"] = str(switch_after)
-		if jobs is not None:
-			env["STUB_JOBS_JSON"] = json.dumps(jobs)
+		if jobs_json is not None:
+			env["STUB_JOBS_JSON"] = json.dumps(jobs_json)
+		if in_progress_runs is not None:
+			env["STUB_IN_PROGRESS_RUNS"] = json.dumps(in_progress_runs)
 		if extra_env:
 			env.update(extra_env)
 		proc = subprocess.run(["bash", "-c", _phase_step_script(step_id)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
@@ -625,7 +642,7 @@ def test_implement_terminal_check_rechecks_newly_indexed_active_run() -> None:
 	later = [[_run(778, name="Internal: AI Implement", conclusion=None, status="in_progress"), *pages[0]]]
 	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, later_pages=later)
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
-	assert len(_run_pages_requested(calls)) == 3, calls
+	assert len(_poll_run_pages_requested(calls)) == 3, calls
 
 
 def test_implement_terminal_check_reuses_known_active_run_id() -> None:
@@ -656,8 +673,8 @@ def test_implement_progress_counter_ignores_other_issue_runs() -> None:
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
 	assert "impl_runs: 0 total" in log, log
 	# Only the counter's page-1 read on each of the two polls; the terminal walk never runs.
-	assert len(_run_pages_requested(calls)) == 2, _run_pages_requested(calls)
-	assert all("&page=1&" in path for path in _run_pages_requested(calls)), _run_pages_requested(calls)
+	assert len(_poll_run_pages_requested(calls)) == 2, _run_pages_requested(calls)
+	assert all("&page=1&" in path for path in _poll_run_pages_requested(calls)), _run_pages_requested(calls)
 
 
 def test_implement_progress_counter_logs_return_to_awaiting_approval() -> None:
@@ -685,11 +702,137 @@ def test_implement_terminal_check_preserves_pr_recheck() -> None:
 	assert len(_run_pages_requested(calls)) >= 2, calls
 
 
+STALL_DIAG_CALL = '( log_implement_stall_diagnostics ) || echo "  stall-diag: diagnostics failed (ignored)"'
+
+
+def _pending_implement_run(run_id: int = 777) -> dict:
+	return _run(run_id, name="Internal: AI Implement", conclusion=None, status="pending")
+
+
+def test_implement_stall_logs_pending_run_diagnostics() -> None:
+	# Issue #8376 (run 40876853022): the only scoped Implement run stayed
+	# pending for 30 minutes while the issue carried ai:implementing.
+	pending = _pending_implement_run()
+	active = pending | {"run_started_at": None, "event": "issue_comment", "updated_at": "2026-09-29T00:49:00Z", "run_attempt": 1}
+	jobs = {"jobs": [{"name": "implement", "status": "queued", "conclusion": None, "started_at": None, "runner_name": None, "steps": []}]}
+	holder = _run(700, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-09-29T00:40:00Z") | {"run_started_at": "2026-09-29T00:40:05Z", "event": "issue_comment"}
+	rc, outputs, calls, log = _run_phase_step("wait-implement", [[pending]], labels="ai:implementing", terminal=True, terminal_timeout="2", active_run=active, jobs_json=jobs, in_progress_runs=[holder, pending])
+	assert rc == 1, log
+	assert outputs == {"status": "timeout"}, outputs
+	assert "::error::Implement phase stalled — no activity for 2 minutes" in log, log
+	assert 'stall-diag latest-run: id=777 name="Internal: AI Implement" event="issue_comment" status="pending"' in log, log
+	assert "run_started_at=null" in log, log
+	assert 'stall-diag job: name="implement" status="queued" conclusion=null started_at=null' in log, log
+	assert "stall-diag window-run: none" in log, log
+	assert "stall-diag in-progress-run: id=700 title_matches=true" in log, log
+	assert "in-progress-run: id=777" not in log, log
+	assert "::warning::Issue #4712 carries ai:implementing but its latest scoped Implement run 777 is still pending at the stall" in log, log
+	assert any(call[1].endswith("/actions/runs/777") for call in calls), calls
+	assert any(call[1].endswith("/actions/runs/777/jobs?per_page=30") for call in calls), calls
+	diag = _stall_diag_reads(calls)
+	assert len(diag) == 2, diag
+	assert f"created=>{APPROVED_AT}" in diag[0] and "status=in_progress" in diag[1], diag
+
+
+def test_implement_stall_diagnostics_are_fail_open() -> None:
+	# Unreadable by-ID payload and a malformed in-progress list.
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[_pending_implement_run()]], labels="ai:implementing", terminal=True, terminal_timeout="2", in_progress_runs=[1, 2])
+	assert rc == 1, log
+	assert outputs == {"status": "timeout"}, outputs
+	assert "stall-diag latest-run: unavailable" in log, log
+	assert "stall-diag jobs: none" in log, log
+	assert "stall-diag in-progress-run: unavailable" in log, log
+	# No scoped run at all: the by-ID reads are skipped, the list reads still run.
+	rc, outputs, calls, log = _run_phase_step("wait-implement", [[]], terminal=True, terminal_timeout="2")
+	assert rc == 1, log
+	assert outputs == {"status": "timeout"}, outputs
+	assert "stall-diag latest-run: none (no scoped Implement run in window)" in log, log
+	assert "::warning::" not in log, log
+	assert not any(re.search(r"/actions/runs/\d+", call[1]) for call in calls), calls
+	assert len(_stall_diag_reads(calls)) == 2, calls
+
+
+def test_implement_stall_diagnostics_only_on_stall_path() -> None:
+	rc, outputs, calls, log = _run_phase_step("wait-implement", [[_run(777, name="Internal: AI Implement")]], pr_number=42)
+	assert rc == 0 and outputs.get("status") == "success", (outputs, log)
+	assert "stall-diag" not in log, log
+	assert not any("status=in_progress" in call[1] for call in calls), calls
+	pages = [[_run(99, name="Internal: AI Implement", title=ALT_TITLE), _run(777, name="Internal: AI Implement", conclusion="failure")]]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "implement_failed", (outputs, log)
+	assert "stall-diag" not in log, log
+	script = _phase_step_script("wait-implement")
+	assert "INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))" in script
+	assert script.count(STALL_DIAG_CALL) == 1
+	error_at = script.index('echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}$(e2e_watched_run_urls)"')
+	status_at = script.index('echo "status=timeout" >> "$GITHUB_OUTPUT"', error_at)
+	call_at = script.index(STALL_DIAG_CALL)
+	assert error_at < status_at < call_at < script.index("exit 1", status_at)
+	assert script[call_at + len(STALL_DIAG_CALL):script.index("exit 1", status_at)].strip() == ""
+
+
+def test_implement_stall_diagnostics_do_not_inject_workflow_commands() -> None:
+	hostile = _run(700, name="Internal: AI Implement", title="x\n::error::injected\n##[error]legacy", conclusion=None, status="in_progress")
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[_pending_implement_run()]], labels="ai:implementing", terminal=True, terminal_timeout="2", in_progress_runs=[hostile])
+	assert rc == 1 and outputs == {"status": "timeout"}, (outputs, log)
+	assert "stall-diag in-progress-run: id=700 title_matches=false" in log, log
+	assert "::error::injected" in log, log  # present only escaped inside the JSON string
+	for line in log.splitlines():
+		assert not line.lstrip().startswith("::error::injected"), line
+		assert not line.lstrip().startswith("##[error]legacy"), line
+
+
+def test_implement_stall_warning_uses_fresh_run_status() -> None:
+	# The by-ID read overrides the 30s-cached status for the warning.
+	started = _pending_implement_run() | {"status": "in_progress", "run_started_at": "2026-09-29T00:49:30Z"}
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[_pending_implement_run()]], labels="ai:implementing", terminal=True, terminal_timeout="2", active_run=started)
+	assert rc == 1 and outputs == {"status": "timeout"}, (outputs, log)
+	assert 'stall-diag latest-run: id=777 name="Internal: AI Implement"' in log and 'status="in_progress"' in log, log
+	assert "::warning::" not in log, log
+	# The reverse: a stale cached in_progress and a fresh pending still warns.
+	cached = _run(777, name="Internal: AI Implement", conclusion=None, status="in_progress")
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[cached]], labels="ai:implementing", terminal=True, terminal_timeout="2", active_run=_pending_implement_run())
+	assert rc == 1 and outputs == {"status": "timeout"}, (outputs, log)
+	assert "::warning::Issue #4712 carries ai:implementing but its latest scoped Implement run 777 is still pending at the stall" in log, log
+
+
+def test_implement_window_start_comes_from_step_env() -> None:
+	doc = yaml.safe_load(_read_workflow())
+	step = next(s for s in doc["jobs"]["e2e-smoke-test"]["steps"] if s.get("id") == "wait-implement")
+	assert step["env"]["IMPL_CREATED_AFTER_INPUT"] == IMPL_CREATED_AFTER_EXPR, step.get("env")
+	assert 'IMPL_CREATED_AFTER="${IMPL_CREATED_AFTER_INPUT:-}"' in step["run"]
+	assert IMPL_CREATED_AFTER_EXPR not in step["run"]
+
+
+def test_implement_stall_diagnostics_mark_truncated_run_lists() -> None:
+	holders = [_run(1000 + n, name="Internal: AI Implement", conclusion=None, status="in_progress") for n in range(22)]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[_pending_implement_run()]], labels="ai:implementing", terminal=True, terminal_timeout="2", in_progress_runs=holders)
+	assert rc == 1 and outputs == {"status": "timeout"}, (outputs, log)
+	assert log.count("stall-diag in-progress-run: id=") == 20, log
+	assert "stall-diag in-progress-run: truncated, 2 more" in log, log
+
+
+def test_implement_stall_window_run_notes_a_full_page() -> None:
+	# The window-run read is one page of 100 runs; a full page is noted.
+	pages = [[_pending_implement_run()] + _noise_page(1000, count=99)]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, labels="ai:implementing", terminal=True, terminal_timeout="2")
+	assert rc == 1 and outputs == {"status": "timeout"}, (outputs, log)
+	assert "stall-diag window-run: note: only the newest 100 runs in the window were read" in log, log
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[_pending_implement_run()]], labels="ai:implementing", terminal=True, terminal_timeout="2")
+	assert "stall-diag window-run: note:" not in log, log
+
+
+# --- Backport of #8243 (working-run tracking) and #8259 (pre-push gate step
+# budget) from main (issue #8376, release run 40876853022). ------------------
+
+
 def _jobs_lookup_run_ids(calls: list[list[str]]) -> set[str]:
+	# Only the per-poll step-name read (per_page=10); the stall diagnostics
+	# read the latest run's jobs with per_page=30.
 	ids = set()
 	for call in calls:
 		path = call[1] if len(call) > 1 else ""
-		if "/actions/runs/" in path and "/jobs?" in path:
+		if "/actions/runs/" in path and "/jobs?per_page=10" in path:
 			ids.add(path.split("/actions/runs/")[1].split("/jobs?")[0])
 	return ids
 
@@ -733,8 +876,13 @@ def test_implement_activity_state_tracks_working_run() -> None:
 	counter = script[script.index("scoped_implement_progress_counts() {"):script.index("IMPL_PREV_LABELS=\"\"")]
 	assert 'select(.status == "in_progress")' in counter
 	assert 'IMPL_RUN_ID_WORKING="$IMPL_RUN_ID_LATEST"' in counter
+	# Exactly one working-run selection and later-page scan (a duplicated
+	# copy from a merge resolution re-ran the scan and could fall back to the
+	# pending run).
+	assert counter.count("IMPL_RUN_ID_WORKING=$(printf") == 1, counter
+	assert counter.count("local working_page=") == 1, counter
 	assert "actions/runs/${IMPL_RUN_ID_WORKING}/jobs?per_page=10" in script
-	assert "actions/runs/${IMPL_RUN_ID_LATEST}/jobs" not in script
+	assert "actions/runs/${IMPL_RUN_ID_LATEST}/jobs?per_page=10" not in script
 	cur_state = next(line for line in script.splitlines() if line.strip().startswith("CUR_STATE="))
 	assert "working=${IMPL_RUN_ID_WORKING}" in cur_state, cur_state
 	assert "PHASE_TIMEOUT" in script
@@ -762,7 +910,7 @@ def test_implement_prepush_gate_step_gets_its_own_stall_limit() -> None:
 	# gate step's is 180 s, so the wait survives idle 120 and stalls at 240.
 	rc, outputs, calls, log = _run_phase_step(
 		"wait-implement", _working_implement_pages(), terminal=True, terminal_timeout="1",
-		jobs=_in_progress_step_jobs(PREPUSH_GATE_STEP),
+		jobs_json=_in_progress_step_jobs(PREPUSH_GATE_STEP),
 		extra_env={"PREPUSH_GATE_STEP_STALL_MINUTES": "3"},
 	)
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
@@ -775,7 +923,7 @@ def test_implement_prepush_gate_step_gets_its_own_stall_limit() -> None:
 def test_implement_other_steps_keep_the_normal_stall_limit() -> None:
 	rc, outputs, calls, log = _run_phase_step(
 		"wait-implement", _working_implement_pages(), terminal=True, terminal_timeout="1",
-		jobs=_in_progress_step_jobs("Run Codex implementation"),
+		jobs_json=_in_progress_step_jobs("Run Codex implementation"),
 		extra_env={"PREPUSH_GATE_STEP_STALL_MINUTES": "3"},
 	)
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
@@ -788,12 +936,25 @@ def test_implement_prepush_gate_limit_never_shortens_the_normal_limit() -> None:
 	# An extended value below PHASE_TIMEOUT leaves the normal limit in place.
 	rc, outputs, calls, log = _run_phase_step(
 		"wait-implement", _working_implement_pages(), terminal=True, terminal_timeout="2",
-		jobs=_in_progress_step_jobs(PREPUSH_GATE_STEP),
+		jobs_json=_in_progress_step_jobs(PREPUSH_GATE_STEP),
 		extra_env={"PREPUSH_GATE_STEP_STALL_MINUTES": "1"},
 	)
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
 	assert "Implement phase stalled — no activity for 2 minutes" in log, log
 	assert "pre-push gate step" not in log, log
+
+
+def test_implement_prepush_gate_limit_rejects_a_non_numeric_value() -> None:
+	# A non-numeric override falls back to PHASE_TIMEOUT without an arithmetic error.
+	rc, outputs, calls, log = _run_phase_step(
+		"wait-implement", _working_implement_pages(), terminal=True, terminal_timeout="1",
+		jobs_json=_in_progress_step_jobs(PREPUSH_GATE_STEP),
+		extra_env={"PREPUSH_GATE_STEP_STALL_MINUTES": "a[$(touch /tmp/x)]"},
+	)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "Implement phase stalled — no activity for 1 minutes" in log, log
+	assert "pre-push gate step" not in log, log
+	assert "syntax error" not in log and "unbound variable" not in log, log
 
 
 def test_implement_prepush_gate_limit_keys_on_the_working_run_step_only() -> None:
@@ -807,10 +968,37 @@ def test_implement_prepush_gate_limit_keys_on_the_working_run_step_only() -> Non
 	cur_state = next(line for line in script.splitlines() if line.strip().startswith("CUR_STATE="))
 	assert cur_state.strip() == 'CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT};working=${IMPL_RUN_ID_WORKING}"', cur_state
 	assert "INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))" in script
+	# The job env default matches main's (35 minutes).
+	doc = yaml.safe_load(_read_workflow())
+	assert doc["jobs"]["e2e-smoke-test"]["env"]["PREPUSH_GATE_STEP_STALL_MINUTES"] == 35
 	# The literal must match the step implement.yml runs, or the extended
 	# limit silently stops applying.
 	implement = (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
 	assert implement.count(f"- name: {PREPUSH_GATE_STEP}\n") == 1
+
+
+def test_implement_replay_40876853022_working_run_through_prepush_gate() -> None:
+	# Issue #8376 replay (scoped per the maintainer note): the working run 777
+	# is in the window and in_progress while a newer duplicate 778 is pending.
+	# Phase 3b reads 777's steps; the 30-minute guard does not trip while its
+	# "Pre-push affected-test gate" step runs (30m28s in the incident); the
+	# 35-minute gate limit still ends a step that never finishes. The fake
+	# clock advances IDLE by 120 s per poll after the first two.
+	pages = [[
+		_run(777, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-09-28T03:50:56Z"),
+		_run(778, name="Internal: AI Implement", conclusion=None, status="pending", created_at="2026-09-28T03:51:43Z"),
+	]]
+	rc, outputs, calls, log = _run_phase_step(
+		"wait-implement", pages, labels="ai:implementing", terminal=True, terminal_timeout="30",
+		jobs_json=_in_progress_step_jobs(PREPUSH_GATE_STEP),
+	)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert _jobs_lookup_run_ids(calls) == {"777"}, calls
+	# Past the 30-minute guard (1800 s) and past the incident's 1828 s step.
+	assert "idle 1920s" in log, log
+	assert "Implement phase stalled — no activity for 30 minutes\n" not in log + "\n", log
+	assert "Implement phase stalled — no activity for 35 minutes (pre-push gate step: limit 35m)" in log, log
+	assert "stall-diag latest-run:" in log, log
 
 
 # --- Watched run URLs (issue #8248) -----------------------------------------
