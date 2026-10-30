@@ -1275,6 +1275,13 @@ def test_report_invalid_pool_reason_becomes_unavailable(tmp_path: Path) -> None:
 	assert "Not Valid" not in result.stdout
 
 
+def test_report_pool_reason_starting_with_a_dash_is_unavailable(tmp_path: Path) -> None:
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON="-x")
+	assert result.returncode == 0, result.stderr
+	assert "payload_build_failed" not in result.stdout
+	assert _report_pool_lines(log) == [["Claude pool step reason: unavailable"]]
+
+
 @pytest.mark.parametrize("variant", ["missing", "symlink"])
 def test_report_without_a_pool_reason_source_omits_the_line(tmp_path: Path, variant: str) -> None:
 	if variant == "symlink":

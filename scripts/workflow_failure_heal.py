@@ -1611,7 +1611,7 @@ def engine_fallback_fingerprint(role: str, reason: str) -> str:
 
 def _engine_pool_reason_token(value: str | None) -> str:
 	"""The pool reason token when it matches the pattern, else "unavailable"."""
-	if isinstance(value, str) and _ENGINE_POOL_REASON_RE.match(value):
+	if isinstance(value, str) and _ENGINE_POOL_REASON_RE.fullmatch(value):
 		return value
 	return ENGINE_POOL_REASON_UNAVAILABLE
 

@@ -6696,7 +6696,7 @@ def test_engine_fallback_pool_reason_token_present() -> None:
 	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
 
 
-@pytest.mark.parametrize("token", ["Bad", "a b", "x" * 61, "", "@x", "all-gated", "pool`x`", "a\nb"])
+@pytest.mark.parametrize("token", ["Bad", "a b", "x" * 61, "", "@x", "all-gated", "pool`x`", "a\nb", "selected\n", "-x"])
 def test_engine_fallback_pool_reason_token_invalid_is_unavailable(token: str) -> None:
 	payload = _engine_pool_payload(pool_reason=token)
 	assert _engine_pool_lines(payload["failure_evidence"]) == ["Claude pool step reason: unavailable"]
@@ -6761,13 +6761,14 @@ def test_engine_fallback_pool_reason_cli(tmp_path: Path) -> None:
 	assert _engine_pool_lines(build("--pool-reason", "")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
 	assert _engine_pool_lines(build("--pool-reason", "Not Valid")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
 	assert _engine_pool_lines(build("--pool-reason", "selected")["failure_evidence"]) == ["Claude pool step reason: selected"]
+	assert _engine_pool_lines(build("--pool-reason=-x")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
 
 
 def test_engine_fallback_reporter_passes_the_pool_reason_only_with_a_source() -> None:
 	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
 	build = text[text.index("build-engine-fallback-payload --repo"):text.index("wrap-dispatch --payload-json")]
 	assert '${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"}' in build
-	assert 'report_pool_reason_args=(--pool-reason "${report_pool_reason_token}")' in text
+	assert 'report_pool_reason_args=("--pool-reason=${report_pool_reason_token}")' in text
 	assert 'if [ "${report_pool_reason_source}" != "none" ]; then' in text
 	# The record format and the fingerprint inputs stay role + reason.
 	assert '--role "${role}" --reason "${reason}"' in build

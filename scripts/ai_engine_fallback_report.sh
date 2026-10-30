@@ -322,9 +322,11 @@ if [ "${#pairs[@]}" -eq 0 ]; then
 	log "outcome=none records=${total} codex_fallbacks=${capacity} waits=${waits}"
 	exit 0
 fi
-# The Claude pool step reason (issue #8406), resolved in the order of
-# ai_engine_no_account_reason in scripts/ai_engine.sh: the env value, then the
-# reason file scripts/claude_pool_token.sh writes. The token is not checked
+# The Claude pool step reason (issue #8406): any non-empty CLAUDE_POOL_REASON
+# value, else the reason file scripts/claude_pool_token.sh writes (same file and
+# read rules as ai_engine_no_account_reason in scripts/ai_engine.sh, which
+# honours the env value only when it is "all_gated"). The line is diagnostic
+# only and never enters the fingerprint. The token is not checked
 # here; workflow_failure_heal.py maps anything outside [a-z0-9_]{1,60} to
 # "unavailable". --pool-reason is passed only when a source exists, so a job
 # whose pool step never ran dispatches the same payload as before.
@@ -342,7 +344,9 @@ else
 	fi
 fi
 if [ "${report_pool_reason_source}" != "none" ]; then
-	report_pool_reason_args=(--pool-reason "${report_pool_reason_token}")
+	# Attached form, so a token starting with "-" stays the option's value and
+	# becomes "unavailable" instead of failing argument parsing.
+	report_pool_reason_args=("--pool-reason=${report_pool_reason_token}")
 fi
 dispatched=0
 for entry in "${pairs[@]}"; do
