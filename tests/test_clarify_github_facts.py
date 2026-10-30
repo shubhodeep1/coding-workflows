@@ -325,3 +325,17 @@ def test_pack_write_failure_still_writes_the_facts_block(tmp_path: Path) -> None
 		], _Runner((0, "{}")))
 	assert rc == 0 and facts_out.exists()
 	assert json.loads(stdout.getvalue())["heal_evidence_pack_bytes"] == 0
+
+
+def test_part_written_pack_is_removed(tmp_path: Path, monkeypatch) -> None:
+	pack_out, original = tmp_path / "pack.txt", Path.write_text
+	def partial(self: Path, data: str, *a, **kw) -> int:
+		if self == pack_out:
+			original(self, data[:10], *a, **kw)
+			raise OSError(28, "No space left on device")
+		return original(self, data, *a, **kw)
+	monkeypatch.setattr(Path, "write_text", partial)
+	monkeypatch.setattr(facts, "render_heal_evidence_pack", lambda body, labels: "x" * 100)
+	(tmp_path / "t.txt").write_text("Make it better.\n", encoding="utf-8")
+	assert facts.main(["--repo", REPO, "--text-file", str(tmp_path / "t.txt"), "--output", str(tmp_path / "facts.txt"), "--heal-evidence-pack-output", str(pack_out)], _Runner((0, "{}"))) == 0
+	assert not pack_out.exists() and (tmp_path / "facts.txt").exists()
