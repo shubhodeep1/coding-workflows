@@ -26,6 +26,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-orchestrate-poll-judge.txt` — Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly.
 - `prompts/mode-orchestrate.txt` — Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph.
 - `prompts/mode-persist-journal-rules.txt` — Role: pre-push gate repair rules fragment. Goal: tell the repair turn to update a test to match a deliberate deletion instead of restoring the deleted code (attempt journal, issue #8428).
+- `prompts/mode-plan-acceptance.txt` — Role: planner. Goal: append a `## Acceptance` section with `ACCEPTANCE:` lines naming the tests, CI checks and post-merge workflow that show the change is delivered (issue #8427, default off).
 - `prompts/mode-plan-heal-counterfactual.txt` — Role: workflow-heal planner. Goal: append a `## Counterfactual check` with one `HEAL_COUNTERFACTUAL:` line to workflow-heal plans so plan auto-approval can tell whether the change would have made the failing run pass (issue #8249).
 - `prompts/mode-plan.txt` — Role: planning-phase auditor. Goal: emit a structured implementation plan or `BLOCKED:` line.
 - `prompts/mode-security-audit.txt` — Role: Chief Security Officer. Goal: emit a JSON-array security audit for default-branch scope.
@@ -108,6 +109,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Scripts
 
+- `scripts/acceptance_check.py` — Validate a plan's `ACCEPTANCE:` done-check against the repository, store it as the `AI_ACCEPTANCE_V1` plan-comment marker and render the PR body's `## Acceptance` section (issue #8427, default off).
 - `scripts/activation_verify.sh` — Grade merged work LIVE or DORMANT, post the verdict, open one issue for code gaps and record operator steps (port P4).
 - `scripts/ai_context_utils.py` — Python helper for ai context utils.
 - `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` in the isolated container (`claude_run` via `codex_isolated_exec.sh --engine claude`), and fall back to codex (D1).

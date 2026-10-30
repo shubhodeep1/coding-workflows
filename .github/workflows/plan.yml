@@ -18,6 +18,8 @@ env:
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+  # Done-check (issue #8427, P2): default off; see scripts/acceptance_check.py.
+  PERSIST_ACCEPTANCE_ENABLED: ${{ vars.PERSIST_ACCEPTANCE_ENABLED || 'false' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -642,6 +644,21 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Done-check helpers (issue #8427, P2): optional, so a support ref
+          # without them never fails planning while PERSIST_ACCEPTANCE_ENABLED is off.
+          for f in acceptance_check.py targeted_file_context.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional done-check helper ${f} unavailable on ${SCRIPT_REF}; plans carry no done-check."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
           # Stage codex_model_catalog.json so scripts/write_codex_config.sh
           # can wire `model_catalog_json` and codex registers
           # `apply_patch_tool_type = "freeform"` for our `openai/gpt-5.*`
@@ -762,6 +779,21 @@ jobs:
               install -m 0644 "${src}" prompts/mode-plan-heal-counterfactual.txt
             else
               echo "::warning::prompts/mode-plan-heal-counterfactual.txt unavailable in the support checkout; heal plans will be held for a human."
+            fi
+          fi
+
+          # Issue #8427 (P2): the done-check fragment run_plan_codex.sh appends
+          # when PERSIST_ACCEPTANCE_ENABLED=true. Optional: without it the plan
+          # carries no ACCEPTANCE lines and no marker.
+          if [ ! -f prompts/mode-plan-acceptance.txt ]; then
+            src=".codex-workflow-src/prompts/mode-plan-acceptance.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-plan-acceptance.txt" ]; then
+              src=".codex-workflow-src-main/prompts/mode-plan-acceptance.txt"
+            fi
+            if [ -f "${src}" ] && [ ! -L "${src}" ]; then
+              install -m 0644 "${src}" prompts/mode-plan-acceptance.txt
+            else
+              echo "::notice::prompts/mode-plan-acceptance.txt unavailable in the support checkout; plans carry no done-check."
             fi
           fi
 
@@ -2140,6 +2172,22 @@ jobs:
             echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
           fi
 
+      - name: Validate done-check (acceptance)
+        if: env.PERSIST_ACCEPTANCE_ENABLED == 'true' && env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          # Issue #8427 (P2): fail-open; only a valid done-check gets a marker.
+          rm -f "${RUNTIME_DIR}/acceptance.json" "${RUNTIME_DIR}/acceptance_marker.txt"
+          { [ -f scripts/acceptance_check.py ] && [ -f scripts/targeted_file_context.py ]; } || { echo "PERSIST acceptance outcome=skipped reason=helper_absent"; exit 0; }
+          python3 -I -B scripts/acceptance_check.py validate --plan-file "${CODEX_OUTPUT_FILE}" \
+            --repo-root "${GITHUB_WORKSPACE}" --out "${RUNTIME_DIR}/acceptance.json" || true
+          if [ -s "${RUNTIME_DIR}/acceptance.json" ]; then
+            python3 -I -B scripts/acceptance_check.py marker --in "${RUNTIME_DIR}/acceptance.json" \
+              > "${RUNTIME_DIR}/acceptance_marker.txt" || rm -f "${RUNTIME_DIR}/acceptance_marker.txt"
+          fi
+
       - name: Handle blocked planning output
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'
         env:
@@ -2738,6 +2786,8 @@ jobs:
             # Automation marker (issue #6630): clarify's intake accepts
             # /reclarify on a later line only in comments without one, so this
             # comment's own /reclarify line never restarts clarification.
+            # Done-check marker (issue #8427, P2) sits directly above it.
+            if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = true ] && [ -s "${RUNTIME_DIR}/acceptance_marker.txt" ]; then cat "${RUNTIME_DIR}/acceptance_marker.txt"; fi
             echo "<!-- ai:plan-proposal:v1 -->"
           } > "${PLAN_COMMENT_FILE}"
 
@@ -2774,8 +2824,12 @@ jobs:
           elif [ "${PLAN_HELD}" = true ]; then
             outcome=blocked
           fi
+          acceptance_args=()
+          if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = true ] && [ -s "${RUNTIME_DIR}/acceptance.json" ]; then
+            acceptance_args=(--acceptance-file "${RUNTIME_DIR}/acceptance.json")
+          fi
           python3 -B scripts/attempt_journal.py append --repo "${GITHUB_REPOSITORY}" --issue "${ISSUE_NUMBER}" \
-            --stage plan --outcome "${outcome}" --approach "${approach}" || true
+            --stage plan --outcome "${outcome}" --approach "${approach}" "${acceptance_args[@]}" || true
 
       - name: Record planning candidate (plan posted)
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'

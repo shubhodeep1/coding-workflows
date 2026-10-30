@@ -421,3 +421,36 @@ def test_parse_keeps_an_older_id_when_the_newest_journal_has_none():
 	newest.pop("databaseId")
 	cid, entries = aj.parse([older, newest], LOGIN)
 	assert cid == 4 and len(entries) == 2
+
+
+def test_acceptance_file_fills_the_acceptance_field(tmp_path):
+	# Issue #8427 (P2): plan.yml passes scripts/acceptance_check.py's output.
+	invalid = tmp_path / "invalid.json"
+	invalid.write_text(json.dumps({"schema": "acceptance.v1", "state": "invalid",
+		"errors": [f"unknown_check:c{i}" for i in range(15)]}), encoding="utf-8")
+	got = aj.acceptance_fields(str(invalid))
+	assert got["state"] == "invalid" and len(got["unmet"]) == aj.UNMET_MAX and got["unmet"][0] == "unknown_check:c0"
+	valid = tmp_path / "valid.json"
+	valid.write_text(json.dumps({"schema": "acceptance.v1", "state": "valid", "errors": []}), encoding="utf-8")
+	assert aj.acceptance_fields(str(valid)) == {"state": "none", "unmet": []}
+	broken = tmp_path / "broken.json"
+	broken.write_text("{not json", encoding="utf-8")
+	assert aj.acceptance_fields(str(broken)) == {"state": "none", "unmet": []}
+	assert aj.acceptance_fields(str(tmp_path / "missing.json")) == {"state": "none", "unmet": []}
+	assert aj.acceptance_fields(None) == {"state": "none", "unmet": []}
+
+
+def test_append_records_acceptance_only_with_the_flag(fake_gh, tmp_path):
+	state, env = fake_gh
+	acc = tmp_path / "acceptance.json"
+	acc.write_text(json.dumps({"schema": "acceptance.v1", "state": "invalid", "errors": ["no_test_or_check"]}), encoding="utf-8")
+	env["GITHUB_RUN_ID"] = "301"
+	proc = _cli(env, "append", "--repo", "o/r", "--issue", "5", "--stage", "plan", "--outcome", "ok", "--acceptance-file", str(acc))
+	assert proc.returncode == 0 and "outcome=ok" in proc.stderr, proc.stderr
+	env["GITHUB_RUN_ID"] = "302"
+	proc = _cli(env, "append", "--repo", "o/r", "--issue", "5", "--stage", "plan", "--outcome", "ok")
+	assert proc.returncode == 0, proc.stderr
+	_, entries = aj.parse(json.loads((state / "comments.json").read_text(encoding="utf-8")), LOGIN)
+	by_run = {e["run_id"]: e["acceptance"] for e in entries}
+	assert by_run["301"] == {"state": "invalid", "unmet": ["no_test_or_check"]}
+	assert by_run["302"] == {"state": "none", "unmet": []}

@@ -26,7 +26,7 @@ Fail-open: every CLI path exits 0. Errors log
 
 CLI:
 	append --repo R (--issue N | --pr N [--head-ref B]) --stage S --outcome O [--approach N|inherit]
-		[--attempt A] [--note-file F] [--files-file F] [--gate-result F]
+		[--attempt A] [--note-file F] [--files-file F] [--gate-result F] [--acceptance-file F]
 		[--deletions-from-commit] [--failure-workflow W --failure-step S
 		--failure-text-file F] [--comments-file F] [--trusted-login L]
 	render [--repo R (--issue N | --pr N [--head-ref B]) | --comments-file F] --out F
@@ -466,6 +466,26 @@ def gate_fields(path: str | None) -> dict:
 	return gate
 
 
+def acceptance_fields(path: str | None) -> dict:
+	"""Journal `acceptance` from scripts/acceptance_check.py's acceptance.v1
+	file (issue #8427, P2). `invalid` is recorded with its errors as `unmet`;
+	`valid` and `none` stay `none` (nothing is met or unmet before a gate runs
+	it); an absent or unreadable file is `none`."""
+	acceptance = {"state": "none", "unmet": []}
+	if not path:
+		return acceptance
+	try:
+		data = json.loads(Path(path).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return acceptance
+	if not isinstance(data, dict) or data.get("schema") != "acceptance.v1":
+		return acceptance
+	if data.get("state") == "invalid":
+		errors = data.get("errors") if isinstance(data.get("errors"), list) else []
+		return {"state": "invalid", "unmet": [str(e)[:200] for e in errors if isinstance(e, (str, int))][:UNMET_MAX]}
+	return acceptance
+
+
 GATE_FAILURE_STEP = "Pre-push affected-test gate"
 
 
@@ -594,7 +614,7 @@ def cmd_append(args: argparse.Namespace) -> None:
 		"failure_key": fkey,
 		"files_changed": _read_lines(args.files_file),
 		"gate": gate_fields(args.gate_result),
-		"acceptance": {"state": "none", "unmet": []},
+		"acceptance": acceptance_fields(args.acceptance_file),
 		"editor_deletions": commit_deletions() if args.deletions_from_commit else [],
 		"evidence_hash": "",
 		"note": note,
@@ -680,6 +700,7 @@ def build_parser() -> argparse.ArgumentParser:
 	append.add_argument("--note-file")
 	append.add_argument("--files-file")
 	append.add_argument("--gate-result")
+	append.add_argument("--acceptance-file")
 	append.add_argument("--deletions-from-commit", action="store_true")
 	append.add_argument("--failure-workflow")
 	append.add_argument("--failure-step")
