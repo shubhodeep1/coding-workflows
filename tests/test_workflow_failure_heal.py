@@ -6665,6 +6665,114 @@ def test_intake_fingerprints_engine_fallback_without_logs() -> None:
 	assert '"${SOURCE_KIND}" == "engine_fallback"' not in text
 
 
+# --- engine_fallback: Claude pool step reason evidence line (issue #8406) ----------
+
+_ENGINE_POOL_NOW = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+_ENGINE_POOL_RECORDS = ["v1\t1700000000\tPLAN\tno_credential\tnon_capacity\trefused\tcapacity"]
+_ENGINE_POOL_EVIDENCE_TODAY = (
+	"AI engine fallback records (v1 epoch role reason class action policy):\n"
+	"v1 1700000000 PLAN no_credential non_capacity refused capacity"
+)
+
+
+def _engine_pool_payload(**kwargs) -> dict:
+	return heal.build_engine_fallback_payload(
+		repo="owner/consumer", role="PLAN", reason="no_credential", workflow_name="AI Plan",
+		run_id="42", wrapper_sha=None, reporter_run_url=None, records=list(_ENGINE_POOL_RECORDS),
+		now=_ENGINE_POOL_NOW, **kwargs,
+	)
+
+
+def _engine_pool_lines(evidence: str) -> list[str]:
+	return [line for line in evidence.split("\n") if line.startswith(heal.ENGINE_POOL_REASON_EVIDENCE_PREFIX)]
+
+
+def test_engine_fallback_pool_reason_token_present() -> None:
+	payload = _engine_pool_payload(pool_reason="pool_dir_invalid")
+	assert payload["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY + "\nClaude pool step reason: pool_dir_invalid"
+	normalized = heal.validate_payload(payload)
+	assert _engine_pool_lines(normalized["failure_evidence"]) == ["Claude pool step reason: pool_dir_invalid"]
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+
+
+@pytest.mark.parametrize("token", ["Bad", "a b", "x" * 61, "", "@x", "all-gated", "pool`x`", "a\nb"])
+def test_engine_fallback_pool_reason_token_invalid_is_unavailable(token: str) -> None:
+	payload = _engine_pool_payload(pool_reason=token)
+	assert _engine_pool_lines(payload["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(heal.validate_payload(payload)["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+
+
+def test_engine_fallback_pool_reason_omitted_is_byte_identical() -> None:
+	omitted = _engine_pool_payload()
+	explicit_none = _engine_pool_payload(pool_reason=None)
+	assert json.dumps(omitted, sort_keys=True) == json.dumps(explicit_none, sort_keys=True)
+	assert omitted["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+	assert _engine_pool_lines(omitted["failure_evidence"]) == []
+	normalized = heal.validate_payload(omitted)
+	assert normalized["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+
+
+def test_engine_fallback_pool_reason_keeps_the_fingerprint_and_title() -> None:
+	plain = heal.validate_payload(_engine_pool_payload())
+	with_reason = heal.validate_payload(_engine_pool_payload(pool_reason="selected"))
+	for key in ("engine_role", "engine_reason", "issue_title", "failure_reason", "failure_fingerprint"):
+		assert plain[key] == with_reason[key], key
+	assert with_reason["engine_reason"] == "no_credential"
+	assert heal.engine_fallback_fingerprint(plain["engine_role"], plain["engine_reason"]) == \
+		heal.engine_fallback_fingerprint(with_reason["engine_role"], with_reason["engine_reason"]) == \
+		heal.fingerprint("ai-engine-fallback", "PLAN", "no_credential")
+
+
+def test_engine_fallback_validator_drops_invalid_and_duplicate_pool_lines() -> None:
+	forged = _engine_pool_payload()
+	forged["failure_evidence"] = "\n".join([
+		_ENGINE_POOL_EVIDENCE_TODAY,
+		"Claude pool step reason: @someone",
+		"Claude pool step reason: first_valid",
+		"Claude pool step reason: second_valid",
+		"Claude pool step reason: ",
+	])
+	normalized = heal.validate_payload(forged)
+	assert normalized["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY + "\nClaude pool step reason: first_valid"
+	# Idempotent: validating the normalized payload again changes nothing.
+	assert heal.validate_payload(normalized) == normalized
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+
+
+def test_engine_fallback_pool_reason_cli(tmp_path: Path) -> None:
+	records = tmp_path / "records.tsv"
+	records.write_text("\n".join(_ENGINE_POOL_RECORDS) + "\n", encoding="utf-8")
+	script = str(REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	base = [sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
+		"--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)]
+
+	def build(*extra: str) -> dict:
+		return json.loads(subprocess.run([*base, *extra], capture_output=True, text=True, env=env, check=True).stdout)
+
+	omitted = build()
+	expected = _engine_pool_payload()
+	omitted.pop("reported_at")
+	expected.pop("reported_at")
+	assert omitted == expected
+	assert omitted["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+	assert _engine_pool_lines(build("--pool-reason", "")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(build("--pool-reason", "Not Valid")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(build("--pool-reason", "selected")["failure_evidence"]) == ["Claude pool step reason: selected"]
+
+
+def test_engine_fallback_reporter_passes_the_pool_reason_only_with_a_source() -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
+	build = text[text.index("build-engine-fallback-payload --repo"):text.index("wrap-dispatch --payload-json")]
+	assert '${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"}' in build
+	assert 'report_pool_reason_args=(--pool-reason "${report_pool_reason_token}")' in text
+	assert 'if [ "${report_pool_reason_source}" != "none" ]; then' in text
+	# The record format and the fingerprint inputs stay role + reason.
+	assert '--role "${role}" --reason "${reason}"' in build
+
+
 # --- engine_fallback reporting run: heal scope instead of scope_unavailable_no_runs ---
 
 ENGINE_RUN_ID = "39565576987"
