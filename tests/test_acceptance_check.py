@@ -340,12 +340,13 @@ def test_workflows_default_the_switch_off():
 	for path in (PLAN_WF, IMPLEMENT_WF):
 		text = path.read_text(encoding="utf-8")
 		assert text.count("PERSIST_ACCEPTANCE_ENABLED: ${{ vars.PERSIST_ACCEPTANCE_ENABLED || 'false' }}") == 1
-		assert " attempt_journal.py acceptance_check.py " in text
+	assert " attempt_journal.py acceptance_check.py " in IMPLEMENT_WF.read_text(encoding="utf-8")
 
 
 def test_plan_workflow_wiring():
 	text = PLAN_WF.read_text(encoding="utf-8")
-	assert "acceptance_check.py targeted_file_context.py gh_api_retry.py" in text
+	assert "for f in acceptance_check.py targeted_file_context.py; do" in text
+	assert "Optional done-check helper ${f} unavailable" in text
 	assert "install -m 0644 \"${src}\" prompts/mode-plan-acceptance.txt" in text
 	validate = _step(text, "Validate done-check (acceptance)")
 	assert "if: env.PERSIST_ACCEPTANCE_ENABLED == 'true' && env.SKIP_PLAN != 'true'" in validate
