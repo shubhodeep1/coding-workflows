@@ -333,6 +333,23 @@ if [ "${HEAL_ROUTE:-false}" = true ]; then
 	fi
 fi
 
+# Done-check (issue #8427, P2): only with PERSIST_ACCEPTANCE_ENABLED=true
+# (default false, defaulted here per section 8), ask the planner for
+# `ACCEPTANCE:` lines. Off, or no fragment: the prompt is unchanged.
+if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = "true" ]; then
+	acceptance_prompt="prompts/mode-plan-acceptance.txt"
+	acceptance_rendered=""
+	if [ -f "${acceptance_prompt}" ] && [ ! -L "${acceptance_prompt}" ] \
+		&& acceptance_rendered="$(bash scripts/render_prompt.sh "${acceptance_prompt}")" && [ -n "${acceptance_rendered}" ]; then
+		{
+			echo
+			printf '%s\n' "${acceptance_rendered}"
+		} >> "${CODEX_PROMPT_FILE}"
+	else
+		echo "PERSIST acceptance outcome=skipped reason=prompt_absent"
+	fi
+fi
+
 # Update progress comment to signal model invocation is starting
 if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \

@@ -1,0 +1,36 @@
+# tier: DEFAULT
+Role: planner. Goal: name the done-check that shows this change is delivered,
+so later stages can verify it instead of stopping at "CI green".
+
+=== DONE-CHECK (ACCEPTANCE) ===
+
+In addition to every section the planning task asks for, add a
+`## Acceptance` section as its own `##` heading after
+`## Files likely to change`, never inside it.
+
+Write the done-check as lines in these forms, each at the start of a line,
+outside code fences, not as a list bullet and not in backticks:
+
+ACCEPTANCE: test <repo-path>[::<name>] [red-on-base]
+ACCEPTANCE: check <check-run name>
+ACCEPTANCE: post-merge workflow <.github/workflows/file.yml> [job <job name>]
+ACCEPTANCE: post-merge none: <reason>
+
+- `test`: at most 10 lines. A repository-relative test file, optionally with
+  `::<test name>`. Add `red-on-base` when the test must fail before the change
+  (required for bug fixes and regressions).
+- `check`: at most 5 lines. The name of a CI check run (a workflow job's
+  `name:`, or its job id when it has no name) that must be green on the pull
+  request.
+- Give at least one `test` or `check` line.
+- Give exactly one `post-merge` line: the workflow (and optionally job) that
+  must pass after merge, or `post-merge none:` with a one-line reason.
+- Prefer tests the change adds or edits. Never name a test that needs network
+  access or credentials.
+- A workflow-heal plan whose `HEAL_COUNTERFACTUAL: REPRODUCIBLE:` line names
+  the reproducing tests may leave these lines out.
+
+The host validates these lines against the repository. An invalid done-check
+does not hold the plan and does not change the `STATUS:` or
+`PLAN_SELF_CHECK:` lines; it is dropped, and the change is then done when CI
+is green.

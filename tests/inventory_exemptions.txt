@@ -1,2 +1,4 @@
 # One exemption per line: repo/relative/path | short justification
 # Intentionally empty; add entries only when a documented parity escape is required.
+prompts/mode-plan-acceptance.txt | issue #8427 P2 scope grant excludes docs/INVENTORY.md; add the roster entry there and drop this line
+scripts/acceptance_check.py | issue #8427 P2 scope grant excludes docs/INVENTORY.md; add the roster entry there and drop this line

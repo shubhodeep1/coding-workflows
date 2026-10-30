@@ -18,6 +18,8 @@ env:
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+  # Done-check (issue #8427, P2): default off; see scripts/acceptance_check.py.
+  PERSIST_ACCEPTANCE_ENABLED: ${{ vars.PERSIST_ACCEPTANCE_ENABLED || 'false' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -589,7 +591,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py partial_delivery.py assemble_prompt.sh render_prompt.py attempt_journal.py gh_api_retry.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py partial_delivery.py assemble_prompt.sh render_prompt.py attempt_journal.py acceptance_check.py targeted_file_context.py gh_api_retry.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -762,6 +764,21 @@ jobs:
               install -m 0644 "${src}" prompts/mode-plan-heal-counterfactual.txt
             else
               echo "::warning::prompts/mode-plan-heal-counterfactual.txt unavailable in the support checkout; heal plans will be held for a human."
+            fi
+          fi
+
+          # Issue #8427 (P2): the done-check fragment run_plan_codex.sh appends
+          # when PERSIST_ACCEPTANCE_ENABLED=true. Optional: without it the plan
+          # carries no ACCEPTANCE lines and no marker.
+          if [ ! -f prompts/mode-plan-acceptance.txt ]; then
+            src=".codex-workflow-src/prompts/mode-plan-acceptance.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-plan-acceptance.txt" ]; then
+              src=".codex-workflow-src-main/prompts/mode-plan-acceptance.txt"
+            fi
+            if [ -f "${src}" ] && [ ! -L "${src}" ]; then
+              install -m 0644 "${src}" prompts/mode-plan-acceptance.txt
+            else
+              echo "::notice::prompts/mode-plan-acceptance.txt unavailable in the support checkout; plans carry no done-check."
             fi
           fi
 
@@ -2140,6 +2157,21 @@ jobs:
             echo "NEEDS_CLARIFICATION=false" >> "$GITHUB_ENV"
           fi
 
+      - name: Validate done-check (acceptance)
+        if: env.PERSIST_ACCEPTANCE_ENABLED == 'true' && env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          # Issue #8427 (P2): fail-open; only a valid done-check gets a marker.
+          rm -f "${RUNTIME_DIR}/acceptance.json" "${RUNTIME_DIR}/acceptance_marker.txt"
+          python3 -I -B scripts/acceptance_check.py validate --plan-file "${CODEX_OUTPUT_FILE}" \
+            --repo-root "${GITHUB_WORKSPACE}" --out "${RUNTIME_DIR}/acceptance.json" || true
+          if [ -s "${RUNTIME_DIR}/acceptance.json" ]; then
+            python3 -I -B scripts/acceptance_check.py marker --in "${RUNTIME_DIR}/acceptance.json" \
+              > "${RUNTIME_DIR}/acceptance_marker.txt" || rm -f "${RUNTIME_DIR}/acceptance_marker.txt"
+          fi
+
       - name: Handle blocked planning output
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'
         env:
@@ -2738,6 +2770,8 @@ jobs:
             # Automation marker (issue #6630): clarify's intake accepts
             # /reclarify on a later line only in comments without one, so this
             # comment's own /reclarify line never restarts clarification.
+            # Done-check marker (issue #8427, P2) sits directly above it.
+            if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = true ] && [ -s "${RUNTIME_DIR}/acceptance_marker.txt" ]; then cat "${RUNTIME_DIR}/acceptance_marker.txt"; fi
             echo "<!-- ai:plan-proposal:v1 -->"
           } > "${PLAN_COMMENT_FILE}"
 
@@ -2774,8 +2808,12 @@ jobs:
           elif [ "${PLAN_HELD}" = true ]; then
             outcome=blocked
           fi
+          acceptance_args=()
+          if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = true ] && [ -s "${RUNTIME_DIR}/acceptance.json" ]; then
+            acceptance_args=(--acceptance-file "${RUNTIME_DIR}/acceptance.json")
+          fi
           python3 -B scripts/attempt_journal.py append --repo "${GITHUB_REPOSITORY}" --issue "${ISSUE_NUMBER}" \
-            --stage plan --outcome "${outcome}" --approach "${approach}" || true
+            --stage plan --outcome "${outcome}" --approach "${approach}" "${acceptance_args[@]}" || true
 
       - name: Record planning candidate (plan posted)
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true'
