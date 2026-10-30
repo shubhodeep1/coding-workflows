@@ -317,8 +317,12 @@ def main(argv: list[str] | None = None, runner: Runner = _run_gh) -> int:
 				issue_body = ""
 		labels = _read_labels(args.issue_labels_file) if args.issue_labels_file else []
 		rendered = render_heal_evidence_pack(issue_body, labels)
-		Path(args.heal_evidence_pack_output).write_text(rendered, encoding="utf-8")
-		heal_pack_bytes = len(rendered.encode("utf-8"))
+		try:
+			Path(args.heal_evidence_pack_output).write_text(rendered, encoding="utf-8")
+			heal_pack_bytes = len(rendered.encode("utf-8"))
+		except OSError as exc:
+			# Fail open: a local write failure must not drop the facts block.
+			print(f"heal evidence pack write failed: {exc.__class__.__name__}", file=sys.stderr)
 	text = ""
 	for path in args.text_file:
 		try:

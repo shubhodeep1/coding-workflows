@@ -306,3 +306,22 @@ def test_respond_workflow_wires_the_heal_evidence_pack() -> None:
 	assert 'issue_labels.json' in workflow
 	assert "grep -q -- '--heal-evidence-pack-output' scripts/clarify_github_facts.py" in workflow
 	assert workflow.index("=== GITHUB FACTS ===") < workflow.index("=== HEAL EVIDENCE PACK (UNTRUSTED) ===")
+
+
+def test_pack_write_failure_still_writes_the_facts_block(tmp_path: Path) -> None:
+	text = tmp_path / "t.txt"
+	text.write_text("Make it better.\n", encoding="utf-8")
+	body_file = tmp_path / "body.txt"
+	body_file.write_text(HEAL_BODY, encoding="utf-8")
+	facts_out = tmp_path / "facts.txt"
+	import contextlib
+	import io
+
+	stdout = io.StringIO()
+	with contextlib.redirect_stdout(stdout):
+		rc = facts.main([
+			"--repo", REPO, "--issue-number", "1", "--text-file", str(text), "--output", str(facts_out),
+			"--issue-body-file", str(body_file), "--heal-evidence-pack-output", str(tmp_path / "missing-dir" / "pack.txt"),
+		], _Runner((0, "{}")))
+	assert rc == 0 and facts_out.exists()
+	assert json.loads(stdout.getvalue())["heal_evidence_pack_bytes"] == 0

@@ -53,7 +53,8 @@ runs_count=0
 : > "${scratch}/pack_content"
 printf '%s' "${live}" | jq -r '.data.repository.issue.body // ""' | tr -d '\r' \
 	| awk 'done{next} on && /^## /{done=1; next} /^## Evidence pack[[:space:]]*$/{on=1} on{print}' > "${scratch}/pack" || : > "${scratch}/pack"
-if [ -s "${scratch}/pack" ]; then
+# A heading-only section is no pack (same rule as render_heal_evidence_pack).
+if [ -n "$(tail -n +2 "${scratch}/pack" | tr -d '[:space:]' | head -c 1)" ]; then
 	{
 		printf '\nHeal issue evidence pack (UNTRUSTED, copied from the verified issue body):\n'
 		cat "${scratch}/pack"
@@ -90,7 +91,8 @@ if [ "${jobs_count}" -eq 0 ]; then
 fi
 # A log line that repeats a fence delimiter must not close the evidence fence.
 sed -E 's/={3}([[:space:]]*(BEGIN|END)[[:space:]]+UNTRUSTED)/= = =\1/Ig' "${scratch}/content" > "${scratch}/fenced"
-sed -E 's/={3}([[:space:]]*(BEGIN|END)[[:space:]]+UNTRUSTED)/= = =\1/Ig' "${scratch}/pack_content" > "${scratch}/pack_fenced"
+# Pack lines also must not open a fake `=== ... ===` prompt section.
+sed -E -e 's/={3}([[:space:]]*(BEGIN|END)[[:space:]]+UNTRUSTED)/= = =\1/Ig' -e 's/^===/= = =/' "${scratch}/pack_content" > "${scratch}/pack_fenced"
 # Pack first, then the tails: the single cut below keeps the pack whole
 # whenever it fits and shrinks the tails to the remaining budget.
 cat "${scratch}/pack_fenced" "${scratch}/fenced" > "${scratch}/combined"
