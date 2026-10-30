@@ -120,6 +120,11 @@ import sys
 TOKEN_RE = re.compile(r"^[a-z0-9_:.-]{1,64}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 STATUSES = ("reproduced", "not_reproduced", "unverified")
+# Gate limits (workflow-templates/.claude/hooks/prepush_affected_tests.py):
+# failing_names keeps at most 50 names from a tail of at most 4096 bytes. A
+# tail this close to the cap may have been truncated.
+GATE_NAMES_MAX = 50
+GATE_TAIL_COMPLETE_BYTES = 4000
 
 
 def token(value, fallback="invalid_reason"):
@@ -183,17 +188,22 @@ def map_entry(data, number, test_path, name):
 			if name is not None and names:
 				node = f"{test_path}::{name}"
 				if not any(n == node or n.startswith(node + "[") for n in names):
+					# Absence from the gate's parsed names proves a pass only when
+					# that list is complete: the gate keeps the last TAIL_BYTES
+					# (4096) of output, at most 50 names, and matches only FAILED
+					# lines, so an `ERROR <node>` setup/teardown error is missed.
+					tail = item.get("tail") if isinstance(item.get("tail"), str) else ""
+					if re.search(r"\bERROR\s+" + re.escape(node) + r"(?:\[|\s|$)", tail, re.M):
+						return "reproduced", "regression"
+					if not tail or len(names) >= GATE_NAMES_MAX or len(tail.encode("utf-8")) >= GATE_TAIL_COMPLETE_BYTES:
+						return "unverified", "names_incomplete"
 					# The named test passed at the failing SHA (a sibling failed).
 					return "not_reproduced", "passes_at_failing_sha"
 			return "reproduced", "regression"
 	for item in items(data, "inherited"):
 		if item.get("test") == test_path:
-			names = [n for n in (item.get("names") or []) if isinstance(n, str)]
-			if name is not None and names:
-				node = f"{test_path}::{name}"
-				if not any(n == node or n.startswith(node + "[") for n in names):
-					# The named test passed at the failing SHA (a sibling failed on both trees).
-					return "not_reproduced", "passes_at_failing_sha"
+			# Inherited entries carry no output tail, so a name missing from
+			# their parsed names proves nothing; keep the unit-level verdict.
 			return "not_reproduced", "pre_existing"
 	ran = data.get("ran") if isinstance(data.get("ran"), list) else []
 	if test_path in ran:

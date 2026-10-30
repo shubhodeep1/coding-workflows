@@ -386,10 +386,36 @@ def test_whole_list_rejection_carries_gate_reason(h: Env) -> None:
 	h.assert_clean(err)
 
 
-def test_named_test_absent_from_inherited_unit_names_passes(h: Env) -> None:
+def test_inherited_unit_keeps_pre_existing_for_unparsed_names(h: Env) -> None:
+	# Inherited entries carry no tail, so a missing name is not proof of a pass.
 	h.gate(_gate("pass", inherited=[{"test": "tests/test_a.py", "file": "tests/test_a.py",
 		"names": ["tests/test_a.py::test_other"]}]))
 	data, err = h.run(h.tests_file("tests/test_a.py::test_x", "tests/test_a.py::test_other"))
 	assert [(t["status"], t["reason"]) for t in data["tests"]] == [
-		("not_reproduced", "passes_at_failing_sha"), ("not_reproduced", "pre_existing")]
+		("not_reproduced", "pre_existing"), ("not_reproduced", "pre_existing")]
+	h.assert_clean(err)
+
+
+def test_named_test_with_error_line_is_reproduced(h: Env) -> None:
+	# pytest reports setup/teardown errors as `ERROR path::name`, which the gate's names miss.
+	fail = _fail(names=["tests/test_a.py::test_other"])
+	fail["tail"] = "FAILED tests/test_a.py::test_other - assert 0\nERROR tests/test_a.py::test_x - fixture\n"
+	h.gate(_gate("fail", failures=[fail]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
+	assert (data["status"], data["reason"]) == ("reproduced", "regression")
+	h.assert_clean(err)
+
+
+@pytest.mark.parametrize("shape", ["full_tail", "name_cap", "no_tail"])
+def test_named_test_absent_from_incomplete_names_is_unverified(h: Env, shape: str) -> None:
+	fail = _fail(names=["tests/test_a.py::test_other"])
+	if shape == "full_tail":
+		fail["tail"] = "x" * 4096
+	elif shape == "name_cap":
+		fail["names"] = [f"tests/test_a.py::test_n{i}" for i in range(50)]
+	else:
+		fail.pop("tail")
+	h.gate(_gate("fail", failures=[fail]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
+	assert (data["status"], data["reason"]) == ("unverified", "names_incomplete")
 	h.assert_clean(err)
