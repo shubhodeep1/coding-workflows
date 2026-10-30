@@ -438,3 +438,23 @@ def test_error_text_mid_line_does_not_count(h: Env) -> None:
 	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
 	assert (data["status"], data["reason"]) == ("not_reproduced", "passes_at_failing_sha")
 	h.assert_clean(err)
+
+
+def test_class_qualified_name_matching_only_a_bare_name_is_unverified(h: Env) -> None:
+	# A bare test_x may belong to another class's failing test_x.
+	fail = _fail(names=["test_x"])
+	fail["tail"] = "FAIL: test_x (__main__.ClassA)\n"
+	h.gate(_gate("fail", failures=[fail]))
+	data, err = h.run(h.tests_file("tests/test_a.py::ClassB::test_x"))
+	assert (data["status"], data["reason"]) == ("unverified", "names_ambiguous")
+	h.assert_clean(err)
+
+
+def test_bare_name_in_pytest_unit_is_unverified(h: Env) -> None:
+	# In a pytest unit, real failures are full nodes; a bare name came from captured output.
+	fail = _fail(names=["tests/test_a.py::test_other", "test_x"])
+	fail["tail"] = "FAILED tests/test_a.py::test_other - assert 0\nFAIL: test_x (printed)\n"
+	h.gate(_gate("fail", failures=[fail]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
+	assert (data["status"], data["reason"]) == ("unverified", "names_ambiguous")
+	h.assert_clean(err)

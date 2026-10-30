@@ -190,7 +190,14 @@ def map_entry(data, number, test_path, name):
 				# Script-style and unittest units report bare names (test_x), and
 				# every name in this item belongs to test_path.
 				short = name.split("::")[-1]
-				if not any(n in (node, short) or n.startswith((node + "[", short + "[")) for n in names):
+				# A bare name proves the failure only for an unqualified listed name
+				# in a unit whose parsed names are all bare; a class-qualified name,
+				# or a bare name inside a pytest unit (captured output), is ambiguous.
+				bare_ok = "::" not in name and not any("::" in n for n in names)
+				if not any(n == node or n.startswith(node + "[") for n in names) \
+						and any(n == short or n.startswith(short + "[") for n in names):
+					return ("reproduced", "regression") if bare_ok else ("unverified", "names_ambiguous")
+				if not any(n == node or n.startswith(node + "[") for n in names):
 					# Absence from the gate's parsed names proves a pass only when
 					# that list is complete: the gate keeps the last TAIL_BYTES
 					# (4096) of output, at most 50 names, and matches only FAILED
