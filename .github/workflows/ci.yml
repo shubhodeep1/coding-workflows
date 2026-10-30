@@ -28,10 +28,10 @@ jobs:
     # Static checks: shell-block guards, YAML lint, drift check, actionlint,
     # Python syntax and ruff, schema/prompt checks, and ShellCheck. About
     # 2 minutes measured (1.4-1.9 in #4707's CI runs); 15 leaves room for a
-    # cold runner. Since #7250 and #7334 it also runs test steps moved from
-    # tests-heal-plan-and-validation, so that figure no longer covers the
-    # whole job: re-measure it before moving more steps here. budget-watch
-    # warns at 75% of the timeout (11m15s for this job).
+    # cold runner. From #7250 and #7334 until #8394 it also ran test steps
+    # moved from tests-heal-plan-and-validation, so that figure did not cover
+    # the whole job then (see below). budget-watch warns at 75% of the
+    # timeout (11m15s for this job).
     # It took 15m18s of its 15 minutes on main (run 38562929820, budget-watch
     # issue #7382), so "Regression tests wired by the CI wiring guard
     # (part 1)" was moved out to tests-release-and-log-analysis, and from there
