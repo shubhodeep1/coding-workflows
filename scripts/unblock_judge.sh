@@ -261,6 +261,28 @@ unblock_latest_hold()
 	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
 }
 
+# Whether a trusted comment newer than the hold created at $1 opens with a
+# slash command: a person (or the pipeline) resumed the item while the hold was
+# open, so a later block must not inherit that hold and wait out its lifetime.
+unblock_hold_resumed_since()
+{
+	[ -n "$1" ] || return 1
+	jq -e --arg login "${UNBLOCK_LOGIN}" --arg at "$1" '
+		any(.[]; ((.created_at // "") > $at)
+			and (((.user.login // "") == $login) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+			and ((.body // "") | sub("\\A\\s+"; "") | test("\\A/[A-Za-z]")))
+	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1
+}
+
+# What ends a hold, as told to the person reading the hold comment.
+unblock_hold_resume_hint()
+{
+	case "$1" in
+		placeholder_retired) printf 'The unblock judge counts that step as done only once a repository Actions variable or secret named `%s` exists. For any other step (a label repair, say), do the step and then post this item'"'"'s resume command yourself; otherwise the judge decides again when the hold expires.' "$2" ;;
+		*) printf 'The unblock judge resumes this item afterwards.' ;;
+	esac
+}
+
 unblock_hold_description()
 {
 	case "$1" in
@@ -274,7 +296,7 @@ unblock_hold_description()
 # never be met, so the hold ends) or unknown (a read failed; try later).
 unblock_hold_condition()
 {
-	local kind="$1" ref="$2" pr branch pr_json state merged sha status dir rc=0
+	local kind="$1" ref="$2" pr branch pr_json state merged sha status dir
 	case "${kind}" in
 		item_closed)
 			[[ "${ref}" =~ ^[1-9][0-9]*$ ]] || { echo unknown; return 0; }
@@ -320,16 +342,16 @@ unblock_hold_condition()
 				echo unknown
 				return 0
 			fi
-			# The changelog keeps the history of a retired step, so it does not count.
-			git -C "${dir}" grep -q -F -e "${ref}" -- . ':(exclude)CHANGELOG.md' ':(exclude)changelog.d' >/dev/null 2>&1 || rc=$?
-			case "${rc}" in
-				1) echo met; return 0 ;;
-				0) ;;
-				*) echo unknown; return 0 ;;
-			esac
-			# Still named in code: an env-var step is done once a person set it as a
-			# repository Actions variable or secret (Q130). A read error, a missing
-			# permission included, keeps the hold waiting.
+			# The checkout must be readable, but the code is not searched: a
+			# placeholder missing from code does not show the step is done. A
+			# docs-only operator step (a label repair, say) names it only in
+			# changelog.d/ from the start, and the shallow checkout cannot tell
+			# "removed from code" from "never in code". Counting that as done
+			# resumed bitsafe.io#603 twice while its labels were still wrong.
+			# An env-var step is done once a person set it as a repository Actions
+			# variable or secret (Q130). Anything else waits until the person resumes
+			# the item or the hold reaches UNBLOCK_JUDGE_WAIT_MAX_DAYS. A read error,
+			# a missing permission included, keeps the hold waiting.
 			if [ "$(gh api "repos/${REPOSITORY}/actions/variables/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ] \
 				|| [ "$(gh api "repos/${REPOSITORY}/actions/secrets/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ]; then
 				echo met
@@ -1605,7 +1627,7 @@ unblock_main()
 					fi
 				fi
 				if [ -n "${step_placeholder}" ]; then
-					if [ -z "${prior_hold}" ] && ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} ${fixup_done_text}. Its operator step \`${step_placeholder}\` still needs a person, so the unblock judge holds this item until that step is done instead of resuming it now. This hold uses no round.
+					if [ -z "${prior_hold}" ] && ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} ${fixup_done_text}. Its operator step \`${step_placeholder}\` still needs a person, so the unblock judge holds this item until that step is done instead of resuming it now. $(unblock_hold_resume_hint placeholder_retired "${step_placeholder}") This hold uses no round.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} hold=placeholder_retired ref=${step_placeholder} -->" >/dev/null 2>&1; then
 						# The fix-up wait stays open, so the next run tries again.
@@ -1679,7 +1701,9 @@ unblock_main()
 			fi
 		else
 			hold_desc="$(unblock_hold_description "${hold_kind}" "${hold_ref}")"
-			if unblock_wait_enabled; then
+			if unblock_hold_resumed_since "${hold_at}"; then
+				hold_status="resumed"
+			elif unblock_wait_enabled; then
 				hold_status="$(unblock_hold_condition "${hold_kind}" "${hold_ref}")"
 			else
 				hold_status="disabled"
@@ -1717,7 +1741,7 @@ unblock_main()
 					;;
 				unmet)
 					if [ "$(unblock_hours_since "${hold_at}")" -lt "$(unblock_wait_max_hours)" ]; then
-						unblock_patch_comment "${hold_id}" "Waiting for ${hold_desc}; the unblock judge resumes this item afterwards. This hold uses no round. Last checked ${now}.
+						unblock_patch_comment "${hold_id}" "Waiting for ${hold_desc}. $(unblock_hold_resume_hint "${hold_kind}" "${hold_ref}") This hold uses no round. Last checked ${now}.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" \
 							|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
@@ -1727,6 +1751,7 @@ unblock_main()
 					hold_reason="max_days"
 					;;
 				impossible) hold_reason="cannot_be_met" ;;
+				resumed) hold_reason="resumed" ;;
 				*) hold_reason="waits_disabled" ;;
 			esac
 			unblock_patch_comment "${hold_id}" "Stopped waiting for ${hold_desc} (${hold_reason}); the unblock judge decides again.
