@@ -13,7 +13,9 @@ Subcommands
                     and static checks as JSON.
 ``run``             select, run every unit (sharded, time-boxed), re-run the
                     failures on ``--baseline-tree`` and write the result JSON
-                    plus a Markdown summary.
+                    plus a Markdown summary. ``--tests-file FILE`` replaces the
+                    selection with an explicit list of test files, one
+                    ``path[::name]`` per line (``select_tests`` is not called).
 ``assertion-diff``  list assertion lines removed from pre-existing test files.
 ``stamp``           interactive: run the gate on the committed HEAD against
                     its merge-base with origin and write a pass/fail stamp
@@ -120,6 +122,15 @@ GIT_SAFE = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
 RUFF_CHECK_ARGS = ("check", "--select", "E,F", "--ignore", "E501")
 SHELLCHECK_ARGS = ("--severity=error",)
 MAX_NEW_STATIC_FINDINGS_LISTED = 20
+# `run --tests-file` limits. The list may be built from untrusted CI log text,
+# so every line is validated and the file size and entry count are capped.
+# The entry cap counts rejected lines too, which bounds result.json.
+MAX_TESTS_FILE_BYTES = 256 * 1024
+MAX_TESTS_FILE_ENTRIES = 500
+MAX_TESTS_FILE_LINE = 1024
+_TESTS_FILE_NAME_RE = re.compile(r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*(?:\[[^\s\[\]]*\])?")
+_TESTS_FILE_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+_TESTS_FILE_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 # Lint messages that cite another line (ruff F811 "from line 12", F402) are
 # normalised so a finding that only moved still matches the baseline.
 _STATIC_MESSAGE_LINE_RE = re.compile(r"\bline \d+\b")
@@ -857,6 +868,8 @@ def run_gate(
 	start = time.monotonic()
 	deadline = start + timeout_minutes * 60
 	units, unverified = plan_units(repo, selection)
+	# Lines of a `run --tests-file` list that were not run (absent otherwise).
+	unverified = [*selection.get("tests_file_rejected", []), *unverified]
 	results = run_units(units, repo, deadline, shards)
 	ran = [r for r in results if r.get("status") in ("pass", "fail")]
 	for r in results:
@@ -1359,6 +1372,114 @@ def _selection_from_args(args: argparse.Namespace) -> dict:
 	return select_tests(repo, parse_changes(lines), planned=bool(args.paths_file))
 
 
+def _tests_file_path_reason(repo: Path, path: str) -> str:
+	"""Reason a `--tests-file` path is rejected, or "" when it is a test file in `repo`."""
+	if path.startswith("/") or "\\" in path or _TESTS_FILE_DRIVE_RE.match(path):
+		return "tests_file_absolute_path"
+	segments = path.split("/")
+	if ".." in segments:
+		return "tests_file_parent_traversal"
+	# A segment starting with `-` could be read as a pytest or python option.
+	if any(segment in ("", ".") or segment.startswith("-") for segment in segments):
+		return "tests_file_invalid_path"
+	try:
+		resolved = (repo / path).resolve()
+	except (OSError, RuntimeError):
+		return "tests_file_outside_repo"
+	if not _inside(resolved, repo):
+		return "tests_file_outside_repo"
+	if not resolved.is_file():
+		return "tests_file_missing"
+	if not is_test_file(path):
+		return "tests_file_not_test_file"
+	return ""
+
+
+def parse_tests_file(repo: Path, text: str) -> tuple[list[dict], list[dict]]:
+	"""(affected_tests, rejected) from a `run --tests-file` list.
+
+	One ``path[::name]`` per line; blank lines and ``#`` comments are skipped.
+	The entries have the shape select_tests returns (``functions`` empty runs
+	the whole file). Rejected lines are reported by line number only, never
+	with their text.
+	"""
+	repo = repo.resolve()
+	merged: dict[str, dict] = {}
+	rejected: list[dict] = []
+	count = 0
+	for number, raw in enumerate(text.split("\n"), start=1):
+		line = raw.strip()
+		if not line or line.startswith("#"):
+			continue
+		if count >= MAX_TESTS_FILE_ENTRIES:
+			rejected.append({"item": "tests_file", "reason": "tests_file_too_many_entries"})
+			break
+		count += 1
+		path, separator, name = line.partition("::")
+		if len(line) > MAX_TESTS_FILE_LINE:
+			reason = "tests_file_line_too_long"
+		elif _TESTS_FILE_CONTROL_RE.search(line):
+			reason = "tests_file_control_character"
+		else:
+			reason = _tests_file_path_reason(repo, path)
+			if not reason and separator and not _TESTS_FILE_NAME_RE.fullmatch(name):
+				reason = "tests_file_invalid_name"
+		if reason:
+			rejected.append({"item": f"tests_file:line{number}", "reason": reason})
+			continue
+		entry = merged.setdefault(path, {"whole": False, "names": []})
+		if not separator:
+			entry["whole"] = True
+		elif name not in entry["names"]:
+			entry["names"].append(name)
+	affected = [
+		{"path": path, "reasons": ["tests_file"], "functions": [] if entry["whole"] else list(entry["names"])}
+		for path, entry in sorted(merged.items())
+	]
+	return affected, rejected
+
+
+def tests_file_selection(repo: Path, tests_file: str, changed_files: list[str]) -> dict:
+	"""Selection for `run --tests-file`: the listed tests only, select_tests is not called."""
+	repo = repo.resolve()
+	affected: list[dict] = []
+	rejected: list[dict] = []
+	try:
+		with open(tests_file, "rb") as handle:
+			data = handle.read(MAX_TESTS_FILE_BYTES + 1)
+	except OSError:
+		data = None
+		rejected = [{"item": "tests_file", "reason": "tests_file_unreadable"}]
+	if data is not None:
+		if len(data) > MAX_TESTS_FILE_BYTES:
+			rejected = [{"item": "tests_file", "reason": "tests_file_too_large"}]
+		else:
+			try:
+				text = data.decode("utf-8")
+			except UnicodeDecodeError:
+				rejected = [{"item": "tests_file", "reason": "tests_file_unreadable"}]
+			else:
+				affected, rejected = parse_tests_file(repo, text)
+	log(phase="tests_file", outcome="rejected" if rejected else "loaded", entries=len(affected), rejected=len(rejected))
+	return {
+		"changed_files": sorted(changed_files),
+		"affected_tests": affected,
+		"companion_files": [],
+		"registry_checks": [],
+		"static_checks": [],
+		"tests_file_rejected": rejected,
+	}
+
+
+def _changes_from_args(args: argparse.Namespace) -> dict[str, str]:
+	"""Changed files for `run --tests-file` (they feed only changed_files)."""
+	repo = Path(args.repo_root).resolve()
+	if args.base:
+		return changes_from_base(repo, args.base)[0]
+	source = args.paths_file or args.changed_files_file
+	return parse_changes(Path(source).read_text(encoding="utf-8").splitlines())
+
+
 def _add_inputs(parser: argparse.ArgumentParser) -> None:
 	parser.add_argument("--repo-root", default=".")
 	group = parser.add_mutually_exclusive_group(required=True)
@@ -1380,6 +1501,7 @@ def main(argv: list[str] | None = None) -> int:
 	run_parser.add_argument("--shards", type=int)
 	run_parser.add_argument("--out")
 	run_parser.add_argument("--summary")
+	run_parser.add_argument("--tests-file")
 	diff_parser = sub.add_parser("assertion-diff")
 	diff_parser.add_argument("--repo-root", default=".")
 	diff_parser.add_argument("--baseline-tree", required=True)
@@ -1399,7 +1521,10 @@ def main(argv: list[str] | None = None) -> int:
 		changed = list(parse_changes(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines()))
 		print(json.dumps(assertion_diff(Path(args.repo_root).resolve(), Path(args.baseline_tree), changed), indent=2))
 		return 0
-	selection = _selection_from_args(args)
+	if args.command == "run" and args.tests_file:
+		selection = tests_file_selection(Path(args.repo_root), args.tests_file, list(_changes_from_args(args)))
+	else:
+		selection = _selection_from_args(args)
 	if args.command == "select":
 		text = json.dumps(selection, indent=2)
 		if args.out:
