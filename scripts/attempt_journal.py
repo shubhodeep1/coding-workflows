@@ -486,6 +486,9 @@ def gate_failure_text(path: str | None) -> str:
 		if not isinstance(item, dict):
 			continue
 		test = " ".join(str(item.get("test") or item.get("file") or "").split())[:300]
+		if not test:
+			# No identifying test: skip it rather than collapse unrelated failures into one key.
+			continue
 		names = [n for n in (item.get("names") or []) if isinstance(n, str)] if isinstance(item.get("names"), list) else []
 		for name in names[:20] or [""]:
 			lines.add(" ".join(f"::error::FAILED {test} {name}".split()))

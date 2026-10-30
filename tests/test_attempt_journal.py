@@ -407,6 +407,14 @@ def test_passing_or_missing_gate_result_leaves_failure_key_empty(tmp_path):
 	assert aj.gate_failure_text(None) == ""
 
 
+def test_gate_failures_without_a_test_name_add_no_line(tmp_path):
+	gate = tmp_path / "result.json"
+	gate.write_text(json.dumps({"status": "fail", "failures": [{}, {"names": ["x"]}]}), encoding="utf-8")
+	assert aj.gate_failure_text(str(gate)) == ""
+	gate.write_text(json.dumps({"status": "fail", "failures": [{}, {"file": "tests/test_c.py"}]}), encoding="utf-8")
+	assert aj.gate_failure_text(str(gate)) == "::error::FAILED tests/test_c.py"
+
+
 def test_parse_keeps_an_older_id_when_the_newest_journal_has_none():
 	older = _journal_comment([_entry()], cid=4, shape="graphql")
 	newest = _journal_comment([_entry(stage="review", run_id="2")], shape="graphql")
