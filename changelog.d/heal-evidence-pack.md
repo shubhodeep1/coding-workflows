@@ -8,6 +8,6 @@ During the 2026-10-27..29 release-gate incident, heal plans ended `HEAL_COUNTERF
 | Default | off (`WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED=false`) |
 | Pack size cap | 12000 bytes by default (`WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES`, clamped to 1024-20000) |
 | Extra GitHub API calls | 0 |
-| Log line | `WORKFLOW_HEAL evidence_pack outcome=ok\|partial\|skipped bytes=<n> [reason=<token>]` |
+| Log line | `WORKFLOW_HEAL evidence_pack outcome=ok\|partial\|skipped bytes=<n> [reason=<token>] [truncated=true]` |
 
 What this means for operators: with the switch off, heal issues are byte-identical to before. With it on, a heal plan can read step durations and head refs straight from the issue. A pack that hits the cap is cut, closed cleanly and logged as `outcome=partial reason=truncated`.

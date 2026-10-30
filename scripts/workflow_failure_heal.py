@@ -1041,7 +1041,9 @@ def build_evidence_pack(
 	Returns ``{"outcome": "ok"|"partial"|"skipped", "reason", "bytes", "text",
 	"neutralized"}``: ``skipped``/``no_data`` when nothing rendered and nothing
 	failed, ``partial`` with the first fail-open reason of a timeline (or
-	``truncated`` when only the cap was hit). Never raises.
+	``truncated`` when only the cap was hit). A rendered pack also carries
+	``truncated`` (bool, set on a cap cut even when a fail-open reason wins);
+	the early returns leave it out, which callers read as false. Never raises.
 	"""
 	try:
 		return _build_evidence_pack(

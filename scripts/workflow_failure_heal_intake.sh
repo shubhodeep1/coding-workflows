@@ -2787,7 +2787,7 @@ _heal_collect_linked_runs || log "warn linked_runs_failed"
 #   Batching contract (CLAUDE.md §14): 0 GitHub API calls. Input is the run and
 #   jobs JSON the reported-run loop and _heal_fetch_linked_runs already saved;
 #   a run without both files is left out. Output is the pack file plus one
-#   `evidence_pack outcome=ok|partial|skipped bytes=<n> [reason=<token>]` line.
+#   `evidence_pack outcome=ok|partial|skipped bytes=<n> [reason=<token>] [truncated=true]` line.
 #   Fails open: a helper failure empties the pack and the issue is composed
 #   exactly as with the switch off.
 _heal_build_evidence_pack()
