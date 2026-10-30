@@ -436,7 +436,8 @@ UNBLOCK_NOTHING_TO_IMPLEMENT_REASON="work is already on the planning ref; nothin
 # as usual; it sets UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT to `closed` after a
 # close. UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false (default true)
 # restores the resume.
-# API budget: at most three writes (comment, label, close), no reads.
+# API budget: at most three writes (comment, label, close), no reads; the
+# caller then marks the fix-up wait `done` (one more write, not retried).
 unblock_nothing_to_implement_close()
 {
 	local fixup="$1" done_text="$2" tracking_issue="$3" marker
@@ -445,12 +446,18 @@ unblock_nothing_to_implement_close()
 		return 1
 	fi
 	[ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "blocked" ] && [ -z "${tracking_issue}" ] || return 1
+	# A trusted implementation plan (the has_plan rule in unblock_main) posted
+	# after that block means planning moved on, so the stale block never closes
+	# the issue: it resumes as usual (`/approved`).
 	jq -e --arg login "${UNBLOCK_LOGIN}" --arg reason "Reason: ${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}" '
-		[.[] | select((.user.login // "") == $login)
+		([.[] | select((.user.login // "") == $login)
 			| ((.body // "") | split("\n") | map(rtrimstr("\r"))) as $lines
 			| select(($lines | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
 			| {at: (.created_at // ""), match: ($lines | index($reason) != null)}]
-		| sort_by(.at) | last // {match: false} | .match
+		| sort_by(.at) | last // {at: "", match: false}) as $block
+		| ([.[] | select(((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b")) and (((.user.type // "") == "Bot") or ((.author_association // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a)) or ((.user.login // "") == $login)))
+			| (.created_at // "")] | max // "") as $plan
+		| $block.match and ($plan == "" or $plan < $block.at)
 	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1 || return 1
 	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
 	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \

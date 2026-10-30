@@ -6,11 +6,11 @@ Issue #8470 was a CI-triage issue whose only fix was a CI re-run. Planning stopp
 | The numbers that matter | Value |
 | --- | --- |
 | Planning runs #8470 spent on the same block | 2 |
-| New kill switch | `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`) |
+| New kill switch | `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`; script environment, not yet forwarded by `unblock_judge.yml`) |
 | Error text kept on a failed heal issue create | last 300 bytes, one line |
 
 What this means for operators: a nothing-to-implement issue closes itself once its fix-up lands, instead of coming back as "Planning blocked: human input required". The next `issue_create_failed` page comes with a reason you can act on. Orchestrator items still resume as before.
 
 ### For contributors
 
-The close runs only where the judge would post the resume command, after the protected-path handoff and the operator-step hold. It writes at most three times (comment, label, close) and reads nothing new. A failed write keeps the fix-up wait open, and the trusted marker `<!-- ai:unblock-nothing-to-implement:v1 item=<n> fixup=<f> -->` stops the comment from being posted twice. Log: `UNBLOCK_JUDGE ... op=nothing_to_implement outcome=closed|skip`.
+The close runs only where the judge would post the resume command, after the protected-path handoff and the operator-step hold. It writes three times to the issue (comment, label, close), then marks the fix-up wait `done`, and reads nothing new. A trusted implementation plan posted after the block keeps the resume. A failed comment, label or close write keeps the fix-up wait open, and the trusted marker `<!-- ai:unblock-nothing-to-implement:v1 item=<n> fixup=<f> -->` stops the comment from being posted twice. Log: `UNBLOCK_JUDGE ... op=nothing_to_implement outcome=closed|skip`.

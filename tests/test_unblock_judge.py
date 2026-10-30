@@ -536,13 +536,13 @@ def test_rejection_snapshot_provenance_and_subset(tmp_path: Path) -> None:
 		"--item", "7", "--repo", "acme/app", "--approved-json", '["src/a.py"]')
 	assert rc == 0 and verified["paths"] == ["src/a.py", "docs/old.md"]
 	for invalid_run in (dict(run, repository={"full_name": "other/app"}),
-	                    dict(run, head_repository={"full_name": "other/app"}),
-	                    dict(run, path=".github/workflows/other.yml"),
-	                    dict(run, conclusion="success"), dict(run, run_attempt=2)):
+			dict(run, head_repository={"full_name": "other/app"}),
+			dict(run, path=".github/workflows/other.yml"),
+			dict(run, conclusion="success"), dict(run, run_attempt=2)):
 		with pytest.raises(ledger.UsageError):
 			ledger.rejection_snapshot(invalid_run, artifact, str(zip_path), 7, "acme/app")
 	for invalid_artifact in (dict(artifact, expired=True), dict(artifact, size_in_bytes=1048577),
-	                         dict(artifact, workflow_run={"id": 999}), dict(artifact, name="other")):
+			dict(artifact, workflow_run={"id": 999}), dict(artifact, name="other")):
 		with pytest.raises(ledger.UsageError):
 			ledger.rejection_snapshot(run, invalid_artifact, str(zip_path), 7, "acme/app")
 	with pytest.raises(ledger.UsageError, match="approved_paths_not_rejected"):
@@ -4968,7 +4968,6 @@ NOTHING_TO_IMPLEMENT_BLOCK = (
 	"Run: https://github.com/o/r/actions/runs/1"
 )
 NOTHING_TO_IMPLEMENT_MARKER = "<!-- ai:unblock-nothing-to-implement:v1 item=7 fixup=50 -->"
-MERGED_FIXUP = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}}
 
 
 def _nothing_to_implement_comments(block_body: str = NOTHING_TO_IMPLEMENT_BLOCK, block_login: str = BOT, extra: list | None = None) -> list:
@@ -5003,7 +5002,7 @@ def test_success_noop_fixup_also_closes_a_nothing_to_implement_issue(tmp_path: P
 	assert _closed_completed(state)
 
 
-@pytest.mark.parametrize("case", ["other_reason", "untrusted_block", "newer_other_block", "disabled", "project_item"])
+@pytest.mark.parametrize("case", ["other_reason", "untrusted_block", "newer_other_block", "newer_plan", "disabled", "project_item"])
 def test_nothing_to_implement_close_keeps_the_resume_otherwise(tmp_path: Path, case: str) -> None:
 	item, env, comments = ISSUE, {}, _nothing_to_implement_comments()
 	if case == "other_reason":
@@ -5013,6 +5012,10 @@ def test_nothing_to_implement_close_keeps_the_resume_otherwise(tmp_path: Path, c
 	elif case == "newer_other_block":
 		newer = _comment("Planning blocked: human input required.\n\nReason: missing API key\n", BOT, "2026-10-04T10:00:00Z")
 		comments = _nothing_to_implement_comments(extra=[newer])
+	elif case == "newer_plan":
+		# Planning moved on after the block: a trusted plan means the issue resumes.
+		plan = _comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T10:00:00Z")
+		comments = _nothing_to_implement_comments(extra=[plan])
 	elif case == "disabled":
 		env["UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] = " False "
 	else:
@@ -5021,7 +5024,7 @@ def test_nothing_to_implement_close_keeps_the_resume_otherwise(tmp_path: Path, c
 	result, state = _judge(tmp_path, item, comments=comments, issues=MERGED_FIXUP, **env)
 	assert "op=nothing_to_implement" not in result.stdout, result.stdout
 	assert "fixup=50 outcome=followup" in result.stdout, result.stdout + result.stderr
-	assert any(comment["body"].startswith("/answer") for comment in state["comments"])
+	assert any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
 	assert not _closed_completed(state)
 
 
