@@ -1857,7 +1857,12 @@ def test_cancel_on_close_wrappers_keep_event_and_add_matching_schedule() -> None
 
 def test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe() -> None:
 	workflow = (REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8")
-	assert "group: cancel-on-pr-close-${{ github.repository }}" in workflow
+	# A substring check also matched the old repository-wide group; parse the
+	# job's group and require the per-PR key (issue #8327).
+	group = yaml.safe_load(workflow)["jobs"]["cancel-active-runs"]["concurrency"]["group"]
+	assert group.startswith("cancel-on-pr-close-${{ github.repository }}")
+	assert "github.event.pull_request.number" in group
+	assert "github.event_name == 'pull_request'" in group
 	assert 'if [ "${EVENT_NAME}" = "schedule" ]; then' in workflow
 	assert workflow.count("-f status=queued") == 1
 	assert workflow.count("-f status=in_progress") == 1
