@@ -10077,7 +10077,7 @@ P1_IMPLEMENT_RUN_LINE = (
 	"9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b main"
 )
 P1_ISSUE_ENV = {"WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED": "true", "WORKFLOW_HEAL_DEFAULT_BRANCH": "main"}
-P1_TRUNCATED_NOTE = "(truncated: the compare response hit GitHub's 250-commit or 300-file limit)"
+P1_TRUNCATED_NOTE = "(truncated: "
 
 
 def _p1_issue_fixture() -> dict:
@@ -10220,13 +10220,16 @@ def test_branch_divergence_renders_scope_paths_and_commits() -> None:
 	assert ".github/ai/" not in text and "bad path" not in text
 	assert "  (2 earlier commits not shown)" in text and f"  - {11:012x} change 11 (#111) [PR #111]" in text
 	assert "change 1 (#101)" not in text and P1_TRUNCATED_NOTE not in text
-	for capped in (
-		dict(big, total_commits=400),
-		dict(big, commits=[dict(big["commits"][0], sha=f"{index:040x}") for index in range(250)], total_commits=400, ahead_by=400),
-		dict(big, files=[{"filename": f"scripts/f{index}.sh"} for index in range(300)]),
+	for capped, note in (
+		(dict(big, total_commits=400), "(truncated: commit list (12 of 400 listed; GitHub lists at most 250))"),
+		(dict(big, commits=[dict(big["commits"][0], sha=f"{index:040x}") for index in range(250)], total_commits=400, ahead_by=400),
+			"(truncated: commit list (250 of 400 listed; GitHub lists at most 250))"),
+		(dict(big, files=[{"filename": f"scripts/f{index}.sh"} for index in range(300)]), "(truncated: file list (GitHub lists at most 300))"),
+		(dict(big, total_commits=400, files=[{"filename": f"scripts/f{index}.sh"} for index in range(300)]),
+			"(truncated: commit list (12 of 400 listed; GitHub lists at most 250); file list (GitHub lists at most 300))"),
 	):
 		hit = heal.branch_divergence(capped, target="stable", default="main")
-		assert hit["truncated"] is True and hit["text"].rstrip("\n").endswith(P1_TRUNCATED_NOTE)
+		assert hit["truncated"] is True and hit["text"].rstrip("\n").splitlines()[-1] == note
 	# A complete range of exactly 250 commits is not truncated: total_commits matches the list.
 	exact = dict(big, commits=[dict(big["commits"][0], sha=f"{index:040x}") for index in range(250)], total_commits=250, ahead_by=250)
 	assert heal.branch_divergence(exact, target="stable", default="main")["truncated"] is False

@@ -2869,7 +2869,9 @@ _heal_fetch_evidence_pack_api()
 	# The heal issue's own target, as the Route block below sets it for a
 	# workflow_run report: the failed run's branch, with the promote-candidate
 	# mirror retargeted to the default branch. A main-targeted heal skips the
-	# compare (target == default).
+	# compare (target == default). The Route block's branch-exists fallback is
+	# not applied here: a run branch deleted since the run makes the compare
+	# 404, which fails open as reason=compare_unreadable.
 	divergence_target="${TARGET_BRANCH_DEFAULT:-}"
 	[ -z "${HEAD_BRANCH:-}" ] || divergence_target="${HEAD_BRANCH}"
 	[ "${divergence_target}" != "${HEAL_PIPELINE_MIRROR_BRANCH}" ] || divergence_target="${PROVENANCE_DEFAULT_BRANCH:-main}"

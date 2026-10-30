@@ -1234,7 +1234,11 @@ def branch_divergence(compare: Any, *, target: Any, default: Any) -> dict[str, A
 	# files[] has no total, so a full 300-entry list is the only sign of a cut.
 	truncated = total_commits > len(commits_raw) or len(files_raw) >= COMPARE_FILE_CAP
 	if truncated:
-		lines.append(f"(truncated: the compare response hit GitHub's {COMPARE_COMMIT_CAP}-commit or {COMPARE_FILE_CAP}-file limit)")
+		# Name the list that was cut, so an operator can tell commits from files.
+		cut = [f"commit list ({len(commits_raw)} of {total_commits} listed; GitHub lists at most {COMPARE_COMMIT_CAP})"] if total_commits > len(commits_raw) else []
+		if len(files_raw) >= COMPARE_FILE_CAP:
+			cut.append(f"file list (GitHub lists at most {COMPARE_FILE_CAP})")
+		lines.append(f"(truncated: {'; '.join(cut)})")
 	return {"ok": True, "text": "\n".join(lines) + "\n", "reason": "", "truncated": truncated}
 
 
