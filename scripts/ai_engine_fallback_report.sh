@@ -72,38 +72,21 @@
 #   AI_ENGINE_FALLBACK_REPORT_WAITS_ONLY  "true" ignores refused fallbacks (implement
 #                                    and review report those through their own
 #                                    heal reporters; issue #7370)
-#   CLAUDE_POOL_REASON_FILE          the pool step's reason file (default
-#                                    ${RUNNER_TEMP}/claude-pool-reason); read only to
-#                                    label `no_credential` refusals with pool_reason=
+#   CLAUDE_POOL_REASON               Claude pool step reason; when non-empty it is passed
+#                                    to the heal payload as --pool-reason (issue #8406)
+#   CLAUDE_POOL_REASON_FILE          pool step reason file read when CLAUDE_POOL_REASON is
+#                                    empty (default ${RUNNER_TEMP:-/tmp}/claude-pool-reason;
+#                                    regular files only, first 64 bytes). With neither
+#                                    source --pool-reason is left out and the payload is
+#                                    unchanged. The same token (env first, then the file)
+#                                    also labels `no_credential` refusals in the log,
+#                                    alert and summary with pool_reason= (issue #8392)
 
 set -uo pipefail
 
 log()
 {
 	echo "AI_ENGINE_FALLBACK_REPORT $*"
-}
-
-# report_pool_reason_token
-# Prints the Claude pool step's reason token (written by claude_pool_token.sh
-# finish()) so a `no_credential` refusal names the real pool outcome (issue
-# #8392). Keep the read rules in step with ai_engine_no_account_reason in
-# scripts/ai_engine.sh: same file, no symlinks, regular files only, at most 64
-# bytes. The value is untrusted: only ^[a-z0-9_]{1,60}$ is printed, anything
-# else (missing, symlinked, unreadable, malformed) prints `unavailable`.
-# Diagnostic only: never changes routing, the payload or the exit code.
-report_pool_reason_token()
-{
-	local reason_file token=""
-	reason_file="${CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason}"
-	if [ -f "${reason_file}" ] && [ ! -L "${reason_file}" ]; then
-		token="$(head -c 64 -- "${reason_file}" 2>/dev/null | tr -d '[:space:]')" || token=""
-	fi
-	if [[ "${token}" =~ ^[a-z0-9_]{1,60}$ ]]; then
-		printf '%s\n' "${token}"
-	else
-		printf 'unavailable\n'
-	fi
-	return 0
 }
 
 RECORDS_FILE="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
@@ -341,7 +324,37 @@ if [ "${#pairs[@]}" -eq 0 ]; then
 	log "outcome=none records=${total} codex_fallbacks=${capacity} waits=${waits}"
 	exit 0
 fi
-pool_reason="$(report_pool_reason_token)" || pool_reason="unavailable"
+# The Claude pool step reason (issue #8406): any non-empty CLAUDE_POOL_REASON
+# value, else the reason file scripts/claude_pool_token.sh writes (same file and
+# read rules as ai_engine_no_account_reason in scripts/ai_engine.sh, which
+# honours the env value only when it is "all_gated"). The line is diagnostic
+# only and never enters the fingerprint. The token is not checked
+# here; workflow_failure_heal.py maps anything outside [a-z0-9_]{1,60} to
+# "unavailable". --pool-reason is passed only when a source exists, so a job
+# whose pool step never ran dispatches the same payload as before.
+report_pool_reason_token=""
+report_pool_reason_source="none"
+report_pool_reason_args=()
+if [ -n "${CLAUDE_POOL_REASON:-}" ]; then
+	report_pool_reason_token="${CLAUDE_POOL_REASON}"
+	report_pool_reason_source="env"
+else
+	report_pool_reason_file="${CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason}"
+	if [ -f "${report_pool_reason_file}" ] && [ ! -L "${report_pool_reason_file}" ]; then
+		report_pool_reason_token="$(head -c 64 -- "${report_pool_reason_file}" 2>/dev/null | tr -d '[:space:]')" || report_pool_reason_token=""
+		report_pool_reason_source="file"
+	fi
+fi
+if [ "${report_pool_reason_source}" != "none" ]; then
+	# Attached form, so a token starting with "-" stays the option's value and
+	# becomes "unavailable" instead of failing argument parsing.
+	report_pool_reason_args=("--pool-reason=${report_pool_reason_token}")
+fi
+# The no_credential log suffix, alert and summary (issue #8392) show the same
+# token the payload gets, so they follow the env-then-file order above. The
+# value is untrusted: only ^[a-z0-9_]{1,60}$ is shown, anything else (no source,
+# symlinked, unreadable, malformed) shows "unavailable". Diagnostic only.
+pool_reason="${report_pool_reason_token}"
 [[ "${pool_reason}" =~ ^[a-z0-9_]{1,60}$ ]] || pool_reason="unavailable"
 dispatched=0
 any_no_credential=false
@@ -366,7 +379,7 @@ for entry in "${pairs[@]}"; do
 	error_file="${REPORT_DIR}/error.txt"
 	if ! python3 "${HEAL_PY}" build-engine-fallback-payload --repo "${REPO}" --role "${role}" --reason "${reason}" \
 		--workflow-name "${WORKFLOW_NAME}" --run-id "${RUN_ID}" --run-attempt "${GITHUB_RUN_ATTEMPT:-}" --wrapper-sha "${WRAPPER_SHA}" \
-		--reporter-run-url "${REPORTER_RUN_URL}" --records-file "${RECORDS_FILE}" > "${payload_file}" 2> "${error_file}" \
+		--reporter-run-url "${REPORTER_RUN_URL}" --records-file "${RECORDS_FILE}" ${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"} > "${payload_file}" 2> "${error_file}" \
 		|| ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${payload_file}" > "${dispatch_file}" 2>> "${error_file}"; then
 		log "skip_dispatch reason=payload_build_failed role=${role} fallback_reason=${reason}${pool_reason_suffix} detail=$(head -c 200 "${error_file}" | tr '\n' ' ')"
 		continue
@@ -377,7 +390,7 @@ for entry in "${pairs[@]}"; do
 		continue
 	fi
 	dispatched=$((dispatched + 1))
-	log "dispatched role=${role} fallback_reason=${reason} workflow=${WORKFLOW_NAME} run=${RUN_ID:-none} upstream=${UPSTREAM_REPO}${pool_reason_suffix}"
+	log "dispatched role=${role} fallback_reason=${reason} workflow=${WORKFLOW_NAME} run=${RUN_ID:-none} upstream=${UPSTREAM_REPO} pool_reason_source=${report_pool_reason_source}${pool_reason_suffix}"
 done
 rm -rf -- "${REPORT_DIR}" 2>/dev/null || true
 

@@ -144,6 +144,78 @@ def test_autofix_intake_verifies_a_review_run_dispatched_for_the_pr() -> None:
 	assert "run_ref_rejected run=500 reason=unverified detail=error:_run_head_mismatch\n" in result.stdout
 
 
+def test_verify_run_binds_a_self_dispatched_review_run_by_its_marker_head() -> None:
+	# review_autofix.yml re-dispatches itself with no `[pr:N]` run name, so only
+	# the provenance gate's marker-head verdict binds it to the PR head.
+	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "event": "workflow_dispatch", "head_sha": SHA_A,
+		"display_title": "Codex PR Self-Healing Semantic Agent", "conclusion": "failure", "path": ".github/workflows/review_autofix.yml"}
+	assert heal.verify_run(run, repo=SELF_REPO, kind="autofix_failure", head_sha=SHA_B, pr_number=4174, marker_head_bound=True)["run_id"] == 500
+	rejected = (
+		{"marker_head_bound": False},
+		{"marker_head_bound": True, "run": dict(run, event="pull_request")},
+		{"marker_head_bound": True, "kind": "workflow_run"},
+	)
+	for case in rejected:
+		try:
+			heal.verify_run(case.get("run", run), repo=SELF_REPO, kind=case.get("kind", "autofix_failure"), head_sha=SHA_B, pr_number=4174, marker_head_bound=case["marker_head_bound"])
+		except ValueError as exc:
+			assert str(exc) == "run head mismatch"
+		else:
+			raise AssertionError(f"head mismatch accepted: {case}")
+
+
+def test_verify_run_provenance_lists_runs_a_trusted_marker_binds_to_the_pr_head() -> None:
+	payload = heal.validate_payload(_autofix_payload())
+	assert payload["head_sha"] == SHA_B
+	review = dict(_provenance_run(path="review_autofix.yml"), event="workflow_dispatch", head_sha=SHA_A)
+
+	def check(body: str, login: str = "workflow-bot") -> dict:
+		return heal.verify_run_provenance(payload, runs={"500": review}, comments=[{"body": body, "user": {"login": login}}], trusted_login="workflow-bot", self_repo=SELF_REPO)
+
+	canonical = f"AI review/autofix failed\n\n<!-- review-autofix-failure:v1 head={SHA_B} reason=workflow_failure fp={FP_HEX} degraded=0 run=500 -->"
+	assert check(canonical)["status"] == "ok" and check(canonical)["marker_head_run_ids"] == ["500"]
+	cap = f"capped\n<!-- review-autofix-failure-cap:v1 head={SHA_B.upper()} fp={FP_HEX} run=500 -->\nmore"
+	assert check(cap)["marker_head_run_ids"] == ["500"]
+	# A marker for another head still links the run, but does not bind its head.
+	other_head = canonical.replace(f"head={SHA_B}", f"head={SHA_A}")
+	assert check(other_head)["status"] == "ok" and check(other_head)["marker_head_run_ids"] == []
+	# A marker naming another run, or written by anyone else, binds nothing.
+	assert check(canonical.replace("run=500", "run=501"))["marker_head_run_ids"] == []
+	assert check(canonical, login="attacker")["marker_head_run_ids"] == []
+	# The report must carry a valid head for any binding.
+	headless = dict(payload, head_sha=None)
+	assert heal.verify_run_provenance(headless, runs={"500": review}, comments=[{"body": canonical, "user": {"login": "workflow-bot"}}], trusted_login="workflow-bot", self_repo=SELF_REPO)["marker_head_run_ids"] == []
+
+
+def test_autofix_intake_verifies_a_self_dispatched_review_run_bound_by_its_marker() -> None:
+	# coding-workflows#8285 (intake run 40814586379): review_autofix.yml
+	# re-dispatched itself on main, so the run's title has no `[pr:N]` and its
+	# head is main's tip. Only the pipeline's failure marker on the PR names
+	# the run and the PR head; verify-run dropped it, and the intake failed on
+	# an unresolved scope marker with a CRITICAL alert.
+	payload = _autofix_payload()
+	dispatched = {
+		"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "workflow_dispatch", "head_sha": SHA_A, "head_branch": "main",
+		"display_title": "Codex PR Self-Healing Semantic Agent", "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/review_autofix.yml", "pull_requests": [],
+	}
+	marker = f"<!-- review-autofix-failure:v1 head={SHA_B} reason=workflow_failure fp={FP_HEX} degraded=0 run=500 -->"
+	jobs = {"500": [{"id": 9001, "name": "codex-agent", "workflow_name": "Codex PR Self-Healing Semantic Agent", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}
+
+	def state_with(body: str) -> dict:
+		state = _intake_state(jobs=jobs, run_details={"500": dispatched})
+		state["comments"][f"repos/{CONSUMER_REPO}/issues/4174/comments"] = [{"body": f"AI review/autofix failed\n\n{body}", "user": {"login": "workflow-bot"}}]
+		return state
+
+	result, _, _ = _run_intake(payload, state_with(marker), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "run_ref_rejected" not in result.stdout and "runs=1" in result.stdout
+	# A marker for an older PR head still links the run but cannot bind its head.
+	stale = marker.replace(f"head={SHA_B}", f"head={SHA_A}")
+	result, _, _ = _run_intake(payload, state_with(stale), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "run_ref_rejected run=500 reason=unverified detail=error:_run_head_mismatch\n" in result.stdout
+
+
 def test_verify_run_accepts_pending_run_only_when_allowed() -> None:
 	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "status": "in_progress", "conclusion": None, "path": ".github/workflows/internal-plan.yml"}
 	assert heal.verify_run(run, repo=SELF_REPO, kind="phase_failure", allow_pending=True)["run_id"] == 500
@@ -1156,8 +1228,8 @@ def test_budget_cli_verifies_reported_source_issue(tmp_path: Path) -> None:
 		repository=SELF_REPO, author="workflow-bot")]), encoding="utf-8")
 	completed = subprocess.run(
 		[sys.executable, str(LIB_PATH), "budget", "--issues-json", str(issues_json),
-		 "--fingerprint", "1" * 64, "--preferred-repo", SELF_REPO, "--source-gen", "2",
-		 "--source-issue", f"{SELF_REPO}#42", "--trusted-author", "workflow-bot"],
+			"--fingerprint", "1" * 64, "--preferred-repo", SELF_REPO, "--source-gen", "2",
+			"--source-issue", f"{SELF_REPO}#42", "--trusted-author", "workflow-bot"],
 		capture_output=True, text=True, check=True,
 	)
 	assert json.loads(completed.stdout)["lineage_source"] == "verified_source_issue"
@@ -1238,7 +1310,8 @@ def test_heal_issue_does_not_accept_routing_from_untrusted_evidence() -> None:
 def test_heal_issue_body_validator_rejects_untrusted_metadata() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	body = heal.compose_issue_body(payload=payload, diagnosis="x", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[])
-	validate = lambda candidate: heal.validate_heal_issue_body_routing(candidate, target_branch="stable", integration_branch=None)
+	def validate(candidate):
+		return heal.validate_heal_issue_body_routing(candidate, target_branch="stable", integration_branch=None)
 	assert validate(body) == ""
 	assert validate(body + "Integration branch: main\n") == "routing_key"
 	assert validate(body + "- **Target branch:** `main`\n") == "routing_key"
@@ -1357,11 +1430,11 @@ def test_compose_issue_body_rejects_routing_directives_left_after_neutralization
 def test_workflow_run_heal_issue_intro_distinguishes_ci_from_release() -> None:
 	for workflow_name, expected_intro, unexpected_intro in (
 		("CI", "A CI run on the default branch failed.",
-		 "A release / promotion workflow run failed."),
+			"A release / promotion workflow run failed."),
 		("Mark Stable Release", "A release / promotion workflow run failed.",
-		 "A CI run on the default branch failed."),
+			"A CI run on the default branch failed."),
 		("Nightly Validation Self-Test", "A scheduled self-check workflow run on the default branch failed.",
-		 "A release / promotion workflow run failed."),
+			"A release / promotion workflow run failed."),
 	):
 		workflow_run_payload = heal.validate_payload(heal.build_workflow_run_payload(
 			repo=SELF_REPO,
@@ -2223,6 +2296,43 @@ def test_intake_workflow_run_preserves_slash_bearing_target_branch() -> None:
 	assert branch_calls and "%2F" in next(part for part in branch_calls[0] if "/branches/" in part)
 
 
+@pytest.mark.parametrize(("default_branch", "expected"), (("main", "main"), ("develop", "develop"), ("", "main")))
+def test_intake_workflow_run_on_promote_candidate_targets_the_default_branch(default_branch: str, expected: str) -> None:
+	"""#8217 -> PR #8221: a release gate failure on the pipeline-only
+	promote-candidate mirror filed a heal issue against that branch, and its
+	PR could never merge (the ruleset blocks every non-pipeline update)."""
+	run_payload = heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Test & Mark Stable Release [cycle:40427177661]", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "promote-candidate", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Test & Mark Stable Release [cycle:40427177661]"},
+	)
+	state = _intake_state(branches=["stable", "main", "develop", "promote-candidate"])
+	result, state_after, _ = _run_intake(run_payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": default_branch})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(_composed_issues(state_after)[0]["body"])
+	assert match and (match.group(1) or match.group(2)) == expected
+	assert f"target_branch_retarget from=promote-candidate to={expected} reason=pipeline_mirror_branch" in result.stdout
+	assert f"target_branch={expected}" in result.stdout and "target_branch_source=pipeline_mirror_branch" in result.stdout
+
+
+@pytest.mark.parametrize(("default_branch", "expected"), (("main", "main"), ("develop", "develop"), ("", "main")))
+def test_intake_consumer_app_defect_on_promote_candidate_targets_the_default_branch(default_branch: str, expected: str) -> None:
+	"""The consumer-app-defect arm opens a heal issue in this repo for a release
+	run too; it must not target the pipeline-only promote-candidate mirror."""
+	run_payload = heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 501, "name": "Test & Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "promote-candidate", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/501", "display_title": "Test & Mark Stable Release"},
+	)
+	state = _intake_state(branches=["stable", "main", "develop", "promote-candidate"])
+	result, state_after, _ = _run_intake(run_payload, state, diagnosis=DIAG_CONSUMER_APP_SCOPE, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": default_branch})
+	assert result.returncode == 0, result.stderr + result.stdout
+	issues = _composed_issues(state_after)
+	assert issues, result.stdout
+	match = TARGET_BRANCH_RE.search(issues[0]["body"])
+	assert match and (match.group(1) or match.group(2)) == expected
+	assert f"target_branch_retarget from=promote-candidate to={expected} reason=pipeline_mirror_branch" in result.stdout
+	assert f"target_branch={expected} target_branch_source=pipeline_mirror_branch" in result.stdout
+
+
 def _gate_run_payload() -> dict:
 	return heal.build_workflow_run_payload(
 		repo=SELF_REPO,
@@ -2865,7 +2975,8 @@ def test_intake_report_without_runs_skips_quietly_instead_of_paging(tmp_path: Pa
 		assert "skip reason=scope_marker_unresolved" not in result.stdout
 	# A report that named a run still pages: there the unresolved scope is a fault.
 	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
-	assert intake.count("_heal_report_claimed_no_runs; then") == 2
+	# Three call sites: the engine_fallback pre-diagnosis skip, the marker guard and the creation gate.
+	assert intake.count("_heal_report_claimed_no_runs; then") == 3
 	# Claimed runs that validate-payload drops (here a foreign repository) still
 	# page: the raw report named runs, so the missing scope is a fault.
 	tg_log = tmp_path / "tg-dropped.log"
@@ -3312,6 +3423,7 @@ def test_count_identical_failures_flags_non_retryable_reasons() -> None:
 		"conflict_resolver_sandbox_path_host_only",
 		"conflict_resolver_sandbox_path_unsupported",
 		"conflict_resolver_sandbox_support_missing",
+		"review_editor_sandbox_path_excluded",
 	}
 	for reason in sorted(heal.NON_RETRYABLE_FAILURE_REASONS):
 		assert heal._FAILURE_REASON_RE.match(reason)
@@ -4198,7 +4310,7 @@ def test_fingerprint_cap_block_records_the_support_sha_on_its_marker() -> None:
 		assert f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason={HOST_ONLY_REASON} count=1 support={SUPPORT_S1} -->" in state["comments_posted"][0]
 	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-bad-") as tmp_name:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_env={**cap_env, "REVIEW_SUPPORT_SHA": "bad sha"})
-		assert f"count=1 -->" in state["comments_posted"][0] and "support=" not in state["comments_posted"][0]
+		assert "count=1 -->" in state["comments_posted"][0] and "support=" not in state["comments_posted"][0]
 
 
 def test_gate_force_rb_judge_skips_conflict_steps_only_on_trusted_same_head_host_only_marker() -> None:
@@ -6525,7 +6637,7 @@ def test_engine_fallback_cli_round_trip(tmp_path: Path) -> None:
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
 	built = subprocess.run(
 		[sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
-		 "--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)],
+			"--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)],
 		capture_output=True, text=True, env=env, check=True,
 	)
 	payload = json.loads(built.stdout)
@@ -6538,7 +6650,7 @@ def test_engine_fallback_cli_round_trip(tmp_path: Path) -> None:
 		capture_output=True, text=True, env=env, check=True).stdout.strip()
 	assert fp == heal.engine_fallback_fingerprint("PLAN", "no_credential")
 	bad = subprocess.run([sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
-		 "--reason", "all_gated", "--workflow-name", "AI Plan"], capture_output=True, text=True, env=env, check=False)
+			"--reason", "all_gated", "--workflow-name", "AI Plan"], capture_output=True, text=True, env=env, check=False)
 	assert bad.returncode == 2
 
 
@@ -6551,6 +6663,115 @@ def test_intake_fingerprints_engine_fallback_without_logs() -> None:
 	assert 'SIGNATURE="${ENGINE_REASON}"' in branch
 	# engine_fallback reports carry no run_refs and never enter the log-reading provenance gate.
 	assert '"${SOURCE_KIND}" == "engine_fallback"' not in text
+
+
+# --- engine_fallback: Claude pool step reason evidence line (issue #8406) ----------
+
+_ENGINE_POOL_NOW = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+_ENGINE_POOL_RECORDS = ["v1\t1700000000\tPLAN\tno_credential\tnon_capacity\trefused\tcapacity"]
+_ENGINE_POOL_EVIDENCE_TODAY = (
+	"AI engine fallback records (v1 epoch role reason class action policy):\n"
+	"v1 1700000000 PLAN no_credential non_capacity refused capacity"
+)
+
+
+def _engine_pool_payload(**kwargs) -> dict:
+	return heal.build_engine_fallback_payload(
+		repo="owner/consumer", role="PLAN", reason="no_credential", workflow_name="AI Plan",
+		run_id="42", wrapper_sha=None, reporter_run_url=None, records=list(_ENGINE_POOL_RECORDS),
+		now=_ENGINE_POOL_NOW, **kwargs,
+	)
+
+
+def _engine_pool_lines(evidence: str) -> list[str]:
+	return [line for line in evidence.split("\n") if line.startswith(heal.ENGINE_POOL_REASON_EVIDENCE_PREFIX)]
+
+
+def test_engine_fallback_pool_reason_token_present() -> None:
+	payload = _engine_pool_payload(pool_reason="pool_dir_invalid")
+	assert payload["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY + "\nClaude pool step reason: pool_dir_invalid"
+	normalized = heal.validate_payload(payload)
+	assert _engine_pool_lines(normalized["failure_evidence"]) == ["Claude pool step reason: pool_dir_invalid"]
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+
+
+@pytest.mark.parametrize("token", ["Bad", "a b", "x" * 61, "", "@x", "all-gated", "pool`x`", "a\nb", "selected\n", "-x"])
+def test_engine_fallback_pool_reason_token_invalid_is_unavailable(token: str) -> None:
+	payload = _engine_pool_payload(pool_reason=token)
+	assert _engine_pool_lines(payload["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(heal.validate_payload(payload)["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+
+
+def test_engine_fallback_pool_reason_omitted_is_byte_identical() -> None:
+	omitted = _engine_pool_payload()
+	explicit_none = _engine_pool_payload(pool_reason=None)
+	assert json.dumps(omitted, sort_keys=True) == json.dumps(explicit_none, sort_keys=True)
+	assert omitted["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+	assert _engine_pool_lines(omitted["failure_evidence"]) == []
+	normalized = heal.validate_payload(omitted)
+	assert normalized["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+
+
+def test_engine_fallback_pool_reason_keeps_the_fingerprint_and_title() -> None:
+	plain = heal.validate_payload(_engine_pool_payload())
+	with_reason = heal.validate_payload(_engine_pool_payload(pool_reason="selected"))
+	for key in ("engine_role", "engine_reason", "issue_title", "failure_reason", "failure_fingerprint"):
+		assert plain[key] == with_reason[key], key
+	assert with_reason["engine_reason"] == "no_credential"
+	assert heal.engine_fallback_fingerprint(plain["engine_role"], plain["engine_reason"]) == \
+		heal.engine_fallback_fingerprint(with_reason["engine_role"], with_reason["engine_reason"]) == \
+		heal.fingerprint("ai-engine-fallback", "PLAN", "no_credential")
+
+
+def test_engine_fallback_validator_drops_invalid_and_duplicate_pool_lines() -> None:
+	forged = _engine_pool_payload()
+	forged["failure_evidence"] = "\n".join([
+		_ENGINE_POOL_EVIDENCE_TODAY,
+		"Claude pool step reason: @someone",
+		"Claude pool step reason: first_valid",
+		"Claude pool step reason: second_valid",
+		"Claude pool step reason: ",
+	])
+	normalized = heal.validate_payload(forged)
+	assert normalized["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY + "\nClaude pool step reason: first_valid"
+	# Idempotent: validating the normalized payload again changes nothing.
+	assert heal.validate_payload(normalized) == normalized
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+
+
+def test_engine_fallback_pool_reason_cli(tmp_path: Path) -> None:
+	records = tmp_path / "records.tsv"
+	records.write_text("\n".join(_ENGINE_POOL_RECORDS) + "\n", encoding="utf-8")
+	script = str(REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	base = [sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
+		"--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)]
+
+	def build(*extra: str) -> dict:
+		return json.loads(subprocess.run([*base, *extra], capture_output=True, text=True, env=env, check=True).stdout)
+
+	omitted = build()
+	expected = _engine_pool_payload()
+	omitted.pop("reported_at")
+	expected.pop("reported_at")
+	assert omitted == expected
+	assert omitted["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+	assert _engine_pool_lines(build("--pool-reason", "")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(build("--pool-reason", "Not Valid")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(build("--pool-reason", "selected")["failure_evidence"]) == ["Claude pool step reason: selected"]
+	assert _engine_pool_lines(build("--pool-reason=-x")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+
+
+def test_engine_fallback_reporter_passes_the_pool_reason_only_with_a_source() -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
+	build = text[text.index("build-engine-fallback-payload --repo"):text.index("wrap-dispatch --payload-json")]
+	assert '${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"}' in build
+	assert 'report_pool_reason_args=("--pool-reason=${report_pool_reason_token}")' in text
+	assert 'if [ "${report_pool_reason_source}" != "none" ]; then' in text
+	# The record format and the fingerprint inputs stay role + reason.
+	assert '--role "${role}" --reason "${reason}"' in build
 
 
 # --- engine_fallback reporting run: heal scope instead of scope_unavailable_no_runs ---
@@ -6751,14 +6972,40 @@ def test_intake_keeps_the_quiet_skip_when_the_reporting_run_does_not_bind(tmp_pa
 	]
 	for index, (outcome, payload, run_details) in enumerate(cases):
 		tg_log = tmp_path / f"tg-{index}.log"
-		result, state, _ = _run_intake(payload, _intake_state(run_details=run_details), diagnosis=DIAG_WORKFLOW_DEFECT,
+		result, state, prompt = _run_intake(payload, _intake_state(run_details=run_details), diagnosis=DIAG_WORKFLOW_DEFECT,
 			setup_git=_engine_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
 		assert result.returncode == 0, outcome + result.stderr + result.stdout
 		assert f"WORKFLOW_HEAL engine_reporter_run outcome={outcome} " in result.stdout, result.stdout
-		assert "WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=marker_guard " in result.stdout, result.stdout
+		# The skip happens before the diagnosis: no prompt, no model call, no classification.
+		assert "WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=pre_diagnosis " in result.stdout, result.stdout
+		assert "classification=none " in result.stdout, result.stdout
+		assert prompt == ""
+		assert "WORKFLOW_HEAL classification=" not in result.stdout
 		assert "issues_created" not in state
 		assert not [line for line in (tg_log.read_text() if tg_log.exists() else "").splitlines() if line.startswith("CRITICAL\t")]
 		assert len(_engine_run_get_calls(state)) == (0 if outcome == "absent" else 1)
+
+
+def test_intake_engine_fallback_without_run_still_diagnoses_when_the_creation_gate_is_off(tmp_path: Path) -> None:
+	# HEAL_INTAKE_SCOPE_GUARD_ENABLED off is the compose-only path: the early
+	# skip does not apply, the diagnosis runs and nothing is created.
+	result, state, prompt = _run_intake(_engine_scoped_payload(reporter_run=None), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tmp_path / "tg.log"))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL engine_reporter_run outcome=absent " in result.stdout
+	assert "stage=pre_diagnosis" not in result.stdout
+	assert prompt != ""
+	assert "WORKFLOW_HEAL classification=workflow-defect " in result.stdout, result.stdout
+	assert "issues_created" not in state
+
+
+def test_intake_skips_the_engine_fallback_diagnosis_only_for_run_less_reports() -> None:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	gate = 'if [ "${SOURCE_KIND}" = "engine_fallback" ] && _heal_intake_scope_guard_is_on && _heal_report_claimed_no_runs; then'
+	assert text.count(gate) == 1
+	# After the reporting-run binding (which sets ENGINE_REPORTER_RUN_REF) and
+	# before the diagnosis prompt is assembled.
+	assert text.index('ENGINE_REPORTER_RUN_REF="$(jq -r') < text.index(gate) < text.index('} > "${PROMPT_FILE}"')
 
 
 def test_intake_engine_fallback_duplicate_reads_no_run(tmp_path: Path) -> None:
@@ -6988,6 +7235,55 @@ def test_non_retryable_route_decisions() -> None:
 	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B, intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/777")
 	assert "`.claude/hooks/pr_merge_status_guard.py`" in body and "manual merge" in body.lower()
 	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={HOST_ONLY_REASON} -->")
+
+
+SANDBOX_EXCLUDED_REASON = "review_editor_sandbox_path_excluded"
+
+
+def _sandbox_excluded_summary_comment(*, head: str = SHA_A, run: str = "801", support: str | None = None, author: str = CAP_AUTHOR) -> dict:
+	"""An editor-summary comment that ends with the #8321 sandbox-excluded marker."""
+	fp = heal.autofix_failure_fingerprint(failure_reason=SANDBOX_EXCLUDED_REASON, evidence_text="")["fp"]
+	marker = heal.render_failure_marker(head, SANDBOX_EXCLUDED_REASON, fp, True, run, support)
+	assert marker
+	body = (
+		"AI autofix editor summary\n\nChanges made:\n- none\n\nChange status:\n- not-edited\n\n"
+		"Ignored suggestions (with short reason):\n- .claude/docs/s25-x.md test failure \u2014 sandbox-excluded path\n\n"
+		"Files changed / commit status:\n- none\n\n" + marker
+	)
+	return {"id": int(run), "author_login": author, "body": body}
+
+
+def test_sandbox_excluded_editor_summary_trips_the_cap_on_its_first_marker() -> None:
+	"""#8321: one editor summary declining a fix as sandbox-excluded stops the head."""
+	one = [_sandbox_excluded_summary_comment()]
+	result = heal.count_identical_failures(one, head_sha=SHA_A, author_login=CAP_AUTHOR)
+	assert result["count"] == 1 and result["reason"] == SANDBOX_EXCLUDED_REASON and result["non_retryable"] is True
+	# A new head resets the count; an untrusted author never trips it.
+	assert heal.count_identical_failures(one, head_sha=SHA_B, author_login=CAP_AUTHOR)["count"] == 0
+	forged = [_sandbox_excluded_summary_comment(author="attacker")]
+	assert heal.count_identical_failures(forged, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
+	# A newer verified support SHA re-arms the stop once (#6911).
+	supported = [_sandbox_excluded_summary_comment(support=SUPPORT_S1)]
+	rearmed = heal.count_identical_failures(supported, head_sha=SHA_A, author_login=CAP_AUTHOR, current_support_sha=SUPPORT_S2)
+	assert rearmed["non_retryable"] is True and rearmed["rearm"] is True
+	same = heal.count_identical_failures(supported, head_sha=SHA_A, author_login=CAP_AUTHOR, current_support_sha=SUPPORT_S1)
+	assert same["rearm"] is False
+
+
+def test_non_retryable_route_explains_sandbox_excluded_editor_stop() -> None:
+	"""#8321: the diagnosis names the editor sandbox, not a conflict merge."""
+	payload = heal.validate_payload(_autofix_payload(failure_reason=SANDBOX_EXCLUDED_REASON))
+	decision = heal.non_retryable_route(payload, comments=[], trusted_login=NR_LOGIN)
+	assert decision["route"] is True and decision["reason"] == SANDBOX_EXCLUDED_REASON
+	assert decision["suffix"] == SANDBOX_EXCLUDED_REASON and decision["paths"] == []
+	cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap"))
+	capped = heal.non_retryable_route(cap, comments=[_sandbox_excluded_summary_comment(head=SHA_B, author=NR_LOGIN)], trusted_login=NR_LOGIN)
+	assert capped["route"] is True and capped["reason"] == SANDBOX_EXCLUDED_REASON
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B)
+	assert heal._NON_RETRYABLE_EXPLANATIONS[SANDBOX_EXCLUDED_REASON] in body
+	assert "review editor sandbox does not admit" in body
+	assert "conflicted path(s) could not be read" not in body
+	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={SANDBOX_EXCLUDED_REASON} -->")
 
 
 def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
@@ -8263,3 +8559,1207 @@ def test_error_signature_ignores_which_engine_ran_the_attempt_loop() -> None:
 	# Unrelated messages that merely start with "Claude" keep their own fingerprint.
 	assert heal.normalize_error_line("::error::Claude pool at capacity (role RETRO)").startswith("::error::claude pool")
 	assert heal.normalize_error_line("##[warning]Claude capacity wait recorded").startswith("##[warning]claude capacity")
+
+
+# ---------------------------------------------------------------------------
+# validation_failure kind (docs/plans/validation-failure-harness-routing-plan.md, Phase 1)
+# ---------------------------------------------------------------------------
+
+_VAL_RUN_ID = "4242"
+_VAL_TRACKING = 77
+
+
+def _val_roots(tmp_path: Path) -> tuple[str, str]:
+	consumer = tmp_path / "consumer"
+	support = tmp_path / "support"
+	for rel in ("src/app.py", "validation/existing.sh"):
+		target = consumer / rel
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text("x\n")
+	for rel in ("scripts/foo.sh", "src/app.py"):
+		target = support / rel
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text("x\n")
+	return str(consumer), str(support)
+
+
+def _val_classify(tmp_path: Path, diagnosis, **kwargs) -> dict:
+	consumer, support = _val_roots(tmp_path)
+	params = {
+		"consumer_root": consumer,
+		"support_root": support,
+		"managed_paths": [".github/workflows/ai-validate.yml"],
+		"raw_status": "needs_fixes",
+		"signature": "boom",
+		"source_repo": CONSUMER_REPO,
+	}
+	params.update(kwargs)
+	return heal.classify_validation_owner(diagnosis, **params)
+
+
+def _val_payload(**overrides) -> dict:
+	params = {
+		"repo": CONSUMER_REPO,
+		"issue_number": _VAL_TRACKING,
+		"run_id": _VAL_RUN_ID,
+		"wrapper_sha": SHA_A,
+		"stage": "sandbox",
+		"reason": "sandbox_unavailable",
+		"signature": "rootless docker failed",
+		"workflow_name": "AI Validate [tracking:77]",
+		"reporter_run_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/{_VAL_RUN_ID}",
+	}
+	params.update(overrides)
+	return heal.build_validation_failure_payload(**params)
+
+
+def test_validation_failure_kind_is_registered() -> None:
+	assert "validation_failure" in heal.SOURCE_KINDS
+	assert "validation_failure" in heal.PROVENANCE_BOUND_KINDS
+	assert "validation_failure" not in heal.PROVENANCE_KINDS
+	assert heal.REPORT_IDENTITY_WORKFLOW_BY_KIND["validation_failure"] == ("validate.yml",)
+	assert heal.VALIDATION_STAGES == ("generate", "preflight", "sandbox", "canary", "run", "diagnose", "engine")
+	assert heal.VALIDATION_BOUNCED_REASON not in heal.VALIDATION_REASONS
+	assert set(heal.VALIDATION_REASON_STAGES) == set(heal.VALIDATION_REASONS)
+	assert set(heal.VALIDATION_REASON_STAGES.values()) <= set(heal.VALIDATION_STAGES)
+	# Existing kinds keep their order and bindings.
+	assert heal.SOURCE_KINDS[:7] == ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding")
+	assert heal.PROVENANCE_BOUND_KINDS[:3] == ("phase_failure", "autofix_failure", "workflow_run")
+	assert heal.REPORT_IDENTITY_WORKFLOW_BY_KIND["phase_failure"] == ("clarify.yml", "plan.yml", "implement.yml")
+
+
+@pytest.mark.parametrize("reason", heal.VALIDATION_FIXED_REASONS)
+def test_classify_validation_owner_layer0_is_harness(tmp_path: Path, reason: str) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["src/app.py"]}]}
+	result = _val_classify(tmp_path, diagnosis, fixed_reason=reason)
+	assert result["owner"] == "harness"
+	assert result["reason"] == reason
+	assert result["stage"] == heal.VALIDATION_REASON_STAGES[reason]
+	assert result["project_paths"] == [] and result["project_fix_ids"] == []
+	assert result["fingerprint"] == heal.validation_failure_fingerprint(result["stage"], reason, "boom")
+	# The explicit stage must agree with the reason.
+	assert _val_classify(tmp_path, None, fixed_reason=reason, fixed_stage=heal.VALIDATION_REASON_STAGES[reason])["owner"] == "harness"
+	with pytest.raises(ValueError):
+		_val_classify(tmp_path, None, fixed_reason=reason, fixed_stage="diagnose")
+
+
+def test_classify_validation_owner_rejects_unknown_fixed_reason(tmp_path: Path) -> None:
+	for reason in ("owner_paths", "diagnosis_harness", "bounced_repeat", "nope"):
+		with pytest.raises(ValueError):
+			_val_classify(tmp_path, None, fixed_reason=reason)
+	with pytest.raises(ValueError):
+		_val_classify(tmp_path, None, fixed_stage="sandbox")
+
+
+@pytest.mark.parametrize("fix_issues", [[], [{"id": "a", "files": ["src/app.py"]}], [{"id": "a"}]])
+def test_classify_validation_owner_harness_error_diagnosis(tmp_path: Path, fix_issues: list) -> None:
+	diagnosis = {"status": "harness_error", "fix_issues": fix_issues, "harness_files": ["validation/tests/a.sh"]}
+	result = _val_classify(tmp_path, diagnosis, raw_status="needs_fixes")
+	assert (result["owner"], result["reason"], result["stage"]) == ("harness", "diagnosis_harness", "diagnose")
+	assert "validation/tests/a.sh" in result["harness_paths"]
+	assert result["fingerprint"]
+
+
+def test_classify_validation_owner_all_harness_paths(tmp_path: Path) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [
+		{"id": "a", "files": ["validation/x.sh"]},
+		{"id": "b", "files": ["./.github/workflows/ai-validate.yml", "scripts/foo.sh"]},
+	]}
+	result = _val_classify(tmp_path, diagnosis)
+	assert (result["owner"], result["reason"], result["stage"]) == ("harness", "owner_paths", "diagnose")
+	assert result["harness_paths"] == ["validation/x.sh", ".github/workflows/ai-validate.yml", "scripts/foo.sh"]
+	assert result["project_paths"] == [] and result["project_fix_ids"] == []
+
+
+def test_classify_validation_owner_all_project_paths(tmp_path: Path) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["src/app.py"]}, {"id": "b", "files": ["src/new.py"]}]}
+	result = _val_classify(tmp_path, diagnosis)
+	assert result["owner"] == "project" and result["reason"] == "" and result["fingerprint"] == ""
+	assert result["project_paths"] == ["src/app.py", "src/new.py"]
+	assert result["project_fix_ids"] == ["a", "b"]
+
+
+def test_classify_validation_owner_mixed(tmp_path: Path) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [
+		{"id": "harness-1", "files": ["validation/x.sh"]},
+		{"id": "proj-1", "files": ["src/app.py", "validation/y.sh"]},
+		{"files": ["src/new.py"]},
+	]}
+	result = _val_classify(tmp_path, diagnosis)
+	assert (result["owner"], result["reason"], result["stage"]) == ("mixed", "mixed_harness_part", "diagnose")
+	assert result["project_fix_ids"] == ["proj-1", "index-2"]
+	assert result["harness_paths"] == ["validation/x.sh", "validation/y.sh"]
+	assert result["fingerprint"] == heal.validation_failure_fingerprint("diagnose", "mixed_harness_part", "boom")
+	# A harness path named only in harness_files also makes the result mixed.
+	only_files = _val_classify(tmp_path, {"status": "needs_fixes", "harness_files": ["validation/z.sh"], "fix_issues": [{"id": "a", "files": ["src/app.py"]}]})
+	assert only_files["owner"] == "mixed" and only_files["project_fix_ids"] == ["a"]
+
+
+def test_classify_validation_owner_missing_files_and_empty_issues(tmp_path: Path) -> None:
+	missing = _val_classify(tmp_path, {"status": "needs_fixes", "harness_files": ["validation/z.sh"], "fix_issues": [{"id": "a", "title": "t"}]})
+	assert missing["owner"] == "project" and missing["project_fix_ids"] == ["a"]
+	assert missing["harness_paths"] == ["validation/z.sh"]
+	# An empty fix_issues is never project-owned.
+	assert _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": []}, raw_status="harness_error")["reason"] == "diagnosis_harness"
+	for raw_status in ("needs_fixes", "", None):
+		assert _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": []}, raw_status=raw_status)["owner"] == "none"
+
+
+@pytest.mark.parametrize("bad_path", ["../../etc/passwd", "/etc/passwd", "src/../validation/x.sh", "a b.py", 7])
+def test_classify_validation_owner_invalid_path_is_project(tmp_path: Path, bad_path) -> None:
+	result = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": [bad_path]}]})
+	assert result["owner"] == "project" and result["project_fix_ids"] == ["a"]
+	assert result["harness_paths"] == [] and result["project_paths"] == []
+
+
+@pytest.mark.parametrize("diagnosis", [None, "", "not json", "[]", {"status": "pass"}, {"no": "status"}])
+def test_classify_validation_owner_without_usable_diagnosis(tmp_path: Path, diagnosis) -> None:
+	result = _val_classify(tmp_path, diagnosis, raw_status="harness_error")
+	assert result["owner"] == "none" and result["reason"] == "" and result["fingerprint"] == ""
+	# JSON text is parsed.
+	parsed = _val_classify(tmp_path, json.dumps({"status": "harness_error"}))
+	assert parsed["owner"] == "harness"
+
+
+def test_classify_validation_owner_bounce_guard(tmp_path: Path) -> None:
+	diagnosis = {"status": "harness_error"}
+	first = _val_classify(tmp_path, diagnosis)
+	bounced = _val_classify(tmp_path, diagnosis, bounced_fingerprints=["not-a-fp", first["fingerprint"].upper()])
+	assert bounced["owner"] == "none" and bounced["reason"] == "bounced_repeat"
+	assert bounced["fingerprint"] == first["fingerprint"] and bounced["stage"] == "diagnose"
+	assert _val_classify(tmp_path, diagnosis, bounced_fingerprints=["0" * 64])["owner"] == "harness"
+
+
+def test_validation_path_owner_rules(tmp_path: Path) -> None:
+	consumer, support = _val_roots(tmp_path)
+	owner = lambda path, managed=(): heal.validation_path_owner(path, consumer_root=consumer, support_root=support, managed_paths=managed)  # noqa: E731
+	assert owner("validation/existing.sh") == "harness"
+	assert owner("validation") == "harness"
+	assert owner(".github/workflows/ai-review.yml", managed={".github/workflows/ai-review.yml"}) == "harness"
+	assert owner("scripts/foo.sh") == "harness"  # only in the support checkout
+	assert owner("src/app.py") == "project"  # in both, not managed
+	assert owner("src/new.py") == "project"  # in neither
+	assert owner("validationx/a.sh") == "project"
+	assert owner("/abs/path") == "project"
+	assert owner(None) == "project"
+	# A symlinked parent directory in the support checkout is never followed.
+	elsewhere = tmp_path / "elsewhere"
+	(elsewhere / "inner").mkdir(parents=True)
+	(elsewhere / "inner" / "f.sh").write_text("x\n")
+	os.symlink(elsewhere, Path(support) / "linked")
+	assert owner("linked/inner/f.sh") == "project"
+	assert heal.classify_validation_paths(["src/app.py", "validation/a.sh", "src/app.py", "../x"], consumer_root=consumer, support_root=support, managed_paths=()) == (["validation/a.sh"], ["src/app.py"])
+
+
+def _val_support_repo(tmp_path: Path) -> Path:
+	root = tmp_path / "support-git"
+	(root / "workflow-templates").mkdir(parents=True)
+	(root / "workflow-templates" / "ai-validate.yml").write_text("name: AI Validate\n")
+	(root / "CLAUDE.md").write_text("rules\n")
+	env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+	for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(key, None)
+	for command in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-q", "-m", "base"]):
+		subprocess.run(command, cwd=root, check=True, env=env, capture_output=True)
+	return root
+
+
+def test_load_validation_managed_paths_reads_the_support_commit(tmp_path: Path) -> None:
+	root = _val_support_repo(tmp_path)
+	managed = heal.load_validation_managed_paths(str(root), "HEAD")
+	assert ".github/workflows/ai-validate.yml" in managed
+	sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+	assert heal.load_validation_managed_paths(str(root), sha) == managed
+	with pytest.raises(ValueError):
+		heal.load_validation_managed_paths(str(root), "--x")
+	with pytest.raises(ValueError):
+		heal.load_validation_managed_paths(str(tmp_path / "missing"), "HEAD")
+	with pytest.raises(ValueError):
+		heal.load_validation_managed_paths(str(tmp_path), "HEAD")  # not a git repository
+	consumer = tmp_path / "consumer-empty"
+	consumer.mkdir()
+	result = heal.classify_validation_owner({"status": "needs_fixes", "fix_issues": [{"id": "a", "files": [".github/workflows/ai-validate.yml"]}]},
+		consumer_root=str(consumer), support_root="", managed_paths=managed, raw_status="needs_fixes")
+	assert result["owner"] == "harness" and result["reason"] == "owner_paths"
+
+
+def test_validation_signature_normalisation_and_fingerprint() -> None:
+	base = "error in shubhodeep1/example-consumer at 0123abcd4567 Target branch: main <!-- x --> `cmd`"
+	normalized = heal.normalize_validation_signature(base, source_repo=CONSUMER_REPO)
+	assert CONSUMER_REPO not in normalized and "0123abcd4567" not in normalized
+	assert "<repo>" in normalized and "<sha>" in normalized
+	assert "Target branch:" not in normalized and "<!--" not in normalized and "`" not in normalized
+	assert heal.normalize_validation_signature(normalized, source_repo=CONSUMER_REPO) == normalized
+	long_text = ("abcdef1 " * 100) + "tail"
+	capped = heal.normalize_validation_signature(long_text)
+	assert len(capped) <= 200 and heal.normalize_validation_signature(capped) == capped
+	assert heal.normalize_validation_signature("") == "no-error-lines"
+	fp_a = heal.validation_failure_fingerprint("diagnose", "owner_paths", "failed at 1111111aaaa in org/one", source_repo="org/one")
+	fp_b = heal.validation_failure_fingerprint("diagnose", "owner_paths", "failed at 2222222bbbbbbb in org/two", source_repo="org/two")
+	assert fp_a == fp_b
+	assert fp_a == heal.fingerprint("validation-harness", "diagnose:owner_paths", "failed at <sha> in <repo>")
+	assert fp_a != heal.validation_failure_fingerprint("diagnose", "mixed_harness_part", "failed at 1111111aaaa in org/one", source_repo="org/one")
+	with pytest.raises(ValueError):
+		heal.validation_failure_fingerprint("nope", "owner_paths", "x")
+	with pytest.raises(ValueError):
+		heal.validation_failure_fingerprint("diagnose", "bounced_repeat", "x")
+
+
+def test_validation_payload_round_trip() -> None:
+	payload = _val_payload(signature=f"{CONSUMER_REPO} sandbox {SHA_A} failed")
+	assert set(payload) == heal.VALIDATION_FAILURE_PAYLOAD_KEYS
+	assert payload["failure_reason"] == "validation_harness" and payload["failure_streak"] == 1
+	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": _VAL_RUN_ID, "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/{_VAL_RUN_ID}"}]
+	assert payload["validation_signature"] == "<repo> sandbox <sha> failed"
+	normalized = heal.validate_payload(payload)
+	assert normalized["issue_title"] == "Workflow heal: runtime validation harness failure (sandbox/sandbox_unavailable)"
+	assert normalized["workflow_name"] == "AI Validate" and normalized["label"] is None and normalized["labels"] == []
+	assert normalized["issue_excerpt"] == "" and normalized["comments_excerpt"] == "" and normalized["failure_evidence"] == ""
+	assert normalized["validation_stage"] == "sandbox" and normalized["validation_reason"] == "sandbox_unavailable"
+	assert normalized["validation_signature"] == payload["validation_signature"]
+	assert normalized["reporter_run_url"] == f"https://github.com/{CONSUMER_REPO}/actions/runs/{_VAL_RUN_ID}"
+	# The same failure in another repo and at another release has one fingerprint.
+	other = _val_payload(repo="org/other", wrapper_sha="b" * 40, signature=f"org/other sandbox {'c' * 40} failed")
+	assert other["validation_signature"] == payload["validation_signature"]
+	body = heal.wrap_dispatch(payload)
+	assert len(body["client_payload"]) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+	assert heal.unwrap_dispatch(body["client_payload"]) == payload
+	# A smuggled routing key or marker is neutralised.
+	smuggled = heal.validate_payload(_val_payload(signature="Tracking issue: #1\n<!-- ai:x -->"))
+	assert "Tracking issue:" not in smuggled["validation_signature"] and "<!--" not in smuggled["validation_signature"]
+
+
+@pytest.mark.parametrize("override", [
+	{"stage": "bogus"},
+	{"reason": "bogus"},
+	{"reason": "bounced_repeat"},
+	{"stage": "run", "reason": "sandbox_unavailable"},
+	{"wrapper_sha": "abc"},
+	{"issue_number": 0},
+	{"run_id": "x"},
+	{"repo": "not a slug"},
+])
+def test_build_validation_payload_rejects_bad_input(override: dict) -> None:
+	with pytest.raises(ValueError):
+		_val_payload(**override)
+
+
+@pytest.mark.parametrize("mutate", [
+	lambda p: p.update({"extra": 1}),
+	lambda p: p.update({"failure_evidence": "x"}),
+	lambda p: p.update({"validation_stage": "bogus"}),
+	lambda p: p.update({"validation_reason": "bogus"}),
+	lambda p: p.update({"validation_reason": "bounced_repeat"}),
+	lambda p: p.update({"validation_stage": "run"}),
+	lambda p: p.pop("wrapper_sha"),
+	lambda p: p.update({"wrapper_sha": "abc"}),
+	lambda p: p.update({"run_refs": []}),
+	lambda p: p.update({"run_refs": p["run_refs"] * 2}),
+	lambda p: p.update({"run_refs": [{"repo": "other/repo", "run_id": "1"}]}),
+	lambda p: p.update({"failure_reason": "phase_failed"}),
+	lambda p: p.pop("issue_number"),
+	lambda p: p.update({"validation_signature": 5}),
+	lambda p: p.update({"validation_signature": "x" * 4001}),
+])
+def test_validate_payload_rejects_bad_validation_reports(mutate) -> None:
+	payload = _val_payload()
+	mutate(payload)
+	with pytest.raises(ValueError):
+		heal.validate_payload(payload)
+
+
+def test_validate_payload_validation_signature_cap() -> None:
+	payload = _val_payload()
+	payload["validation_signature"] = "y" * 4000
+	assert len(heal.validate_payload(payload)["validation_signature"]) == 200
+
+
+def test_validation_report_identity_is_bound_to_validate_yml() -> None:
+	good = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/validate.yml@{SHA_A}")
+	assert _verify_id(_sign_test_jwt(good), kind="validation_failure")["ok"] is True
+	bad = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/implement.yml@{SHA_A}")
+	assert _verify_id(_sign_test_jwt(bad), kind="validation_failure")["reason"] == "job_workflow_ref_mismatch"
+	assert _verify_id(_sign_test_jwt(good), kind="phase_failure")["reason"] == "job_workflow_ref_mismatch"
+
+
+def _val_run(**overrides) -> dict:
+	run = {
+		"id": int(_VAL_RUN_ID),
+		"repository": {"full_name": CONSUMER_REPO},
+		"event": "workflow_dispatch",
+		"path": ".github/workflows/ai-validate.yml",
+		"status": "completed",
+		"conclusion": "failure",
+		"display_title": f"AI Validate [tracking:{_VAL_TRACKING}]",
+	}
+	run.update(overrides)
+	return run
+
+
+_VAL_JOBS = {"jobs": [{"name": "validate", "conclusion": "failure"}, {"name": "heal-report", "conclusion": None}]}
+
+
+def _val_provenance(payload=None, *, run=None, jobs=_VAL_JOBS, self_repo: str = SELF_REPO) -> dict:
+	return heal.verify_phase_report_provenance(payload if payload is not None else _val_payload(), run=_val_run() if run is None else run,
+		jobs=jobs, comments=None, self_repo=self_repo, trusted_author=None)
+
+
+def test_validation_report_provenance_accepts_the_failed_validation_run() -> None:
+	assert _val_provenance() == {"verified": True, "reason": "ok", "run_id": _VAL_RUN_ID}
+	assert _val_provenance(run=_val_run(status="in_progress", conclusion=None))["verified"] is True
+	assert _val_provenance(run=_val_run(conclusion="timed_out"))["verified"] is True
+	internal = _val_payload(repo=SELF_REPO)
+	run = _val_run(repository={"full_name": SELF_REPO}, path=".github/workflows/internal-validate.yml@refs/heads/main", display_title=f"Internal: AI Validate [tracking:{_VAL_TRACKING}]")
+	assert _val_provenance(internal, run=run)["verified"] is True
+	assert _val_provenance(run=_val_run(path=".github/workflows/internal-validate.yml"))["reason"] == "workflow_path_mismatch"
+
+
+@pytest.mark.parametrize(("run_overrides", "jobs", "reason"), [
+	({"id": 1}, _VAL_JOBS, "run_id_mismatch"),
+	({"repository": {"full_name": "other/repo"}}, _VAL_JOBS, "repo_mismatch"),
+	({"event": "schedule"}, _VAL_JOBS, "event_mismatch"),
+	({"path": ".github/workflows/ai-implement.yml"}, _VAL_JOBS, "workflow_path_mismatch"),
+	({"conclusion": "success"}, _VAL_JOBS, "run_not_failed"),
+	({}, None, "jobs_unavailable"),
+	({}, {"jobs": [{"name": "heal-report", "conclusion": "failure"}, {"name": "validate / heal-report", "conclusion": "failure"}]}, "no_failed_validation_job"),
+	({"display_title": "AI Validate [tracking:78]"}, _VAL_JOBS, "tracking_title_mismatch"),
+	({"display_title": "AI Validate [tracking:0]"}, _VAL_JOBS, "tracking_title_mismatch"),
+])
+def test_validation_report_provenance_rejections(run_overrides: dict, jobs, reason: str) -> None:
+	assert _val_provenance(run=_val_run(**run_overrides), jobs=jobs)["reason"] == reason
+
+
+def test_validation_report_provenance_needs_a_validation_report() -> None:
+	payload = _val_payload()
+	payload["failure_reason"] = "plan_failed"
+	assert _val_provenance(payload)["reason"] == "not_validation_report"
+	assert heal.verify_phase_report_provenance(_val_payload(), run=None, jobs=_VAL_JOBS, comments=None, self_repo=SELF_REPO, trusted_author=None)["reason"] == "run_unavailable"
+	# A phase report keeps the phase rules (no linking comment).
+	phase = {"source_kind": "phase_failure", "failure_reason": "plan_failed", "source_repo": CONSUMER_REPO, "run_refs": [{"run_id": _VAL_RUN_ID}]}
+	phase_run = _val_run(event="issue_comment", path=".github/workflows/ai-plan.yml")
+	assert heal.verify_phase_report_provenance(phase, run=phase_run, jobs=_VAL_JOBS, comments=[], self_repo=SELF_REPO, trusted_author=None)["reason"] == "no_linking_comment"
+
+
+def test_validation_report_title_and_context_lines() -> None:
+	normalized = heal.validate_payload(_val_payload(stage="diagnose", reason="owner_paths", signature="Target branch: main"))
+	assert heal.compose_issue_title(normalized, workflow_name="ignored") == "Workflow heal: runtime validation harness failure (diagnose/owner_paths)"
+	lines = heal._context_lines(normalized, run_summaries=[])
+	text = "\n".join(lines)
+	assert "- **Validation stage:** `diagnose`" in lines
+	assert "- **Validation reason:** `owner_paths`" in lines
+	assert any(line.startswith("- **Normalised error signature:** `") for line in lines)
+	assert "Escalation label" not in text and "Tracking issue:" not in text and "Target branch:" not in text
+	assert f"({CONSUMER_REPO}#{_VAL_TRACKING})" in text
+
+
+def _val_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+	return subprocess.run([sys.executable, str(LIB_PATH), *args], capture_output=True, text=True, check=check, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+
+
+def test_validation_cli_round_trips(tmp_path: Path) -> None:
+	signature = tmp_path / "sig.txt"
+	signature.write_text(f"{CONSUMER_REPO} canary {SHA_A} failed\n")
+	built = json.loads(_val_cli("build-validation-payload", "--repo", CONSUMER_REPO, "--issue-number", str(_VAL_TRACKING), "--run-id", _VAL_RUN_ID,
+		"--wrapper-sha", SHA_A, "--stage", "canary", "--reason", "canary_failed", "--signature-file", str(signature)).stdout)
+	assert built["validation_signature"] == "<repo> canary <sha> failed" and set(built) == heal.VALIDATION_FAILURE_PAYLOAD_KEYS
+	refused = _val_cli("build-validation-payload", "--repo", CONSUMER_REPO, "--issue-number", "1", "--run-id", "1", "--wrapper-sha", SHA_A, "--stage", "run", "--reason", "canary_failed", check=False)
+	assert refused.returncode == 2
+	fp = _val_cli("validation-failure-fingerprint", "--stage", "canary", "--reason", "canary_failed", "--signature-file", str(signature), "--source-repo", CONSUMER_REPO).stdout.strip()
+	assert fp == heal.validation_failure_fingerprint("canary", "canary_failed", signature.read_text(), source_repo=CONSUMER_REPO)
+	assert re.fullmatch(r"[0-9a-f]{64}", fp)
+
+	consumer, support = _val_roots(tmp_path)
+	diagnosis = tmp_path / "diag.json"
+	diagnosis.write_text(json.dumps({"status": "needs_fixes", "fix_issues": [{"id": "a", "files": [".github/workflows/ai-validate.yml"]}]}))
+	managed_file = tmp_path / "managed.txt"
+	managed_file.write_text(".github/workflows/ai-validate.yml\n")
+	via_file = json.loads(_val_cli("classify-validation-owner", "--diagnosis-json", str(diagnosis), "--consumer-root", consumer, "--support-root", support,
+		"--managed-paths-file", str(managed_file), "--signature-file", str(signature), "--source-repo", CONSUMER_REPO).stdout)
+	assert via_file["owner"] == "harness" and via_file["reason"] == "owner_paths"
+	repo = _val_support_repo(tmp_path)
+	via_repo = json.loads(_val_cli("classify-validation-owner", "--diagnosis-json", str(diagnosis), "--consumer-root", consumer, "--support-root", str(repo),
+		"--support-commit", "HEAD", "--signature-file", str(signature), "--source-repo", CONSUMER_REPO).stdout)
+	assert via_repo["owner"] == "harness" and via_repo["fingerprint"] == via_file["fingerprint"]
+	# Managed paths needed but unavailable: the classifier fails instead of guessing.
+	failed = _val_cli("classify-validation-owner", "--diagnosis-json", str(diagnosis), "--consumer-root", consumer, "--support-root", str(repo), "--support-commit=--x", check=False)
+	assert failed.returncode == 2 and failed.stdout == ""
+	assert "support commit" in failed.stderr
+	# Layer 0 needs no managed paths.
+	fixed = json.loads(_val_cli("classify-validation-owner", "--consumer-root", consumer, "--fixed-reason", "sandbox_unavailable", "--support-commit=--x").stdout)
+	assert fixed["owner"] == "harness" and fixed["stage"] == "sandbox"
+	bounced_file = tmp_path / "bounced.txt"
+	bounced_file.write_text(fixed["fingerprint"] + "\n")
+	bounced = json.loads(_val_cli("classify-validation-owner", "--consumer-root", consumer, "--fixed-reason", "sandbox_unavailable", "--bounced-fingerprints-file", str(bounced_file)).stdout)
+	assert bounced["owner"] == "none" and bounced["reason"] == "bounced_repeat"
+	none = json.loads(_val_cli("classify-validation-owner", "--consumer-root", consumer, "--diagnosis-json", str(tmp_path / "missing.json")).stdout)
+	assert none["owner"] == "none"
+	phase_payload = tmp_path / "payload.json"
+	phase_payload.write_text(json.dumps(built))
+	run_file = tmp_path / "run.json"
+	run_file.write_text(json.dumps(_val_run(display_title=f"AI Validate [tracking:{_VAL_TRACKING}]")))
+	jobs_file = tmp_path / "jobs.json"
+	jobs_file.write_text(json.dumps(_VAL_JOBS))
+	verdict = json.loads(_val_cli("verify-phase-provenance", "--payload-json", str(phase_payload), "--run-json", str(run_file), "--jobs-json", str(jobs_file),
+		"--comments-json", str(tmp_path / "none.json"), "--self-repo", SELF_REPO, "--comment-author", "").stdout)
+	assert verdict == {"verified": True, "reason": "ok", "run_id": _VAL_RUN_ID}
+
+
+def test_load_validation_managed_paths_ignores_inherited_git_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = _val_support_repo(tmp_path)
+	other = tmp_path / "other-git"
+	other.mkdir()
+	subprocess.run(["git", "init", "-q"], cwd=other, check=True, capture_output=True)
+	monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+	monkeypatch.setenv("GIT_WORK_TREE", str(other))
+	assert ".github/workflows/ai-validate.yml" in heal.load_validation_managed_paths(str(root), "HEAD")
+
+
+def test_validation_signature_masks_bare_repo_name() -> None:
+	first = heal.normalize_validation_signature("failed in /home/runner/work/example-consumer/example-consumer/validation/a.sh", source_repo=CONSUMER_REPO)
+	second = heal.normalize_validation_signature("failed in /home/runner/work/other-app/other-app/validation/a.sh", source_repo="org/other-app")
+	assert first == second == "failed in /home/runner/work/<repo>/<repo>/validation/a.sh"
+	assert "example-consumer" not in first
+	# A longer name containing the repo name is kept, and the result is idempotent.
+	kept = heal.normalize_validation_signature("example-consumer-tools broke", source_repo=CONSUMER_REPO)
+	assert kept == "example-consumer-tools broke"
+	repo_named = heal.normalize_validation_signature("repo failed", source_repo="org/repo")
+	assert repo_named == "<repo> failed" and heal.normalize_validation_signature(repo_named, source_repo="org/repo") == repo_named
+	# Plain hex-letter words are not SHAs; full SHAs and digit-bearing runs are.
+	assert heal.normalize_validation_signature(f"defaced {SHA_A} abc1234") == "defaced <sha> <sha>"
+
+
+def test_classify_validation_owner_keeps_original_fix_issue_index(tmp_path: Path) -> None:
+	result = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": ["junk", {"files": ["validation/x.sh"]}, {"files": ["src/app.py"]}]})
+	assert result["owner"] == "mixed" and result["project_fix_ids"] == ["index-2"]
+
+
+def test_classify_validation_owner_truncated_lists_are_not_harness(tmp_path: Path) -> None:
+	many = [{"id": f"h{n}", "files": ["validation/x.sh"]} for n in range(heal.VALIDATION_MAX_FIX_ISSUES + 1)]
+	result = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": many})
+	assert result["owner"] == "none" and result["truncated"] is True and result["fingerprint"] == ""
+	files = ["validation/x.sh"] * heal.VALIDATION_MAX_FILES_PER_ISSUE + ["src/app.py"]
+	long_files = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": files}]})
+	assert long_files["owner"] == "mixed" and long_files["project_fix_ids"] == ["a"] and long_files["truncated"] is True
+	assert _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["validation/x.sh"]}]})["truncated"] is False
+
+
+def test_classify_validation_owner_requires_consumer_root_for_paths(tmp_path: Path) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["scripts/foo.sh"]}]}
+	for root in ("", str(tmp_path / "missing")):
+		with pytest.raises(ValueError):
+			_val_classify(tmp_path, diagnosis, consumer_root=root)
+	# Layer 0 and path-free diagnoses need no consumer root.
+	assert _val_classify(tmp_path, diagnosis, consumer_root="", fixed_reason="sandbox_unavailable")["owner"] == "harness"
+	assert _val_classify(tmp_path, {"status": "harness_error"}, consumer_root="")["owner"] == "harness"
+
+
+# --- validation_failure routing (validation-failure-harness-routing plan, Phase 1) ---
+
+VALIDATION_SIGNATURE = "validation_harness_sandbox.sh: rootless dockerd did not start in shubhodeep1/example-consumer"
+VALIDATION_JOB_LOG = (
+	"2026-10-22T10:00:00.000Z ##[group]Run bash scripts/validate_process.sh\n"
+	"2026-10-22T10:00:00.000Z ##[endgroup]\n"
+	"2026-10-22T10:00:01.000Z ::error::validation_harness_sandbox.sh: rootless dockerd did not start\n"
+	"2026-10-22T10:00:02.000Z ##[error]Process completed with exit code 1.\n"
+)
+VALIDATION_ROUTE_RE = re.compile(
+	r"<!-- workflow-failure-heal:validation-route:v1 fp=([0-9a-f]{64}) outcome=(opened|duplicate|already-fixed|bounced|skipped)"
+	r" issue=(none|[1-9][0-9]*) classification=([a-z-]+) run=([0-9]+) -->"
+)
+VALIDATION_TRACKING_COMMENTS = f"repos/{CONSUMER_REPO}/issues/42/comments"
+
+
+def _validation_payload(**overrides) -> dict:
+	payload = heal.build_validation_failure_payload(
+		repo=CONSUMER_REPO, issue_number=42, run_id="500", wrapper_sha=SHA_A, stage="sandbox", reason="sandbox_unavailable",
+		signature=VALIDATION_SIGNATURE, workflow_name="AI Validate", reporter_run_url=None,
+	)
+	payload.update(overrides)
+	return payload
+
+
+def _validation_fp() -> str:
+	return heal.validation_failure_fingerprint("sandbox", "sandbox_unavailable", VALIDATION_SIGNATURE, source_repo=CONSUMER_REPO)
+
+
+def _validation_run(**overrides) -> dict:
+	run = {
+		"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "workflow_dispatch", "path": ".github/workflows/ai-validate.yml",
+		"status": "in_progress", "conclusion": None, "display_title": "AI Validate [tracking:42]", "head_sha": SHA_A,
+		"html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		"referenced_workflows": [{"path": f"{SELF_REPO}/.github/workflows/validate.yml@stable"}],
+	}
+	run.update(overrides)
+	return run
+
+
+def _validation_intake_state(**overrides) -> dict:
+	return _intake_state(**{
+		"jobs": {"500": [
+			{"id": 9201, "name": "validate / validate", "workflow_name": "AI Validate", "conclusion": "failure",
+				"steps": [{"name": "Run validation process", "conclusion": "failure"}]},
+			{"id": 9202, "name": "validate / heal-report", "workflow_name": "AI Validate", "conclusion": None, "steps": []},
+		]},
+		"job_logs": {"9201": VALIDATION_JOB_LOG},
+		"run_details": {"500": _validation_run()},
+		**overrides,
+	})
+
+
+def _assert_validation_route(result: subprocess.CompletedProcess[str], state: dict, outcome: str, *, issue: str = "none", classification: str) -> dict:
+	assert result.returncode == 0, result.stderr + result.stdout
+	comments = [c for c in state.get("comments_posted", []) if c["path"] == VALIDATION_TRACKING_COMMENTS]
+	assert len(comments) == 1, comments
+	last_line = comments[0]["body"].rstrip("\n").splitlines()[-1]
+	match = VALIDATION_ROUTE_RE.fullmatch(last_line)
+	assert match, last_line
+	assert match.groups() == (_validation_fp(), outcome, issue, classification, "500")
+	assert f"WORKFLOW_HEAL received kind=validation_failure outcome={outcome} fp={_validation_fp()}" in result.stdout
+	# Never an issue in the source (consumer) repository for this kind.
+	assert not [i for i in state.get("issues_created", []) if i.get("repo") == CONSUMER_REPO]
+	assert not [i for i in state.get("issues_composed", []) if i.get("repo") == CONSUMER_REPO]
+	return comments[0]
+
+
+def test_intake_validation_failure_fingerprint_and_self_repo_dedup_only() -> None:
+	signature = heal.normalize_validation_signature(VALIDATION_SIGNATURE, source_repo=CONSUMER_REPO)
+	assert "<repo>" in signature
+	assert _validation_fp() == heal.fingerprint("validation-harness", "sandbox:sandbox_unavailable", signature)
+	result, state, prompt = _run_intake(_validation_payload(), _validation_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL provenance_verified source={CONSUMER_REPO} kind=validation_failure issue=42 runs=1" in result.stdout
+	assert f"WORKFLOW_HEAL fingerprint fp={_validation_fp()} workflow=validation-harness step=sandbox:sandbox_unavailable" in result.stdout
+	assert "rootless dockerd did not start" in prompt and "Validation stage: sandbox  reason: sandbox_unavailable" in prompt
+	# Only coding-workflows' heal issues are listed (Q14); no comment list is read.
+	issue_lists = [call for call in state["calls"] if any(part.endswith("/issues") for part in call) and "--paginate" in call]
+	assert issue_lists and all(f"repos/{SELF_REPO}/issues" in call for call in issue_lists)
+	assert not [call for call in state["calls"] if VALIDATION_TRACKING_COMMENTS in call and "--method" in call]
+	# One run GET and one jobs GET (provenance, reused by the log collection).
+	for path in (f"repos/{CONSUMER_REPO}/actions/runs/500", f"repos/{CONSUMER_REPO}/actions/runs/500/jobs"):
+		assert len([call for call in state["calls"] if path in call]) == 1, path
+
+
+def _prepare_validation_scope_support(payload: dict):
+	def _setup(tmp: Path, work: Path) -> None:
+		remote = tmp / "remote.git"
+		subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+		subprocess.run(["git", "init", "-q", "-b", "stable"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.name", "test"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=work, check=True)
+		(work / ".github" / "workflows" / "validate.yml").write_text("name: validate\n", encoding="utf-8")
+		subprocess.run(["git", "add", "-f", ".github/workflows/validate.yml"], cwd=work, check=True)
+		subprocess.run(["git", "commit", "-qm", "support"], cwd=work, check=True)
+		subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
+		subprocess.run(["git", "push", "-q", "origin", "stable"], cwd=work, check=True)
+		payload["wrapper_sha"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True).stdout.strip()
+	return _setup
+
+
+@pytest.mark.parametrize("diagnosis,classification", [
+	(DIAG_WORKFLOW_DEFECT, "workflow-defect"),
+	("## Classification\ninconclusive\n\n## Summary\nUnclear cause.\n", "inconclusive"),
+])
+def test_intake_validation_failure_opens_heal_issue_here(diagnosis: str, classification: str) -> None:
+	payload = _validation_payload()
+	result, state, _ = _run_intake(payload, _validation_intake_state(), diagnosis=diagnosis,
+		setup_git=_prepare_validation_scope_support(payload), extra_env=SCOPE_GUARD_ON)
+	assert "WORKFLOW_HEAL scope_guard outcome=verified" in result.stdout, result.stdout
+	assert [issue["repo"] for issue in state["issues_created"]] == [SELF_REPO]
+	assert "- **Target branch:** `stable`" in state["issues_created"][0]["body"]
+	comment = _assert_validation_route(result, state, "opened", issue="901", classification=classification)
+	assert f"https://github.com/{SELF_REPO}/issues/901" in comment["body"]
+
+
+@pytest.mark.parametrize("diagnosis,classification", [
+	(DIAG_CONSUMER_APP_SCOPE, "consumer-app-defect"),
+	("## Classification\nconsumer-config\n\n## Summary\nThe consumer has no Docker on its runner.\n", "consumer-config"),
+	("## Classification\ntransient\n\n## Summary\nA registry hiccup.\n", "transient"),
+	(DIAG_PR_SELF_INFLICTED, "pr-self-inflicted"),
+	(DIAG_BASE_SELF_INFLICTED, "base-self-inflicted"),
+])
+def test_intake_validation_failure_bounces_non_harness_verdicts(diagnosis: str, classification: str) -> None:
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(), diagnosis=diagnosis, extra_env=SCOPE_GUARD_ON)
+	comment = _assert_validation_route(result, state, "bounced", classification=classification)
+	assert f"`{classification}` (not a harness defect)" in comment["body"]
+	assert "issues_created" not in state and "issues_composed" not in state
+	assert f"WORKFLOW_HEAL no_issue classification={classification} kind=validation_failure outcome=bounced" in result.stdout
+
+
+def test_intake_validation_failure_duplicate_records_occurrence_and_routes() -> None:
+	state = _validation_intake_state(heal_issues=[_heal_issue(812, state="open", fp=_validation_fp())])
+	result, state, _ = _run_intake(_validation_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	comment = _assert_validation_route(result, state, "duplicate", issue="812", classification="none")
+	assert f"https://github.com/{SELF_REPO}/issues/812" in comment["body"]
+	assert [c["path"] for c in state["comments_posted"] if c["path"] != VALIDATION_TRACKING_COMMENTS] == [f"repos/{SELF_REPO}/issues/812/comments"]
+	assert "issues_created" not in state
+
+
+def test_intake_validation_failure_already_fixed_routes_without_issue() -> None:
+	compare = _compare(1, [(SHA_FIX, "AI implementation for issue #4350 (#4351)")])
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(compare=compare), diagnosis=DIAG_ALREADY_FIXED)
+	comment = _assert_validation_route(result, state, "already-fixed", classification="already-fixed")
+	assert "`already-fixed`" in comment["body"]
+	assert "issues_created" not in state
+
+
+def test_intake_validation_failure_skips_are_routed() -> None:
+	# Scope guard off (the test default): the issue is composed, not filed.
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	comment = _assert_validation_route(result, state, "skipped", classification="workflow-defect")
+	assert "`scope_guard_disabled`" in comment["body"]
+	# Budget exhausted: stops before diagnosis, so no classification.
+	other = _heal_issue(813, state="open", fp="9" * 64)
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(heal_issues=[other]), diagnosis=DIAG_WORKFLOW_DEFECT,
+		extra_env={"WORKFLOW_HEAL_MAX_OPEN_ISSUES": "1"})
+	comment = _assert_validation_route(result, state, "skipped", classification="none")
+	assert "`budget_exhausted`" in comment["body"]
+	assert "issues_composed" not in state
+
+
+def test_intake_validation_failure_provenance_rejection_posts_nothing() -> None:
+	for run in (_validation_run(path=".github/workflows/ai-plan.yml"), _validation_run(display_title="AI Validate [tracking:43]"),
+			_validation_run(repository={"full_name": "someone/else"})):
+		result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(run_details={"500": run}), diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL skip reason=provenance_rejected" in result.stdout
+		assert "comments_posted" not in state and "issues_created" not in state
+		assert "received kind=validation_failure" not in result.stdout
+		assert not [call for call in state["calls"] if any("/actions/jobs/" in part for part in call)]
+
+
+def _stage_validation_report(tmp: Path, *, flags: dict[str, str] | None = None) -> tuple[Path, Path, dict[str, str]]:
+	work, state_file, env = _stage_phase_report(tmp, comments=[])
+	signature_file = tmp / "signature.txt"
+	signature_file.write_text(VALIDATION_SIGNATURE + "\n", encoding="utf-8")
+	env.update({
+		"WORKFLOW_HEAL_PHASE": "validate",
+		"REPORT_WORKFLOW_NAME": "AI Validate",
+		"WORKFLOW_HEAL_VALIDATION_STAGE": "sandbox",
+		"WORKFLOW_HEAL_VALIDATION_REASON": "sandbox_unavailable",
+		"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": str(signature_file),
+		"WORKFLOW_HEAL_VALIDATION_FP": _validation_fp(),
+	})
+	env.update(flags or {})
+	return work, state_file, env
+
+
+def test_phase_report_validate_dispatches_one_validation_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-phase-validate-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_validation_report(tmp)
+		result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL_PHASE_REPORT dispatched issue=42 phase=validate stage=sandbox reason=sandbox_unavailable fp={_validation_fp()} run=500" in result.stdout
+		state = _state(state_file)
+		assert len(state["dispatches"]) == 1
+		dispatch = state["dispatches"][0]
+		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches" and dispatch["body"]["event_type"] == "workflow-failure-heal"
+		payload = heal.validate_payload(dispatch["body"]["client_payload"]["report"])
+		assert payload["source_kind"] == "validation_failure" and payload["issue_number"] == 42
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500"] and payload["wrapper_sha"] == SHA_A
+		assert heal.validation_failure_fingerprint(payload["validation_stage"], payload["validation_reason"], payload["validation_signature"]) == _validation_fp()
+		# No GitHub read at all: only the dispatch.
+		assert [call for call in state["calls"] if "--input" not in call] == []
+
+
+def test_phase_report_validate_skips_cleanly() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-phase-validate-link-") as link_dir:
+		target = Path(link_dir) / "real.txt"
+		target.write_text("x\n", encoding="utf-8")
+		link = Path(link_dir) / "link.txt"
+		link.symlink_to(target)
+		empty = Path(link_dir) / "empty.txt"
+		empty.write_text("", encoding="utf-8")
+		cases = [
+			({"VALIDATION_HARNESS_HEAL_ENABLED": "FALSE"}, "skip reason=disabled (VALIDATION_HARNESS_HEAL_ENABLED=false)"),
+			({"WORKFLOW_HEAL_VALIDATION_STAGE": ""}, "skip reason=missing_validation_context field=stage"),
+			({"WORKFLOW_HEAL_VALIDATION_REASON": "Bad Reason"}, "skip reason=missing_validation_context field=reason"),
+			({"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": ""}, "skip reason=missing_validation_context field=signature_file"),
+			({"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": str(link)}, "skip reason=missing_validation_context field=signature_file"),
+			({"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": str(empty)}, "skip reason=missing_validation_context field=signature_file"),
+			({"WORKFLOW_HEAL_VALIDATION_FP": "abc"}, "skip reason=missing_validation_context field=fp"),
+			({"WORKFLOW_HEAL_VALIDATION_FP": "0" * 64}, "skip reason=fingerprint_mismatch"),
+			({"WORKFLOW_HEAL_VALIDATION_REASON": "preflight_failed"}, "skip reason=payload_build_failed"),
+			({"REPORT_WRAPPER_SHA": ""}, "skip reason=payload_build_failed"),
+		]
+		for flags, expected in cases:
+			with tempfile.TemporaryDirectory(prefix="heal-phase-validate-skip-") as tmp_name:
+				work, state_file, env = _stage_validation_report(Path(tmp_name), flags=flags)
+				result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+				assert result.returncode == 0, (flags, result.stderr, result.stdout)
+				assert expected in result.stdout, (flags, result.stdout)
+				state = _state(state_file)
+				assert "dispatches" not in state and "calls" not in state, flags
+
+
+def test_intake_compose_payload_keys_match_validation_failure_keys() -> None:
+	# _compose_payload_file limits the compose payload to the keys the
+	# validation_failure validator accepts; keep its jq list in step.
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	body = text.split("_compose_payload_file()\n{", 1)[1].split("\n}\n", 1)[0]
+	match = re.search(r"jq '\{([^}]*)\}", body)
+	assert match, body
+	keys = {key.strip() for key in match.group(1).split(",")}
+	assert keys == set(heal.VALIDATION_FAILURE_PAYLOAD_KEYS)
+
+
+# --- Linked runs (issue #8248) ----------------------------------------------
+# Heal #8241 diagnosed release run 40608957733 from the failed jobs' own logs:
+# the real causes sat in the Orchestrate and Implement runs those jobs
+# dispatched or polled. The intake now follows same-repository run links in
+# the filtered logs and gives the diagnosis their step timelines.
+
+
+def _linked_run(run_id: int, *, repo: str = CONSUMER_REPO, name: str = "AI Implement") -> dict:
+	return {
+		"id": run_id, "repository": {"full_name": repo}, "name": name, "status": "completed", "conclusion": "failure",
+		"created_at": "2026-10-27T10:00:00Z", "updated_at": "2026-10-27T10:40:00Z",
+		"html_url": f"https://github.com/{repo}/actions/runs/{run_id}",
+	}
+
+
+def _linked_jobs(job_id: int, step_secs: int = 1868) -> list[dict]:
+	start = datetime(2026, 10, 27, 10, 2, 0, tzinfo=timezone.utc)
+	end = start + timedelta(seconds=step_secs)
+	return [{
+		"id": job_id, "name": "implement", "status": "completed", "conclusion": "cancelled",
+		"steps": [
+			{"name": "Checkout", "status": "completed", "conclusion": "success", "started_at": "2026-10-27T10:00:05Z", "completed_at": "2026-10-27T10:00:10Z"},
+			{"name": "Skipped step", "status": "completed", "conclusion": "skipped", "started_at": None, "completed_at": None},
+			{"name": "Pre-push affected-test gate", "status": "completed", "conclusion": "cancelled",
+				"started_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": end.strftime("%Y-%m-%dT%H:%M:%SZ")},
+		],
+	}]
+
+
+LINKED_JOB_LOG = (
+	"2026-10-27T10:00:06.0000000Z checkout done\n"
+	"2026-10-27T10:02:01.0000000Z PREPUSH_TEST_GATE phase=implement running 214 tests\n"
+	"2026-10-27T10:20:00.0000000Z still running tests\n"
+)
+
+
+def _default_run_detail(run_id: int = 500) -> dict:
+	# Mirrors the default fixture _run_intake builds for the reported run.
+	return {
+		"id": run_id, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_A,
+		"html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/{run_id}",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml",
+		"pull_requests": [{"number": 42}],
+	}
+
+
+def _linked_state(job_log: str, *, run_details: dict | None = None, jobs: dict | None = None, job_logs: dict | None = None) -> dict:
+	base = _intake_state()
+	details = {"500": _default_run_detail()}
+	details.update(run_details if run_details is not None else {"600": _linked_run(600)})
+	all_jobs = dict(base["jobs"])
+	all_jobs.update(jobs if jobs is not None else {"600": _linked_jobs(9600)})
+	logs = {"9001": job_log}
+	logs.update(job_logs if job_logs is not None else {"9600": LINKED_JOB_LOG})
+	return _intake_state(run_details=details, jobs=all_jobs, job_logs=logs)
+
+
+LINKED_PARENT_LOG = JOB_LOG + (
+	f"2026-09-20T10:00:04.000Z ::error::Implement phase stalled — no activity for 30 minutes (watched runs: https://github.com/{CONSUMER_REPO}/actions/runs/600)\n"
+)
+
+
+def _linked_calls(state: dict, run_id: str, job_id: str) -> list[list[str]]:
+	return [call for call in state.get("calls", []) if any(f"/actions/runs/{run_id}" in part or f"/actions/jobs/{job_id}/" in part for part in call)]
+
+
+def test_select_linked_runs_same_repo_dedup_exclusion_cap_and_order() -> None:
+	texts = [
+		f"https://github.com/{CONSUMER_REPO}/actions/runs/1 https://github.com/other/repo/actions/runs/2",
+		f"https://github.com/{CONSUMER_REPO}/actions/runs/3 https://github.com/{CONSUMER_REPO}/actions/runs/1",
+		f"https://github.com/{CONSUMER_REPO}/actions/runs/500 https://github.com/{CONSUMER_REPO}/actions/runs/4",
+	]
+	refs = heal.select_linked_runs(texts, CONSUMER_REPO, ["500"], 10)
+	assert [ref["run_id"] for ref in refs] == ["3", "1", "4"]
+	assert [ref["run_id"] for ref in heal.select_linked_runs(texts, CONSUMER_REPO, ["500"], 2)] == ["1", "4"]
+	assert heal.select_linked_runs(texts, CONSUMER_REPO, [], 0) == []
+	assert heal.select_linked_runs(texts, "other/repo", [], 4) == [{"repo": "other/repo", "run_id": "2", "url": "https://github.com/other/repo/actions/runs/2"}]
+
+
+def test_stall_window_minutes_reads_named_windows() -> None:
+	text = (
+		"::error::Implement phase stalled — no activity for 30 minutes\n"
+		"the 45-min stall window elapsed\nstall window of 20 min\nvalue 9999 minutes ignored by range: no activity for 5000 minutes\n"
+	)
+	assert heal.stall_window_minutes([text]) == [20, 30, 45]
+	assert heal.stall_window_minutes(["nothing here"]) == []
+
+
+def test_linked_run_timeline_identity_checks() -> None:
+	jobs = {"jobs": _linked_jobs(9600)}
+	assert heal.render_linked_run_timeline(_linked_run(600, repo="other/repo"), jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "other_repository"
+	assert heal.render_linked_run_timeline(_linked_run(601), jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "run_malformed"
+	assert heal.render_linked_run_timeline({"id": 600}, jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "run_malformed"
+	assert heal.render_linked_run_timeline("x", jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "run_malformed"
+	assert heal.render_linked_run_timeline(_linked_run(600), {"jobs": None}, repo=CONSUMER_REPO, run_id="600")["reason"] == "jobs_malformed"
+	# The repository name is compared case-insensitively.
+	assert heal.render_linked_run_timeline(_linked_run(600, repo=CONSUMER_REPO.upper()), jobs, repo=CONSUMER_REPO, run_id="600")["ok"] is True
+
+
+def test_linked_run_timeline_rendering_and_long_steps() -> None:
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": _linked_jobs(9600)}, repo=CONSUMER_REPO, run_id="600", stall_minutes=[30])
+	assert result["ok"] is True
+	text = result["text"]
+	assert f"https://github.com/{CONSUMER_REPO}/actions/runs/600" in text
+	assert "Skipped step" not in text
+	assert "Pre-push affected-test gate: 2026-10-27T10:02:00Z -> 2026-10-27T10:33:08Z (31m08s) cancelled [LONG]" in text
+	assert "Checkout: 2026-10-27T10:00:05Z -> 2026-10-27T10:00:10Z (0m05s) success\n" in text
+	assert result["longest"] == {"job_id": 9600, "start": "2026-10-27T10:02:00Z", "end": "2026-10-27T10:33:08Z"}
+	# A 5-minute step is long only against a shorter stall window.
+	short = {"jobs": _linked_jobs(9600, step_secs=300)}
+	assert "[LONG]" not in heal.render_linked_run_timeline(_linked_run(600), short, repo=CONSUMER_REPO, run_id="600")["text"]
+	assert "[LONG]" in heal.render_linked_run_timeline(_linked_run(600), short, repo=CONSUMER_REPO, run_id="600", stall_minutes=[4])["text"]
+	assert "[LONG]" in heal.render_linked_run_timeline(_linked_run(600), {"jobs": _linked_jobs(9600, step_secs=600)}, repo=CONSUMER_REPO, run_id="600")["text"]
+
+
+def test_linked_run_timeline_running_steps_sanitized_names_and_caps() -> None:
+	jobs = _linked_jobs(9600)
+	jobs[0]["steps"][2].update({"status": "in_progress", "conclusion": None, "completed_at": None, "name": "Gate\x1b[31m\n::error::forged" + "x" * 300})
+	jobs.extend({"id": 9700 + index, "name": f"job {index}", "steps": []} for index in range(25))
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": jobs, "total_count": 150}, repo=CONSUMER_REPO, run_id="600")
+	text = result["text"]
+	assert "(still running)" in text and "-> 2026-10-27T10:40:00Z (still running)" in text
+	assert "\x1b" not in text and "\n::error::" not in text
+	assert all(len(line) < 400 for line in text.splitlines())
+	assert "more jobs not shown" in text and "jobs listing truncated: 150 jobs" in text
+	assert len(text.encode("utf-8")) <= heal.LINKED_RUN_TEXT_MAX_BYTES + 32
+
+
+def test_linked_run_timeline_finds_long_steps_past_the_display_caps() -> None:
+	# The Implement gate sits after more than 40 non-skipped steps: it must
+	# still be marked [LONG], shown and chosen as the longest step.
+	base = datetime(2026, 10, 27, 10, 0, 0, tzinfo=timezone.utc)
+	steps = []
+	for index in range(55):
+		start = base + timedelta(seconds=index * 10)
+		steps.append({"name": f"step {index}", "status": "completed", "conclusion": "success",
+			"started_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": (start + timedelta(seconds=5)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+	gate_start = base + timedelta(seconds=600)
+	steps.append({"name": "Pre-push affected-test gate", "status": "completed", "conclusion": "cancelled",
+		"started_at": gate_start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": (gate_start + timedelta(seconds=1868)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+	jobs = [{"id": 9000 + index, "name": f"job {index}", "steps": []} for index in range(25)]
+	jobs.append({"id": 9600, "name": "implement", "status": "completed", "conclusion": "cancelled", "steps": steps})
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": jobs}, repo=CONSUMER_REPO, run_id="600")
+	assert result["ok"] is True
+	assert result["longest"]["job_id"] == 9600
+	assert result["longest"]["start"] == gate_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+	assert "Pre-push affected-test gate:" in result["text"] and "[LONG]" in result["text"]
+	assert "job: implement" in result["text"]
+	assert "more steps not shown" in result["text"] and "more jobs not shown" in result["text"]
+	assert len(result["text"].encode("utf-8")) <= heal.LINKED_RUN_TEXT_MAX_BYTES + 32
+
+
+def test_slice_log_to_window() -> None:
+	assert heal.slice_log_to_window(LINKED_JOB_LOG, "2026-10-27T10:02:00Z", "2026-10-27T10:33:08Z") == (
+		"2026-10-27T10:02:01.0000000Z PREPUSH_TEST_GATE phase=implement running 214 tests\n"
+		"2026-10-27T10:20:00.0000000Z still running tests\n"
+	)
+	# Untimestamped continuation lines follow the line before them.
+	text = "2026-10-27T10:02:01.0Z a\ncontinued\n2026-10-27T11:00:00.0Z b\n"
+	assert heal.slice_log_to_window(text, "2026-10-27T10:02:00Z", "2026-10-27T10:03:00Z") == "2026-10-27T10:02:01.0Z a\ncontinued\n"
+	# No match, no timestamps or bad bounds keep the whole text.
+	assert heal.slice_log_to_window(LINKED_JOB_LOG, "2027-01-01T00:00:00Z", "2027-01-01T00:01:00Z") == LINKED_JOB_LOG
+	assert heal.slice_log_to_window("plain\nlines\n", "2026-10-27T10:02:00Z", "2026-10-27T10:03:00Z") == "plain\nlines\n"
+	assert heal.slice_log_to_window(LINKED_JOB_LOG, "bad", "") == LINKED_JOB_LOG
+
+
+def test_intake_adds_linked_run_timeline_before_failed_logs() -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL classification=workflow-defect" in result.stdout
+	assert "=== LINKED RUN TIMELINES (UNTRUSTED) ===" in prompt
+	assert prompt.index("=== LINKED RUN TIMELINES (UNTRUSTED) ===") < prompt.index("=== FAILED RUN LOGS (UNTRUSTED) ===")
+	assert f"--- linked run https://github.com/{CONSUMER_REPO}/actions/runs/600" in prompt
+	assert "Pre-push affected-test gate: 2026-10-27T10:02:00Z -> 2026-10-27T10:33:08Z (31m08s) cancelled [LONG]" in prompt
+	assert "--- log of job 9600 (window of its longest step" in prompt and "PREPUSH_TEST_GATE phase=implement running 214 tests" in prompt
+	assert "checkout done" not in prompt  # outside the step's window
+	# Budget: three REST reads for the linked run (run, jobs, one job log).
+	assert len(_linked_calls(state, "600", "9600")) == 3
+	assert "linked_run_skipped" not in result.stdout
+
+
+def test_intake_without_links_makes_no_extra_reads_and_omits_the_section() -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(JOB_LOG), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	# The diagnosis template mentions the block by name; the section header is absent.
+	assert "=== LINKED RUN TIMELINES (UNTRUSTED) ===" not in prompt
+	assert _linked_calls(state, "600", "9600") == []
+
+
+def test_intake_linked_runs_switch_off() -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_MAX_LINKED_RUNS": "0"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	# The diagnosis template mentions the block by name; the section header is absent.
+	assert "=== LINKED RUN TIMELINES (UNTRUSTED) ===" not in prompt
+	assert _linked_calls(state, "600", "9600") == []
+
+
+@pytest.mark.parametrize(
+	("state_kwargs", "reason", "timeline"),
+	[
+		({"run_details": {}}, "run_unreadable", False),
+		({"run_details": {"600": _linked_run(600, repo="someone/else")}}, "other_repository", False),
+		({"run_details": {"600": {"id": 601, "repository": {"full_name": CONSUMER_REPO}}}}, "run_malformed", False),
+		({"jobs": {}}, "jobs_unreadable", False),
+		({"job_logs": {}}, "log_unavailable", True),
+	],
+)
+def test_intake_linked_run_failures_fail_open(state_kwargs: dict, reason: str, timeline: bool) -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG, **state_kwargs), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL warn linked_run_skipped run=600 reason={reason}" in result.stdout
+	assert "WORKFLOW_HEAL classification=workflow-defect" in result.stdout
+	assert "=== FAILED RUN LOGS (UNTRUSTED) ===" in prompt
+	assert ("=== LINKED RUN TIMELINES (UNTRUSTED) ===" in prompt) is timeline
+	if timeline:
+		assert "(job log unavailable)" in prompt
+	if reason == "other_repository":
+		# A foreign run's jobs and logs are never read.
+		assert not any(part.endswith("/actions/runs/600/jobs") for call in state["calls"] for part in call)
+
+
+def test_intake_linked_runs_never_change_the_heal_scope_inputs() -> None:
+	frozen = []
+	for max_linked in ("0", "4"):
+		with tempfile.TemporaryDirectory(prefix="heal-linked-scope-") as tmp_name:
+			runtime = Path(tmp_name) / "runtime"
+			result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_MAX_LINKED_RUNS": max_linked, "RUNTIME_DIR": str(runtime)})
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert ("=== LINKED RUN TIMELINES (UNTRUSTED) ===" in prompt) is (max_linked == "4")
+			frozen.append((runtime / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+			body = state.get("composed_issue", {}).get("body", "")
+			frozen.append(next((line for line in body.splitlines() if "ai:workflow-heal-scope:v1" in line), ""))
+			assert "600" not in frozen[-2]
+	assert frozen[0] == frozen[2] and frozen[1] == frozen[3]
+
+
+def test_intake_replays_release_run_40608957733_evidence() -> None:
+	# The decompose job named its Orchestrate run; the e2e stall line (#8248
+	# watched runs) named the Implement run whose test gate ran past the
+	# 30-minute stall window.
+	orchestrate_id, implement_id = 40609251819, 40610855593
+	parent_log = JOB_LOG + (
+		f"2026-10-27T09:58:00.000Z Dispatched orchestrate run https://github.com/{CONSUMER_REPO}/actions/runs/{orchestrate_id}\n"
+		f"2026-10-27T11:00:00.000Z ::error::Implement phase stalled — no activity for 30 minutes (watched runs: https://github.com/{CONSUMER_REPO}/actions/runs/{implement_id})\n"
+	)
+	orchestrate_jobs = [{"id": 7001, "name": "decompose", "status": "completed", "conclusion": "success", "steps": [
+		{"name": "Validate decomposition JSON", "status": "completed", "conclusion": "success", "started_at": "2026-10-27T09:59:00Z", "completed_at": "2026-10-27T09:59:40Z"},
+	]}]
+	state = _linked_state(
+		parent_log,
+		run_details={str(orchestrate_id): _linked_run(orchestrate_id, name="AI Orchestrate"), str(implement_id): _linked_run(implement_id)},
+		jobs={str(orchestrate_id): orchestrate_jobs, str(implement_id): _linked_jobs(7002)},
+		job_logs={"7001": "2026-10-27T09:59:10.0000000Z PREPUSH_TEST_GATE phase=augment issue=smoke-canary-a added=11\n2026-10-27T09:59:20.0000000Z Will serialize: smoke-canary-a -> smoke-canary-b\n", "7002": LINKED_JOB_LOG},
+	)
+	result, _state_after, prompt = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	section = prompt.split("=== LINKED RUN TIMELINES (UNTRUSTED) ===", 1)[1].split("=== FAILED RUN LOGS (UNTRUSTED) ===", 1)[0]
+	assert f"actions/runs/{orchestrate_id} | workflow: AI Orchestrate" in section
+	assert "PREPUSH_TEST_GATE phase=augment issue=smoke-canary-a added=11" in section
+	assert f"actions/runs/{implement_id} | workflow: AI Implement" in section
+	assert "Pre-push affected-test gate: 2026-10-27T10:02:00Z -> 2026-10-27T10:33:08Z (31m08s) cancelled [LONG]" in section
+
+
+def test_heal_prompt_lists_linked_run_timelines() -> None:
+	text = PROMPT_FILE.read_text(encoding="utf-8")
+	assert "LINKED RUN TIMELINES" in text
+	assert "before attributing a stall or a missing artefact to the polling run" in text
+	assert "name its run id" in text
+	assert (REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt").read_text(encoding="utf-8") == text
+
+
+# ---------------------------------------------------------------------------
+# Issue #8265: synced_check_failure (check-failure triage routed upstream)
+# ---------------------------------------------------------------------------
+
+_SYNCED_CHECK_WRAPPER = ".github/workflows/ai-review.yml"
+
+
+def _synced_check_payload(**overrides) -> dict:
+	payload = {
+		"schema_version": heal.SCHEMA_VERSION,
+		"source_repo": CONSUMER_REPO,
+		"source_kind": "synced_check_failure",
+		"pr_number": 688,
+		"check_name": "Workflow Ref Pinning Gate",
+		"check_run_ids": ["555"],
+		"paths": [_SYNCED_CHECK_WRAPPER],
+		"head_sha": "e" * 40,
+		"wrapper_sha": "c" * 40,
+		"reporter_run_id": "4242",
+		"reporter_run_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/4242",
+		"run_refs": [],
+	}
+	payload.update(overrides)
+	return payload
+
+
+def test_synced_check_kind_is_registered_with_its_reporter_workflow() -> None:
+	assert "synced_check_failure" in heal.SOURCE_KINDS
+	assert heal.SOURCE_KINDS[:8] == ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure")
+	assert heal.REPORT_IDENTITY_WORKFLOW_BY_KIND["synced_check_failure"] == ("check_failure_triage.yml",)
+
+
+def test_synced_check_payload_validates_to_pointers_only() -> None:
+	normalized = heal.validate_payload(_synced_check_payload(check_name="CI `<!-- x -->` lint", cause_path=_SYNCED_CHECK_WRAPPER))
+	assert normalized["failure_reason"] == heal.SYNCED_CHECK_FAILURE_REASON
+	assert normalized["workflow_name"] == heal.SYNCED_CHECK_WORKFLOW_NAME
+	assert normalized["issue_title"] == heal.SYNCED_CHECK_ISSUE_TITLE
+	assert normalized["issue_number"] is None and normalized["label"] is None
+	assert normalized["issue_excerpt"] == "" and normalized["comments_excerpt"] == "" and normalized["failure_evidence"] == ""
+	assert normalized["paths"] == [_SYNCED_CHECK_WRAPPER] and normalized["cause_path"] == _SYNCED_CHECK_WRAPPER
+	assert "`" not in normalized["check_name"] and "<" not in normalized["check_name"]
+	assert normalized["pr_number"] == 688 and normalized["check_run_ids"] == ["555"]
+	assert heal.validate_payload(_synced_check_payload(check_name="!!!"))["check_name"] == "check"
+
+
+@pytest.mark.parametrize(
+	"overrides",
+	[
+		{"extra_field": "x"},
+		{"run_refs": [{"repo": CONSUMER_REPO, "run_id": "1"}]},
+		{"wrapper_sha": "abc"},
+		{"head_sha": None},
+		{"paths": []},
+		{"paths": [f"dir/file{index}.js" for index in range(21)]},
+		{"paths": ["../etc/passwd"]},
+		{"paths": ["/abs/path"]},
+		{"paths": ["a//b"]},
+		{"paths": [_SYNCED_CHECK_WRAPPER, _SYNCED_CHECK_WRAPPER]},
+		{"cause_path": "app.js"},
+		{"pr_number": 0},
+		{"pr_number": True},
+		{"check_run_ids": ["1", "2", "3", "4"]},
+		{"check_run_ids": ["abc"]},
+		{"reporter_run_id": "x"},
+	],
+)
+def test_synced_check_payload_rejects_bad_fields(overrides) -> None:
+	with pytest.raises(ValueError):
+		heal.validate_payload(_synced_check_payload(**overrides))
+
+
+def test_synced_check_fingerprint_ignores_order_duplicates_pr_and_release() -> None:
+	first = heal.synced_check_fingerprint([_SYNCED_CHECK_WRAPPER, ".claude/commands/do.md"])
+	assert first == heal.synced_check_fingerprint([".claude/commands/do.md", _SYNCED_CHECK_WRAPPER, _SYNCED_CHECK_WRAPPER])
+	assert first != heal.synced_check_fingerprint([_SYNCED_CHECK_WRAPPER])
+	assert re.fullmatch(r"[0-9a-f]{64}", first)
+
+
+@pytest.mark.parametrize(
+	("text", "status", "paths", "cause"),
+	[
+		("no block", "missing", [], None),
+		("AFFECTED_FILES_BEGIN\n- a.yml\n- a.yml\nAFFECTED_FILES_END\n", "ok", ["a.yml"], None),
+		("AFFECTED_FILES_BEGIN\ncause: b.yml\n- a.yml\nAFFECTED_FILES_END\n", "ok", ["a.yml", "b.yml"], "b.yml"),
+		("AFFECTED_FILES_BEGIN\n\nAFFECTED_FILES_END\n", "empty", [], None),
+		("AFFECTED_FILES_BEGIN\n- a.yml\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\n- a.yml\nAFFECTED_FILES_END\nAFFECTED_FILES_BEGIN\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\nsome prose\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\n- ../x\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\n- dir/*.yml\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\ncause: a\ncause: b\n- a\nAFFECTED_FILES_END\n", "malformed", [], None),
+	],
+)
+def test_parse_check_triage_affected_files(text, status, paths, cause) -> None:
+	result = heal.parse_check_triage_affected_files(text)
+	assert result["status"] == status
+	if status == "ok":
+		assert result["paths"] == paths and result["cause"] == cause
+
+
+def test_parse_check_triage_affected_files_caps_the_count() -> None:
+	block = "AFFECTED_FILES_BEGIN\n" + "".join(f"- f{index}.js\n" for index in range(21)) + "AFFECTED_FILES_END\n"
+	assert heal.parse_check_triage_affected_files(block)["status"] == "malformed"
+
+
+def _route_repo(tmp_path: Path, wrapper_pin: str) -> tuple[Path, dict]:
+	repo = tmp_path / "consumer"
+	(repo / ".github" / "workflows").mkdir(parents=True)
+	text = "uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{} # stable\n"
+	(repo / _SYNCED_CHECK_WRAPPER).write_text(text.format(wrapper_pin), encoding="utf-8")
+	(repo / "app.js").write_text("x\n", encoding="utf-8")
+	env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+	for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(name, None)
+	subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+	subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
+	subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false", "commit", "-qm", "x"], check=True, env=env)
+	digest = hashlib.sha256(text.format("0" * 40).encode("utf-8")).hexdigest()
+	return repo, {_SYNCED_CHECK_WRAPPER: [digest]}
+
+
+def _route(tmp_path: Path, diagnosis: str, *, pin: str = "1" * 40, digests: object = "default", **overrides) -> dict:
+	repo, default_digests = _route_repo(tmp_path, pin)
+	args = {
+		"diagnosis": diagnosis,
+		"digests": default_digests if digests == "default" else digests,
+		"repo_root": str(repo),
+		"commit": "HEAD",
+		"enabled": "true",
+		"repo": CONSUMER_REPO,
+		"upstream_repo": SELF_REPO,
+		"historical": "false",
+	}
+	args.update(overrides)
+	return heal.check_triage_route(**args)
+
+
+def _block(*paths: str, cause: str | None = None) -> str:
+	return "AFFECTED_FILES_BEGIN\n" + (f"cause: {cause}\n" if cause else "") + "".join(f"- {path}\n" for path in paths) + "AFFECTED_FILES_END\n"
+
+
+def test_check_triage_route_decision_matrix(tmp_path: Path) -> None:
+	routed = _route(tmp_path / "a", _block(_SYNCED_CHECK_WRAPPER))
+	assert routed["decision"] == "route" and routed["reason"] == "all_unmodified_managed"
+	assert routed["heal_fp"] == heal.synced_check_fingerprint([_SYNCED_CHECK_WRAPPER])
+	assert _route(tmp_path / "b", _block(_SYNCED_CHECK_WRAPPER, "app.js"))["reason"] == "unmanaged_paths"
+	cause = _route(tmp_path / "c", _block(_SYNCED_CHECK_WRAPPER, "app.js", cause=_SYNCED_CHECK_WRAPPER))
+	assert cause["decision"] == "route" and cause["reason"] == "managed_wrapper_cause" and cause["paths"] == [_SYNCED_CHECK_WRAPPER]
+	assert _route(tmp_path / "d", "no block")["reason"] == "no_block"
+	assert _route(tmp_path / "e", "AFFECTED_FILES_BEGIN\n")["reason"] == "malformed_block"
+	assert _route(tmp_path / "f", _block(_SYNCED_CHECK_WRAPPER), digests={})["reason"] == "manifest_unavailable"
+	assert _route(tmp_path / "g", _block(_SYNCED_CHECK_WRAPPER), enabled="false")["reason"] == "disabled"
+	assert _route(tmp_path / "h", _block(_SYNCED_CHECK_WRAPPER), repo=SELF_REPO)["reason"] == "self_repo"
+	assert _route(tmp_path / "i", _block(_SYNCED_CHECK_WRAPPER), historical="true")["reason"] == "historical_mode"
+	assert _route(tmp_path / "j", _block(_SYNCED_CHECK_WRAPPER), commit="0" * 40)["reason"] == "classify_failed"
+	modified = _route(tmp_path / "k", _block(_SYNCED_CHECK_WRAPPER), digests={_SYNCED_CHECK_WRAPPER: ["f" * 64]})
+	assert modified["decision"] == "file" and modified["reason"] == "consumer_modified"
+
+
+def test_build_synced_check_payload_takes_only_same_repo_run_links() -> None:
+	decision = {"decision": "route", "paths": [_SYNCED_CHECK_WRAPPER], "cause": None}
+	payload = heal.build_synced_check_payload(
+		decision=decision, repo=CONSUMER_REPO, pr_number="688", check_name="Gate", check_run_id="1",
+		details_url="https://github.com/evil/repo/actions/runs/9", head_sha="E" * 40, wrapper_sha="c" * 40, run_id="77",
+	)
+	assert payload["check_run_ids"] == [] and payload["run_refs"] == []
+	assert payload["head_sha"] == "e" * 40 and "cause_path" not in payload
+	assert heal.validate_payload(payload)["reporter_run_url"].endswith("/actions/runs/77")
+
+
+def test_synced_check_issue_and_occurrence_carry_no_free_text() -> None:
+	payload = heal.validate_payload(_synced_check_payload(check_name="SECRET-LOG-TEXT", cause_path=_SYNCED_CHECK_WRAPPER))
+	fp = heal.synced_check_fingerprint(payload["paths"])
+	title, body = heal.compose_synced_check_issue(
+		payload=payload, fp=fp, gen=1, root=fp, scope_marker="", max_depth=3, intake_run_url="https://example.invalid/run",
+		sources=heal.synced_check_source_paths(payload["paths"]),
+	)
+	assert title.startswith("[synced] .github/workflows/ai-review.yml")
+	assert body.splitlines()[0] == f"<!-- workflow-failure-heal:fp={fp} -->"
+	assert "`workflow-templates/ai-review.yml`" in body
+	assert "https://github.com/" + CONSUMER_REPO + "/actions/runs/555" in body
+	assert "regression test" in body
+	occurrence = heal.compose_synced_check_occurrence(payload=payload, intake_run_url="https://example.invalid/run")
+	assert occurrence.startswith("<!-- workflow-failure-heal:occurrence -->")
+	assert f"`{CONSUMER_REPO}` PR 688" in occurrence and f"`{CONSUMER_REPO}` PR 688" in body
+	assert "#688" not in occurrence and "#688" not in body
+	assert heal.check_synced_check_managed_paths(payload["paths"], {_SYNCED_CHECK_WRAPPER: ["x"]}) is None
+	assert heal.check_synced_check_managed_paths(payload["paths"], {"other": ["x"]}) == "unmanaged_path"
+	assert heal.check_synced_check_managed_paths(payload["paths"], {}) == "release_unavailable"

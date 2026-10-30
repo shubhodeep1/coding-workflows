@@ -119,8 +119,10 @@ AUDIENCE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 # The Claude review-panel slot reviews on Sonnet 5.5; its slug
 # (anthropic/claude-sonnet-5.5) is also the model hint, so this is the
-# fallback when no hint is passed.
-SONNET_DEFAULT_ROLES: tuple[str, ...] = ("PANEL_REVIEWER",)
+# fallback when no hint is passed. The review consolidator merges and ranks
+# the panel's findings on Sonnet 5.5 too; its OpenCode model hint
+# (REVIEW_CONSOLIDATOR_MODEL) is not a claude- slug, so this default applies.
+SONNET_DEFAULT_ROLES: tuple[str, ...] = ("PANEL_REVIEWER", "REVIEW_CONSOLIDATOR")
 
 
 def _role_default(role: str) -> dict[str, str]:

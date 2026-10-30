@@ -190,12 +190,6 @@ def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
 	assert shared_budget + max(review_timeout, min(review_step_override, 90) + review_handoff_budget) > job_timeout
 
 
-def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
-	job = _e2e_job(_read_workflow())
-	assert "DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))" in job
-	assert job.count("(PHASE7_WAIT_BUDGET_MINUTES * 60)") == 2
-
-
 def _prerequisites_budget_block(workflow: str) -> str:
 	job = _e2e_job(workflow)
 	prerequisites = _slice_between(job, "- name: Validate prerequisites", "# Fast-fail the hottest")
@@ -255,6 +249,12 @@ def test_prepush_gate_stall_budget_defaults_fit_and_bad_values_fail() -> None:
 	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="10")
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert "E2E conservative serial budget: 295/300 minutes" in result.stdout
+
+
+def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
+	job = _e2e_job(_read_workflow())
+	assert "DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))" in job
+	assert job.count("(PHASE7_WAIT_BUDGET_MINUTES * 60)") == 2
 
 
 def test_phase4b_adopts_the_oldest_eligible_active_review_run() -> None:

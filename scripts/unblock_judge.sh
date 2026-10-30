@@ -60,6 +60,11 @@
 # MOCK_UNBLOCK_JUDGE_JSON_REASK (tests only, default empty: the model's answer
 # to the sandbox re-ask when set),
 # MOCK_UNBLOCK_JUDGE_NOW (tests only).
+# UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED (default true; read by
+# scripts/unblock_actions.py: a harness-owned verdict files a heal report
+# instead of a fix-up; `false` restores the old behaviour),
+# WORKFLOW_HEAL_ENABLED (default true; `false` skips the heal report and the
+# project hold request).
 # UNBLOCK_CREATED_ISSUES_FILE (optional, default unset): unblock_run_ops
 # appends each issue number it creates to this file.
 #
@@ -73,7 +78,9 @@
 # API budget (CLAUDE.md §15), per run: one `user` read, the item, its
 # comments (paginated; fresh reads before recording a `project-failed`
 # verdict and before its terminal label), the tracking issue's comments for a project's item,
-# at most one linked-issue read, one fix-up read while waiting, the PR diff,
+# at most one linked-issue read, one fix-up read while waiting (plus one
+# paginated fix-up comments read when the fix-up closed `completed` with
+# `ai:closed` and without `ai:merged`, #8191), the PR diff,
 # at most three run-metadata reads to bind a run cited in a pipeline-authored
 # comment to this item, then that run's log, one verdict comment (two for a
 # project's item) and
@@ -89,12 +96,18 @@
 # For an ai:workflow-heal issue (Q148, unblock_heal_already_fixed): the
 # repository's heal issues (paginated), one re-issue search, and at most three
 # closed-PR reads for the fix branches of matching siblings.
+# A `heal_report` op (harness routing): one actions/runs listing and one
+# repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
+# one comment on the tracking issue.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 #      UNBLOCK_JUDGE item= op=hold hold= ref= outcome=held|holding|met|expired|skip reason=
 #      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
 #      UNBLOCK_JUDGE item= kind= stop= fingerprint= op=instruction_sandbox_check outcome=reasked|refused_after_reask reason=
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
+#      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
+#      UNBLOCK_JUDGE item= op=hold_request issue= outcome=posted|failed|skip reason=
+#      UNBLOCK_TARGET_REPO_GUARD item= verdict= outcome=consumer|harness|mixed|disabled paths=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
 # project_state_recheck_unavailable, project_resumed.
 set -uo pipefail
@@ -187,6 +200,29 @@ unblock_latest_wait()
 	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
 }
 
+# unblock_fixup_success_noop <fixup> — did the implement phase close this
+# fix-up as already implemented? Looks for the success-no-op marker
+# `<!-- ai:implement-success-noop:v1 issue=<fixup> -->` (implement.yml,
+# Guard 0) as the last line of a comment by the pipeline login.
+# Returns 0 when found, 1 when not, 2 when the comments cannot be read.
+# API calls (§15): one paginated comments read, only for a fix-up that
+# closed `completed` with `ai:closed` and without `ai:merged`.
+unblock_fixup_success_noop()
+{
+	local fixup="$1" comments_file="${RUNTIME_DIR}/fixup_${1}_comments.json"
+	if ! unblock_fetch_comments "${fixup}" "${comments_file}"; then
+		return 2
+	fi
+	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg fixup "${fixup}" '
+		any(.[]; (.user.login // "") == $login
+			and (((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r"))
+				== "<!-- ai:implement-success-noop:v1 issue=\($fixup) -->"))
+	' "${comments_file}" >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
+}
+
 # Default on: unset, empty or `true`; `false` turns waits off; any other
 # value turns them off and says so.
 unblock_wait_enabled()
@@ -225,6 +261,28 @@ unblock_latest_hold()
 	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
 }
 
+# Whether a trusted comment newer than the hold created at $1 opens with a
+# slash command: a person (or the pipeline) resumed the item while the hold was
+# open, so a later block must not inherit that hold and wait out its lifetime.
+unblock_hold_resumed_since()
+{
+	[ -n "$1" ] || return 1
+	jq -e --arg login "${UNBLOCK_LOGIN}" --arg at "$1" '
+		any(.[]; ((.created_at // "") > $at)
+			and (((.user.login // "") == $login) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+			and ((.body // "") | sub("\\A\\s+"; "") | test("\\A/[A-Za-z]")))
+	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1
+}
+
+# What ends a hold, as told to the person reading the hold comment.
+unblock_hold_resume_hint()
+{
+	case "$1" in
+		placeholder_retired) printf 'The unblock judge counts that step as done only once a repository Actions variable or secret named `%s` exists. For any other step (a label repair, say), do the step and then post this item'"'"'s resume command yourself; otherwise the judge decides again when the hold expires.' "$2" ;;
+		*) printf 'The unblock judge resumes this item afterwards.' ;;
+	esac
+}
+
 unblock_hold_description()
 {
 	case "$1" in
@@ -238,7 +296,7 @@ unblock_hold_description()
 # never be met, so the hold ends) or unknown (a read failed; try later).
 unblock_hold_condition()
 {
-	local kind="$1" ref="$2" pr branch pr_json state merged sha status dir rc=0
+	local kind="$1" ref="$2" pr branch pr_json state merged sha status dir
 	case "${kind}" in
 		item_closed)
 			[[ "${ref}" =~ ^[1-9][0-9]*$ ]] || { echo unknown; return 0; }
@@ -284,16 +342,16 @@ unblock_hold_condition()
 				echo unknown
 				return 0
 			fi
-			# The changelog keeps the history of a retired step, so it does not count.
-			git -C "${dir}" grep -q -F -e "${ref}" -- . ':(exclude)CHANGELOG.md' ':(exclude)changelog.d' >/dev/null 2>&1 || rc=$?
-			case "${rc}" in
-				1) echo met; return 0 ;;
-				0) ;;
-				*) echo unknown; return 0 ;;
-			esac
-			# Still named in code: an env-var step is done once a person set it as a
-			# repository Actions variable or secret (Q130). A read error, a missing
-			# permission included, keeps the hold waiting.
+			# The checkout must be readable, but the code is not searched: a
+			# placeholder missing from code does not show the step is done. A
+			# docs-only operator step (a label repair, say) names it only in
+			# changelog.d/ from the start, and the shallow checkout cannot tell
+			# "removed from code" from "never in code". Counting that as done
+			# resumed bitsafe.io#603 twice while its labels were still wrong.
+			# An env-var step is done once a person set it as a repository Actions
+			# variable or secret (Q130). Anything else waits until the person resumes
+			# the item or the hold reaches UNBLOCK_JUDGE_WAIT_MAX_DAYS. A read error,
+			# a missing permission included, keeps the hold waiting.
 			if [ "$(gh api "repos/${REPOSITORY}/actions/variables/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ] \
 				|| [ "$(gh api "repos/${REPOSITORY}/actions/secrets/${ref}" --jq '.name // ""' 2>/dev/null || true)" = "${ref}" ]; then
 				echo met
@@ -485,12 +543,178 @@ unblock_project_terminal_recheck()
 	return 0
 }
 
+# Validation-harness routing, Phase 3 (docs/plans/validation-failure-harness-routing-plan.md):
+# send the `heal_report` op that scripts/unblock_actions.py plans for a
+# harness-owned verdict, the reporter sequence of
+# scripts/workflow_failure_heal_report.sh on the judge's already-read files.
+# Returns 0 when dispatched, 2 when skipped (UNBLOCK_HEAL_SKIP_REASON set),
+# 1 when a step failed. The OIDC token and the dispatch body are removed in
+# every outcome and never printed. UNBLOCK_HEAL_UNAUTHENTICATED=true marks a
+# report sent without an OIDC identity: the default intake still files it
+# (WORKFLOW_HEAL_REQUIRE_REPORT_AUTH defaults to false), so the caller still
+# posts the project hold, but pages a WARNING because an intake that requires
+# report auth drops it.
+UNBLOCK_HEAL_SKIP_REASON=""
+UNBLOCK_HEAL_UNAUTHENTICATED=""
+unblock_send_heal_report()
+{
+	local ops_file="$1" idx="$2" issue label sendable heal_py issue_json runs_json payload identity dispatch identity_status wrapper_sha="" run_url="" detail
+	local -a wrap_args=()
+	UNBLOCK_HEAL_SKIP_REASON=""
+	UNBLOCK_HEAL_UNAUTHENTICATED=""
+	issue="$(jq -r ".ops[${idx}].issue // empty" "${ops_file}" 2>/dev/null)"
+	label="$(jq -r ".ops[${idx}].label // empty" "${ops_file}" 2>/dev/null)"
+	sendable="$(jq -r ".ops[${idx}].sendable // false" "${ops_file}" 2>/dev/null)"
+	heal_py="${SUPPORT_DIR}/scripts/workflow_failure_heal.py"
+	# no_accepted_label first: the planner already pages for it, so a second
+	# skip reason must not add another WARNING after the ops.
+	if [ "${sendable}" != "true" ] || [ -z "${label}" ]; then
+		UNBLOCK_HEAL_SKIP_REASON="no_accepted_label"
+	elif [ "$(printf '%s' "${WORKFLOW_HEAL_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
+		UNBLOCK_HEAL_SKIP_REASON="workflow_heal_disabled"
+	elif [ "${REPOSITORY}" = "${UNBLOCK_SOURCE_REPO}" ]; then
+		UNBLOCK_HEAL_SKIP_REASON="self_repo"
+	elif [ ! -f "${heal_py}" ] || [ -L "${heal_py}" ]; then
+		UNBLOCK_HEAL_SKIP_REASON="helper_missing"
+	elif ! [[ "${issue}" =~ ^[1-9][0-9]*$ ]]; then
+		UNBLOCK_HEAL_SKIP_REASON="invalid_issue"
+	else
+		# The labels the heal intake accepts (workflow_failure_heal.HUMAN_NEEDED_LABELS).
+		case "${label}" in
+			ai:needs-human|ai:check-triage-escalated|ai:destructive-blocked|ai:scope-blocked|ai:harness-broken|ai:resolver-escalated|ai:security-pass-failed) ;;
+			*) UNBLOCK_HEAL_SKIP_REASON="label_not_accepted" ;;
+		esac
+	fi
+	if [ -n "${UNBLOCK_HEAL_SKIP_REASON}" ]; then
+		unblock_log "item=${ITEM} op=heal_report issue=$(printf '%s' "${issue}" | tr -cd '0-9' | cut -c1-20 | grep . || echo none) label=$(printf '%s' "${label}" | tr -cd 'A-Za-z0-9:._-' | cut -c1-80 | grep . || echo none) outcome=skip reason=${UNBLOCK_HEAL_SKIP_REASON}"
+		return 2
+	fi
+	issue_json="${RUNTIME_DIR}/item.json"
+	if [ "${issue}" != "${ITEM}" ]; then
+		issue_json="${RUNTIME_DIR}/heal_issue.json"
+		if ! gh api "repos/${REPOSITORY}/issues/${issue}" > "${issue_json}" 2>/dev/null \
+			|| ! jq -e '.number' "${issue_json}" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=issue_read_failed"
+			return 1
+		fi
+	fi
+	# A pull request: the intake binds an issue-kind report only to an issue
+	# (kind_mismatch otherwise) and accepts unblock_judge.yml only as the
+	# reporter of issue-kind reports, so the report would be dropped unfiled.
+	if jq -e '.pull_request' "${issue_json}" >/dev/null 2>&1; then
+		UNBLOCK_HEAL_SKIP_REASON="pull_request_item"
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=skip reason=${UNBLOCK_HEAL_SKIP_REASON}"
+		return 2
+	fi
+	# API hygiene (CLAUDE.md §15): the judge's other run reads
+	# (unblock_select_run_log) fetch single runs by id; none lists runs. The
+	# heal intake drops a report that names no run (#7424), and
+	# build-issue-payload picks the project's failed validation runs from this
+	# listing, so one listing per sent heal report. Fail open to no runs.
+	runs_json="${RUNTIME_DIR}/heal_runs.json"
+	if ! gh api --method GET "repos/${REPOSITORY}/actions/runs" -F per_page=100 > "${runs_json}" 2>/dev/null \
+		|| ! jq -e 'type == "object"' "${runs_json}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} runs=unavailable"
+		printf '{"workflow_runs":[]}' > "${runs_json}"
+	fi
+	# Release pin: consumer wrappers carry `uses: shubhodeep1/coding-workflows/...@<sha> # stable`.
+	if [ -d "${TARGET_DIR}/.github/workflows" ]; then
+		wrapper_sha="$(grep -rhoE "uses:[[:space:]]+${UNBLOCK_SOURCE_REPO}/\.github/workflows/[A-Za-z0-9_.-]+\.yml@[0-9a-fA-F]{40}" "${TARGET_DIR}/.github/workflows" 2>/dev/null \
+			| sed -E 's/.*@//' | head -1 || true)"
+	fi
+	wrapper_sha="$(printf '%s' "${wrapper_sha}" | tr '[:upper:]' '[:lower:]')"
+	[[ "${wrapper_sha}" =~ ^[0-9a-f]{40}$ ]] || wrapper_sha=""
+	if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+		run_url="${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+	fi
+	payload="${RUNTIME_DIR}/heal_payload.json"
+	identity="${RUNTIME_DIR}/heal_identity.jwt"
+	dispatch="${RUNTIME_DIR}/heal_dispatch.json"
+	# An interrupted run must not leave the OIDC token or the dispatch body behind.
+	trap 'rm -f "${RUNTIME_DIR}/heal_identity.jwt" "${RUNTIME_DIR}/heal_dispatch.json"' EXIT
+	if ! unblock_py "${heal_py}" build-issue-payload --repo "${REPOSITORY}" --kind issue --label "${label}" \
+		--issue-json "${issue_json}" --comments-json "${RUNTIME_DIR}/item_comments.json" --runs-json "${runs_json}" \
+		--wrapper-sha "${wrapper_sha}" --reporter-run-url "${run_url}" --pipeline-login "${UNBLOCK_LOGIN:-}" \
+		> "${payload}" 2>/dev/null; then
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=build_failed"
+		return 1
+	fi
+	# The intake skips a report that names no run without filing anything
+	# (#7424), so a run-less report counts as failed: no hold, and a WARNING.
+	if ! jq -e '((.run_refs // []) | length) > 0' "${payload}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=runs_unavailable"
+		return 1
+	fi
+	# The reporter's own pre-dispatch check (workflow_failure_heal_report.sh):
+	# the intake drops a smoke fixture or its own workflow, so nothing to hold on.
+	detail="$(unblock_py "${heal_py}" skip-reason --payload-json "${payload}" --self-repo "${REPOSITORY}" 2>/dev/null | head -1 | tr -cd 'a-z_' || true)"
+	if [ -n "${detail}" ]; then
+		UNBLOCK_HEAL_SKIP_REASON="${detail}"
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=skip reason=${UNBLOCK_HEAL_SKIP_REASON}"
+		return 2
+	fi
+	rm -f "${identity}" "${dispatch}"
+	identity_status="$(unblock_py "${heal_py}" request-report-identity --out "${identity}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+	identity_status="$(printf '%s' "${identity_status}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+	unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} ${identity_status:-identity=absent reason=unknown}"
+	wrap_args=(--payload-json "${payload}")
+	if [ -s "${identity}" ]; then
+		wrap_args+=(--report-identity-file "${identity}")
+	else
+		UNBLOCK_HEAL_UNAUTHENTICATED="true"
+	fi
+	# The dispatch body embeds the OIDC token: keep it owner-only until removed.
+	if ! ( umask 077; unblock_py "${heal_py}" wrap-dispatch "${wrap_args[@]}" > "${dispatch}" 2>/dev/null ); then
+		rm -f "${identity}" "${dispatch}"
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=wrap_failed"
+		return 1
+	fi
+	# One attempt: a repository_dispatch is a create, so it is never retried.
+	if ! gh api -X POST "repos/${UNBLOCK_SOURCE_REPO}/dispatches" --input "${dispatch}" >/dev/null 2> "${RUNTIME_DIR}/heal_dispatch_error.txt"; then
+		detail="$(head -c 200 "${RUNTIME_DIR}/heal_dispatch_error.txt" 2>/dev/null | tr '\n' ' ' | tr -cd '\040-\176' \
+			| sed -E 's/gh[pousr]_[A-Za-z0-9_]{10,}/[redacted]/g; s/github_pat_[A-Za-z0-9_]{10,}/[redacted]/g; s/eyJ[A-Za-z0-9_-]{10,}(\.[A-Za-z0-9_-]*){0,2}/[redacted]/g')"
+		rm -f "${identity}" "${dispatch}" "${RUNTIME_DIR}/heal_dispatch_error.txt"
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=dispatch_failed detail=${detail}"
+		return 1
+	fi
+	rm -f "${identity}" "${dispatch}" "${RUNTIME_DIR}/heal_dispatch_error.txt"
+	unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=sent"
+	return 0
+}
+
+# UNBLOCK_TARGET_REPO_GUARD: where the planned ops sent a guarded verdict's
+# work. Derived from the planned heal_report op, never recomputed. Log only.
+unblock_log_target_repo_guard()
+{
+	local ops_file="$1" verdict="$2" switch outcome="consumer" paths="none" reason
+	case "${verdict}" in
+		retry_budget|descope|reissue|accept_with_followup|operator_step) ;;
+		*) return 0 ;;
+	esac
+	switch="$(printf '%s' "${UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+	if [ -n "${switch}" ] && [ "${switch}" != "true" ]; then
+		outcome="disabled"
+	else
+		reason="$(jq -r 'first(.ops[] | select(.op == "heal_report") | .reason) // ""' "${ops_file}" 2>/dev/null || true)"
+		case "${reason}" in
+			target_repo|backstop) outcome="harness" ;;
+			mixed_harness_part) outcome="mixed" ;;
+		esac
+		if [ "${outcome}" != "consumer" ]; then
+			paths="$(jq -r 'first(.ops[] | select(.op == "heal_report") | (.harness_paths // []) | join(",")) // ""' "${ops_file}" 2>/dev/null || true)"
+			paths="$(printf '%s' "${paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-300)"
+			[ -n "${paths}" ] || paths="none"
+		fi
+	fi
+	echo "UNBLOCK_TARGET_REPO_GUARD item=${ITEM} verdict=${verdict} outcome=${outcome} paths=${paths}"
+}
+
 # Runs the operations of unblock_actions.py output, in order. A failed
 # operation is logged and the rest still run, except a failed prerequisite
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard=""
+	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0 heal_planned="false" heal_warned="false" heal_unauth="false"
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -498,6 +722,18 @@ unblock_run_ops()
 		if [ "${ops_failed}" = "true" ] && [ "${op}" != "close" ] && [ "${op}" != "telegram" ] \
 			&& ! { [ "${op}" = "add_labels" ] && [ "${close_succeeded}" = "true" ] && [ "${ITEM_KIND}" = "pr" ] \
 				&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and ((.ops[3].text // "") | startswith("Unblock judge closed untrusted PR #"))' "${ops_file}" >/dev/null 2>&1; }; then
+			if [ "${op}" = "heal_report" ]; then
+				# A heal report skipped after an earlier failure still needs its page.
+				heal_planned="true"
+				if [ "$(jq -r ".ops[${idx}].sendable // false" "${ops_file}" 2>/dev/null)" = "true" ]; then
+					heal_skip_reason="earlier_op_failed"
+				else
+					heal_skip_reason="no_accepted_label"
+				fi
+				unblock_log "item=${ITEM} op=heal_report issue=$(printf '%s' "${issue}" | tr -cd '0-9' | cut -c1-20 | grep . || echo none) label=$(jq -r ".ops[${idx}].label // empty" "${ops_file}" 2>/dev/null | tr -cd 'A-Za-z0-9:._-' | cut -c1-80 | grep . || echo none) outcome=skip reason=${heal_skip_reason}"
+			elif [ "${op}" = "hold_request" ]; then
+				unblock_log "item=${ITEM} op=hold_request issue=${issue} outcome=skip reason=earlier_op_failed"
+			fi
 			continue
 		fi
 		case "${op}" in
@@ -709,6 +945,38 @@ PY
 				gh workflow run "${review_workflow}" -R "${REPOSITORY}" -f pr_number="${number}" >/dev/null 2>&1 \
 					|| { ops_failed="true"; unblock_log "item=${ITEM} op=dispatch_review pr=${number} outcome=failed"; }
 				;;
+			heal_report)
+				heal_planned="true"
+				heal_rc=0
+				unblock_send_heal_report "${ops_file}" "${idx}" || heal_rc=$?
+				if [ "${heal_rc}" -eq 0 ]; then
+					heal_sent="true"
+					[ "${UNBLOCK_HEAL_UNAUTHENTICATED}" = "true" ] && heal_unauth="true"
+				elif [ "${heal_rc}" -eq 2 ]; then
+					heal_skip_reason="${UNBLOCK_HEAL_SKIP_REASON}"
+				else
+					ops_failed="true"
+				fi
+				;;
+			hold_request)
+				# No hold without a sent report: nothing would ship the fix it waits for.
+				if [ "${heal_sent}" != "true" ]; then
+					unblock_log "item=${ITEM} op=hold_request issue=${issue} outcome=skip reason=no_heal_report"
+					continue
+				fi
+				if ! [[ "${issue}" =~ ^[1-9][0-9]*$ ]]; then
+					ops_failed="true"
+					unblock_log "item=${ITEM} op=hold_request issue=$(printf '%s' "${issue}" | tr -cd '0-9' | cut -c1-20 | grep . || echo none) outcome=failed reason=invalid_issue"
+					continue
+				fi
+				body="$(jq -r ".ops[${idx}].body" "${ops_file}")"
+				if gh api "repos/${REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null 2>&1; then
+					unblock_log "item=${ITEM} op=hold_request issue=${issue} outcome=posted"
+				else
+					ops_failed="true"
+					unblock_log "item=${ITEM} op=hold_request issue=${issue} outcome=failed"
+				fi
+				;;
 			telegram)
 				if [ "${ops_failed}" = "true" ] && [ "${close_succeeded}" != "true" ]; then
 					if [ "${ITEM_KIND}" = "project" ] && [ "$(jq -r ".ops[${idx}].level" "${ops_file}")" = "CRITICAL" ]; then
@@ -731,7 +999,36 @@ PY
 						else
 							unblock_tg "WARNING" "Operator handoff for #${ITEM} is incomplete: a write failed and the verdict will not be retried; the item stays blocked (${REPOSITORY})."
 						fi
+					elif jq -e ".ops[${idx}].text // \"\" | contains(\"has no escalation label for a heal report\")" "${ops_file}" >/dev/null 2>&1; then
+						# The planner's own no-label WARNING names the real cause; keep it.
+						heal_warned="true"
+						unblock_tg "WARNING" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
+					elif jq -e 'any(.ops[]; .op == "heal_report")' "${ops_file}" >/dev/null 2>&1; then
+						# Harness routing: the verdict is already recorded, so this is the only page.
+						heal_warned="true"
+						if [ "${heal_sent}" = "true" ]; then
+							unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM}, but a later write (such as the project hold request) failed; the item stays blocked (${REPOSITORY})."
+						else
+							unblock_tg "WARNING" "Unblock judge could not send the harness heal report for #${ITEM}; a write failed and the item stays blocked (${REPOSITORY})."
+						fi
 					fi
+					continue
+				fi
+				if [ "${heal_sent}" != "true" ] && [ -n "${heal_skip_reason}" ] && [ "${heal_skip_reason}" != "no_accepted_label" ] \
+					&& jq -e ".ops[${idx}].text // \"\" | startswith(\"Unblock judge routed #\")" "${ops_file}" >/dev/null 2>&1; then
+					# The planned DEBUG says a report was sent; it was not, so a person must act.
+					heal_warned="true"
+					if [ "${heal_skip_reason}" = "workflow_heal_disabled" ]; then
+						unblock_tg "WARNING" "Unblock judge found #${ITEM} harness-owned, but WORKFLOW_HEAL_ENABLED=false, so no heal report was sent; a person must file the harness change (${REPOSITORY})."
+					else
+						unblock_tg "WARNING" "Unblock judge found #${ITEM} harness-owned, but no heal report was sent (${heal_skip_reason}); a person must file the harness change (${REPOSITORY})."
+					fi
+					continue
+				fi
+				if [ "${heal_unauth}" = "true" ] \
+					&& jq -e ".ops[${idx}].text // \"\" | startswith(\"Unblock judge routed #\")" "${ops_file}" >/dev/null 2>&1; then
+					heal_warned="true"
+					unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity; a heal intake that requires report authentication drops it, so check that the heal issue was filed (${REPOSITORY})."
 					continue
 				fi
 				unblock_tg "$(jq -r ".ops[${idx}].level" "${ops_file}")" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
@@ -741,6 +1038,20 @@ PY
 				;;
 		esac
 	done
+	# A mixed route plans no telegram op of its own, so a report that was not
+	# sent (skipped or failed) would otherwise page nobody.
+	if [ "${heal_planned}" = "true" ] && [ "${heal_sent}" != "true" ] && [ "${heal_warned}" != "true" ] \
+		&& [ "${heal_skip_reason}" != "no_accepted_label" ]; then
+		if [ "${heal_skip_reason}" = "workflow_heal_disabled" ]; then
+			unblock_tg "WARNING" "Unblock judge found a harness-owned part in #${ITEM}, but WORKFLOW_HEAL_ENABLED=false, so no heal report was sent; a person must file the harness change (${REPOSITORY})."
+		elif [ -n "${heal_skip_reason}" ]; then
+			unblock_tg "WARNING" "Unblock judge found a harness-owned part in #${ITEM}, but no heal report was sent (${heal_skip_reason}); a person must file the harness change (${REPOSITORY})."
+		else
+			unblock_tg "WARNING" "Unblock judge could not send the harness heal report for #${ITEM}; a person must file the harness change (${REPOSITORY})."
+		fi
+	elif [ "${heal_unauth}" = "true" ] && [ "${heal_warned}" != "true" ]; then
+		unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity; a heal intake that requires report authentication drops it, so check that the heal issue was filed (${REPOSITORY})."
+	fi
 	[ "${ops_failed}" != "true" ]
 }
 
@@ -1210,7 +1521,29 @@ unblock_main()
 				unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=fixup_unavailable"
 				return 0
 			fi
+			# A merged fix-up ends the wait. So does one the implement phase closed
+			# as already implemented (no change needed, e.g. a verification-only
+			# operator step), when its trusted success-no-op marker is present.
+			local fixup_done_text="" fixup_noop_rc
 			if jq -e '.state == "closed" and .state_reason == "completed" and (.labels | index("ai:merged") != null)' <<< "${fixup_json}" >/dev/null 2>&1; then
+				fixup_done_text="merged"
+			elif jq -e '.state == "closed" and .state_reason == "completed" and (.labels | index("ai:closed") != null)' <<< "${fixup_json}" >/dev/null 2>&1; then
+				fixup_noop_rc=0
+				unblock_fixup_success_noop "${wait_fixup}" || fixup_noop_rc=$?
+				case "${fixup_noop_rc}" in
+					0)
+						fixup_done_text="closed as already implemented"
+						unblock_log "item=${ITEM} fixup=${wait_fixup} op=fixup_done via=success_noop"
+						;;
+					2)
+						# Unreadable comments: keep the wait open and retry next run
+						# instead of spending a round on a transient read failure.
+						unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=fixup_comments_unavailable"
+						return 0
+						;;
+				esac
+			fi
+			if [ -n "${fixup_done_text}" ]; then
 				# #7287: a fix-up filed for a descope / operator_step verdict that
 				# followed an automation-path rejection must not resume the item
 				# into the same guard; hand it to an operator instead.
@@ -1229,14 +1562,14 @@ unblock_main()
 							unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_regrant_failed run=${followup_run}"
 							return 0
 						fi
-						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge re-checked the automation-path grant instead of posting a resume command.
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; the unblock judge re-checked the automation-path grant instead of posting a resume command.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=followup_regrant run=${followup_run}"
 						return 0
 					fi
 					if jq -e '.handoff_pending == true' "${RUNTIME_DIR}/protected_rejection.json" >/dev/null 2>&1; then
-						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; this item is waiting for an operator (protected-path handoff), so no resume command was posted.
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; this item is waiting for an operator (protected-path handoff), so no resume command was posted.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=skip reason=operator_handoff_pending run=${followup_run}"
@@ -1254,15 +1587,21 @@ unblock_main()
 							return 0
 						fi
 						ops_file="${RUNTIME_DIR}/followup_handoff_ops.json"
+						# Pass --done-text only for the success-no-op case, so a merged
+						# fix-up keeps the call (and its text) unchanged.
+						local -a handoff_done_args=()
+						if [ "${fixup_done_text}" != "merged" ]; then
+							handoff_done_args=(--done-text "${fixup_done_text}")
+						fi
 						if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup-handoff --context-file "${RUNTIME_DIR}/context.json" \
-							--fixup "${wait_fixup}" --verdict "${followup_verdict}" > "${ops_file}" \
+							--fixup "${wait_fixup}" --verdict "${followup_verdict}" ${handoff_done_args[@]+"${handoff_done_args[@]}"} > "${ops_file}" \
 							|| ! unblock_run_ops "${ops_file}"; then
 							# The wait stays open, so the next run retries; the keyed
 							# operator step and the hold marker make that idempotent.
 							unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_handoff_failed"
 							return 0
 						fi
-						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged, but the automation-path guard's rejection of run ${followup_run} is still the newest guard result; the unblock judge handed this item to an operator instead of posting a resume command.
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}, but the automation-path guard's rejection of run ${followup_run} is still the newest guard result; the unblock judge handed this item to an operator instead of posting a resume command.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=followup_handoff fixup=${wait_fixup} run=${followup_run}"
@@ -1288,26 +1627,31 @@ unblock_main()
 					fi
 				fi
 				if [ -n "${step_placeholder}" ]; then
-					if [ -z "${prior_hold}" ] && ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} merged. Its operator step \`${step_placeholder}\` still needs a person, so the unblock judge holds this item until that step is done instead of resuming it now. This hold uses no round.
+					if [ -z "${prior_hold}" ] && ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} ${fixup_done_text}. Its operator step \`${step_placeholder}\` still needs a person, so the unblock judge holds this item until that step is done instead of resuming it now. $(unblock_hold_resume_hint placeholder_retired "${step_placeholder}") This hold uses no round.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} hold=placeholder_retired ref=${step_placeholder} -->" >/dev/null 2>&1; then
 						# The fix-up wait stays open, so the next run tries again.
 						unblock_log "item=${ITEM} fixup=${wait_fixup} op=hold hold=placeholder_retired ref=${step_placeholder} outcome=skip reason=hold_record_failed"
 						return 0
 					fi
-					unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge holds this item until operator step \`${step_placeholder}\` is done.
+					unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; the unblock judge holds this item until operator step \`${step_placeholder}\` is done.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} op=hold hold=placeholder_retired ref=${step_placeholder} outcome=held"
 					return 0
 				fi
 				ops_file="${RUNTIME_DIR}/followup_ops.json"
-				if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup --context-file "${RUNTIME_DIR}/context.json" --fixup "${wait_fixup}" > "${ops_file}" \
+				# The resume note names how the wait ended; a merged fix-up keeps the old call.
+				local -a followup_done_args=()
+				if [ "${fixup_done_text}" != "merged" ]; then
+					followup_done_args=(--done-text "${fixup_done_text}")
+				fi
+				if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup --context-file "${RUNTIME_DIR}/context.json" --fixup "${wait_fixup}" ${followup_done_args[@]+"${followup_done_args[@]}"} > "${ops_file}" \
 					|| ! unblock_run_ops "${ops_file}"; then
 					unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_failed"
 					return 0
 				fi
-				unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge posted this item's resume command.
+				unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; the unblock judge posted this item's resume command.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=followup"
@@ -1357,7 +1701,9 @@ unblock_main()
 			fi
 		else
 			hold_desc="$(unblock_hold_description "${hold_kind}" "${hold_ref}")"
-			if unblock_wait_enabled; then
+			if unblock_hold_resumed_since "${hold_at}"; then
+				hold_status="resumed"
+			elif unblock_wait_enabled; then
 				hold_status="$(unblock_hold_condition "${hold_kind}" "${hold_ref}")"
 			else
 				hold_status="disabled"
@@ -1395,7 +1741,7 @@ unblock_main()
 					;;
 				unmet)
 					if [ "$(unblock_hours_since "${hold_at}")" -lt "$(unblock_wait_max_hours)" ]; then
-						unblock_patch_comment "${hold_id}" "Waiting for ${hold_desc}; the unblock judge resumes this item afterwards. This hold uses no round. Last checked ${now}.
+						unblock_patch_comment "${hold_id}" "Waiting for ${hold_desc}. $(unblock_hold_resume_hint "${hold_kind}" "${hold_ref}") This hold uses no round. Last checked ${now}.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} hold=${hold_kind} ref=${hold_ref} -->" \
 							|| unblock_log "item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed"
@@ -1405,6 +1751,7 @@ unblock_main()
 					hold_reason="max_days"
 					;;
 				impossible) hold_reason="cannot_be_met" ;;
+				resumed) hold_reason="resumed" ;;
 				*) hold_reason="waits_disabled" ;;
 			esac
 			unblock_patch_comment "${hold_id}" "Stopped waiting for ${hold_desc} (${hold_reason}); the unblock judge decides again.
@@ -1762,6 +2109,7 @@ ${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=plan_failed"
 		return 0
 	fi
+	unblock_log_target_repo_guard "${ops_file}" "${verdict_name}"
 	local actuation_failed="false"
 	if ! unblock_run_ops "${ops_file}" "${project_failed_substituted}"; then
 		actuation_failed="true"

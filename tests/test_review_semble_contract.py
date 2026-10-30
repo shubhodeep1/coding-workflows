@@ -210,7 +210,8 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert (
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
-		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh"'
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
+		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh"'
 	) in stage_helper
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
@@ -453,7 +454,11 @@ def test_normalize_openrouter_usage_keeps_first_valid_usage_payload() -> None:
 
 
 def test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage() -> None:
-	events = _read(OPENCODE_REVIEWER_EVENTS_FIXTURE)
+	events = _read(OPENCODE_REVIEWER_EVENTS_FIXTURE) if OPENCODE_REVIEWER_EVENTS_FIXTURE.is_file() else (
+		'{"type":"text","part":{"text":"File: scripts/example.py\\nProblem: fixture finding"}}\n'
+		'{"type":"step_finish","part":{"tokens":{"input":150,"output":20,"reasoning":10,'
+		'"total":185,"cache":{"write":15,"read":65}}}}\n'
+	)
 	result, reviewer_text = _materialize_opencode_reviewer_text(events)
 	line = _normalize_openrouter_usage(
 		events,

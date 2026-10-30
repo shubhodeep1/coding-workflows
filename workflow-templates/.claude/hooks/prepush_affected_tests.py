@@ -19,8 +19,17 @@ Subcommands
                     its merge-base with origin and write a pass/fail stamp
                     under ``${TMPDIR:-/tmp}/claude-prepush-gate/``.
 ``hook``            PreToolUse hook: ask for confirmation when a Bash command
-                    pushes and no passing stamp exists for HEAD. It never runs
-                    tests or repository code, and fails open with a warning.
+                    pushes and no stamp exists for HEAD. A stamp that records
+                    failures does not hold the push: the hook passes the
+                    failures to the session as context and shows them to the
+                    user, in every permission mode. In Auto mode
+                    (``permission_mode`` ``auto``) a push whose only problems are
+                    a missing stamp or a pushed branch that does not exist yet
+                    (made earlier in the same command) is denied instead, with a
+                    reason that tells the session to commit, run ``stamp`` and
+                    push again as its own command, so no human has to answer a
+                    prompt. It never runs tests or repository
+                    code, and fails open with a warning.
 
 Environment (each has a default here, §8): ``PREPUSH_TEST_GATE_TIMEOUT_MINUTES``
 (15), ``PREPUSH_TEST_GATE_SHARDS`` (4), ``PREPUSH_TEST_GATE_LARGE_FILE_TESTS``
@@ -83,7 +92,39 @@ AGENTS_ASSEMBLER = "scripts/assemble_agents.py"
 STAMP_DIR_NAME = "claude-prepush-gate"
 STAMP_COMMAND = "python3 .claude/hooks/prepush_affected_tests.py stamp"
 PASSING_STAMP_STATUSES = frozenset({"pass", "unverified", "skipped"})
+# Claude Code's `permission_mode` hook field for Auto mode (hooks reference,
+# "Common input fields"). Any other or missing value keeps the ask.
+AUTO_PERMISSION_MODE = "auto"
+FINDING_MISSING_STAMP = "missing_stamp"
+FINDING_NEEDS_HUMAN = "needs_human"
+# The pushed branch does not resolve yet, usually because the same command
+# creates it (`git checkout -b X && ... && git push -u origin X`). Splitting
+# the command clears it, so Auto mode denies it like a missing stamp.
+FINDING_UNRESOLVED_REF = "unresolved_ref"
+# Findings the session can clear itself, so Auto mode denies rather than asks.
+SESSION_FIXABLE_FINDINGS = frozenset({FINDING_MISSING_STAMP, FINDING_UNRESOLVED_REF})
+# A stamp that records failures this change caused. It never holds the push:
+# the session already saw the failures when it ran the stamp, and CI runs the
+# full suite, so the hook passes them back as context instead of prompting.
+FINDING_STAMP_FAILURES = "stamp_failures"
+# hook_decision value: no permission decision, the reason goes to the session
+# as additionalContext and to the user as a systemMessage.
+DECISION_CONTEXT_ONLY = "context"
+# The off switch is read from the hook's own environment, so a session command
+# cannot use it; the Auto-mode deny reason leaves it out.
+GATE_OFF_HINT = "Set CLAUDE_PREPUSH_TEST_GATE=off to disable this check."
 GIT_SAFE = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
+# Static checks run on whole changed files. The baseline comparison runs the
+# same arguments with JSON output on both trees and counts only the findings
+# the change added, so a file that already had lint errors does not fail.
+RUFF_CHECK_ARGS = ("check", "--select", "E,F", "--ignore", "E501")
+SHELLCHECK_ARGS = ("--severity=error",)
+MAX_NEW_STATIC_FINDINGS_LISTED = 20
+# Lint messages that cite another line (ruff F811 "from line 12", F402) are
+# normalised so a finding that only moved still matches the baseline.
+_STATIC_MESSAGE_LINE_RE = re.compile(r"\bline \d+\b")
+# Dropped from a failing-stamp reason when another finding holds the push.
+STAMP_FAILURES_NOT_HELD = " The push was not held for this."
 
 _TEST_JS_RE = re.compile(r".+\.(?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs)$")
 _ASSERTION_RE = re.compile(r"\bassert\b|self\.assert\w*\(|\bexpect\(|pytest\.raises|\bxfail\b|\bskip\b")
@@ -405,9 +446,9 @@ def select_tests(
 	py_changed = sorted(p for p in present_changes if p.endswith(".py"))
 	sh_changed = sorted(p for p in present_changes if p.endswith(".sh"))
 	if py_changed:
-		static_checks.append({"tool": "ruff", "files": py_changed, "argv": ["ruff", "check", "--select", "E,F", "--ignore", "E501", *py_changed]})
+		static_checks.append({"tool": "ruff", "files": py_changed, "argv": ["ruff", *RUFF_CHECK_ARGS, *py_changed]})
 	if sh_changed:
-		static_checks.append({"tool": "shellcheck", "files": sh_changed, "argv": ["shellcheck", "--severity=error", *sh_changed]})
+		static_checks.append({"tool": "shellcheck", "files": sh_changed, "argv": ["shellcheck", *SHELLCHECK_ARGS, *sh_changed]})
 	# Rule 6: large Python test files keep only the functions that mention a change.
 	needles = set(function_names or ()) | {PurePosixPath(p).name for p in changes}
 	affected: list[dict] = []
@@ -579,7 +620,7 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 		if shutil.which(check["argv"][0]) is None:
 			unverified.append({"item": check["tool"], "reason": "tool_unavailable"})
 			continue
-		units.append({"id": check["tool"], "file": None, "argv": list(check["argv"]), "kind": "static"})
+		units.append({"id": check["tool"], "file": None, "argv": list(check["argv"]), "kind": "static", "files": list(check.get("files") or [])})
 	return units, unverified
 
 
@@ -665,15 +706,119 @@ def failing_names(tail: str) -> list[str]:
 	return unique[:50]
 
 
-def classify_baseline(failed: list[dict], baseline: Path | None, deadline: float, shards: int) -> tuple[list[dict], list[dict]]:
-	"""Split failed unit results into (pr_caused, inherited)."""
+def _static_findings(tool: str, files: list[str], cwd: Path, deadline: float) -> list[tuple[str, str, str]] | None:
+	"""(file, code, message) per finding of one static tool on `files` in `cwd`.
+
+	None when the tool could not be run or its JSON output could not be read;
+	the caller then keeps the failure as caused by the change.
+	"""
+	if not files:
+		return []
+	if tool == "ruff":
+		argv = ["ruff", *RUFF_CHECK_ARGS, "--output-format", "json", *files]
+	elif tool == "shellcheck":
+		argv = ["shellcheck", *SHELLCHECK_ARGS, "--format", "json1", *files]
+	else:
+		return None
+	remaining = deadline - time.monotonic()
+	if remaining <= 0:
+		return None
+	try:
+		proc = subprocess.run(argv, cwd=cwd, env=_child_env(), capture_output=True, stdin=subprocess.DEVNULL, timeout=remaining)
+	except (OSError, subprocess.TimeoutExpired):
+		return None
+	if proc.returncode not in (0, 1) or len(proc.stdout) > MAX_SCAN_BYTES:
+		return None
+	try:
+		data = json.loads(proc.stdout.decode("utf-8", "replace") or "[]")
+	except ValueError:
+		return None
+	entries = data.get("comments") if tool == "shellcheck" and isinstance(data, dict) else data
+	if not isinstance(entries, list):
+		return None
+	root = os.path.realpath(cwd)
+	findings: list[tuple[str, str, str]] = []
+	for entry in entries:
+		if not isinstance(entry, dict):
+			return None
+		name = str((entry.get("filename") if tool == "ruff" else entry.get("file")) or "")
+		if not name:
+			return None
+		if os.path.isabs(name):
+			name = os.path.relpath(os.path.realpath(name), root)
+		code = "" if entry.get("code") is None else str(entry.get("code"))
+		message = _STATIC_MESSAGE_LINE_RE.sub("line N", str(entry.get("message")))
+		findings.append((PurePosixPath(name).as_posix(), code, message))
+	return findings
+
+
+def _new_static_findings(unit: dict, repo: Path, baseline: Path, deadline: float) -> list[tuple[str, str, str]] | None:
+	"""Findings in `repo` that the merge-base copies of the same files did not have.
+
+	Line numbers are left out of the comparison, so findings that only moved
+	still match. A file that is new in this change counts in full.
+	"""
+	files = [f for f in unit.get("files") or [] if isinstance(f, str)]
+	head = _static_findings(str(unit.get("id")), files, repo, deadline)
+	if head is None:
+		return None
+	old = _static_findings(str(unit.get("id")), [f for f in files if (baseline / f).is_file()], baseline, deadline)
+	if old is None:
+		return None
+	remaining: dict[tuple[str, str, str], int] = {}
+	for key in old:
+		remaining[key] = remaining.get(key, 0) + 1
+	added: list[tuple[str, str, str]] = []
+	for key in head:
+		if remaining.get(key, 0) > 0:
+			remaining[key] -= 1
+		else:
+			added.append(key)
+	return added
+
+
+def classify_baseline(
+	failed: list[dict],
+	baseline: Path | None,
+	deadline: float,
+	shards: int,
+	repo: Path | None = None,
+) -> tuple[list[dict], list[dict]]:
+	"""Split failed unit results into (pr_caused, inherited).
+
+	Test and registry units are re-run on the baseline tree. Static units
+	(`ruff`, `shellcheck`) are compared finding by finding when `repo` is
+	given: a static unit whose findings all exist on the baseline too is
+	inherited, otherwise it stays caused by the change and its tail lists the
+	added findings.
+
+	Each re-run unit gets `baseline_status` (the re-run's status). A unit
+	whose re-run timed out or could not start stays in pr_caused here;
+	run_gate reports it as unverified, because nothing showed the change
+	caused it.
+	"""
 	if baseline is None or not baseline.is_dir():
 		return failed, []
+	inherited_ids: set[str] = set()
 	rerun = [unit for unit in failed if unit.get("kind") != "static" and (unit.get("file") is None or (baseline / unit["file"]).is_file())]
-	if not rerun:
-		return failed, []
-	reran = run_units(rerun, baseline, deadline, shards)
-	inherited_ids = {unit["id"] for unit in reran if unit.get("status") == "fail"}
+	if rerun:
+		reran = run_units(rerun, baseline, deadline, shards)
+		baseline_statuses = {unit["id"]: unit.get("status") for unit in reran}
+		for unit in rerun:
+			unit["baseline_status"] = baseline_statuses.get(unit["id"])
+		inherited_ids = {unit["id"] for unit in reran if unit.get("status") == "fail"}
+	if repo is not None:
+		for unit in failed:
+			if unit.get("kind") != "static":
+				continue
+			added = _new_static_findings(unit, repo, baseline, deadline)
+			if added is None:
+				continue
+			if not added:
+				inherited_ids.add(unit["id"])
+				continue
+			listed = [f"{name}: {code} {message}" for name, code, message in added[:MAX_NEW_STATIC_FINDINGS_LISTED]]
+			unit["tail"] = f"{len(added)} finding(s) added by this change:\n" + "\n".join(listed)
 	pr_caused = [unit for unit in failed if unit["id"] not in inherited_ids]
 	inherited = [unit for unit in failed if unit["id"] in inherited_ids]
 	return pr_caused, inherited
@@ -723,7 +868,16 @@ def run_gate(
 	# The baseline re-run gets at least BASELINE_MIN_SECS even when the main
 	# run used the whole budget, so a late failure can still be confirmed as
 	# inherited (the container wrapper allows 120 s past the budget).
-	pr_caused, inherited = classify_baseline(failed, baseline, max(deadline, time.monotonic() + BASELINE_MIN_SECS), shards)
+	pr_caused, inherited = classify_baseline(failed, baseline, max(deadline, time.monotonic() + BASELINE_MIN_SECS), shards, repo)
+	# A failure whose baseline re-run did not finish is unverified, not caused
+	# by the change: a slow test that fails on both trees would otherwise
+	# trigger a repair turn and a second full gate run (release v1.40.3).
+	baseline_unfinished = [r for r in pr_caused if r.get("baseline_status") in ("timeout", "error")]
+	if baseline_unfinished:
+		pr_caused = [r for r in pr_caused if r not in baseline_unfinished]
+		for r in baseline_unfinished:
+			# Keep the PR-side failing test names (not the tail) for diagnosis.
+			unverified.append({"item": r["id"], "reason": f"baseline_{r['baseline_status']}", "names": failing_names(r.get("tail", ""))})
 	changed_assertions = assertion_diff(repo, baseline, selection.get("changed_files", [])) if baseline is not None and baseline.is_dir() else []
 	if pr_caused:
 		status = "fail"
@@ -771,7 +925,9 @@ def write_summary(result: dict) -> str:
 				lines.append(f"- `{_sanitize_name(str(entry.get('test')))}`" + (f": {names}" if names else ""))
 	if result.get("unverified"):
 		lines += ["", "### Unverified", ""]
-		lines += [f"- `{_sanitize_name(str(u.get('item')))}`: {_sanitize_name(str(u.get('reason')))}" for u in result["unverified"]]
+		for u in result["unverified"]:
+			names = ", ".join(f"`{_sanitize_name(n)}`" for n in [n for n in (u.get("names") or []) if isinstance(n, str)][:10])
+			lines.append(f"- `{_sanitize_name(str(u.get('item')))}`: {_sanitize_name(str(u.get('reason')))}" + (f" (failed on this change: {names})" if names else ""))
 	if result.get("changed_assertions"):
 		lines += ["", "### Changed pre-existing assertions", ""]
 		lines += [f"- `{_sanitize_name(str(a.get('file')))}` ({a.get('kind')}): `{_sanitize_name(str(a.get('line')))}`" for a in result["changed_assertions"]]
@@ -992,66 +1148,96 @@ def _resolve_commit(repo: Path, ref: str) -> str | None:
 	return value if _SHA_RE.match(value) else None
 
 
-def _emit(ask_reason: str = "", system_message: str = "") -> None:
+def _emit(ask_reason: str = "", system_message: str = "", decision: str = "ask") -> None:
 	response: dict = {}
+	if decision == DECISION_CONTEXT_ONLY:
+		# No permission decision: the push goes through the normal permission
+		# flow, the session gets the reason as context and the user sees it.
+		if ask_reason:
+			response["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "additionalContext": ask_reason}
+			system_message = "\n\n".join(part for part in (f"prepush gate: {ask_reason}", system_message) if part)
+		if system_message:
+			response["systemMessage"] = system_message
+		if response:
+			print(json.dumps(response))
+		return
 	if system_message:
 		response["systemMessage"] = system_message
 	if ask_reason:
 		response["hookSpecificOutput"] = {
 			"hookEventName": "PreToolUse",
-			"permissionDecision": "ask",
+			"permissionDecision": decision,
 			"permissionDecisionReason": ask_reason,
 		}
 	if response:
 		print(json.dumps(response))
 
 
-def evaluate_hook(payload: object) -> tuple[str, str]:
-	"""(ask reason, system message); both empty means no decision."""
+def _hook_findings(payload: object) -> tuple[list[tuple[str, str]], str]:
+	"""([(finding kind, reason)], system message); no findings means no decision.
+
+	The kind is FINDING_MISSING_STAMP when the session can clear the finding
+	itself by running the stamp, FINDING_UNRESOLVED_REF when the pushed branch
+	does not resolve yet (the session clears it by splitting the command),
+	FINDING_STAMP_FAILURES when the stamp records failures (never holds the
+	push), and FINDING_NEEDS_HUMAN otherwise.
+	"""
 	if not isinstance(payload, dict):
-		return "", "prepush gate: hook payload is not a JSON object; push not checked."
+		return [], "prepush gate: hook payload is not a JSON object; push not checked."
 	if payload.get("tool_name") != "Bash" or gate_disabled():
-		return "", ""
+		return [], ""
 	tool_input = payload.get("tool_input")
 	command = tool_input.get("command") if isinstance(tool_input, dict) else None
 	if not isinstance(command, str) or not command.strip():
-		return "", ""
+		return [], ""
 	cwd = payload.get("cwd")
 	if not isinstance(cwd, str) or not os.path.isdir(cwd):
 		cwd = os.getcwd()
 	pushes, warning = detect_pushes(command, cwd)
 	if not pushes:
-		return "", warning
-	reasons = []
+		return [], warning
+	reasons: list[tuple[str, str]] = []
 	for directory, ref, note in dict.fromkeys(pushes):
 		toplevel = _toplevel(Path(directory))
 		if toplevel is None:
 			continue
 		if note.startswith("bulk:"):
-			reasons.append(
-				f"This push ({_sanitize_name(note[5:])}) publishes several branch tips in {toplevel}; a pre-push test "
-				f"stamp covers one commit. Push each branch by name after running `{STAMP_COMMAND}` on it, or confirm to push anyway."
-			)
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"This push ({_sanitize_name(note[5:])}) publishes several branch tips in {toplevel}; a pre-push test "
+					f"stamp covers one commit. Push each branch by name after running `{STAMP_COMMAND}` on it, or confirm to push anyway."
+				),
+			))
 			continue
 		if note == "unresolved":
-			reasons.append(
-				f"Could not resolve which refs this push publishes in {toplevel} (unrecognised push options or "
-				f"destination), so its pre-push test stamp cannot be checked. Run `{STAMP_COMMAND}` on the pushed "
-				"commit and push with full option names, or confirm to push anyway."
-			)
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"Could not resolve which refs this push publishes in {toplevel} (unrecognised push options or "
+					f"destination), so its pre-push test stamp cannot be checked. Run `{STAMP_COMMAND}` on the pushed "
+					"commit and push with full option names, or confirm to push anyway."
+				),
+			))
 			continue
 		if note == "non_branch":
-			reasons.append(
-				f"This push publishes tags or other non-branch refs in {toplevel}, whose commits the pre-push test "
-				f"stamp check cannot map. Check out the tagged commit and run `{STAMP_COMMAND}`, or confirm to push anyway."
-			)
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"This push publishes tags or other non-branch refs in {toplevel}, whose commits the pre-push test "
+					f"stamp check cannot map. Check out the tagged commit and run `{STAMP_COMMAND}`, or confirm to push anyway."
+				),
+			))
 			continue
 		head = _resolve_commit(toplevel, ref)
 		if head is None:
-			reasons.append(
-				f"Could not resolve the pushed ref `{_sanitize_name(ref)}` in {toplevel} to a commit, so its pre-push "
-				f"test stamp cannot be checked. Check out that commit, run `{STAMP_COMMAND}`, or confirm to push anyway."
-			)
+			reasons.append((
+				FINDING_UNRESOLVED_REF,
+				(
+					f"Could not resolve the pushed ref `{_sanitize_name(ref)}` in {toplevel} to a commit, so its pre-push "
+					f"test stamp cannot be checked. Check out that commit, run `{STAMP_COMMAND}`, or confirm to push anyway."
+				),
+			))
 			continue
 		path = stamp_path(toplevel, head)
 		try:
@@ -1059,22 +1245,89 @@ def evaluate_hook(payload: object) -> tuple[str, str]:
 		except (OSError, ValueError):
 			stamp = None
 		if not isinstance(stamp, dict) or stamp.get("head") != head:
-			reasons.append(
-				f"No pre-push test stamp for {head[:12]} (pushed ref `{_sanitize_name(ref)}`) in {toplevel}. Check out that commit "
-				f"and run `{STAMP_COMMAND}` after committing, fix failures this change caused, then push. "
-				"Set CLAUDE_PREPUSH_TEST_GATE=off to disable this check."
-			)
+			reasons.append((
+				FINDING_MISSING_STAMP,
+				(
+					f"No pre-push test stamp for {head[:12]} (pushed ref `{_sanitize_name(ref)}`) in {toplevel}. Check out that commit "
+					f"and run `{STAMP_COMMAND}` after committing, fix failures this change caused, then push. "
+					+ GATE_OFF_HINT
+				),
+			))
 			continue
 		status = stamp.get("status")
+		# A non-string status (list, object) is unhashable; treat it as missing.
+		if not isinstance(status, str):
+			status = None
 		if status in PASSING_STAMP_STATUSES:
+			continue
+		if status != "fail":
+			# A stamp with a missing or unknown status records no gate result,
+			# so it holds the push like before instead of passing as failures.
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"The pre-push test stamp for {head[:12]} has no valid status, so it records no gate result. "
+					f"Run `{STAMP_COMMAND}` again, or confirm to push anyway."
+				),
+			))
 			continue
 		failures = stamp.get("failures") if isinstance(stamp.get("failures"), list) else []
 		listed = ", ".join(_sanitize_name(str(f.get("test"))) for f in failures[:MAX_HOOK_FAILURES_LISTED] if isinstance(f, dict))
-		reasons.append(
-			f"The pre-push test stamp for {head[:12]} records {len(failures)} failure(s) this change caused"
-			+ (f": {listed}" if listed else "") + ". Fix them and re-run the stamp, or confirm to push anyway."
-		)
-	return "\n\n".join(reasons), warning
+		reasons.append((
+			FINDING_STAMP_FAILURES,
+			(
+				f"The pre-push test stamp for {head[:12]} records {len(failures)} failure(s) this change caused"
+				+ (f": {listed}" if listed else "") + "." + STAMP_FAILURES_NOT_HELD + " Fix them and push again, "
+				"or tell the user why they are not this change's to fix."
+			),
+		))
+	return reasons, warning
+
+
+def evaluate_hook(payload: object) -> tuple[str, str]:
+	"""(ask reason, system message); both empty means no decision."""
+	findings, warning = _hook_findings(payload)
+	return "\n\n".join(reason for _kind, reason in findings), warning
+
+
+def is_auto_permission_mode(payload: object) -> bool:
+	return isinstance(payload, dict) and payload.get("permission_mode") == AUTO_PERMISSION_MODE
+
+
+def hook_decision(payload: object) -> tuple[str, str, str]:
+	"""(decision, reason, system message); an empty reason means no decision.
+
+	A stamp that records failures never holds the push: alone it returns
+	DECISION_CONTEXT_ONLY, which tells the session and the user about the
+	failures without a permission decision.
+
+	Outside Auto mode every other finding asks, as before. In Auto mode a push whose
+	only findings are missing stamps or not-yet-created pushed branches is
+	denied: a hook "ask" still forces a
+	human prompt in Auto mode, while a deny runs nothing and hands the reason
+	back to the session, which can run the stamp itself and push again. A push
+	whose commits the hook cannot map (bulk, tag or unparsed pushes) still
+	asks, because only a person can decide to push anyway.
+	"""
+	all_findings, warning = _hook_findings(payload)
+	if not all_findings:
+		return "", "", warning
+	# A failing stamp never holds a push on its own (DECISION_CONTEXT_ONLY);
+	# next to another finding its text rides along in that finding's reason.
+	findings = [(kind, text) for kind, text in all_findings if kind != FINDING_STAMP_FAILURES]
+	reason = "\n\n".join(text for _kind, text in all_findings)
+	if not findings:
+		return DECISION_CONTEXT_ONLY, reason, warning
+	# Another finding holds (or stops) the push, so do not say it was not held.
+	reason = reason.replace(STAMP_FAILURES_NOT_HELD, "")
+	if is_auto_permission_mode(payload) and all(kind in SESSION_FIXABLE_FINDINGS for kind, _text in findings):
+		return "deny", (
+			reason.replace(" " + GATE_OFF_HINT, "") + "\n\nAuto mode: nothing ran (any branch or commit in this command was not "
+			"created either). Create the branch and commit first in their own command, run "
+			f"`{STAMP_COMMAND}`, fix failures it reports that this change caused, then run the push again as its "
+			"own plain command (`git push -u origin <branch>`). If the stamp cannot be written, stop and tell the user."
+		), warning
+	return "ask", reason, warning
 
 
 def cmd_hook(raw: str) -> int:
@@ -1084,11 +1337,11 @@ def cmd_hook(raw: str) -> int:
 		_emit(system_message="prepush gate: hook payload is not valid JSON; push not checked.")
 		return 0
 	try:
-		ask, message = evaluate_hook(payload)
+		decision, reason, message = hook_decision(payload)
 	except Exception as exc:  # noqa: BLE001 - the hook fails open
 		_emit(system_message=f"prepush gate: internal error ({type(exc).__name__}); push not checked.")
 		return 0
-	_emit(ask, message)
+	_emit(reason, message, decision or "ask")
 	return 0
 
 

@@ -363,11 +363,121 @@ def test_run_gate_classifies_inherited_and_pr_caused_failures(tmp_path):
 	assert sorted(result["ran"]) == ["tests/test_new.py", "tests/test_ok.py", "tests/test_old.py"]
 
 
+@pytest.mark.parametrize("baseline_status", ["timeout", "error"])
+def test_run_gate_reports_unfinished_baseline_rerun_as_unverified(tmp_path, monkeypatch, baseline_status):
+	# Release v1.40.3: a slow test failed on the PR tree, its baseline re-run hit
+	# the deadline, and the gate blamed the change (repair turn + second run).
+	root = _repo(tmp_path, {"tests/test_slow.py": FAILING, "tests/test_new.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_slow.py": FAILING}, name="baseline")
+
+	def fake_run_units(units, cwd, deadline, shards):
+		status = baseline_status if Path(cwd).resolve() == baseline.resolve() else "fail"
+		return [{**u, "status": status, "rc": None if status != "fail" else 1, "tail": "FAIL: test_x (m.C)"} for u in units]
+
+	monkeypatch.setattr(gate, "run_units", fake_run_units)
+	selection = {"changed_files": [], "affected_tests": [{"path": p, "reasons": []} for p in ("tests/test_slow.py", "tests/test_new.py")]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=1, shards=1)
+	# test_new.py has no baseline copy, so it is still caused by the change.
+	assert [f["test"] for f in result["failures"]] == ["tests/test_new.py"]
+	assert result["inherited"] == []
+	assert result["unverified"] == [{"item": "tests/test_slow.py", "reason": f"baseline_{baseline_status}", "names": ["test_x"]}]
+	assert result["status"] == "fail"
+	assert f"`tests/test_slow.py`: baseline_{baseline_status} (failed on this change: `test_x`)" in gate.write_summary(result)
+
+
+def test_run_gate_unfinished_baseline_only_is_unverified_not_fail(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_slow.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_slow.py": FAILING}, name="baseline")
+
+	def fake_run_units(units, cwd, deadline, shards):
+		status = "timeout" if Path(cwd).resolve() == baseline.resolve() else "fail"
+		return [{**u, "status": status, "rc": None, "tail": ""} for u in units]
+
+	monkeypatch.setattr(gate, "run_units", fake_run_units)
+	result = gate.run_gate(root, {"changed_files": [], "affected_tests": [{"path": "tests/test_slow.py", "reasons": []}]}, baseline, timeout_minutes=1, shards=1)
+	assert result["status"] == "unverified"
+	assert result["failures"] == [] and result["inherited"] == []
+	assert result["unverified"] == [{"item": "tests/test_slow.py", "reason": "baseline_timeout", "names": []}]
+	assert result["ran"] == ["tests/test_slow.py"]
+
+
 def test_run_gate_inherited_only_passes(tmp_path):
 	root = _repo(tmp_path, {"tests/test_old.py": FAILING})
 	baseline = _repo(tmp_path, {"tests/test_old.py": FAILING}, name="baseline")
 	result = gate.run_gate(root, {"changed_files": [], "affected_tests": [{"path": "tests/test_old.py", "reasons": []}]}, baseline, timeout_minutes=2, shards=1)
 	assert result["status"] == "pass" and result["failures"] == [] and len(result["inherited"]) == 1
+
+
+LINT_OLD = "import os\nimport sys\n"
+
+
+@pytest.mark.skipif(gate.shutil.which("ruff") is None, reason="ruff not installed")
+def test_run_gate_counts_only_lint_findings_the_change_added(tmp_path):
+	# The file already has an unused import on the merge-base; a change that
+	# adds an unrelated line must not fail for it.
+	root = _repo(tmp_path, {"lib/a.py": LINT_OLD + "X = 1\n"})
+	baseline = _repo(tmp_path, {"lib/a.py": LINT_OLD}, name="baseline")
+	selection = {"changed_files": ["lib/a.py"], "affected_tests": [], "static_checks": [
+		{"tool": "ruff", "files": ["lib/a.py"], "argv": ["ruff", *gate.RUFF_CHECK_ARGS, "lib/a.py"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and result["failures"] == []
+	assert [i["test"] for i in result["inherited"]] == ["ruff"]
+	# A new unused import is a finding the change added.
+	(root / "lib" / "a.py").write_text(LINT_OLD + "import json\nX = 1\n", encoding="utf-8")
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail" and [f["test"] for f in result["failures"]] == ["ruff"]
+	tail = result["failures"][0]["tail"]
+	assert tail.startswith("1 finding(s) added by this change:") and "lib/a.py: F401" in tail and "json" in tail
+	assert "`os`" not in tail and "`sys`" not in tail
+
+
+@pytest.mark.skipif(gate.shutil.which("ruff") is None, reason="ruff not installed")
+def test_run_gate_counts_every_lint_finding_in_a_new_file(tmp_path):
+	root = _repo(tmp_path, {"lib/new.py": LINT_OLD})
+	baseline = _repo(tmp_path, {"README": ""}, name="baseline")
+	selection = {"changed_files": ["lib/new.py"], "affected_tests": [], "static_checks": [
+		{"tool": "ruff", "files": ["lib/new.py"], "argv": ["ruff", *gate.RUFF_CHECK_ARGS, "lib/new.py"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail" and result["failures"][0]["tail"].startswith("2 finding(s) added")
+
+
+@pytest.mark.skipif(gate.shutil.which("ruff") is None, reason="ruff not installed")
+def test_run_gate_matches_moved_findings_whose_message_cites_a_line(tmp_path):
+	# F811 says "from line N"; lines added above it must not make it new.
+	old = "def f():\n\tpass\n\n\ndef f():\n\tpass\n"
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\nY = 2\n" + old})
+	baseline = _repo(tmp_path, {"lib/a.py": old}, name="baseline")
+	selection = {"changed_files": ["lib/a.py"], "affected_tests": [], "static_checks": [
+		{"tool": "ruff", "files": ["lib/a.py"], "argv": ["ruff", *gate.RUFF_CHECK_ARGS, "lib/a.py"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and [i["test"] for i in result["inherited"]] == ["ruff"]
+
+
+def test_static_failure_stays_caused_by_the_change_when_findings_cannot_be_read(tmp_path, monkeypatch):
+	baseline = tmp_path / "baseline"
+	baseline.mkdir()
+	monkeypatch.setattr(gate, "_static_findings", lambda tool, files, cwd, deadline: None)
+	unit = {"id": "ruff", "file": None, "kind": "static", "files": ["a.py"], "status": "fail", "tail": "raw"}
+	pr_caused, inherited = gate.classify_baseline([unit], baseline, time.monotonic() + 30, 1, tmp_path)
+	assert pr_caused == [unit] and inherited == [] and unit["tail"] == "raw"
+
+
+def test_static_failure_without_a_repo_keeps_the_old_classification(tmp_path):
+	baseline = tmp_path / "baseline"
+	baseline.mkdir()
+	unit = {"id": "ruff", "file": None, "kind": "static", "files": ["a.py"], "status": "fail", "tail": "raw"}
+	assert gate.classify_baseline([unit], baseline, time.monotonic() + 30, 1) == ([unit], [])
+
+
+@pytest.mark.skipif(gate.shutil.which("shellcheck") is None, reason="shellcheck not installed")
+def test_run_gate_compares_shellcheck_findings_against_the_baseline(tmp_path):
+	old = "#!/bin/bash\nif [ 1 ]\nthen echo x\n"
+	root = _repo(tmp_path, {"lib/b.sh": old})
+	baseline = _repo(tmp_path, {"lib/b.sh": old}, name="baseline")
+	selection = {"changed_files": ["lib/b.sh"], "affected_tests": [], "static_checks": [
+		{"tool": "shellcheck", "files": ["lib/b.sh"], "argv": ["shellcheck", *gate.SHELLCHECK_ARGS, "lib/b.sh"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and [i["test"] for i in result["inherited"]] == ["shellcheck"]
 
 
 def test_failing_names_parses_the_heal_shapes():
@@ -489,14 +599,17 @@ def test_hook_asks_when_no_stamp_exists(tmp_path):
 	assert "CLAUDE_PREPUSH_TEST_GATE=off" in decision["permissionDecisionReason"]
 
 
-def test_hook_allows_with_a_passing_stamp_and_asks_on_failures(tmp_path):
+def test_hook_allows_with_a_passing_stamp_and_reports_failures_without_asking(tmp_path):
 	root = _repo(tmp_path, {"a.txt": ""})
 	_write(root, tmp_path, "pass")
 	assert _hook(_push(root), {"TMPDIR": str(tmp_path)}) == {}
 	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
 	out = _hook(_push(root), {"TMPDIR": str(tmp_path)})
-	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
-	assert "tests/test_broken.py" in out["hookSpecificOutput"]["permissionDecisionReason"]
+	specific = out["hookSpecificOutput"]
+	assert "permissionDecision" not in specific
+	assert specific["hookEventName"] == "PreToolUse"
+	assert "tests/test_broken.py" in specific["additionalContext"]
+	assert "tests/test_broken.py" in out["systemMessage"]
 
 
 def test_hook_ignores_non_push_commands_and_other_tools(tmp_path):
@@ -527,7 +640,7 @@ def test_hook_falls_back_when_the_guard_module_is_missing(tmp_path):
 
 
 def test_hook_internal_error_fails_open(monkeypatch, capsys):
-	monkeypatch.setattr(gate, "evaluate_hook", lambda payload: (_ for _ in ()).throw(RuntimeError("boom")))
+	monkeypatch.setattr(gate, "hook_decision", lambda payload: (_ for _ in ()).throw(RuntimeError("boom")))
 	assert gate.cmd_hook(json.dumps({"tool_name": "Bash"})) == 0
 	out = json.loads(capsys.readouterr().out)
 	assert "internal error" in out["systemMessage"] and "hookSpecificOutput" not in out
@@ -640,12 +753,29 @@ def test_wrapper_runs_an_isolated_container_and_copies_back_only_results(tmp_pat
 	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
 	for flag in ("--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--rm", "--init"):
 		assert flag in run_line
+	# Docker's --tmpfs defaults to noexec; tests that run a stub script from
+	# a temp dir need exec (PR #8371 loop).
+	assert "--tmpfs /tmp:rw,exec,nosuid,nodev,size=512m" in run_line
 	assert "--env" not in run_line and " -e " not in run_line
 	assert f"src={MODULE_PATH.resolve()},dst=/gate/prepush_affected_tests.py,readonly" in run_line
 	assert "dst=/baseline,readonly" in run_line
 	assert sorted(p.name for p in out.iterdir()) == ["result.json", "summary.md"]
 	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass"
 	assert "PREPUSH_TEST_GATE phase=wrapper outcome=pass" in proc.stderr
+
+
+@pytest.mark.parametrize("dockerfile_source", [
+	"scripts/codex_isolated_exec.sh",  # implement gate (generated Dockerfile)
+	"scripts/review_sandbox/Dockerfile",  # review and conflict-resolver gates
+	"scripts/clarify_sandbox/Dockerfile",  # heal gate
+])
+def test_gate_images_install_jq(dockerfile_source):
+	# Most repo scripts call jq; without it their tests fail on both trees in
+	# the gate container and the gate reports noise instead of results.
+	text = (REPO_ROOT / dockerfile_source).read_text(encoding="utf-8")
+	installs = [line for line in text.splitlines() if "apt-get install" in line]
+	assert installs, dockerfile_source
+	assert any("jq" in line.split() for line in installs), dockerfile_source
 
 
 def test_wrapper_refuses_a_module_inside_the_worktree(tmp_path):
@@ -788,3 +918,165 @@ def test_hook_asks_when_the_guard_cannot_resolve_push_options(tmp_path, command)
 	out = _hook(_push(root, command), {"TMPDIR": str(tmp_path)})
 	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
 	assert "Could not resolve which refs" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# --- Auto mode ----------------------------------------------------------------
+
+def _auto(payload: dict, mode: str = "auto") -> dict:
+	return {**payload, "permission_mode": mode}
+
+
+def test_hook_denies_a_missing_stamp_in_auto_mode(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)})
+	decision = out["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "deny"
+	reason = decision["permissionDecisionReason"]
+	assert gate.STAMP_COMMAND in reason and "nothing ran" in reason and "tell the user" in reason
+	# The session cannot set the hook's environment, so the off switch is not offered.
+	assert "CLAUDE_PREPUSH_TEST_GATE=off" not in reason
+
+
+@pytest.mark.parametrize("mode", ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "Auto", None])
+def test_hook_still_asks_for_a_missing_stamp_outside_auto_mode(tmp_path, mode):
+	root = _repo(tmp_path, {"a.txt": ""})
+	payload = _push(root) if mode is None else _auto(_push(root), mode)
+	out = _hook(payload, {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("mode", ["auto", "default", "acceptEdits", "bypassPermissions", "dontAsk"])
+def test_hook_never_holds_a_push_for_a_failing_stamp(tmp_path, mode):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, "pass")
+	assert _hook(_auto(_push(root), mode), {"TMPDIR": str(tmp_path)}) == {}
+	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
+	out = _hook(_auto(_push(root), mode), {"TMPDIR": str(tmp_path)})
+	specific = out["hookSpecificOutput"]
+	assert "permissionDecision" not in specific
+	assert "tests/test_broken.py" in specific["additionalContext"]
+	assert "confirm to push anyway" not in specific["additionalContext"]
+
+
+@pytest.mark.parametrize("command", ["git push --tags origin", "git push --all origin"])
+def test_hook_auto_mode_still_asks_when_a_person_must_decide(tmp_path, command):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root, command)), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git push origin no-such-branch:main",
+		# The branch only exists once the command has run, so the hook cannot see it yet.
+		"git checkout -q -b claude/new-log && git commit -qam log && git push -u origin claude/new-log 2>&1 | tail -1",
+	],
+)
+def test_hook_auto_mode_denies_a_pushed_branch_that_does_not_exist_yet(tmp_path, command):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root, command)), {"TMPDIR": str(tmp_path)})
+	decision = out["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "deny"
+	reason = decision["permissionDecisionReason"]
+	assert "Could not resolve the pushed ref" in reason and "nothing ran" in reason
+	assert "own plain command" in reason and gate.STAMP_COMMAND in reason
+
+
+def test_hook_still_asks_for_a_pushed_branch_that_does_not_exist_yet_outside_auto_mode(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_push(root, "git checkout -b claude/new-log && git push -u origin claude/new-log"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "Could not resolve the pushed ref" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_auto_mode_asks_when_a_missing_stamp_comes_with_a_human_finding(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root, "git push origin HEAD && git push --tags origin")), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "No pre-push test stamp" in reason and "tags" in reason
+
+
+def test_hook_auto_mode_a_failing_stamp_next_to_a_missing_one_still_denies(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_git(root, "branch", "other")
+	_commit(root, {"a.txt": "changed\n"})
+	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
+	out = _hook(_auto(_push(root, "git push origin HEAD && git push origin other")), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+	reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "No pre-push test stamp" in reason and "tests/test_broken.py" in reason
+	assert "not held" not in reason
+
+
+@pytest.mark.parametrize("status", [None, "garbled", ["fail"], {"k": "v"}])
+def test_hook_asks_for_a_stamp_without_a_valid_status(tmp_path, status):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, status)
+	out = _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "no valid status" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_auto_mode_off_switch_still_allows(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	assert _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path), "CLAUDE_PREPUSH_TEST_GATE": "off"}) == {}
+
+
+def test_evaluate_hook_keeps_its_two_value_contract(tmp_path, monkeypatch):
+	monkeypatch.setenv("TMPDIR", str(tmp_path))
+	root = _repo(tmp_path, {"a.txt": ""})
+	ask, message = gate.evaluate_hook(_auto(_push(root)))
+	assert "No pre-push test stamp" in ask and message == ""
+
+
+# --- wrapper pass-through flags (issue #8190) ---------------------------------
+
+def test_wrapper_forwards_venv_shards_and_large_file_limit(tmp_path):
+	worktree = _worktree(tmp_path)
+	venv = tmp_path / "venv"
+	(venv / "bin").mkdir(parents=True)
+	env, log = _wrapper_env(tmp_path)
+	out = tmp_path / "out"
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(out), "--timeout-minutes", "2", "--venv", str(venv), "--shards", "3",
+		"--large-file-tests", "7"], capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert f"src={venv.resolve()},dst=/opt/codex-venv,readonly" in run_line
+	assert "--env PATH=/opt/codex-venv/bin:" in run_line
+	assert "--env PREPUSH_TEST_GATE_LARGE_FILE_TESTS=7" in run_line
+	assert "--shards 3" in run_line
+	for flag in ("--network none", "--read-only", "--cap-drop ALL"):
+		assert flag in run_line
+
+
+def test_wrapper_drops_invalid_shards_and_large_file_values(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	out = tmp_path / "out"
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(out), "--shards", "4;rm -rf /", "--large-file-tests", "0", "--venv", str(tmp_path / "missing")],
+		capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	assert "name=PREPUSH_TEST_GATE_SHARDS" in proc.stderr and "name=PREPUSH_TEST_GATE_LARGE_FILE_TESTS" in proc.stderr
+	assert "reason=venv_missing" in proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "--env" not in run_line and "--shards" not in run_line and "/opt/codex-venv" not in run_line
+
+
+def test_wrapper_mounts_node_modules_read_only_on_both_trees(tmp_path):
+	worktree = _worktree(tmp_path)
+	node_modules = tmp_path / "prep" / "node_modules"
+	node_modules.mkdir(parents=True)
+	env, log = _wrapper_env(tmp_path)
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(tmp_path / "out"), "--node-modules", str(node_modules)], capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert f"src={node_modules.resolve()},dst=/source/node_modules,readonly" in run_line
+	assert f"src={node_modules.resolve()},dst=/baseline/node_modules,readonly" in run_line

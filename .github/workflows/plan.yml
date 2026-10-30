@@ -335,10 +335,12 @@ jobs:
               echo "resolver_status=none" >> "$GITHUB_OUTPUT"
             fi
           elif [ "${resolver_pr_not_open}" = "true" ]; then
+            not_open_pr="$(grep -E 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" | sed -n 's/.* pr=\([0-9][0-9]*\) .*/\1/p' | head -n1)"
             echo "::notice::CI-triage PR for issue #${issue_number} is no longer open; planning continues only if the superseded-PR check resolves it."
             echo "ref=" >> "$GITHUB_OUTPUT"
             echo "resolver_status=failed" >> "$GITHUB_OUTPUT"
             echo "pr_not_open=true" >> "$GITHUB_OUTPUT"
+            echo "pr_not_open_pr=${not_open_pr}" >> "$GITHUB_OUTPUT"
           elif [ "${resolver_label_missing}" = "true" ]; then
             hold_repo="${{ github.repository }}"
             hold_marker="<!-- ai:integration-ref-label-missing:v1 issue=${issue_number} -->"
@@ -421,9 +423,13 @@ jobs:
             fi
             # Best effort: this run has not added ai:planning, but an earlier
             # run may have. A failure (404 when absent) never fails the step.
-            hold_planning_label=absent
-            if gh api -X DELETE "repos/${hold_repo}/issues/${issue_number}/labels/ai:planning" >/dev/null 2>&1; then
+            # A 404 means the label was not there; any other failure is
+            # logged as planning_label=failed so a leftover label is visible.
+            hold_planning_label=failed
+            if hold_delete_err="$(gh api -X DELETE "repos/${hold_repo}/issues/${issue_number}/labels/ai:planning" 2>&1 >/dev/null)"; then
               hold_planning_label=removed
+            elif printf '%s' "${hold_delete_err}" | grep -q 'HTTP 404'; then
+              hold_planning_label=absent
             fi
             hold_skip_plan
             echo "::warning::INTEGRATION_REF_RESOLVE outcome=held reason=label_missing issue=${issue_number} comment=${hold_comment_state} label=applied planning_label=${hold_planning_label} phase=plan"
@@ -441,6 +447,13 @@ jobs:
           fi
 
       - name: Checkout repository
+        # The label_missing hold (#7516, #8151) sets SKIP_PLAN=true and exits 0.
+        # Every setup step up to "Fetch issue metadata" is skipped on that hold,
+        # as in clarify, so a transient checkout, staging or API failure cannot
+        # fail a held run and file a plan_failed heal report. This comment sits
+        # inside the step: a less-indented line before it would end up in the
+        # refctx body that the tests extract and dedent.
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -450,6 +463,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Log checkout ref
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           PLAN_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
@@ -463,6 +477,7 @@ jobs:
           fi
 
       - name: Configure git auth for memory helper clones
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -474,6 +489,7 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
@@ -518,6 +534,7 @@ jobs:
 
       - name: Checkout workflow support source
         id: checkout_support_source
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -528,7 +545,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
+        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -538,6 +555,7 @@ jobs:
           fetch-depth: 1
 
       - name: Ensure workflow support source checkout
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
@@ -552,7 +570,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF == 'stable' }}
+        if: ${{ steps.refctx.outputs.label_missing_hold != 'true' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -563,12 +581,13 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py partial_delivery.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -728,9 +747,26 @@ jobs:
             install -m 0644 "${src}" prompts/references/security-money-lens.txt
           fi
 
+          # Issue #8249: the heal-route counterfactual block that
+          # run_plan_codex.sh appends for workflow-heal plans. Optional: without
+          # it the heal plan carries no HEAL_COUNTERFACTUAL line and the plan
+          # auto-approval gate holds it for a human.
+          if [ ! -f prompts/mode-plan-heal-counterfactual.txt ]; then
+            src=".codex-workflow-src/prompts/mode-plan-heal-counterfactual.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-plan-heal-counterfactual.txt" ]; then
+              src=".codex-workflow-src-main/prompts/mode-plan-heal-counterfactual.txt"
+            fi
+            if [ -f "${src}" ] && [ ! -L "${src}" ]; then
+              install -m 0644 "${src}" prompts/mode-plan-heal-counterfactual.txt
+            else
+              echo "::warning::prompts/mode-plan-heal-counterfactual.txt unavailable in the support checkout; heal plans will be held for a human."
+            fi
+          fi
+
           rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-plan-${GITHUB_RUN_ID}"
@@ -751,6 +787,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1056,6 +1093,7 @@ jobs:
           PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED: ${{ vars.PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED || 'true' }}
           PLAN_SUPERSEDE_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           PLAN_PR_NOT_OPEN: ${{ steps.refctx.outputs.pr_not_open }}
+          PLAN_PR_NOT_OPEN_PR: ${{ steps.refctx.outputs.pr_not_open_pr }}
           PLAN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1077,14 +1115,39 @@ jobs:
           if [ "${PLAN_PR_NOT_OPEN:-}" = "true" ]; then
             pr_not_open=true
           fi
+          # Issue #7995: skipping alone left the issue at ai:planning, so
+          # stall recovery re-posted /answer every hour and each run skipped
+          # again. Hand the issue to the unblock judge as implement does
+          # (#7540): ai:planning -> ai:blocked plus one marker comment.
           pr_not_open_unresolved() {
-            local detail="${1:-unknown}"
+            local detail pr label_state=applied comment_state=posted body
+            detail="$(printf '%s' "${1:-unknown}" | tr -cd 'a-z_')"
+            pr="$(printf '%s' "${PLAN_PR_NOT_OPEN_PR:-${pr_number:-}}" | tr -cd '0-9')"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
-            log "outcome=skip reason=pr_not_open_unresolved detail=${detail}"
-            echo "::warning::Planning skipped for #${ISSUE_NUMBER}: CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail})."
+            source scripts/gh_helpers.sh 2>/dev/null || true
+            type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+            source scripts/label_helpers.sh 2>/dev/null || true
             source scripts/tg_helpers.sh 2>/dev/null || true
+            if type ensure_label_exists >/dev/null 2>&1; then
+              ensure_label_exists "ai:blocked" "${REPO_SLUG}" || true
+            fi
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" --add-label 'ai:blocked' \
+              --remove-label 'ai:planning' >/dev/null 2>&1 || label_state=failed
+            body="CI-triage pull request #${pr:-unknown} is no longer open, so planning was not started (outcome: \`${detail}\`). The unblock judge decides whether to close or re-issue this issue."$'\n\n'"<!-- ai:plan-pr-not-open:v1 pr=${pr} run=${GITHUB_RUN_ID:-} -->"
+            # Comment only after the label landed, so a retry does not post it twice.
+            if [ "${label_state}" = "applied" ]; then
+              gh_retry gh api "repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 || comment_state=failed
+            else
+              comment_state=skipped
+            fi
+            log "outcome=skip reason=pr_not_open_unresolved detail=${detail} pr=${pr:-none} label=${label_state} comment=${comment_state}"
+            echo "::warning::Planning skipped for #${ISSUE_NUMBER}: CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail})."
             if type tg_send_tracked >/dev/null 2>&1; then
-              tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: its CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail})."$'\n'"Issue: ${ISSUE_URL:-}" "WARNING" || true
+              if [ "${label_state}" = "failed" ]; then
+                tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: its CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail}). The ai:blocked hand-off failed; the issue is still ai:planning."$'\n'"Issue: ${ISSUE_URL:-}" "WARNING" || true
+              else
+                tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: its CI-triage PR is no longer open (${detail}); handed to the unblock judge."$'\n'"Issue: ${ISSUE_URL:-}" "DEBUG" || true
+              fi
             fi
             exit 0
           }
@@ -1241,6 +1304,9 @@ jobs:
                   echo "PLAN_REROUTED_REF=${base_ref}" >> "$GITHUB_ENV"
                   log "source=${source_issue} pr=${pr_number} outcome=rerouted from=${head_ref:-default} to=${base_ref}"
                 else
+                  # A PR that is no longer open usually has a deleted base, so
+                  # a retry fails again: hand it off instead (#7995).
+                  [ "${pr_not_open}" = "true" ] && pr_not_open_unresolved reroute_failed
                   # Never plan on the merged PR's former head (#7185): skip
                   # this run and let stall recovery retry it.
                   echo "::warning::Could not check out ${base_ref} for planning; skipping planning this run."
@@ -1568,6 +1634,8 @@ jobs:
 
       - name: Pre-assemble static context (cacheable across runs)
         if: env.SKIP_PLAN != 'true'
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
           # See scripts/build_static_context.sh for trimming rationale and
@@ -2677,8 +2745,13 @@ jobs:
             exit 1
           fi
 
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="$(cat "${PLAN_COMMENT_FILE}")"
+          # Issue #8249: keep the plan comment id so the heal counterfactual
+          # hold marker names the plan it held (dedup with the poller).
+          PLAN_COMMENT_ID="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${PLAN_COMMENT_FILE}")" --jq '.id')"
+          if [[ "${PLAN_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+            echo "PLAN_COMMENT_ID=${PLAN_COMMENT_ID}" >> "$GITHUB_ENV"
+          fi
 
           ensure_label_exists "ai:awaiting-approval" "${{ github.repository }}"
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -2735,6 +2808,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           # Read as ${PLAN_STEP_REPO} so the run: body carries no expression
           # (tests/test_workflow_file_size_limit.py expression guard).
           PLAN_STEP_REPO: ${{ github.repository }}
@@ -2836,10 +2910,12 @@ jobs:
                     (if ($safe | length) > 0 then ($safe[:50] | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
                     (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
                     (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
-                    (if any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
+                    (if $reason != "heal_scope_plan_out_of_scope" and any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
                     "",
                     (if $reason == "plan_files_outside_files_touched"
                       then "To proceed, a maintainer either adds these paths to the `files_touched` list in the issue body or asks for a narrower plan, then replies `/approved`. `/approved` alone does not help: the implement-time `files_touched` guard would still refuse these files."
+                    elif $reason == "heal_scope_plan_out_of_scope"
+                      then "`/approved` alone does not help: implementation copies back and commits only files inside the heal scope marker of this issue (plus its own `agents.d/<issue>-*.md` fragment), so it would refuse these files. To proceed, a maintainer either asks for a plan inside the scope with `/reclarify`, or fixes the defect outside the heal pipeline (an interactive session or an ordinary issue) and closes this one. Do not edit the issue body: the scope of a workflow-heal issue comes from its scope marker, not `files_touched`, and an edit by anyone but the pipeline makes implementation refuse the issue."
                     elif ($heal == "true" or ($reason | startswith("heal_scope_")))
                       then "To proceed, a maintainer reviews the plan and replies `/approved`. Do not edit the issue body: the scope of a workflow-heal issue comes from its scope marker, not `files_touched`, and an edit by anyone but the pipeline makes implementation refuse the issue."
                       else "To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way." end),
@@ -2863,9 +2939,130 @@ jobs:
             return 0
           }
 
+          # Issue #8249: one deduplicated hold comment plus a WARNING for a
+          # workflow-heal plan whose HEAL_COUNTERFACTUAL line does not show the
+          # change would have turned the observed failing run green. Failures
+          # only warn; a hold never turns into an approval.
+          heal_counterfactual_plan_hold() {
+            local hold_body="" comments_json="" duplicate="false" plan_comment="${PLAN_COMMENT_ID:-unknown}"
+            [[ "${plan_comment}" =~ ^[0-9]+$ ]] || plan_comment="unknown"
+            if [ "${plan_comment}" != "unknown" ] \
+              && comments_json="$(gh_retry gh api --paginate "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null | jq -s -c 'add // []' 2>/dev/null)"; then
+              duplicate="$(printf '%s' "${comments_json}" | jq -r --arg prefix "<!-- ai:heal-counterfactual-hold:v1 issue=${ISSUE_NUMBER} plan_comment=${plan_comment} result=${heal_cf_result} " '
+                any(.[]?; ((.user.login // "" | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+                  and ((.body // "") | contains($prefix)))' 2>/dev/null)" || duplicate="false"
+            fi
+            if [ "${duplicate}" = "true" ]; then
+              echo "Heal counterfactual hold already reported for issue #${ISSUE_NUMBER}; not posting another comment."
+              return 0
+            fi
+            if ! hold_body="$(printf '%s' "${heal_cf_json}" | jq -r --arg issue "${ISSUE_NUMBER}" --arg plan "${plan_comment}" \
+              --arg result "${heal_cf_result}" --arg reason "${heal_cf_reason}" '
+                def clean: tostring | gsub("[[:cntrl:]`]"; " ") | gsub("<!--"; "&lt;!--") | gsub("-->"; "--&gt;") | .[0:300];
+                ((.line // "") | clean) as $line
+                | [(.unmatched_jobs // [])[]? | clean] as $unmatched
+                | [
+                    "**Automatic approval withheld: the plan does not show that the change would have made the failing run pass.**",
+                    "",
+                    (if $line != "" then "Counterfactual line: `\($line)`" else "Counterfactual line: _(none found)_" end),
+                    "Reason: `\($reason | gsub("[^a-z_]"; ""))`",
+                    "",
+                    (if $reason == "fail" then "The plan says the observed run would still fail for a reason it does not address. The plan has to cover that cause, or list the job under `## Deferred scope` and say `PARTIAL`."
+                     elif $reason == "unverified" then "The plan says the heal evidence cannot show whether the change helps. The evidence named on the line is missing: add it to the heal issue (for example the failing job step timeline) and re-plan."
+                     elif $reason == "partial_jobs_not_deferred" then "These jobs would still fail but are not listed under `## Deferred scope`:\n" + ($unmatched | map("- " + .) | join("\n")) + "\nAdd them to `## Deferred scope` or fix them."
+                     elif $reason == "deferred_scope_missing" then "The line says `PARTIAL`, but the plan has no readable `## Deferred scope` section listing the jobs that would still fail. The section must appear once and hold only `- ` bullets: a prose line or note inside it makes it unreadable."
+                     elif $reason == "partial_job_list_invalid" then "The `PARTIAL:` line must list the still-failing jobs, comma-separated (at most 20)."
+                     elif ($reason | IN("heal_counterfactual_check_unavailable", "heal_route_unknown")) then "The heal counterfactual check could not run."
+                     else "The plan must end its `## Counterfactual check` with exactly one `HEAL_COUNTERFACTUAL:` line." end),
+                    "",
+                    "A maintainer can review the plan and reply `/approved`, or `/reclarify`.",
+                    "",
+                    "<!-- ai:heal-counterfactual-hold:v1 issue=\($issue) plan_comment=\($plan) result=\($result) source=plan -->"
+                  ] | join("\n")' 2>/dev/null)"; then
+              echo "::warning::Could not render the heal counterfactual hold comment for issue #${ISSUE_NUMBER}."
+              return 0
+            fi
+            if ! gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+              echo "::warning::Could not post the heal counterfactual hold comment for issue #${ISSUE_NUMBER}."
+            fi
+            if [ -f scripts/tg_helpers.sh ]; then
+              # shellcheck disable=SC1091
+              source scripts/tg_helpers.sh >/dev/null 2>&1 || true
+            fi
+            if type tg_send_msg >/dev/null 2>&1; then
+              tg_send_msg "Heal plan auto-approval withheld for issue #${ISSUE_NUMBER}: counterfactual ${heal_cf_result} (${heal_cf_reason})."$'\n'"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" "WARNING" >/dev/null 2>&1 || true
+            fi
+            return 0
+          }
+
           normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
           case "${normalized_flag}" in
             1|true|yes|on)
+              # Heal counterfactual gate (issue #8249). A workflow-heal plan is
+              # auto-approved only when its single HEAL_COUNTERFACTUAL line is
+              # PASS, or PARTIAL with every listed job under ## Deferred scope
+              # (scripts/partial_delivery.py heal-counterfactual, which the
+              # poller's _plan_auto_approval_gate also calls). It runs before
+              # the automation-path gate so a held heal plan never gets a grant
+              # written. Every error holds; a human /approved still works.
+              # HEAL_COUNTERFACTUAL_GATE_ENABLED=false turns it off.
+              heal_cf_route="false"
+              if [ "${HEAL_ROUTE:-false}" = "true" ]; then
+                heal_cf_route="true"
+              else
+                heal_cf_issue_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/heal_cf_issue.XXXXXX")"
+                printf '%s' "${CURRENT_ISSUE_JSON}" > "${heal_cf_issue_file}"
+                heal_cf_route="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/workflow_failure_heal.py heal-route --issue-json "${heal_cf_issue_file}" 2>/dev/null)" || heal_cf_route="unknown"
+                rm -f "${heal_cf_issue_file}"
+                case "${heal_cf_route}" in true|false) ;; *) heal_cf_route="unknown" ;; esac
+              fi
+              if [ "${heal_cf_route}" != "false" ]; then
+                heal_cf_json=""
+                # sed, not xargs: xargs fails on an unmatched quote and set -e would abort the step.
+                heal_cf_flag_norm="$(printf '%s' "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || heal_cf_flag_norm="true"
+                if [ "${heal_cf_route}" = "unknown" ] && [ "${heal_cf_flag_norm}" = "false" ]; then
+                  # The rollback switch also releases an unknown-route hold.
+                  heal_cf_json='{"decision":"approve","result":"missing","reason":"gate_disabled","line":"","unmatched_jobs":[]}'
+                elif [ "${heal_cf_route}" = "unknown" ]; then
+                  heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[]}'
+                  case "${heal_cf_flag_norm}" in
+                    ""|true) ;;
+                    *) heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[],"flag_invalid":true}' ;;
+                  esac
+                elif [ -f scripts/partial_delivery.py ] && heal_cf_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/partial_delivery.py heal-counterfactual \
+                    --plan-file "${CODEX_OUTPUT_FILE:-}" --gate-flag "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" 2>/dev/null)" \
+                  && printf '%s' "${heal_cf_json}" | jq -e '.decision | IN("approve", "hold")' >/dev/null 2>&1; then
+                  :
+                else
+                  heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[]}'
+                  case "${heal_cf_flag_norm}" in
+                    ""|true) ;;
+                    false) heal_cf_json='{"decision":"approve","result":"missing","reason":"gate_disabled","line":"","unmatched_jobs":[]}' ;;
+                    *) heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[],"flag_invalid":true}' ;;
+                  esac
+                fi
+                if printf '%s' "${heal_cf_json}" | jq -e '.flag_invalid == true' >/dev/null 2>&1; then
+                  echo "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true"
+                fi
+                heal_cf_decision="$(printf '%s' "${heal_cf_json}" | jq -r '.decision' 2>/dev/null | tr -cd 'a-z' || true)"
+                heal_cf_result="$(printf '%s' "${heal_cf_json}" | jq -r '.result // "missing"' 2>/dev/null | tr -cd 'A-Za-z_' | cut -c1-20 || true)"
+                heal_cf_reason="$(printf '%s' "${heal_cf_json}" | jq -r '.reason // "heal_counterfactual_check_unavailable"' 2>/dev/null | tr -cd 'a-z_' | cut -c1-80 || true)"
+                [ "${heal_cf_decision}" = "approve" ] || heal_cf_decision="hold"
+                heal_cf_outcome="approve"
+                [ "${heal_cf_decision}" = "approve" ] || heal_cf_outcome="hold"
+                echo "AI_PHASE_GATE_V1 phase=plan gate=heal_counterfactual outcome=${heal_cf_outcome} result=${heal_cf_result:-missing} reason=${heal_cf_reason:-heal_counterfactual_check_unavailable} issue=${ISSUE_NUMBER}"
+                if [ "${heal_cf_decision}" != "approve" ]; then
+                  echo "auto_approve_hold_reason=heal_counterfactual_hold" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "### Automatic plan approval held (heal counterfactual)"
+                    echo ""
+                    echo "This workflow-heal plan does not show that the change would have made the failing run pass (result \`${heal_cf_result:-missing}\`, reason \`${heal_cf_reason}\`), so no automatic \`/approved\` was posted."
+                    echo "A maintainer can review the plan and reply \`/approved\`, or \`/reclarify\`."
+                  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+                  heal_counterfactual_plan_hold || true
+                  exit 0
+                fi
+              fi
               # Automation-path plan gate (issue #6769). Plans listing
               # .github/, .claude/, scripts/, prompts/ or workflow-templates/
               # paths are held while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED
@@ -2997,6 +3194,10 @@ jobs:
                     echo "The plan changes files outside the issue's \`files_touched\` list, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason}\`)."
                     echo "Plan files outside \`files_touched\`: \`${plan_gate_paths:-none}\`"
                     echo "A maintainer adds these paths to the issue's \`files_touched\` list or asks for a narrower plan, then replies \`/approved\`. \`/approved\` alone does not help: the implement-time \`files_touched\` guard would still refuse these files."
+                  elif [ "${plan_gate_reason:-}" = "heal_scope_plan_out_of_scope" ]; then
+                    echo "The plan changes files outside the verified workflow-heal scope, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason}\`)."
+                    echo "Plan files outside the heal scope: \`${plan_gate_paths:-none}\`"
+                    echo "\`/approved\` alone does not help: implementation enforces the heal scope marker of this issue. A maintainer asks for a plan inside the scope with \`/reclarify\`, or fixes the defect outside the heal pipeline."
                   else
                     echo "The plan lists automation paths, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason:-plan_gate_error}\`)."
                     echo "Protected paths without an exact grant: \`${plan_gate_paths:-none}\`"

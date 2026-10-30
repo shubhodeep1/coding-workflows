@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **The consumer updater's header now says plainly how to hold wrapper updates.** A consumer security audit (finding `updater-security-hold-reverted-default-on`, #8117) read the default-on gate of `ai-update-workflows.yml` as a reverted security hold. That finding is a false positive: the gate is unchanged and still runs the job unless `AI_WORKFLOW_AUTO_UPDATE_ENABLED` is `false`.
+
+Update integrity does not depend on that gate. The updater verifies the release's signed sync manifest before any fetched code runs, delivers changes as an `auto/update-workflows-*` pull request, and enables auto-merge only after the `verify` job has checked every changed file against the attested manifest. The header comment now says the job runs by default and that setting `AI_WORKFLOW_AUTO_UPDATE_ENABLED=false` (any letter case) holds updates, and a contract test pins both the comment and the gate. Consumers need to do nothing unless they want a hold.

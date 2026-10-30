@@ -169,6 +169,33 @@ def test_prompt_contract_includes_blocked_rule() -> None:
 	assert "BLOCKED: <short reason>" in clarify_prompt
 
 
+def test_plan_prompt_blocks_work_delivered_by_an_open_pr() -> None:
+	# tele-funtoken-msg-scoring#4992: a no-edit "track open PR #4991" plan was
+	# auto-approved and implement, which can only change files, blocked on it.
+	for prompt_path in (PROMPT_PLAN, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		plan_prompt = _read(prompt_path)
+		assert "Implement only writes repository files and opens one pull request; it cannot post comments, close issues, or check or wait for another pull request, so never plan such steps." in plan_prompt
+		assert "emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged` and end with `STATUS: NOT_CLEAR`" in plan_prompt
+		assert "When that work is already on the planning ref, plan no edits: emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement` and end with `STATUS: NOT_CLEAR`." in plan_prompt
+	# The live planner prompt is the runner's inline heredoc, not prompts/mode-plan.txt.
+	runner = " ".join(_read(PLAN_RUNNER).split())
+	assert "Implement only writes repository files and opens one pull request; it cannot post comments, close issues, or check or wait for another pull request, so never plan such steps." in runner
+	assert "emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged` and end with `STATUS: NOT_CLEAR`" in runner
+	assert "emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement` and end with `STATUS: NOT_CLEAR`" in runner
+
+
+def test_open_pr_blocker_routes_to_blocked() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\n"
+		"PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #4991; resume once it is merged\n"
+		"STATUS: NOT_CLEAR\n"
+	)
+
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+	assert _self_check_blocker_routes_to_blocked(parsed_output, self_check_gate_enabled=True) is True
+	assert _first_self_check_blocker_reason(parsed_output) == "work is delivered by open PR #4991; resume once it is merged"
+
+
 def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	wf = _read(PLAN_WF)
 	plan_runner = _read(PLAN_RUNNER)

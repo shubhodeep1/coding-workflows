@@ -1255,6 +1255,8 @@ jobs:
 
       - name: Pre-assemble static context (cacheable across runs)
         if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
           # See scripts/build_static_context.sh for trimming rationale and
@@ -1462,9 +1464,12 @@ jobs:
 
           Your task is to determine whether the GitHub issue contains enough information to implement the task.
 
-          IMPORTANT: The system instructions, AI pipeline spec, agents.md, and README.md
-          are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt or
-          any of the individual source files — they are already loaded.
+          IMPORTANT: The system instructions, AI pipeline spec, README.md and agents.md
+          (either inlined in full, or as an `=== AGENTS.MD INDEX ===` list of sections)
+          are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt, the
+          system instructions, the pipeline spec or README.md — they are already loaded.
+          When an agents.md index is shown, read only the agents.md sections (and the
+          agents.d/ fragments it lists) that you need, from the working tree.
 
           The issue context (description and comments) is provided BELOW at the end of
           this prompt — do NOT read issue_context.txt separately.

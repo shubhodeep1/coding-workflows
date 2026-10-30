@@ -54,6 +54,8 @@ Test verification:
 - If `pytest` is not installed, install it via `pip install pytest`.
 - For `npm test`, treat "Missing script" errors as a pass (no tests defined);
   treat any other test failure as a real error.
+- Update the tests and registries listed under Expected files together with
+  the code; a pre-push gate re-runs them.
 
 Pinned-SHA test discipline: never write a test that asserts a specific
 upstream commit SHA in a file the workflow sync manages, such as a wrapper's

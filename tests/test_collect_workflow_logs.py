@@ -2589,6 +2589,11 @@ print(json.dumps({}))
 		env.update(
 			{
 				"GH_TOKEN": "token",
+				# Issue #8268: without this the collector cloned the real
+				# ai-memory branch from origin and retried a cache push with
+				# CI's read-only token, about 5 minutes per CI run, and the
+				# test could write fixture data to the shared branch.
+				"AI_MEMORY_ENABLED": "false",
 				"GH_MOCK_STORE": str(store_file),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
@@ -2691,7 +2696,7 @@ def test_pat_budget_workflow_listing_marks_api_ceiling_incomplete():
 	day = datetime(2026, 10, 5, tzinfo=timezone.utc)
 	with patch.object(collector, "gh_api_json", return_value=(
 		{"workflow_runs": [{"id": 1, "name": "Internal Review", "path": ".github/workflows/internal-review.yml"}],
-		 "total_count": 1000},
+			"total_count": 1000},
 		{"status_code": 200, "headers": {}},
 	)) as api:
 		runs, capped, metadata = collector.list_runs_for_repo(
