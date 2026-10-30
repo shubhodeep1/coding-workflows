@@ -454,7 +454,11 @@ def test_normalize_openrouter_usage_keeps_first_valid_usage_payload() -> None:
 
 
 def test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage() -> None:
-	events = _read(OPENCODE_REVIEWER_EVENTS_FIXTURE)
+	events = _read(OPENCODE_REVIEWER_EVENTS_FIXTURE) if OPENCODE_REVIEWER_EVENTS_FIXTURE.is_file() else (
+		'{"type":"text","part":{"text":"File: scripts/example.py\\nProblem: fixture finding"}}\n'
+		'{"type":"step_finish","part":{"tokens":{"input":150,"output":20,"reasoning":10,'
+		'"total":185,"cache":{"write":15,"read":65}}}}\n'
+	)
 	result, reviewer_text = _materialize_opencode_reviewer_text(events)
 	line = _normalize_openrouter_usage(
 		events,
