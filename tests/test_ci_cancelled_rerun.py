@@ -393,7 +393,7 @@ def annotation(message, level="failure"):
 	return {"message": message, "annotation_level": level}
 
 
-def classify(jobs, annotations):
+def classify(jobs, annotations, enabled=True):
 	"""Run the real classifier against stubbed jobs/annotations reads."""
 	def fake_annotations(repo, check_run_id):
 		value = annotations[check_run_id - 1000]
@@ -403,7 +403,7 @@ def classify(jobs, annotations):
 	jobs_mock = mock.Mock(side_effect=jobs) if isinstance(jobs, Exception) else mock.Mock(return_value=jobs)
 	with mock.patch.object(HELPER, "list_run_jobs", jobs_mock), \
 		mock.patch.object(HELPER, "failure_annotations", side_effect=fake_annotations) as reads:
-		return HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 123), reads
+		return HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 123, action_resolution_enabled=enabled), reads
 
 
 def test_shutdown_failure_with_lint_aggregate_is_classified_shutdown():
@@ -587,3 +587,145 @@ def test_failure_annotations_parser():
 	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
 		with pytest.raises(ValueError, match="annotations_unreadable"):
 			HELPER.failure_annotations(HELPER.SOURCE_REPO, 1001)
+
+
+# --- Action-resolution recovery (issue #8471) ------------------------------
+
+ACTION_RESOLUTION = ("Unable to resolve action `actions/checkout@v5`, unable to find version `v5`. "
+	"Unable to resolve action `actions/setup-python@v6`, unable to find version `v6`.")
+
+
+def no_step_job(name, job_id, steps=None):
+	return dict(job(name, job_id), steps=[] if steps is None else steps)
+
+
+@pytest.mark.parametrize("message,steps", [
+	(ACTION_RESOLUTION, []),
+	("Unable to resolve action `actions/checkout@v5`, unable to find version `v5`", []),
+	(ACTION_RESOLUTION, [{"name": "Set up job", "conclusion": "skipped"}, {"name": "Run", "conclusion": None}]),
+])
+def test_action_resolution_job_is_eligible(message, steps):
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2, steps), job("static-checks", 1, "success")]
+	verdict, _ = classify(jobs, {2: [annotation(message)]})
+	assert verdict == "action_resolution"
+
+
+def test_action_resolution_verdict_reruns_once_with_new_reason():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="action_resolution")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=action_resolution"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+	assert exercise.classifier.call_args.kwargs == {"action_resolution_enabled": True}
+
+
+def test_action_resolution_flag_off_falls_back_to_genuine():
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2)]
+	verdict, _ = classify(jobs, {2: [annotation(ACTION_RESOLUTION)]}, enabled=False)
+	assert verdict == "genuine"
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run(conclusion="failure")] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: SHA}), \
+		mock.patch.object(HELPER, "classify_runner_shutdown", return_value="genuine") as classifier, \
+		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "", action_resolution_enabled=False)
+	assert classifier.call_args.kwargs == {"action_resolution_enabled": False}
+	assert "action=skip reason=other_conclusion" in output.getvalue()
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("raw,expected,warned", [
+	(None, True, False), ("", True, False), ("true", True, False), ("TRUE", True, False),
+	("false", False, False), ("FALSE", False, False), ("yes", False, True),
+])
+def test_action_resolution_flag_parser(raw, expected, warned):
+	err = io.StringIO()
+	with contextlib.redirect_stderr(err):
+		assert HELPER.action_resolution_rerun_enabled(raw) is expected
+	assert ("::warning::CI_ACTION_RESOLUTION_RERUN_ENABLED" in err.getvalue()) is warned
+	if warned:
+		assert raw not in err.getvalue()
+
+
+def test_main_reads_action_resolution_flag(tmp_path, monkeypatch):
+	snapshot = tmp_path / "snapshot.json"
+	snapshot.write_text(json.dumps([pr()]), encoding="utf-8")
+	monkeypatch.setenv("CI_CANCELLED_PR_SNAPSHOT", str(snapshot))
+	for value, expected in ((None, True), ("false", False), ("bogus", False)):
+		if value is None:
+			monkeypatch.delenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", raising=False)
+		else:
+			monkeypatch.setenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", value)
+		with mock.patch.object(HELPER, "process") as processed, contextlib.redirect_stderr(io.StringIO()):
+			HELPER.main()
+		assert processed.call_args.kwargs == {"action_resolution_enabled": expected}
+
+
+@pytest.mark.parametrize("steps", [
+	[{"name": "Set up job", "conclusion": "success"}],
+	[{"name": "Set up job", "conclusion": "failure"}],
+	None,
+	"not-a-list",
+	["not-a-dict"],
+])
+def test_step_ran_or_unknown_steps_job_is_genuine(steps):
+	base = job("tests-hooks-and-orchestrator", 2)
+	failed = base if steps is None else dict(base, steps=steps)
+	verdict, _ = classify([failed], {2: [annotation(ACTION_RESOLUTION)]})
+	assert verdict == "genuine"
+
+
+@pytest.mark.parametrize("messages", [
+	[ACTION_RESOLUTION, "Process completed with exit code 1."],
+	[ACTION_RESOLUTION + " Also, something else"],
+	["Unable to resolve action `actions/checkout@v5`"],
+])
+def test_mixed_or_extended_action_resolution_annotations_are_genuine(messages):
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2)]
+	verdict, _ = classify(jobs, {2: [annotation(message) for message in messages]})
+	assert verdict == "genuine"
+
+
+def test_action_resolution_job_without_failure_annotation_is_genuine():
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2)]
+	verdict, _ = classify(jobs, {2: [annotation(ACTION_RESOLUTION, "warning")]})
+	assert verdict == "genuine"
+
+
+def test_shutdown_and_action_resolution_mix_still_reruns_as_shutdown():
+	jobs = [job("static-checks", 1), no_step_job("tests-hooks-and-orchestrator", 2), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN), annotation("The operation was canceled.")],
+		2: [annotation(ACTION_RESOLUTION)],
+		3: [annotation("CI jobs that did not succeed: static-checks, tests-hooks-and-orchestrator"),
+			annotation("Process completed with exit code 1.")],
+	})
+	assert verdict == "shutdown"
+
+
+def test_lint_aggregate_naming_action_resolution_job():
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2), job("static-checks", 1, "success"), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		2: [annotation(ACTION_RESOLUTION)],
+		3: [annotation("CI jobs that did not succeed: tests-hooks-and-orchestrator"),
+			annotation("Process completed with exit code 1.")],
+	})
+	assert verdict == "action_resolution"
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2), job("static-checks", 1, "cancelled"),
+		job("orchestrate-poll (1)", 4, "success"), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		2: [annotation(ACTION_RESOLUTION)],
+		3: [annotation("CI jobs that did not succeed: tests-hooks-and-orchestrator, orchestrate-poll")],
+	})
+	assert verdict == "genuine"
+
+
+def test_lint_job_with_action_resolution_annotation_is_genuine():
+	jobs = [no_step_job("lint", 3)]
+	verdict, _ = classify(jobs, {3: [annotation(ACTION_RESOLUTION)]})
+	assert verdict == "genuine"
+
+
+def test_action_resolution_keeps_once_per_head_cap():
+	lines, _, post = exercise(completed=[run(conclusion="failure", attempt=2)], classify="action_resolution")
+	assert "reason=already_retried" in lines[0]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
