@@ -78,7 +78,9 @@
 #                                    empty (default ${RUNNER_TEMP:-/tmp}/claude-pool-reason;
 #                                    regular files only, first 64 bytes). With neither
 #                                    source --pool-reason is left out and the payload is
-#                                    unchanged.
+#                                    unchanged. The same token (env first, then the file)
+#                                    also labels `no_credential` refusals in the log,
+#                                    alert and summary with pool_reason= (issue #8392)
 
 set -uo pipefail
 
@@ -348,16 +350,28 @@ if [ "${report_pool_reason_source}" != "none" ]; then
 	# becomes "unavailable" instead of failing argument parsing.
 	report_pool_reason_args=("--pool-reason=${report_pool_reason_token}")
 fi
+# The no_credential log suffix, alert and summary (issue #8392) show the same
+# token the payload gets, so they follow the env-then-file order above. The
+# value is untrusted: only ^[a-z0-9_]{1,60}$ is shown, anything else (no source,
+# symlinked, unreadable, malformed) shows "unavailable". Diagnostic only.
+pool_reason="${report_pool_reason_token}"
+[[ "${pool_reason}" =~ ^[a-z0-9_]{1,60}$ ]] || pool_reason="unavailable"
 dispatched=0
+any_no_credential=false
 for entry in "${pairs[@]}"; do
 	role="${entry%%:*}"
 	reason="${entry#*:}"
+	pool_reason_suffix=""
+	if [ "${reason}" = "no_credential" ]; then
+		pool_reason_suffix=" pool_reason=${pool_reason}"
+		any_no_credential=true
+	fi
 	if [ "$(printf '%s' "${ENABLED}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
-		log "skip_dispatch reason=disabled role=${role} fallback_reason=${reason}"
+		log "skip_dispatch reason=disabled role=${role} fallback_reason=${reason}${pool_reason_suffix}"
 		continue
 	fi
 	if [ -z "${REPO}" ] || [ ! -f "${HEAL_PY}" ]; then
-		log "skip_dispatch reason=missing_context role=${role} fallback_reason=${reason}"
+		log "skip_dispatch reason=missing_context role=${role} fallback_reason=${reason}${pool_reason_suffix}"
 		continue
 	fi
 	payload_file="${REPORT_DIR}/payload-${role}-${reason}.json"
@@ -367,30 +381,36 @@ for entry in "${pairs[@]}"; do
 		--workflow-name "${WORKFLOW_NAME}" --run-id "${RUN_ID}" --run-attempt "${GITHUB_RUN_ATTEMPT:-}" --wrapper-sha "${WRAPPER_SHA}" \
 		--reporter-run-url "${REPORTER_RUN_URL}" --records-file "${RECORDS_FILE}" ${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"} > "${payload_file}" 2> "${error_file}" \
 		|| ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${payload_file}" > "${dispatch_file}" 2>> "${error_file}"; then
-		log "skip_dispatch reason=payload_build_failed role=${role} fallback_reason=${reason} detail=$(head -c 200 "${error_file}" | tr '\n' ' ')"
+		log "skip_dispatch reason=payload_build_failed role=${role} fallback_reason=${reason}${pool_reason_suffix} detail=$(head -c 200 "${error_file}" | tr '\n' ' ')"
 		continue
 	fi
 	if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${dispatch_file}" >/dev/null 2> "${error_file}"; then
-		log "skip_dispatch reason=dispatch_denied role=${role} fallback_reason=${reason} upstream=${UPSTREAM_REPO} detail=$(head -c 300 "${error_file}" | tr '\n' ' ')"
+		log "skip_dispatch reason=dispatch_denied role=${role} fallback_reason=${reason} upstream=${UPSTREAM_REPO}${pool_reason_suffix} detail=$(head -c 300 "${error_file}" | tr '\n' ' ')"
 		echo "::warning::AI engine fallback heal report (${role}, ${reason}) could not be dispatched to ${UPSTREAM_REPO}."
 		continue
 	fi
 	dispatched=$((dispatched + 1))
-	log "dispatched role=${role} fallback_reason=${reason} workflow=${WORKFLOW_NAME} run=${RUN_ID:-none} upstream=${UPSTREAM_REPO} pool_reason_source=${report_pool_reason_source}"
+	log "dispatched role=${role} fallback_reason=${reason} workflow=${WORKFLOW_NAME} run=${RUN_ID:-none} upstream=${UPSTREAM_REPO} pool_reason_source=${report_pool_reason_source}${pool_reason_suffix}"
 done
 rm -rf -- "${REPORT_DIR}" 2>/dev/null || true
 
 pair_list="$(printf '%s, ' "${pairs[@]}")"
 pair_list="${pair_list%, }"
+pool_reason_note=""
+[ "${any_no_credential}" != "true" ] || pool_reason_note=" Claude pool step: pool_reason=${pool_reason}."
 if type tg_send_msg >/dev/null 2>&1; then
-	tg_send_msg "AI engine: refused Claude fallback (non-capacity) in ${REPO:-unknown} ${WORKFLOW_NAME} run ${RUN_ID:-local}: ${pair_list}. Codex did not run; set AI_ENGINE_FALLBACK_POLICY=always to roll back."$'\n'"Run: ${REPORTER_RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+	tg_send_msg "AI engine: refused Claude fallback (non-capacity) in ${REPO:-unknown} ${WORKFLOW_NAME} run ${RUN_ID:-local}: ${pair_list}. Codex did not run; set AI_ENGINE_FALLBACK_POLICY=always to roll back.${pool_reason_note}"$'\n'"Run: ${REPORTER_RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 fi
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ ! -L "${GITHUB_STEP_SUMMARY}" ]; then
 	{
 		echo "### Refused AI engine fallbacks"
 		echo
 		for entry in "${pairs[@]}"; do
-			echo "- \`${entry%%:*}\`: \`${entry#*:}\`"
+			if [ "${entry#*:}" = "no_credential" ]; then
+				echo "- \`${entry%%:*}\`: \`${entry#*:}\` (pool_reason \`${pool_reason}\`)"
+			else
+				echo "- \`${entry%%:*}\`: \`${entry#*:}\`"
+			fi
 		done
 	} >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
 fi
