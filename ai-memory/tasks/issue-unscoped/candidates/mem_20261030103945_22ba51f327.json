@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Leave the rest of that test and test_cancel_on_close_event_runs_get_their_own_concurrency_group unchanged.\" The linked issue asks for a test-only change. \u00a79 forbids reformatting, so tests/test_review_merge_train.py should differ from base only inside test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe, plus the changelog fragment.\n  expected_change_site: tests/test_review_merge_train.py, only the group assertions at about lines 1858-1866\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The working tree still has the unrelated re-indentation. In 13 multi-line run literals, the `\"path\": ...` continuation lines use tabs only, where the base used tabs plus one space (lines 1166, 1168, 1280, 1360, 1419, 1512, 1524, 1558, 1602, 1621, 1740, 1913, 1915). The previous autofix commit e39c59a touched only the changelog fragment. Suggested fix: restore the base indentation on those 13 lines and leave lines 1858-1866 as they are. Severity stated: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=NIT, confidence=5)\n  Requirement: \"Leave the rest of that test and test_cancel_on_close_event_runs_get_their_own_concurrency_group unchanged.\" The linked issue asks for a test-only change. \u00a79 forbids reformatting.\n  Expected change site: tests/test_review_merge_train.py, only the group assertions at about lines 1858-1866\n  Evidence of absence: The unrelated re-indentation is still in the working tree. In 13 multi-line run literals, the `\"path\": ...` continuation lines use tabs only, where the base used tabs plus one space (lines 1166, 1168, 1280, 1360, 1419, 1512, 1524, 1558, 1602, 1621, 1740, 1913, 1915). Commit e39c59a touched only the changelog fragment. Suggested fix: restore the base indentation on those lines. The concurrency-group assertions and the changelog fragment otherwise meet the issue.\n- All other checklist categories (security, correctness, concurrency, error paths, performance, index contract, naming, trust boundary): NONE. HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "3a25a22673d860e94091cb0c68d6fb26b1185903ab80a2b91ac2afe8d66e9108",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8414,
+    "run_id": "41040692679",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41040692679",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030103945_22ba51f327",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8414,
+    "run_id": "41040692679"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T10:39:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
