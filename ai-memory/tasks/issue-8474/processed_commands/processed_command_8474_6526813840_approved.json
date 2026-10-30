@@ -5,13 +5,29 @@
   "entry_id": "processed_command_8474_6526813840_approved",
   "issue_number": 8474,
   "metadata": {
+    "branch": "ai/issue-8474",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "agents.d/heal-reproduce.md",
+      "changelog.d/heal-reproduce.md",
+      "docs/INVENTORY.md",
+      "docs/scripts-pending-removal.md",
+      "scripts/heal_reproduce.sh",
+      "tests/test_heal_reproduce.py",
+      "tests/test_heal_reproduce_docker_e2e.py"
+    ],
+    "issue_number": 8474,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8474",
+    "pr_number": 8477,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8477",
+    "run_attempt": "1",
+    "run_id": "41082936671",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41082936671"
   },
   "run_attempt": 1,
   "run_id": "41082936671",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-30T15:42:57Z",
+  "status": "completed",
+  "timestamp": "2026-10-30T16:17:32Z",
   "workflow": "implement"
 }
