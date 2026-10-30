@@ -1256,7 +1256,8 @@ def test_report_passes_the_pool_reason_file(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert _report_pool_lines(log) == [["Claude pool step reason: pool_dir_invalid"]]
 	assert "pool_reason_source=file" in result.stdout
-	assert "pool_dir_invalid" not in result.stdout
+	# The #8392 log suffix also names the file's token on no_credential lines.
+	assert _dispatched_line(result.stdout, "PLAN").endswith(" pool_reason=pool_dir_invalid")
 
 
 def test_report_pool_reason_env_overrides_the_file(tmp_path: Path) -> None:
@@ -1309,6 +1310,138 @@ def test_report_passes_the_pool_reason_argument_array() -> None:
 	assert '${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"}' in build
 	assert 'CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason' in text
 	assert "ai_engine_no_account_reason" not in text.split("report_pool_reason_token=", 1)[1].split("dispatched=0", 1)[0]
+# --- pool reason on no_credential refusals (issue #8392) -----------------------
+
+
+def _tg_stub(tmp_path: Path) -> tuple[Path, Path]:
+	tg_log = tmp_path / "tg.log"
+	stub = tmp_path / "tg_stub.sh"
+	stub.write_text(f"tg_send_msg() {{ printf '%s\\n' \"$1\" >> {shlex.quote(str(tg_log))}; }}\n", encoding="utf-8")
+	return stub, tg_log
+
+
+def _write_pool_reason(tmp_path: Path, content: str | None, symlink: bool = False) -> None:
+	runner_temp = tmp_path / "rt-report"
+	runner_temp.mkdir(parents=True, exist_ok=True)
+	path = runner_temp / "claude-pool-reason"
+	if content is None:
+		return
+	if symlink:
+		target = tmp_path / "pool-reason-target.txt"
+		target.write_text(content, encoding="utf-8")
+		path.symlink_to(target)
+	else:
+		path.write_text(content, encoding="utf-8")
+
+
+def _dispatched_line(stdout: str, role: str) -> str:
+	lines = [line for line in stdout.splitlines() if line.startswith(f"AI_ENGINE_FALLBACK_REPORT dispatched role={role} ")]
+	assert len(lines) == 1, stdout
+	return lines[0]
+
+
+def _dispatch_bodies(log: Path) -> list[dict]:
+	bodies = [json.loads(line) for line in Path(f"{log}.bodies").read_text(encoding="utf-8").splitlines() if line.strip()]
+	for body in bodies:
+		body["client_payload"]["report"].pop("reported_at", None)
+	return bodies
+
+
+NO_CREDENTIAL_RECORDS = _record("CLARIFY", "no_credential", "non_capacity", "refused") * 3
+
+
+@pytest.mark.parametrize("token", ["crashed", "cli_missing", "broker_refused_workflow_sha_unverifiable"])
+def test_report_names_the_pool_reason_for_no_credential(tmp_path: Path, token: str) -> None:
+	with_file = tmp_path / "with"
+	with_file.mkdir()
+	_write_pool_reason(with_file, f"{token}\n")
+	stub, tg_log = _tg_stub(with_file)
+	result, log = _run_report(with_file, NO_CREDENTIAL_RECORDS, BASH_ENV=str(stub))
+	assert result.returncode == 0, result.stderr
+	line = _dispatched_line(result.stdout, "CLARIFY")
+	assert "fallback_reason=no_credential" in line
+	assert line.endswith(f" pool_reason={token}")
+	assert f"pool_reason={token}" in tg_log.read_text(encoding="utf-8")
+	assert f"(pool_reason `{token}`)" in (with_file / "summary.md").read_text(encoding="utf-8")
+
+	# Since #8406 the reason file adds one evidence line to the heal payload;
+	# apart from that line the payload is unchanged.
+	without_file = tmp_path / "without"
+	without_file.mkdir()
+	plain, plain_log = _run_report(without_file, NO_CREDENTIAL_RECORDS)
+	assert plain.returncode == 0, plain.stderr
+	assert _report_pool_lines(log) == [[f"{POOL_LINE_PREFIX}{token}"]]
+	assert _report_pool_lines(plain_log) == [[]]
+	with_bodies = _dispatch_bodies(log)
+	for body in with_bodies:
+		evidence = body["client_payload"]["report"]["failure_evidence"].split("\n")
+		body["client_payload"]["report"]["failure_evidence"] = "\n".join(
+			part for part in evidence if not part.startswith(POOL_LINE_PREFIX)
+		)
+	assert with_bodies == _dispatch_bodies(plain_log)
+	report = with_bodies[0]["client_payload"]["report"]
+	assert report["engine_reason"] == "no_credential"
+	assert token not in json.dumps(report)
+
+
+@pytest.mark.parametrize(("content", "symlink"), [
+	(None, False),
+	("crashed\n", True),
+	("a" * 61, False),
+	("b" * 100, False),
+	("Bad Reason!", False),
+	("CRASHED", False),
+	("", False),
+])
+def test_report_pool_reason_unavailable_when_unreadable(tmp_path: Path, content: str | None, symlink: bool) -> None:
+	_write_pool_reason(tmp_path, content, symlink=symlink)
+	result, log = _run_report(tmp_path, NO_CREDENTIAL_RECORDS)
+	assert result.returncode == 0, result.stderr
+	assert _dispatched_line(result.stdout, "CLARIFY").endswith(" pool_reason=unavailable")
+	assert len(log.read_text(encoding="utf-8").splitlines()) == 1
+	assert "outcome=reported pairs=1 dispatched=1" in result.stdout
+
+
+def test_report_pool_reason_only_labels_no_credential(tmp_path: Path) -> None:
+	records = _record("CLARIFY", "isolation_unavailable", "non_capacity", "refused") + _record("PLAN", "no_credential", "non_capacity", "refused")
+	_write_pool_reason(tmp_path, "crashed\n")
+	result, _ = _run_report(tmp_path, records)
+	assert result.returncode == 0, result.stderr
+	assert "pool_reason=" not in _dispatched_line(result.stdout, "CLARIFY")
+	assert _dispatched_line(result.stdout, "PLAN").endswith(" pool_reason=crashed")
+	summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
+	assert "- `CLARIFY`: `isolation_unavailable`\n" in summary
+	assert "- `PLAN`: `no_credential` (pool_reason `crashed`)" in summary
+
+	disabled = tmp_path / "disabled"
+	disabled.mkdir()
+	_write_pool_reason(disabled, "crashed\n")
+	result, log = _run_report(disabled, records, WORKFLOW_HEAL_ENABLED="false")
+	assert result.returncode == 0, result.stderr
+	assert "skip_dispatch reason=disabled role=PLAN fallback_reason=no_credential pool_reason=crashed" in result.stdout
+	assert "skip_dispatch reason=disabled role=CLARIFY fallback_reason=isolation_unavailable\n" in result.stdout + "\n"
+	assert not log.exists()
+
+
+def test_report_pool_reason_keeps_detail_last_on_a_denied_dispatch(tmp_path: Path) -> None:
+	_write_pool_reason(tmp_path, "auth_failed\n")
+	result, _ = _run_report(tmp_path, NO_CREDENTIAL_RECORDS, FAKE_GH_FAIL="1")
+	assert result.returncode == 0, result.stderr
+	line = next(line for line in result.stdout.splitlines() if "skip_dispatch reason=dispatch_denied" in line)
+	assert " pool_reason=auth_failed detail=" in line
+
+
+@pytest.mark.parametrize(("token", "expected"), [
+	("crashed", "no_credential"),
+	("cli_missing", "no_credential"),
+	("broker_refused_workflow_sha_unverifiable", "no_credential"),
+	("all_gated", "all_gated"),
+])
+def test_no_account_reason_output_is_unchanged_by_the_pool_reason(sandbox: dict, token: str, expected: str) -> None:
+	(sandbox["runner_temp"] / "claude-pool-reason").write_text(f"{token}\n", encoding="utf-8")
+	result = _bash(sandbox, "ai_engine_no_account_reason")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == f"{expected}\n"
 
 
 # --- Claude capacity wait (issue #7251, capacity-wait Phase 1) -----------------
