@@ -165,9 +165,10 @@ def plan(root: Path, before: str, after: str, *, recover_both_changed: bool = Tr
 			# Issue #8405: a push that changed both copies and left them
 			# different would otherwise keep main's strict parity red forever.
 			# The template is the source of truth; provenance routing still
-			# decides the PR (the commit range after the live copy's last commit
-			# is empty here, so it holds the path as no_template_commits). A
-			# live-only change is a deliberate edit and stays untouched.
+			# decides the PR. It holds the path as no_template_commits unless a
+			# later commit in the push changed only the template, which goes
+			# through the normal provenance check. A live-only change is a
+			# deliberate edit and stays untouched.
 			if TEMPLATE_PREFIX + relative in changed:
 				if recover_both_changed:
 					log(f"both_changed path={LIVE_PREFIX}{relative} action=template_wins")
@@ -191,12 +192,15 @@ def plan(root: Path, before: str, after: str, *, recover_both_changed: bool = Tr
 			and _git(root, "merge-base", "--is-ancestor", live_sha, template_sha, check=False).returncode == 0
 		)):
 			paths.append(relative)
-		elif recover_both_changed and template_sha and live_sha == template_sha:
+		elif template_sha and live_sha == template_sha:
 			# One commit last touched both copies and they still differ (the
 			# #8316 state); its own sync run was skipped or failed. A later
 			# live-only edit gives the live copy a newer commit and is kept.
-			log(f"both_changed path={LIVE_PREFIX}{relative} action=template_wins")
-			paths.append(relative)
+			if recover_both_changed:
+				log(f"both_changed path={LIVE_PREFIX}{relative} action=template_wins")
+				paths.append(relative)
+			else:
+				log(f"both_changed path={LIVE_PREFIX}{relative} action=left_for_parity")
 	return paths
 
 
