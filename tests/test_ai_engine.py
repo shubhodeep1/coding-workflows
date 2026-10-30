@@ -1267,6 +1267,16 @@ def test_report_pool_reason_env_overrides_the_file(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert _report_pool_lines(log) == [["Claude pool step reason: from_env"]]
 	assert "pool_reason_source=env" in result.stdout
+	# The #8392 suffix and summary name the same token as the payload.
+	assert _dispatched_line(result.stdout, "PLAN").endswith(" pool_reason_source=env pool_reason=from_env")
+	assert "(pool_reason `from_env`)" in (tmp_path / "summary.md").read_text(encoding="utf-8")
+
+
+def test_report_pool_reason_suffix_uses_the_env_without_a_file(tmp_path: Path) -> None:
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON="from_env")
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: from_env"]]
+	assert _dispatched_line(result.stdout, "PLAN").endswith(" pool_reason_source=env pool_reason=from_env")
 
 
 def test_report_invalid_pool_reason_becomes_unavailable(tmp_path: Path) -> None:

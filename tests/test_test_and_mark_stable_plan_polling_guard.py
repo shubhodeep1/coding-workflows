@@ -53,8 +53,9 @@ elif "/actions/runs?" in path and "status=in_progress" in path:
 	# wait-implement's stall diagnostics read of every in-progress run.
 	payload = {"workflow_runs": json.loads(os.environ.get("STUB_IN_PROGRESS_RUNS", "[]"))}
 elif "/actions/runs?" in path and os.environ.get("STUB_UNPAGED_RUNS_INVALID") and "&page=" not in path:
-	# The other-active check's page-1 read (fetch_plan_runs_json) is the only
-	# runs request without &page=; this makes just that read unreadable.
+	# Unpaged runs reads: the other-active check's page-1 read
+	# (fetch_plan_runs_json) and wait-implement's stall-diagnostics window read
+	# (the in-progress read is answered above); this makes them unreadable.
 	payload = {"workflow_runs": None}
 elif "/actions/runs?" in path:
 	pages = json.loads(open(os.environ["STUB_RUN_PAGES"], encoding="utf-8").read())

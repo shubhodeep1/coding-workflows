@@ -78,38 +78,15 @@
 #                                    empty (default ${RUNNER_TEMP:-/tmp}/claude-pool-reason;
 #                                    regular files only, first 64 bytes). With neither
 #                                    source --pool-reason is left out and the payload is
-#                                    unchanged. The file alone also labels `no_credential`
-#                                    refusals in the log, alert and summary with
-#                                    pool_reason= (issue #8392)
+#                                    unchanged. The same token (env first, then the file)
+#                                    also labels `no_credential` refusals in the log,
+#                                    alert and summary with pool_reason= (issue #8392)
 
 set -uo pipefail
 
 log()
 {
 	echo "AI_ENGINE_FALLBACK_REPORT $*"
-}
-
-# report_pool_reason_token
-# Prints the Claude pool step's reason token (written by claude_pool_token.sh
-# finish()) so a `no_credential` refusal names the real pool outcome (issue
-# #8392). Keep the read rules in step with ai_engine_no_account_reason in
-# scripts/ai_engine.sh: same file, no symlinks, regular files only, at most 64
-# bytes. The value is untrusted: only ^[a-z0-9_]{1,60}$ is printed, anything
-# else (missing, symlinked, unreadable, malformed) prints `unavailable`.
-# Diagnostic only: never changes routing, the payload or the exit code.
-report_pool_reason_token()
-{
-	local reason_file token=""
-	reason_file="${CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason}"
-	if [ -f "${reason_file}" ] && [ ! -L "${reason_file}" ]; then
-		token="$(head -c 64 -- "${reason_file}" 2>/dev/null | tr -d '[:space:]')" || token=""
-	fi
-	if [[ "${token}" =~ ^[a-z0-9_]{1,60}$ ]]; then
-		printf '%s\n' "${token}"
-	else
-		printf 'unavailable\n'
-	fi
-	return 0
 }
 
 RECORDS_FILE="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
@@ -373,7 +350,11 @@ if [ "${report_pool_reason_source}" != "none" ]; then
 	# becomes "unavailable" instead of failing argument parsing.
 	report_pool_reason_args=("--pool-reason=${report_pool_reason_token}")
 fi
-pool_reason="$(report_pool_reason_token)" || pool_reason="unavailable"
+# The no_credential log suffix, alert and summary (issue #8392) show the same
+# token the payload gets, so they follow the env-then-file order above. The
+# value is untrusted: only ^[a-z0-9_]{1,60}$ is shown, anything else (no source,
+# symlinked, unreadable, malformed) shows "unavailable". Diagnostic only.
+pool_reason="${report_pool_reason_token}"
 [[ "${pool_reason}" =~ ^[a-z0-9_]{1,60}$ ]] || pool_reason="unavailable"
 dispatched=0
 any_no_credential=false
