@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2207-2216 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The carried-over #8394 comment \"This job has the most recorded room (#8278; its last own budget-watch issue was #7677)\" now sits above a step in tests-release-and-log-analysis, so it names the wrong job's headroom record and is stacked under the #8466 rationale block.\n  WHY: It has no runtime effect, but it could mislead a maintainer rebalancing CI jobs. Reviewers rated it NIT, mapped here to low. google_gemini-3_1-flash-lite cited lines 2212-2216 and minimax_minimax-m3 cited 2212-2216 plus the step at line 2217.\n- .github/workflows/ci.yml:39-46 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `static-checks` header comment may still list `tests-promote-stall-and-review` as the destination of the bootstrap step.\n  WHY: It is a documentation drift with no runtime effect. The reviewer did not re-read these lines. Rated NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:2207-2216 | severity=NIT | confidence=4\n  PROBLEM: The #8394 comment was carried over unchanged. It says \"This job has the most recent recorded room (#8278; its last own budget-watch issue was #7677)\", but #7677 was the promote job's issue. Two rationale blocks, #8466 and #8394, are stacked above one step.\n  WHY: It has no runtime effect. A maintainer would read the headroom claim as describing the release job.\n- .github/workflows/ci.yml:39-46 (the `static-checks` header comment) | severity=NIT | confidence=2\n  PROBLEM: It may still list `tests-promote-stall-and-review` as the destination of the bootstrap step. The reviewer did not re-read those lines.\n  WHY: It is a documentation drift only, with no runtime effect.\n- Other sections: NONE. Hardening suggestion: delete the carried-over sentence and keep a single rationale block (about 4 lines). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2212-2216 | severity=NIT | confidence=4\n  PROBLEM: The moved step carries a stale comment claiming \"This job has the most recorded room (#8278; its last own budget-watch issue was #7677)\".\n  WHY: The claim is false for the new job (`tests-release-and-log-analysis`) and misleading, because the headroom record belonged to the source job or is stale.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:2212-2216 (the comment block above the step at line 2217) | severity=NIT | confidence=4\n  PROBLEM: The carried-over #8394 rationale named the promote job's headroom record. #7677 was the promote job's last budget-watch issue, not the release job's. The release job's own last issue was #8278, which the #8466 block above already states.\n  WHY: It is a documentation defect with no runtime effect. It could mislead a maintainer rebalancing CI jobs.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2212-2216 | severity=NIT\n  PROBLEM: The carried-over #8394 rationale, \"This job has the most recorded room (#8278; its last own budget-watch issue was #7677)\", described the promote job, not the release job it now sits in.\n  WHY: It is comment-only and harmless, and fixing it is optional.\n- The reviewer said the five pre-push failures are not caused by this PR and do not reproduce on the PR head (`bc2b4dc`). It refuted both BLOCKER findings and the \"no diff hunk at the expected site\" completeness finding, and reported no other defects.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ef92c96588bf01c3ba9462af6313923be4757226a21ddf0912125112ae035675",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8469,
+    "run_id": "41052422026",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41052422026",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030125721_535004644f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8469,
+    "run_id": "41052422026"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T12:57:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
