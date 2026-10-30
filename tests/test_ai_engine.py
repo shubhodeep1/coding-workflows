@@ -1345,6 +1345,15 @@ def test_report_pool_reason_keeps_detail_last_on_a_denied_dispatch(tmp_path: Pat
 	assert " pool_reason=auth_failed detail=" in line
 
 
+def test_report_pool_reason_label_follows_the_env_like_the_payload(tmp_path: Path) -> None:
+	# The label uses the same env-or-file value as --pool-reason (issue #8392).
+	_write_pool_reason(tmp_path, "crashed\n")
+	result, log = _run_report(tmp_path, NO_CREDENTIAL_RECORDS, CLAUDE_POOL_REASON="cli_missing")
+	assert result.returncode == 0, result.stderr
+	assert _dispatched_line(result.stdout, "CLARIFY").endswith(" pool_reason_source=env pool_reason=cli_missing")
+	assert _report_pool_lines(log) == [["Claude pool step reason: cli_missing"]]
+
+
 @pytest.mark.parametrize(("token", "expected"), [
 	("crashed", "no_credential"),
 	("cli_missing", "no_credential"),
