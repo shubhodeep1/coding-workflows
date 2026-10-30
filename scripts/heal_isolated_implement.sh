@@ -600,7 +600,49 @@ def cmd_final(tests_file, edited, failing, sha, out, forced):
 	return 0
 
 
+def cmd_scope(support, workspace, manifest, scope_file):
+	# The repro-tree transfer checks the host baseline before the per-file
+	# scope rules (review_untrusted_workspace.transfer), so a clean HEAD tree
+	# can hide a scope violation behind host_baseline_changed. This repeats
+	# only those per-file rules, in the same order, against the snapshot and
+	# the manifest; the host is never read. Prints out_of_scope, in_scope or
+	# unknown (any error; the caller then keeps its exit 43 hold).
+	try:
+		import hashlib
+		from pathlib import Path
+		sys.path.insert(0, support)
+		import review_untrusted_workspace as ruw
+		from files_touched_scope_guard import entry_matches
+		scope = Path(scope_file).read_text(encoding="utf-8").splitlines()
+		man = Path(manifest)
+		commands = ruw.load_admitted_commands(man)
+		baseline = json.loads(man.read_text(encoding="utf-8"))
+		results = {name: (data, mode) for name, data, mode in ruw.enumerate_workspace(Path(workspace), None, commands, strict=True)}
+		for name in sorted(set(baseline) | set(results)):
+			old = baseline.get(name)
+			new = results.get(name)
+			if new is not None and old == [hashlib.sha256(new[0]).hexdigest(), new[1]]:
+				continue
+			if not ruw.allowed(name, None, commands):
+				print("unknown")
+				return 0
+			git_control = any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in name.split("/"))
+			if name.startswith((".github/ai/", ".claude/")) or git_control or not any(entry_matches(entry, name) for entry in scope):
+				print("out_of_scope")
+				return 0
+			if new is not None and old is not None and new[1] != old[1]:
+				print("out_of_scope")
+				return 0
+	except Exception:  # noqa: BLE001 - classification only; fail closed to exit 43
+		print("unknown")
+		return 0
+	print("in_scope")
+	return 0
+
+
 def main(argv):
+	if argv[0] == "scope":
+		return cmd_scope(*argv[1:5])
 	if argv[0] == "tests":
 		return cmd_tests(*argv[1:4])
 	if argv[0] == "edited_ok":
@@ -715,13 +757,21 @@ heal_impl_repro_check()
 	# host workspace, so this transfer can fail (host baseline changed) where the
 	# host transfer would not. Hold with an accurate reason (exit 43); the heal
 	# is held and handed to a person either way. A real scope violation keeps
-	# the host transfer's exit 42 / out_of_heal_scope.
+	# the host transfer's exit 42 / out_of_heal_scope, also when the baseline
+	# check failed first (cmd_scope). The stderr file lives in ${root} itself,
+	# never in the editor-writable results/ mount.
+	rm -f -- "${root}/repro-transfer.err"
 	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer \
-		"${root}/repro-tree" "${root}/source" "${root}/manifest.repro.json" --scope-file "${scope}" >/dev/null 2>"${root}/results/repro-transfer.err"; then
-		if grep -q 'reason=out_of_heal_scope' "${root}/results/repro-transfer.err" 2>/dev/null; then
+		"${root}/repro-tree" "${root}/source" "${root}/manifest.repro.json" --scope-file "${scope}" >/dev/null 2>"${root}/repro-transfer.err"; then
+		local transfer_reason
+		transfer_reason="$(grep -o 'reason=[a-z_]*' "${root}/repro-transfer.err" 2>/dev/null | head -n 1)" || transfer_reason=""
+		[[ "${transfer_reason}" =~ ^reason=[a-z_]{1,64}$ ]] || transfer_reason="reason=unknown"
+		if [ "${transfer_reason}" = reason=out_of_heal_scope ] \
+			|| [ "$(heal_impl_repro_py_run scope "${support}" "${root}/source" "${root}/manifest.repro.json" "${scope}" 2>/dev/null)" = out_of_scope ]; then
 			echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope" >&2
 			exit 42
 		fi
+		echo "HEAL_ISOLATED_EDITOR phase=repro_transfer outcome=failed ${transfer_reason}" >&2
 		heal_impl_repro_finish repro_tree_unavailable "${failing_sha}"
 	fi
 	# Run 1: the edited tree, baseline the failing SHA.

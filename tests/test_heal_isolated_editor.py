@@ -830,7 +830,8 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 		with_step: bool = True, validator_down_after_repair: bool = False, gate_budget: str = "", job_start_age: int = 0,
 		repro_enabled: bool | None = None, approval_body: str | None = None, plan_text: str | None = None,
 		issue_body: str | None = None, repro_results: dict | None = None, record_gate: bool = False,
-		with_prepare: bool = False, comments_text: str | None = None, scope_text: str | None = None) -> dict:
+		with_prepare: bool = False, comments_text: str | None = None, scope_text: str | None = None,
+		untracked_host_file: bool = False) -> dict:
 	host = tmp_path / "host"
 	(host / "scripts").mkdir(parents=True)
 	(host / "tests").mkdir()
@@ -839,6 +840,9 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 	git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 	for cmd in (["init", "-q"], ["add", "--all"], ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "base"]):
 		subprocess.run(["git", *cmd], cwd=host, check=True, env=git_env)
+	if untracked_host_file:
+		# Untracked, not ignored: in the snapshot baseline, absent from a clean HEAD tree.
+		(host / "scripts/extra.py").write_text("local\n")
 	support = tmp_path / "support" / "scripts"
 	support.mkdir(parents=True)
 	(tmp_path / "support" / "prompts").mkdir()
@@ -1212,4 +1216,27 @@ def test_repro_out_of_scope_edit_keeps_exit_42(tmp_path: Path) -> None:
 	assert run["repro_calls"] == []
 	assert "phase=transfer engine=codex outcome=failed reason=out_of_heal_scope" in run["stderr"]
 	assert "phase=repro_check" not in run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
+
+
+def test_repro_out_of_scope_edit_keeps_exit_42_behind_a_host_baseline_mismatch(tmp_path: Path) -> None:
+	# An untracked host file makes the repro-tree transfer fail its baseline
+	# check (host_baseline_changed) before the scope check; the scope-only
+	# check still classifies the out-of-scope edit as exit 42.
+	run = _repro_run(tmp_path, scope_text="tests/**\nchangelog.d/*.md\n", untracked_host_file=True)
+	assert run["rc"] == 42, run["stderr"]
+	assert run["repro_calls"] == []
+	assert "phase=transfer engine=codex outcome=failed reason=out_of_heal_scope" in run["stderr"]
+	assert "phase=repro_check" not in run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
+
+
+def test_repro_tree_transfer_failure_logs_its_reason_token(tmp_path: Path) -> None:
+	# In-scope edit, but the clean HEAD tree lacks the untracked host file:
+	# the hold names the transfer's fixed reason token in the log.
+	run = _repro_run(tmp_path, untracked_host_file=True)
+	assert run["rc"] == 43, run["stderr"]
+	assert run["repro_calls"] == []
+	assert "HEAL_ISOLATED_EDITOR phase=repro_transfer outcome=failed reason=host_baseline_changed" in run["stderr"]
+	assert run["repro_result"]["reason"] == "repro_tree_unavailable"
 	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
