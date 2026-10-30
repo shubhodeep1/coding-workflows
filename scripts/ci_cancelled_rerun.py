@@ -16,6 +16,10 @@ and at most MAX_FAILURE_CLASSIFICATIONS_PER_TICK classified runs per tick
 Eligible runs get one rerun-failed-jobs POST, with no retry or full-rerun
 fallback. The bounded completed window cannot establish an absolute
 once-per-head cap if an older, distinct run ID has fallen out of view.
+A failed job that ran no steps and whose only failure annotations are
+GitHub's "Unable to resolve action ..." text (issue #8471) is also re-run
+once (reason `action_resolution`), using the same reads and no extra API
+calls; CI_ACTION_RESOLUTION_RERUN_ENABLED=false turns that class off.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -34,6 +39,14 @@ ACTIVE_STATUSES = ("queued", "in_progress", "pending")
 # Runner-shutdown classification (issue #7109). The runner writes this text as
 # an `##[error]` line, which GitHub records as a failure annotation on the job.
 RUNNER_SHUTDOWN_PREFIX = "The runner has received a shutdown signal"
+# Action-resolution classification (issues #8470 / #8471, run 41054179361):
+# a job that failed before any step ran because GitHub could not resolve an
+# action tag that resolved in the run's other jobs. Used with .fullmatch()
+# on the stripped message, which gives the issue's ^...$ anchoring.
+ACTION_RESOLUTION_MESSAGE = re.compile(
+	r"Unable to resolve action `[^`]+`, unable to find version `[^`]+`"
+	r"(\. Unable to resolve action `[^`]+`, unable to find version `[^`]+`)*\.?"
+)
 # ci.yml's aggregate job keeps the id `lint` (CLAUDE.md §6) and fails with
 # `::error::CI jobs that did not succeed: <key>, <key>` when a needed job fails.
 CI_AGGREGATE_JOB_NAME = "lint"
@@ -50,6 +63,28 @@ BENIGN_JOB_CONCLUSIONS = ("success", "skipped", "neutral", "cancelled", "failure
 
 def positive_number(value: object) -> bool:
 	return type(value) is int and value > 0
+
+
+def action_resolution_rerun_enabled(raw: str | None) -> bool:
+	# Off switch for the action-resolution class only (issue #8471). Unset,
+	# empty or any-case `true` keeps it on; `false` turns it off; any other
+	# value turns it off and warns. The raw value is never echoed.
+	value = (raw or "").lower()
+	if value in ("", "true"):
+		return True
+	if value != "false":
+		print("::warning::CI_ACTION_RESOLUTION_RERUN_ENABLED is not true or false; "
+			"action-resolution CI re-runs are off", file=sys.stderr)
+	return False
+
+
+def job_ran_no_steps(job: dict) -> bool:
+	# Fail closed: a missing or malformed `steps` value is not evidence
+	# that the job ran no steps, so today's `genuine` result stands.
+	steps = job.get("steps")
+	if not isinstance(steps, list) or any(not isinstance(step, dict) for step in steps):
+		return False
+	return not any(step.get("conclusion") in ("success", "failure") for step in steps)
 
 
 def decision(pr: object, head: object, run: object, action: str, reason: str) -> None:
@@ -224,12 +259,16 @@ def failure_annotations(repo: str, check_run_id: int) -> list[dict]:
 	return [item for item in payload if item["annotation_level"] == "failure"]
 
 
-def classify_runner_shutdown(repo: str, run_id: int) -> str:
-	"""Return "shutdown", "genuine", or "unverified" for a failed CI run.
+def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: bool = True) -> str:
+	"""Return "shutdown", "action_resolution", "genuine", or "unverified".
 
 	Fail closed: only a run whose every failed job was killed by a runner
-	shutdown (or is the `lint` aggregate reporting only such jobs) counts.
-	Annotation text is never logged; it can be written by a PR's own steps.
+	shutdown or, when enabled, failed before any step ran with only
+	"Unable to resolve action" annotations (or is the `lint` aggregate
+	reporting only such jobs) counts. "action_resolution" means every
+	non-lint failed job is in that class; a mix with shutdown jobs is
+	"shutdown". Annotation text is never logged; it can be written by a
+	PR's own steps.
 	"""
 	try:
 		jobs = list_run_jobs(repo, run_id)
@@ -239,6 +278,7 @@ def classify_runner_shutdown(repo: str, run_id: int) -> str:
 		if not failed or len(failed) > MAX_FAILED_JOBS_CLASSIFIED:
 			return "unverified"
 		shutdown_ids: set[int] = set()
+		action_resolution_ids: set[int] = set()
 		aggregate_annotations: list[list[dict]] = []
 		for job in failed:
 			check_run_id = int(CHECK_RUN_URL_PATTERN.search(job["check_run_url"])[1])
@@ -251,6 +291,13 @@ def classify_runner_shutdown(repo: str, run_id: int) -> str:
 				# Any other failure annotation (a failed step's exit code, a
 				# test error) means the job also failed for real.
 				shutdown_ids.add(job["id"])
+			elif action_resolution_enabled and job_ran_no_steps(job) and annotations \
+					and all(ACTION_RESOLUTION_MESSAGE.fullmatch(item["message"].strip())
+						for item in annotations):
+				# Transient action resolution (issue #8471): no step ran, so no
+				# PR-controlled step could have written these annotations.
+				shutdown_ids.add(job["id"])
+				action_resolution_ids.add(job["id"])
 			else:
 				return "genuine"
 		for annotations in aggregate_annotations:
@@ -274,11 +321,14 @@ def classify_runner_shutdown(repo: str, run_id: int) -> str:
 				if not named or any(job["id"] not in shutdown_ids and job["conclusion"] != "cancelled"
 						for job in named):
 					return "genuine"
-		return "shutdown" if shutdown_ids else "unverified"
+		if not shutdown_ids:
+			return "unverified"
+		return "action_resolution" if action_resolution_ids == shutdown_ids else "shutdown"
 	except (ValueError, OSError, subprocess.TimeoutExpired):
 		return "unverified"
 
-def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str) -> None:
+def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str,
+		action_resolution_enabled: bool = True) -> None:
 	# One malformed item makes the enumerated set incomplete: do not infer
 	# that the remaining entries are the only open PRs on a shared head.
 	if any(not isinstance(pr, dict) or not positive_number(pr.get("number"))
@@ -386,13 +436,14 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 				decision(number, sha, run_id, "skip", "runner_shutdown_unverified")
 				continue
 			classified += 1
-			verdict = classify_runner_shutdown(repo, run_id)
+			verdict = classify_runner_shutdown(repo, run_id, action_resolution_enabled=action_resolution_enabled)
 			if verdict == "genuine":
 				decision(number, sha, run_id, "skip", "other_conclusion")
-			elif verdict != "shutdown":
+			elif verdict not in ("shutdown", "action_resolution"):
 				decision(number, sha, run_id, "skip", "runner_shutdown_unverified")
 			elif rerun_failed_jobs(repo, run_id):
-				decision(number, sha, run_id, "rerun", "runner_shutdown")
+				decision(number, sha, run_id, "rerun",
+					"action_resolution" if verdict == "action_resolution" else "runner_shutdown")
 			else:
 				decision(number, sha, run_id, "skip", "rerun_refused")
 		elif rerun_failed_jobs(repo, run_id):
@@ -415,6 +466,8 @@ def main() -> None:
 		os.environ.get("CI_CANCELLED_AUTO_RERUN_ENABLED", "true").lower() == "true",
 		os.environ.get("DRY_RUN", "false").lower() == "true",
 		os.environ.get("HEAD_REF_FILTER", ""),
+		action_resolution_enabled=action_resolution_rerun_enabled(
+			os.environ.get("CI_ACTION_RESOLUTION_RERUN_ENABLED")),
 	)
 
 
