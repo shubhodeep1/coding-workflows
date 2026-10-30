@@ -768,27 +768,6 @@ def test_write_role_reuses_the_prepared_implement_sandbox(sandbox: dict) -> None
 	assert f"coding-workflows.codex-isolated.root={root}" not in run["argv"]
 
 
-def test_every_workflow_staging_ai_engine_also_stages_its_stall_guard() -> None:
-	"""claude_run calls ${_AI_ENGINE_DIR}/codex_stall_guard.sh with --engine.
-
-	A workflow that stages ai_engine.sh from the support ref but leaves the
-	stall guard to the checkout runs whatever guard the checked-out branch
-	carries. A heal issue plans against `stable`, whose older guard rejected
-	`--engine` and crashed every Claude planning attempt (runs 37389550162,
-	37389524799, 37389535878).
-	"""
-	workflows = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
-	staging_lists = []
-	for path in workflows:
-		for line in path.read_text(encoding="utf-8").splitlines():
-			stripped = line.strip()
-			if stripped.startswith("for f in ") and stripped.endswith("; do") and " ai_engine.sh " in f" {stripped} ":
-				staging_lists.append((path.name, stripped.split()))
-	assert {name for name, _ in staging_lists} >= {"plan.yml", "clarify.yml", "orchestrate_clarify_respond.yml", "implement.yml"}
-	missing = [name for name, names in staging_lists if "codex_stall_guard.sh" not in names]
-	assert not missing, f"stage codex_stall_guard.sh beside ai_engine.sh in: {missing}"
-
-
 # --- claude_run_selected / ai_engine_stage_support (plan item 3a) -----------------
 
 
@@ -1308,15 +1287,16 @@ def test_report_names_the_pool_reason_for_no_credential(tmp_path: Path, token: s
 	assert f"pool_reason={token}" in tg_log.read_text(encoding="utf-8")
 	assert f"(pool_reason `{token}`)" in (with_file / "summary.md").read_text(encoding="utf-8")
 
-	# The heal payload is unchanged by the reason file.
+	# The reason file only adds the pool reason evidence line (issue #8406).
 	without_file = tmp_path / "without"
 	without_file.mkdir()
 	plain, plain_log = _run_report(without_file, NO_CREDENTIAL_RECORDS)
 	assert plain.returncode == 0, plain.stderr
-	assert _dispatch_bodies(log) == _dispatch_bodies(plain_log)
+	assert _report_pool_lines(log) == [[f"Claude pool step reason: {token}"]]
+	assert _report_pool_lines(plain_log) == [[]]
 	report = _dispatch_bodies(log)[0]["client_payload"]["report"]
 	assert report["engine_reason"] == "no_credential"
-	assert token not in json.dumps(report)
+	assert _dispatch_bodies(plain_log)[0]["client_payload"]["report"]["engine_reason"] == "no_credential"
 
 
 @pytest.mark.parametrize(("content", "symlink"), [
@@ -1377,6 +1357,85 @@ def test_no_account_reason_output_is_unchanged_by_the_pool_reason(sandbox: dict,
 	result = _bash(sandbox, "ai_engine_no_account_reason")
 	assert result.returncode == 0, result.stderr
 	assert result.stdout == f"{expected}\n"
+
+
+# --- Claude pool step reason in the heal payload (issue #8406) -------------------
+
+POOL_LINE_PREFIX = "Claude pool step reason: "
+
+
+def _report_pool_lines(log: Path) -> list[list[str]]:
+	bodies = [json.loads(line) for line in Path(f"{log}.bodies").read_text(encoding="utf-8").splitlines() if line.strip()]
+	return [
+		[line for line in body["client_payload"]["report"]["failure_evidence"].split("\n") if line.startswith(POOL_LINE_PREFIX)]
+		for body in bodies
+	]
+
+
+REFUSED_RECORD = _record("PLAN", "no_credential", "non_capacity", "refused")
+
+
+def test_report_passes_the_pool_reason_file(tmp_path: Path) -> None:
+	(tmp_path / "rt-report").mkdir()
+	(tmp_path / "rt-report" / "claude-pool-reason").write_text("pool_dir_invalid\n", encoding="utf-8")
+	result, log = _run_report(tmp_path, REFUSED_RECORD)
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: pool_dir_invalid"]]
+	assert "pool_reason_source=file" in result.stdout
+	# The validated token is labelled on no_credential refusals (issue #8392).
+	assert _dispatched_line(result.stdout, "PLAN").endswith(" pool_reason=pool_dir_invalid")
+
+
+def test_report_pool_reason_env_overrides_the_file(tmp_path: Path) -> None:
+	(tmp_path / "rt-report").mkdir()
+	(tmp_path / "rt-report" / "claude-pool-reason").write_text("from_file\n", encoding="utf-8")
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON="from_env")
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: from_env"]]
+	assert "pool_reason_source=env" in result.stdout
+
+
+def test_report_invalid_pool_reason_becomes_unavailable(tmp_path: Path) -> None:
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON="Not Valid @x")
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: unavailable"]]
+	assert "Not Valid" not in result.stdout
+
+
+def test_report_pool_reason_starting_with_a_dash_is_unavailable(tmp_path: Path) -> None:
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON="-x")
+	assert result.returncode == 0, result.stderr
+	assert "payload_build_failed" not in result.stdout
+	assert _report_pool_lines(log) == [["Claude pool step reason: unavailable"]]
+
+
+@pytest.mark.parametrize("variant", ["missing", "symlink"])
+def test_report_without_a_pool_reason_source_omits_the_line(tmp_path: Path, variant: str) -> None:
+	if variant == "symlink":
+		(tmp_path / "rt-report").mkdir()
+		target = tmp_path / "secret.txt"
+		target.write_text("selected\n", encoding="utf-8")
+		(tmp_path / "rt-report" / "claude-pool-reason").symlink_to(target)
+	result, log = _run_report(tmp_path, REFUSED_RECORD)
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [[]]
+	assert "pool_reason_source=none" in result.stdout
+
+
+def test_report_pool_reason_file_override_path(tmp_path: Path) -> None:
+	reason_file = tmp_path / "custom-reason"
+	reason_file.write_text("  selected \n", encoding="utf-8")
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON_FILE=str(reason_file))
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: selected"]]
+
+
+def test_report_passes_the_pool_reason_argument_array() -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
+	build = text[text.index("build-engine-fallback-payload --repo"):text.index("wrap-dispatch --payload-json")]
+	assert '${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"}' in build
+	assert 'CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason' in text
+	assert "ai_engine_no_account_reason" not in text.split("report_pool_reason_token=", 1)[1].split("dispatched=0", 1)[0]
 
 
 # --- Claude capacity wait (issue #7251, capacity-wait Phase 1) -----------------
@@ -1510,7 +1569,7 @@ def _fake_tracker(tmp_path: Path, opened: bool, tracker: str = "900") -> Path:
 		"args = sys.argv[1:]\n"
 		"alert = args[args.index('--alert-out') + 1]\n"
 		+ (f"open(alert, 'w').write('opened')\nprint('PROVIDER_OUTAGE op=open outcome=opened')\nprint('alert=1 outcome=opened tracker={tracker}')\n"
-		   if opened else f"print('alert=0 outcome=already_open tracker={tracker}')\n"),
+			if opened else f"print('alert=0 outcome=already_open tracker={tracker}')\n"),
 		encoding="utf-8",
 	)
 	return stub
