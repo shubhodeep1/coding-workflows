@@ -351,6 +351,9 @@ def test_plan_workflow_wiring():
 	validate = _step(text, "Validate done-check (acceptance)")
 	assert "if: env.PERSIST_ACCEPTANCE_ENABLED == 'true' && env.SKIP_PLAN != 'true'" in validate
 	assert "continue-on-error: true" in validate
+	# Both helpers must be staged: acceptance_check.py imports targeted_file_context.
+	assert "[ -f scripts/acceptance_check.py ] && [ -f scripts/targeted_file_context.py ]" in validate
+	assert 'echo "PERSIST acceptance outcome=skipped reason=helper_absent"; exit 0;' in validate
 	assert text.index("- name: Parse planning output") < text.index("- name: Validate done-check (acceptance)") < text.index("- name: Post implementation plan")
 	post = _step(text, "Post implementation plan")
 	gate = 'if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = true ] && [ -s "${RUNTIME_DIR}/acceptance_marker.txt" ]; then cat'
