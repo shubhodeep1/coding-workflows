@@ -1287,15 +1287,24 @@ def test_report_names_the_pool_reason_for_no_credential(tmp_path: Path, token: s
 	assert f"pool_reason={token}" in tg_log.read_text(encoding="utf-8")
 	assert f"(pool_reason `{token}`)" in (with_file / "summary.md").read_text(encoding="utf-8")
 
-	# The reason file adds only the issue #8406 pool reason evidence line.
+	# Since #8406 the reason file adds one evidence line to the heal payload;
+	# apart from that line the payload is unchanged.
 	without_file = tmp_path / "without"
 	without_file.mkdir()
 	plain, plain_log = _run_report(without_file, NO_CREDENTIAL_RECORDS)
 	assert plain.returncode == 0, plain.stderr
-	assert _report_pool_lines(log) == [[f"Claude pool step reason: {token}"]]
+	assert _report_pool_lines(log) == [[f"{POOL_LINE_PREFIX}{token}"]]
 	assert _report_pool_lines(plain_log) == [[]]
-	report = _dispatch_bodies(log)[0]["client_payload"]["report"]
+	with_bodies = _dispatch_bodies(log)
+	for body in with_bodies:
+		evidence = body["client_payload"]["report"]["failure_evidence"].split("\n")
+		body["client_payload"]["report"]["failure_evidence"] = "\n".join(
+			part for part in evidence if not part.startswith(POOL_LINE_PREFIX)
+		)
+	assert with_bodies == _dispatch_bodies(plain_log)
+	report = with_bodies[0]["client_payload"]["report"]
 	assert report["engine_reason"] == "no_credential"
+	assert token not in json.dumps(report)
 
 
 @pytest.mark.parametrize(("content", "symlink"), [
@@ -1401,6 +1410,16 @@ def test_report_pool_reason_env_overrides_the_file(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert _report_pool_lines(log) == [["Claude pool step reason: from_env"]]
 	assert "pool_reason_source=env" in result.stdout
+	# The #8392 suffix and summary name the same token as the payload.
+	assert _dispatched_line(result.stdout, "PLAN").endswith(" pool_reason_source=env pool_reason=from_env")
+	assert "(pool_reason `from_env`)" in (tmp_path / "summary.md").read_text(encoding="utf-8")
+
+
+def test_report_pool_reason_suffix_uses_the_env_without_a_file(tmp_path: Path) -> None:
+	result, log = _run_report(tmp_path, REFUSED_RECORD, CLAUDE_POOL_REASON="from_env")
+	assert result.returncode == 0, result.stderr
+	assert _report_pool_lines(log) == [["Claude pool step reason: from_env"]]
+	assert _dispatched_line(result.stdout, "PLAN").endswith(" pool_reason_source=env pool_reason=from_env")
 
 
 def test_report_invalid_pool_reason_becomes_unavailable(tmp_path: Path) -> None:

@@ -53,8 +53,9 @@ elif "/actions/runs?" in path and "status=in_progress" in path:
 	# wait-implement's stall diagnostics read of every in-progress run.
 	payload = {"workflow_runs": json.loads(os.environ.get("STUB_IN_PROGRESS_RUNS", "[]"))}
 elif "/actions/runs?" in path and os.environ.get("STUB_UNPAGED_RUNS_INVALID") and "&page=" not in path:
-	# The other-active check's page-1 read (fetch_plan_runs_json) is the only
-	# runs request without &page=; this makes just that read unreadable.
+	# Unpaged runs reads: the other-active check's page-1 read
+	# (fetch_plan_runs_json) and wait-implement's stall-diagnostics window read
+	# (the in-progress read is answered above); this makes them unreadable.
 	payload = {"workflow_runs": None}
 elif "/actions/runs?" in path:
 	pages = json.loads(open(os.environ["STUB_RUN_PAGES"], encoding="utf-8").read())
@@ -875,8 +876,13 @@ def test_implement_activity_state_tracks_working_run() -> None:
 	counter = script[script.index("scoped_implement_progress_counts() {"):script.index("IMPL_PREV_LABELS=\"\"")]
 	assert 'select(.status == "in_progress")' in counter
 	assert 'IMPL_RUN_ID_WORKING="$IMPL_RUN_ID_LATEST"' in counter
+	# Exactly one working-run selection and later-page scan (a duplicated
+	# copy from a merge resolution re-ran the scan and could fall back to the
+	# pending run).
+	assert counter.count("IMPL_RUN_ID_WORKING=$(printf") == 1, counter
+	assert counter.count("local working_page=") == 1, counter
 	assert "actions/runs/${IMPL_RUN_ID_WORKING}/jobs?per_page=10" in script
-	assert "actions/runs/${IMPL_RUN_ID_LATEST}/jobs" not in script
+	assert "actions/runs/${IMPL_RUN_ID_LATEST}/jobs?per_page=10" not in script
 	cur_state = next(line for line in script.splitlines() if line.strip().startswith("CUR_STATE="))
 	assert "working=${IMPL_RUN_ID_WORKING}" in cur_state, cur_state
 	assert "PHASE_TIMEOUT" in script

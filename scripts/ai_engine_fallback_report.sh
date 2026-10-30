@@ -78,8 +78,9 @@
 #                                    empty (default ${RUNNER_TEMP:-/tmp}/claude-pool-reason;
 #                                    regular files only, first 64 bytes). With neither
 #                                    source --pool-reason is left out and the payload is
-#                                    unchanged. The same value labels `no_credential`
-#                                    refusals with pool_reason= (issue #8392)
+#                                    unchanged. The same token (env first, then the file)
+#                                    also labels `no_credential` refusals in the log,
+#                                    alert and summary with pool_reason= (issue #8392)
 
 set -uo pipefail
 
@@ -349,9 +350,10 @@ if [ "${report_pool_reason_source}" != "none" ]; then
 	# becomes "unavailable" instead of failing argument parsing.
 	report_pool_reason_args=("--pool-reason=${report_pool_reason_token}")
 fi
-# Label `no_credential` refusals (issue #8392) with the same env-or-file
-# value the payload carries; anything outside [a-z0-9_]{1,60} is shown as
-# "unavailable". Diagnostic only: routing and the payload are unchanged.
+# The no_credential log suffix, alert and summary (issue #8392) show the same
+# token the payload gets, so they follow the env-then-file order above. The
+# value is untrusted: only ^[a-z0-9_]{1,60}$ is shown, anything else (no source,
+# symlinked, unreadable, malformed) shows "unavailable". Diagnostic only.
 pool_reason="${report_pool_reason_token}"
 [[ "${pool_reason}" =~ ^[a-z0-9_]{1,60}$ ]] || pool_reason="unavailable"
 dispatched=0
