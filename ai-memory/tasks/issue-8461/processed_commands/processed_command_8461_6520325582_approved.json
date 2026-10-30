@@ -5,13 +5,26 @@
   "entry_id": "processed_command_8461_6520325582_approved",
   "issue_number": 8461,
   "metadata": {
+    "branch": "ai/issue-8461",
+    "changed_files": [
+      "agents.d/prepush-gate-tests-file.md",
+      "changelog.d/prepush-gate-tests-file.md",
+      "scripts/prepush_test_gate_run.sh",
+      "tests/test_prepush_affected_tests.py",
+      "workflow-templates/.claude/hooks/prepush_affected_tests.py"
+    ],
+    "issue_number": 8461,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8461",
+    "pr_number": 8464,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8464",
+    "run_attempt": "1",
+    "run_id": "41039690017",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41039690017"
   },
   "run_attempt": 1,
   "run_id": "41039690017",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-30T10:19:38Z",
+  "status": "completed",
+  "timestamp": "2026-10-30T10:39:01Z",
   "workflow": "implement"
 }
