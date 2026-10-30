@@ -39,7 +39,8 @@ jobs:
     # It then took 11m17s of its 15 minutes on main (run 40954844196,
     # budget-watch issue #8394), so its three test steps moved out to
     # tests-hooks-and-orchestrator, orchestrate-poll (3) and
-    # tests-promote-stall-and-review. Its remaining test steps are the small
+    # tests-promote-stall-and-review (the last one moved on to
+    # tests-release-and-log-analysis in #8466). Its remaining test steps are the small
     # contract tests for its own guards (shell-block, CI job split, CI test
     # wiring, agents.d fragments) and the "Prompt tier budget" check
     # (tests/prompt_size_budget.py); the test steps moved in by #7250 and
@@ -1727,21 +1728,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_judge_interim_round_trip.py
 
-      - name: Review/judge/conflict strict-render contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
-
-      - name: Review synthesize-smoke contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
-
       - name: Validate driver synthesised filter contract test
         run: |
           set -euo pipefail
@@ -1962,27 +1948,6 @@ jobs:
             echo "::error::promote-cycle step shards failed: ${pc_failed[*]}"
             exit 1
           fi
-
-      # Moved from static-checks, which took 11m17s of its 15 minutes on main
-      # (run 40954844196, budget-watch issue #8394). The pick is an estimate
-      # from test and subprocess counts, not measured. This job has the most
-      # recorded room (#8278; its last own budget-watch issue was #7677).
-      # Name and body unchanged.
-      - name: Validation bootstrap and family direct-run tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -2239,6 +2204,56 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_files_touched_scope_guard.py
+
+      # Moved again from tests-promote-stall-and-review, which took 15m33s of
+      # its 20 minutes on main (run 41042353484, budget-watch issue #8466).
+      # Picked by test and subprocess counts because the run's step timings
+      # could not be read (an estimate, not a measurement). Needs no Node or
+      # prepared .claude/ live copies. Name and body unchanged.
+      # Moved from static-checks, which took 11m17s of its 15 minutes on main
+      # (run 40954844196, budget-watch issue #8394), first to
+      # tests-promote-stall-and-review. That pick was an estimate from test
+      # and subprocess counts, not measured. Name and body unchanged.
+      - name: Validation bootstrap and family direct-run tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
+
+      # Moved from tests-promote-stall-and-review, which took 15m33s of its 20
+      # minutes on main (run 41042353484, budget-watch issue #8466). Picked by
+      # test and subprocess counts because the run's step timings could not be
+      # read (an estimate, not a measurement). Needs no Node or prepared
+      # .claude/ live copies. Name and body unchanged.
+      - name: Review/judge/conflict strict-render contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
+
+      # Moved from tests-promote-stall-and-review, which took 15m33s of its 20
+      # minutes on main (run 41042353484, budget-watch issue #8466). Picked by
+      # test and subprocess counts because the run's step timings could not be
+      # read (an estimate, not a measurement). Needs no Node or prepared
+      # .claude/ live copies. Name and body unchanged.
+      - name: Review synthesize-smoke contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
