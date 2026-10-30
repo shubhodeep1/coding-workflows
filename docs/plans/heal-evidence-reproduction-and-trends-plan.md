@@ -6,6 +6,27 @@ From 2026-10-27, release gates failed six times in a row, while the workflow-fai
 
 This plan gives the heal pipeline the same capabilities in seven independently mergeable phases. Each phase sits behind its own default-off repo variable.
 
+## Automation and wiring (§18.E)
+
+- **New scripts:**
+  - `scripts/heal_reproduce.sh` (P2), called from `scripts/workflow_failure_heal_intake.sh` and `scripts/heal_isolated_implement.sh`.
+  - `scripts/heal_port_to_default.sh` (P6), wired into `.github/workflows/issue_pr_status.yml`'s existing merged-PR path in the same PR. It runs only in this repository, so consumer runs of that reusable workflow skip it.
+  - `scripts/workflow_failure_heal_verify.sh` (P7), run by a new `heal-verify` job in `.github/workflows/workflow-failure-heal-intake.yml` on that workflow's existing hourly schedule.
+  - Everything else extends existing scripts.
+- **Entry points (no new triggers):**
+  - `.github/workflows/workflow-failure-heal-intake.yml`: the intake job (`workflow_run`, `repository_dispatch`, `workflow_dispatch`), and its existing hourly `schedule` trigger for P7's new `heal-verify` job.
+  - `.github/workflows/plan.yml`: the heal counterfactual gate step.
+  - `.github/workflows/implement.yml`: the heal isolated editor step.
+  - `.github/workflows/orchestrate_clarify_respond.yml`.
+  - `.github/workflows/issue_pr_status.yml`: the merged-PR handler.
+- **Long-running supervisor:** none. P7 is a scheduled job on an existing trigger.
+- **DB work:** none.
+- **`docs/scripts-pending-removal.md`:** each phase that adds a script adds its entry in the same PR, in the form the registry already uses for `scripts/prepush_test_gate_run.sh`:
+  - `scripts/heal_reproduce.sh` (P2): type `long-running`; removal trigger "permanent — review annually"; preflight checks: `grep -rn heal_reproduce .github/workflows scripts` returns no callers, and `tests/test_heal_reproduce.py` is removed in the same PR; owner @shubhodeep1.
+  - `scripts/heal_port_to_default.sh` (P6): type `long-running`; removal trigger "permanent — review annually"; preflight checks: `grep -rn heal_port_to_default .github/workflows scripts` returns no callers, and no open issue carries its port marker; owner @shubhodeep1.
+  - `scripts/workflow_failure_heal_verify.sh` (P7): type `long-running`; removal trigger "permanent — review annually"; preflight checks: the `heal-verify` job is removed from `workflow-failure-heal-intake.yml` in the same PR, and `grep -rn workflow_failure_heal_verify .github/workflows scripts` returns no callers; owner @shubhodeep1.
+
+
 ## Context
 
 ### The incident (2026-10-27 to 2026-10-29)
@@ -61,7 +82,7 @@ All of this is from `main` at e8afd87f.
 - **§6:** existing identifiers stay as they are. These include env vars, the `WORKFLOW_HEAL` and `PREPUSH_TEST_GATE` log keys, the `HEAL_COUNTERFACTUAL` values, and the marker formats. New ones are added alongside.
 - **§14:** `workflow-templates/.claude/hooks/prepush_affected_tests.py` ships to consumer repos, so changes to it are additive only.
 - **§15:** every new GitHub API call is listed per phase with a budget and fail-open behaviour.
-- **§18:** no manual scripts. Everything runs from the existing intake, recovery-scan, plan and implement entry points.
+- **§18:** no manual scripts. Everything runs from existing triggers: the intake, the intake workflow's hourly schedule, plan, implement, clarify-respond and the PR-status workflow.
 - **§20 and §30:** one `changelog.d/` and one `agents.d/` fragment per phase.
 - **§27:** `.github/workflows/implement.yml` is 425,273 bytes and `plan.yml` 203,288 bytes. New logic goes into `scripts/`; no phase may add more than about 2 KB to `implement.yml`.
 - **Security:** heal inputs are untrusted (logs, comments, consumer code). New evidence stays labelled untrusted in prompts. Reproduction runs only in the existing credential-free, `--network none`, read-only-root container pattern. No new token reaches any model sandbox.
@@ -78,7 +99,7 @@ All of this is from `main` at e8afd87f.
 - **P4:** files changed by the suspected regressing commits can enter the heal scope, capped, alongside #8290's scope widening.
 - **P5:** a second failure with the same workflow, failing step and error class within the grouping window becomes an occurrence on the open heal instead of a new issue.
 - **P6:** when the failing code ran from another branch than the failed run, the heal targets that branch, and a `stable` fix that `main` lacks gets a port issue.
-- **P7:** within 24 hours of a heal PR merging, the next completed run of the same workflow is checked. A recurrence at the same step reopens the heal with the new run, and a pass is logged.
+- **P7:** for heals merged in the last 7 days, the first completed run of the same workflow after the merge is checked once it exists. A recurrence at the same step reopens the heal with the new run, and a pass is logged.
 - Every phase is behind its own repo variable, which defaults to off. With it off, behaviour is byte-identical to today.
 
 ## Non-goals
@@ -97,7 +118,7 @@ All of this is from `main` at e8afd87f.
 - P2 reuses the gate container and `classify_baseline` instead of building a new runner. "Did the fix work?" becomes an experiment with a recorded result.
 
 **Alternatives considered:**
-- **Give the planner a read-only GitHub token or MCP server.** Rejected: it hands credentials to a model running on untrusted input, and §23 keeps tokens out of model sandboxes. Prefetching at intake costs a little more API budget but keeps the boundary.
+- **Give the planner a read-only GitHub token or MCP server.** Rejected: it hands credentials to a model running on untrusted input, against this plan's Security constraint and the credential-free model sandboxes `agents.md` describes under "Isolated Codex agents". Prefetching at intake costs a little more API budget but keeps the boundary.
 - **Raise the evidence byte caps.** Rejected as the main lever: the missing evidence was never in the logs at all, for example the working implement run and the commits on `main`.
 - **Replace the counterfactual gate with reproduction.** Rejected: many failures, such as release stalls, have no runnable unit. P2 adds a reproduction path next to the reasoning path.
 
@@ -105,7 +126,7 @@ All of this is from `main` at e8afd87f.
 
 - **D1: every phase is default-off.** Rollout turns phases on one at a time, and a follow-up flips the defaults once each has run cleanly for a week.
 - **D2: a new counterfactual value.** `HEAL_COUNTERFACTUAL: REPRODUCIBLE: <test ids>` auto-approves only when P2 is enabled. The heal PR opens only if those tests fail at the failing SHA and pass on the PR tree. Otherwise implement holds with `ai:needs-human` and the reproduction result.
-- **D3: the grouping key** is `(workflow name, failing step, error class)`. The error class comes from a fixed list: `stall`, `timeout`, `test_failure`, `crash`, `api_error`, `other`. The window is 3 days.
+- **D3: the grouping key** is `(workflow name, failing step, error class)`. The error class is the result of `classify_failure_shape` (P3 step 1), which returns one value from a fixed list: `stall`, `timeout`, `test_failure`, `crash`, `api_error`, `other`. The window is 3 days.
 - **D4: porting a `stable` fix to `main`.** After a heal PR merges into `stable`, a follow-up heal issue is opened on `main` if the same patch still applies there. The heal pipeline does not open PRs on two branches itself.
 
 ## Phases & Merge Strategy
@@ -156,12 +177,12 @@ Each phase is one PR, independently mergeable, and safe in production with its s
    - Rollback: switch off. Existing `cause=` markers are ignored.
 6. **P6: Branch awareness.**
    - Switch: `WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED` (default `false`).
-   - Scope: target the branch the failing code ran from, using the P1-style child-run `head_sha`/`head_branch` or the `SCRIPT_REF` echoed in child logs. Add a port issue to `main` after a `stable` merge (D4).
+   - Scope: target the branch the failing code ran from, using the P1-style child-run `head_sha`/`head_branch` or the payload's script ref (the intake already writes it as `Script ref the run staged: <sha>`). Add a port issue to `main` after a `stable` merge (D4).
    - Done when: the replayed payload targets `main` and the issue states the code ref. A merged `stable` heal whose patch applies to `main` produces one port issue.
    - Rollback: switch off.
 7. **P7: Post-merge verification.**
    - Switch: `WORKFLOW_HEAL_VERIFY_ENABLED` (default `false`).
-   - Scope: the hourly `recovery-scan` job checks heals merged in the last 7 days. It reopens a heal with a recurrence comment, and adds `ai:workflow-heal-escalated` on a second recurrence. A pass is logged.
+   - Scope: a new `heal-verify` job on the intake workflow's existing hourly schedule checks heals merged in the last 7 days. It reopens a heal with a recurrence comment, unless the intake already filed the next generation, and adds `ai:workflow-heal-escalated` on a second recurrence. A pass is logged.
    - Done when: a fixture heal whose next run failed at the same step is reopened, one whose next run passed logs `outcome=held`, and nothing changes with the switch off.
    - Rollback: switch off.
 
@@ -176,14 +197,19 @@ Suggested order (not required): P1, P2, then P3, P5, P7, then P4, P6.
    - Extend `render_linked_run_timeline`'s header with `head_sha` (12 characters) and `head_branch`, taken from the run JSON it already receives. Keep the existing header line and add a second line, so existing parsers keep working (§6).
 2. `scripts/workflow_failure_heal.py`: add `issue_linked_runs` for a `workflow_run` report.
    - From the failed job logs, collect same-repo issue references: `issues/<n>` URLs, `issue #<n>` and `on issue #<n>`. Cap: 2 issues.
-   - For each issue, call `GET repos/<repo>/actions/runs?created=<job start>..<job end>&per_page=100`. One call per issue, at most 2 per report, both counted against `GH_PAT_BUDGET`.
+   - For each issue, call `GET repos/<repo>/actions/runs?created=<job start>..<job end>&per_page=100`, reading at most 2 pages per issue. When `total_count` exceeds the pages read, render the runs found and log `WORKFLOW_HEAL evidence_pack outcome=partial reason=runs_truncated`. At most 4 calls per report, counted against `GH_PAT_BUDGET`.
    - Keep runs whose `display_title` equals the issue's title. Fetch the issue title with one `GET issues/<n>` per issue, unless it already appears in the log.
    - Render each run as `id status/conclusion created run_started_at updated head_sha head_branch`.
    - Fail open: on any error, log `WORKFLOW_HEAL evidence_pack outcome=partial reason=<r>`.
-3. `scripts/workflow_failure_heal.py`: add `branch_divergence`, which is one `GET repos/<repo>/compare/<target>...<default>` call. List the commits on the default branch that touch any scope-marker path (subject, short SHA, PR number), at most 10. Skip it when the target branch is the default branch.
+3. `scripts/workflow_failure_heal.py`: add `branch_divergence`, which is one `GET repos/<repo>/compare/<target>...<default>` call. The compare response lists the range's commits and one aggregate `files[]` for the whole range; it does not say which commit touched which file. So render two lists, and do not claim per-commit attribution:
+   - the range's files that are scope-marker paths (`filename` only, at most 20);
+   - the range's commits (subject, short SHA, and the PR number parsed from a squash subject's `(#N)`), at most 10.
+
+   Note `truncated` when the response hit GitHub's 250-commit or 300-file limit. Skip it when the target branch is the default branch.
 4. `scripts/workflow_failure_heal_intake.sh`:
    - Behind `WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED`, build the pack after the scope freeze (lines around 2501-2533), so it never feeds the marker.
-   - Insert it into the issue body as `## Evidence pack` with an untrusted-data banner, capped at `WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES` (default 12000).
+   - Insert it into the issue body as `## Evidence pack` with an untrusted-data banner, capped at `WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES` (default 12000). Commit subjects, run titles, issue titles and job and step names are attacker-writable, so every value goes through `sanitize_text` and then `neutralize_untrusted_routing` (which also escapes `<!--`), and the pack is inserted before `validate_heal_issue_body_routing` runs, so the validator still checks the whole body.
+   - Test: a commit subject containing `<!--` and a run title containing `Target branch: x` produce an escaped pack, and the body still validates.
    - Log `WORKFLOW_HEAL evidence_pack outcome=ok|partial|skipped bytes=<n>`.
 5. `scripts/workflow_failure_heal_evidence.sh` (the plan and clarify bundle): when the issue body has an `## Evidence pack`, include it in full before the per-job tails, inside the existing 24,000-byte limit, with priority over the tails.
 6. `.github/workflows/orchestrate_clarify_respond.yml` and `scripts/clarify_github_facts.py`: when the issue is a heal and the pack exists, pass it in the respond prompt under `=== HEAL EVIDENCE PACK (UNTRUSTED) ===`.
@@ -199,19 +225,29 @@ Suggested order (not required): P1, P2, then P3, P5, P7, then P4, P6.
 2. `scripts/prepush_test_gate_run.sh`: add `--tests-file`, passed through to the module and mounted read-only. Existing callers are unchanged.
 3. `scripts/heal_reproduce.sh` [new], called from the intake and from `heal_isolated_implement.sh`.
    - Inputs: a test list from `extract_failing_tests`, a SHA to test, and a baseline SHA.
-   - It exports both trees with `git archive`, prepares deps with `codex_isolated_exec.sh prepare --deps` to get a venv, and runs `prepush_test_gate_run.sh` with `--tests-file`.
+   - It fetches both SHAs with enough history for `git merge-base` (the intake checkout is `fetch-depth: 1`, so it deepens the fetch up to a fixed cap), adds a detached `git worktree` at the SHA to test, prepares deps with `codex_isolated_exec.sh prepare --deps` to get a venv, and runs `prepush_test_gate_run.sh --worktree <that worktree> --base <baseline SHA> --tests-file`. The wrapper resolves the merge-base itself and runs the tests on both trees in one call. A `git archive` export would not work, because the wrapper runs `git merge-base` in the tree it is given. An unresolvable merge-base comes back as `unverified` (`no_merge_base`).
    - Output: `heal_repro.v1` JSON `{status: reproduced|not_reproduced|unverified, failing_at, passing_at, tests[]}`.
    - Wall time: `WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES` (default 10).
    - Log prefix: `HEAL_REPRODUCE`.
 4. `scripts/workflow_failure_heal_intake.sh`: behind the switch, when failing tests exist, run `heal_reproduce.sh` at the failing SHA, with the last green SHA of the same workflow on the same branch as baseline. Finding the last green SHA takes one `actions/workflows/<id>/runs?status=success&branch=<b>&per_page=1` call. Add a `## Reproduction` section to the body.
-   - "Fails at failing SHA, passes at last green" means a deterministic regression. Feed this into classification: never `transient`.
-   - "Fails at both" means pre-existing.
-5. `scripts/heal_isolated_implement.sh`: pass `--venv` from the prepared deps to the heal gate. This fixes `pytest_unavailable`, independently of the switch.
+   - Map the gate result onto `heal_repro.v1` per test, then for the run as a whole (`reproduced` only if every listed test is `reproduced`):
+
+     | At the failing SHA | At last green | Gate classification | `status` | `reason` |
+     | --- | --- | --- | --- | --- |
+     | fails | passes | caused | `reproduced` | `regression` |
+     | fails | fails | inherited | `not_reproduced` | `pre_existing` |
+     | passes | passes | pass | `not_reproduced` | `passes_at_failing_sha` |
+     | passes | fails | pass | `not_reproduced` | `passes_at_failing_sha` |
+     | any test unverified or timed out, or no merge-base | | unverified | `unverified` | the gate's reason |
+
+   - Only `reproduced` feeds classification (never `transient`) and makes `REPRODUCIBLE` available to the planner. `pre_existing` and `passes_at_failing_sha` are shown in the `## Reproduction` section but change nothing else. A test that passes at the failing SHA is never `reproduced`.
+   - Test: one case per table row.
+5. `scripts/heal_isolated_implement.sh`: when `WORKFLOW_HEAL_REPRODUCE_ENABLED` is on, pass `--venv` from the prepared deps to the heal gate. This fixes `pytest_unavailable`. With the switch off, the gate call is unchanged, so the switch-off behaviour stays byte-identical.
 6. `scripts/partial_delivery.py`: accept `HEAL_COUNTERFACTUAL: REPRODUCIBLE: <test ids>`.
    - Switch on: decision `approve_pending_repro`. Switch off: decision `hold` with reason `reproduction_disabled`.
    - `PASS`, `PARTIAL`, `FAIL` and `UNVERIFIED` are unchanged.
 7. `.github/workflows/plan.yml` (about 1 KB): treat `approve_pending_repro` like approve, but post `/approved [auto-approved-by-plan] [repro-required]`.
-8. `scripts/heal_isolated_implement.sh`: when the approving comment carries `[repro-required]`, run `heal_reproduce.sh` on the edited tree against the failing SHA before handing back to implement.
+8. `scripts/heal_isolated_implement.sh`: when the approving comment carries `[repro-required]`, run `heal_reproduce.sh` with the edited checkout as the worktree and the failing SHA as the baseline before handing back to implement. The edited checkout is a git worktree whose history contains the failing SHA, so the merge-base resolves.
    - Tests must fail at the failing SHA and pass on the edited tree.
    - On a mismatch, exit with a new code that `implement.yml` (about 0.5 KB) maps to `implement_heal_preflight.sh refuse repro_not_fixed`. That comments the result and adds `ai:needs-human`.
 9. `prompts/mode-plan-heal-counterfactual.txt` and its template copy: tell the planner when to emit `REPRODUCIBLE` (a `## Reproduction` section shows `reproduced`).
@@ -219,14 +255,22 @@ Suggested order (not required): P1, P2, then P3, P5, P7, then P4, P6.
 
 ### P3: Trends and the timeout rule
 
-1. `scripts/workflow_failure_heal.py` `classify_failure_shape`: return `stall` or `timeout` when the failed job concluded `timed_out`, or the signature matches `stalled|no activity for|timed out|exceeded .* budget|timeout`. Otherwise return `other`. The function is pure and adds no API calls.
-2. `scripts/workflow_failure_heal.py` `trend_table`: for the failing workflow and the workflows of linked and issue-linked runs (at most 3), call `actions/workflows/<file>/runs?status=success&created=>=<now-7d>&per_page=100`, one call each. Render the per-day `n`, median and p90 duration.
-3. Mark `regression=true` when the latest day's median is at least `WORKFLOW_HEAL_TREND_REGRESSION_RATIO` (default 1.5) times the median of the earlier days.
+1. `scripts/workflow_failure_heal.py` `classify_failure_shape`: return one D3 class, first match wins:
+   - `stall`: the signature matches `stalled|no activity for|no visible progress`;
+   - `timeout`: the failed job concluded `timed_out`, or the signature matches `timed out|exceeded .* budget|timeout`;
+   - `test_failure`: the intake's `extract_failing_tests` found failing tests, or the signature matches `FAILED |AssertionError|not ok `;
+   - `crash`: the signature matches `Traceback|Segmentation fault|core dumped|exit code 13[4-9]|command not found|unbound variable`;
+   - `api_error`: the signature matches `HTTP [45][0-9][0-9]|API rate limit|gh: .*(Not Found|Bad credentials)|GH_API_RETRY .*outcome=gave_up`;
+   - otherwise `other`.
+
+   The function is pure and adds no API calls. Test: one fixture per class, and two failures at the same step with different classes get different cause keys (P5).
+2. `scripts/workflow_failure_heal.py` `trend_table`: for the failing workflow and the workflows of linked and issue-linked runs (at most 3), call `actions/workflows/<file>/runs?status=success&branch=<branch>&event=<event of the run being trended>&created=>=<now-7d>&per_page=100`, reading at most 2 pages each. Render the per-day `n`, median and p90 duration. When the oldest run read is newer than the window start and more pages exist, mark the table `history=truncated` and never set `regression=true` from it.
+3. Mark `regression=true` when the latest day's median is at least `WORKFLOW_HEAL_TREND_REGRESSION_RATIO` (default 1.5) times the median of the earlier days. The *first slow day* is then the earliest UTC day in the window whose median, and every later day's median, is at least that ratio times the median of all runs before it. If no earlier day qualifies, it is the latest day. Test: a fixture with fast days, then three slow days, gives the first of the three.
 4. `scripts/workflow_failure_heal.py` `suspect_commits`:
    - Find the last successful run of the failing workflow on its branch (shared with P2 step 4).
    - Call `compare/<last_green_sha>...<failing_sha>` once.
-   - List the commits (subject, PR number, short SHA, pipeline files touched), at most 15.
-   - If `regression=true`, also list the default-branch commits merged on the first slow day: one `commits?since=&until=&per_page=50` call.
+   - List the commits (subject, short SHA, PR number parsed from a squash subject's `(#N)`), at most 15, and separately the range's aggregate pipeline files (`filename` of entries under `scripts/`, `.github/workflows/`, `workflow-templates/` and `prompts/`), at most 20. The compare response gives no per-commit file list, so the files are not attributed to single commits.
+   - If `regression=true`, also list the default-branch commits merged on the first slow day: one `commits?sha=<default>&since=<day 00:00Z>&until=<next day 00:00Z>&per_page=50` call.
 5. `scripts/workflow_failure_heal_intake.sh`: behind `WORKFLOW_HEAL_TREND_ENABLED`, for `stall` or `timeout` shapes, add `## Run-time trend` and `## Suspect commits` sections.
 6. `scripts/partial_delivery.py`: add `parse_heal_regression`. When the issue body says `regression=true`, the plan must contain one `HEAL_REGRESSION: <file or commit> | not a regression: <reason>` line.
    - Hold reason `regression_line_missing`.
@@ -239,15 +283,20 @@ Suggested order (not required): P1, P2, then P3, P5, P7, then P4, P6.
 
 1. `scripts/workflow_failure_heal_intake.sh`: behind the switch, before the freeze, add P3's suspect-commit files to `SCOPE_INPUTS_FROZEN` as a new input.
    - The suspect commits come from GitHub API data, not from logs, so they are trusted metadata.
-   - Only files under `scripts/`, `.github/workflows/`, `workflow-templates/` and `prompts/` are kept; never `.github/ai/` or `.claude/` (the existing `_safe_heal_path` rules); at most 8.
-   - When P3 is off, compute the compare call here.
+   - The input is the compare response's aggregate `files[]` (see P3 step 4). Use only `filename`; ignore `previous_filename`, and drop entries whose `status` is `removed`.
+   - Every path must pass the existing `_safe_heal_path` rules and exist at the scope commit. Only files under `scripts/`, `.github/workflows/`, `workflow-templates/` and `prompts/` are kept; never `.github/ai/` or `.claude/`; at most 8, ranked by `changes`.
+   - When P3 is off, make the last-green lookup and the compare call here (2 calls).
+   - Test: a removed file, a renamed file's old name, a `.claude/` path and a path missing at the scope commit are all left out.
 2. `scripts/workflow_failure_heal.py` `render_heal_scope_marker`: add a `suspect_files` parameter, ranked after workflow paths and before `changed_files`. The existing 20-path cap is unchanged. Without the parameter, output is identical.
 3. Fragments. Cross-reference #8290's plan in the `agents.d/` text, so its P1 and P2 inputs stack with this one.
 
 ### P5: Root-cause grouping
 
 1. `scripts/workflow_failure_heal.py` `cause_key(workflow, failing_step, shape)`: sha256 of the workflow name (with the cycle suffix stripped, as in `fingerprint()`), the failing step and the shape from P3 step 1. That step is pure and lands in this phase if P3 has not merged.
-2. `render` adds `<!-- workflow-failure-heal:cause=<64hex> -->` to new heal issue bodies, next to the existing `fp=` marker (§6: additive).
+2. `render` adds `<!-- workflow-failure-heal:cause=<64hex> -->` to new heal issue bodies as line 6, right after the five existing marker lines (§6: additive).
+   - `validate_heal_issue_body_routing` in `scripts/workflow_failure_heal.py` today requires exactly five leading marker lines and rejects `<!--` anywhere after them. Change it to also accept an optional line 6 that matches `<!-- workflow-failure-heal:cause=<64 lowercase hex> -->` exactly, and keep rejecting `<!--` anywhere else.
+   - `build_issue_payload`'s `marker_header` check uses `body.startswith(...)` over the five keys, so a sixth line after them leaves source-lineage trust unchanged. `parse_heal_markers` reads `cause` when present.
+   - Test: a body with the six lines validates; a body with a seventh marker, a malformed `cause=` line or a `<!--` later in the body still fails with `marker`.
 3. `budget` decision: behind the switch, a new report with no `fp` match but a `cause` match on an open heal created within `WORKFLOW_HEAL_CAUSE_GROUPING_DAYS` becomes an occurrence on that heal.
    - The comment includes the new run link, its signature and the P1 pack if enabled.
    - It logs `WORKFLOW_HEAL duplicate reason=cause_match`.
@@ -257,46 +306,53 @@ Suggested order (not required): P1, P2, then P3, P5, P7, then P4, P6.
 
 1. `scripts/workflow_failure_heal.py` `code_ref`:
    - From the P1 data (or one `GET actions/runs/<id>` per linked or issue-linked run when P1 is off, at most 3), take the `head_sha` and `head_branch` of the run whose step failed or stalled.
-   - Also parse `SCRIPT_REF: <sha>` from the evidence logs.
+   - Also use the payload's `script_ref`, which the intake already renders as `- Script ref the run staged: <sha>`. No new log key is parsed.
    - If that branch differs from the failed run's `head_branch` and the scope paths include its workflow, set the target branch to it.
    - Write `- **Code ran from:** <branch>@<sha>` in the body.
 2. `scripts/heal_port_to_default.sh` [new], called from `.github/workflows/issue_pr_status.yml`'s merged-PR path next to `handle_partial_delivery_merge` (defined at line 259, called around line 761), and wired in the same PR (§18.B).
    - When a heal PR merges into `stable`, it checks whether the merged diff applies to the default branch with `git apply --check` on a fresh checkout of it.
    - If it does, it files a heal issue on the default branch with the patch summary and `Refs #<heal>`.
    - It logs `WORKFLOW_HEAL port outcome=filed|not_needed|not_applicable`.
-3. Fragments.
+   - Wiring: `issue_pr_status.yml` is a reusable workflow that consumer repos call. The step runs only when `github.repository` is `shubhodeep1/coding-workflows`, because heal issues live there. The script is fetched with the existing `fetch_from_ref_or_local` helper as optional, so a missing copy logs a warning and skips. This adds about 0.5 KB to `issue_pr_status.yml` (68,950 bytes today).
+   - API calls: one issue search for an existing port issue (`Refs #<heal>` marker), then at most one issue create.
+3. Fragments: `agents.d/` and `changelog.d/`.
 
 ### P7: Post-merge verification
 
-1. `scripts/workflow_failure_heal_recovery_scan.sh`: behind `WORKFLOW_HEAL_VERIFY_ENABLED`, list heal issues closed in the last 7 days whose linked heal PR merged. That comes from the list the scan already fetches, with no new call.
+1. `scripts/workflow_failure_heal_verify.sh` [new], run by a new `heal-verify` job in `.github/workflows/workflow-failure-heal-intake.yml` on the workflow's existing hourly `schedule` trigger, gated on `WORKFLOW_HEAL_VERIFY_ENABLED`, with `issues: write` and `actions: read`. The `recovery-scan` job is not used: its list query is `states:OPEN` and it runs only when there are markerless candidates.
+   - Make one GraphQL query for heal issues by the pipeline login that are `CLOSED`, closed in the last 7 days, with their closing pull request (`closedByPullRequestsReferences`, merged state, merge commit, `mergedAt`) and their last 30 comments. Keep those whose closing pull request merged and that have no `<!-- workflow-failure-heal:verified:v1 ... -->` marker by the pipeline login.
 2. For each, at most `WORKFLOW_HEAL_VERIFY_MAX_PER_TICK` (default 3) per tick:
-   - Make one `actions/workflows/<file>/runs?branch=<target>&created=><merged_at>&per_page=5` call.
-   - Take the first completed run whose `head_sha` contains the merge commit. Ancestry is checked with one `compare` call only when the SHAs differ.
-   - If it failed with the same failing step, reopen the heal with a `## Fix did not hold` comment (run link, signature) and log `WORKFLOW_HEAL_VERIFY outcome=recurred`. On a second recurrence, add `ai:workflow-heal-escalated` and send a CRITICAL alert.
-   - If it succeeded, log `outcome=held` and record a marker comment `<!-- workflow-failure-heal:verified:v1 run=<id> -->`, so the heal is checked only once.
-3. `.github/workflows/workflow-failure-heal-intake.yml`: add the two env vars to the `recovery-scan` job.
-4. Fragments: the `WORKFLOW_HEAL_VERIFY` log prefix.
+   - Make one `actions/workflows/<file>/runs?branch=<target>&created=>=<mergedAt>&per_page=100` call. The list is newest-first, so sort it by `created_at` ascending.
+   - Take the oldest completed run whose `head_sha` equals the merge commit or descends from it. Descent is checked with one `compare/<merge>...<head_sha>` call (`ahead` or `identical`) only when the SHAs differ, at most 2 per heal. If no such run has completed yet, do nothing this tick and check again next hour.
+   - If that run failed with the same failing step:
+     - When an open heal issue in the same lineage (same `root=` marker) was created after `mergedAt`, the intake already filed the next generation. Comment on the closed heal with a link to it and log `WORKFLOW_HEAL_VERIFY outcome=recurred_lineage`; do not reopen.
+     - Otherwise reopen the heal with a `## Fix did not hold` comment (run link, signature) ending in `<!-- workflow-failure-heal:verified:v1 outcome=recurred run=<id> -->`, and log `WORKFLOW_HEAL_VERIFY outcome=recurred`. The reopened heal has the same `fp=`, so a later intake report for this failure finds it as the open duplicate and records an occurrence instead of filing `gen+1`.
+     - When the heal already has one trusted `outcome=recurred` marker, also add `ai:workflow-heal-escalated` and send a CRITICAL alert.
+   - If it succeeded, log `outcome=held` and post `<!-- workflow-failure-heal:verified:v1 outcome=held run=<id> -->`, so the heal is checked only once.
+   - Tests: a run on an unrelated older commit is skipped; with a failing first run and a later passing run the result is `recurred`; a lineage heal filed after the merge gives `recurred_lineage` and no reopen; a second recurrence escalates.
+3. `.github/workflows/workflow-failure-heal-intake.yml`: the `heal-verify` job and its env (`WORKFLOW_HEAL_VERIFY_ENABLED`, `WORKFLOW_HEAL_VERIFY_MAX_PER_TICK`).
+4. Fragments: `agents.d/<n>-heal-verify.md` with the `WORKFLOW_HEAL_VERIFY` log prefix under "Stable log prefixes (contractual)", and `changelog.d/<n>-heal-verify.md`.
 
 ## Files & Modules
 
 - `scripts/workflow_failure_heal.py` (P1, P3, P4, P5, P6)
 - `scripts/workflow_failure_heal_intake.sh` (P1, P2, P3, P4)
 - `scripts/workflow_failure_heal_evidence.sh` (P1)
-- `scripts/workflow_failure_heal_recovery_scan.sh` (P7)
+- `scripts/workflow_failure_heal_verify.sh` [new] (P7)
 - `scripts/partial_delivery.py` (P2, P3)
 - `scripts/heal_reproduce.sh` [new] (P2)
 - `scripts/heal_isolated_implement.sh` (P2)
 - `scripts/prepush_test_gate_run.sh` (P2)
 - `workflow-templates/.claude/hooks/prepush_affected_tests.py` (P2, additive; ships to consumers per §14)
 - `scripts/clarify_github_facts.py`, `.github/workflows/orchestrate_clarify_respond.yml` (P1)
-- `.github/workflows/workflow-failure-heal-intake.yml` (P1, P2, P3, P4, P5, P6, P7: env only)
+- `.github/workflows/workflow-failure-heal-intake.yml` (P1 to P6: env only; P7: the `heal-verify` job)
 - `.github/workflows/plan.yml` (P2, P3: a few lines each)
 - `.github/workflows/implement.yml` (P2: about 0.5 KB exit-code mapping)
 - `scripts/implement_heal_preflight.sh` (P2: refusal reason `repro_not_fixed`)
 - `scripts/heal_port_to_default.sh` [new] and `.github/workflows/issue_pr_status.yml` (P6: wiring only)
 - `prompts/mode-workflow-failure-heal.txt`, `prompts/mode-plan-heal-counterfactual.txt` and their `_templates/` copies (P1, P2, P3)
-- `docs/scripts-pending-removal.md`: no entry, because `heal_reproduce.sh` is a permanent library script called from automation, not single-use (§18.F).
-- Tests: `tests/test_workflow_failure_heal.py`, `tests/test_workflow_failure_heal_scope_tests.py`, `tests/test_partial_delivery.py` (or the existing counterfactual test module), `tests/test_prepush_affected_tests.py`, `tests/test_heal_isolated_editor.py`, `tests/test_workflow_failure_heal_recovery_scan.py`, plus new `tests/test_heal_reproduce.py`.
+- `docs/scripts-pending-removal.md`: one entry per new script, added by the phase that adds it (P2, P6, P7); see "Automation and wiring" above.
+- Tests: `tests/test_workflow_failure_heal.py`, `tests/test_workflow_failure_heal_scope_tests.py`, `tests/test_partial_delivery.py` (or the existing counterfactual test module), `tests/test_prepush_affected_tests.py`, `tests/test_heal_isolated_editor.py`, plus new `tests/test_heal_reproduce.py` and `tests/test_workflow_failure_heal_verify.py`.
 - One `agents.d/` and one `changelog.d/` fragment per phase.
 
 ## Data Model / Index Changes
@@ -310,11 +366,11 @@ None. No MongoDB collections are involved.
   - Parsers: `REPRODUCIBLE` and `HEAL_REGRESSION`, including the switch-off cases.
   - Scope marker rendering with `suspect_files`: the cap, the allowed roots and the forbidden paths.
 - **Switch-off byte-identity:** for each phase, a test that renders a heal body (or plan decision) with the switch off and compares it to the current output fixture.
-- **Intake replay:** the existing intake replay tests (`test_intake_replays_*` in `tests/test_workflow_failure_heal_scope_tests.py`) get a release-gate stall replay. It asserts the evidence pack (P1), the trend and suspect commits (P3), the scope addition (P4), cause grouping against an open fixture heal (P5) and the code-ref target (P6).
+- **Intake replay:** the existing intake replay tests (`test_intake_replays_*` in `tests/test_workflow_failure_heal.py`) get a release-gate stall replay. It asserts the evidence pack (P1), the trend and suspect commits (P3), the scope addition (P4), cause grouping against an open fixture heal (P5) and the code-ref target (P6).
 - **Reproduction:**
   - `tests/test_heal_reproduce.py` with a fake docker and fake gate result, covering the reproduced, not-reproduced and unverified paths.
   - One docker end-to-end test, skipped when docker is unavailable, following `tests/test_codex_isolated_exec_docker_e2e.py`.
-- **API budget:** each new call path asserts its call count against a fake `gh`. The P1 budget is at most 5 extra calls per report, P3 at most 5, P7 at most 2 per heal per tick.
+- **API budget:** each new call path asserts its call count against a fake `gh`. Per report: P1 at most 7 (4 runs pages, 2 issue reads, 1 compare); P2 at most 1 (last green, shared with P3 and P4); P3 at most 9 (6 trend pages, last green, compare, commits); P4 0 when P3 is on, else 2; P5 0 (it uses the heal-issue list the intake already reads); P6 0 when P1 is on, else at most 3, plus at most 2 for the port script after a merge. P7: 1 list query per tick, then at most 3 reads per heal.
 
 ## Risks & Mitigations
 
@@ -325,8 +381,8 @@ None. No MongoDB collections are involved.
 - **`REPRODUCIBLE` auto-approves a wrong fix that happens to turn the tests green.** The normal review pipeline and CI still run on the heal PR. With D2, the tests must fail before the fix and pass after it, which is stronger than today's reasoning-only `PASS`.
 - **Cause grouping merges two different causes.** The occurrence comment carries the new run's signature and evidence. The heal's planner sees both, and the window is short (3 days).
 - **The timeout rule blocks a legitimate budget increase.** `HEAL_REGRESSION: not a regression: <reason>` lets the plan explain one.
-- **API budget.** At most about 12 extra REST calls per heal report across all phases, and 2 per verified heal per hourly tick. All are fail-open and logged under `GH_PAT_BUDGET`.
-- **Workflow size (§27).** Only `plan.yml` and `implement.yml` grow, by a few hundred bytes each; everything else goes into scripts.
+- **API budget.** At most 17 extra REST calls per heal report with every phase on (P1 7, P3 9, P2 1 when P3 is off, P6 3 only when P1 is off), plus 1 query per hourly tick and at most 3 reads per checked heal for P7. All are fail-open and logged under `GH_PAT_BUDGET`.
+- **Workflow size (§27).** `plan.yml` and `implement.yml` grow by a few hundred bytes each, `issue_pr_status.yml` by about 0.5 KB (P6), and `workflow-failure-heal-intake.yml` by the small `heal-verify` job (P7). Everything else goes into scripts.
 
 ## Rollout
 
@@ -335,23 +391,7 @@ None. No MongoDB collections are involved.
 3. Turn on P3 and P5, then P2 (it costs runner minutes), then P7, then P4 and P6.
 4. After a week without problems for each phase, open one follow-up PR that flips that phase's default to `true`, keeping the switch.
 5. Rollback for any phase: set its repo variable to `false`. No data migration is involved, and markers added by a phase are ignored when it is off.
-6. Consumer repos (§14): only P2's additive gate option reaches them via `workflow-templates/.claude/hooks/prepush_affected_tests.py`. Their pipelines are unchanged unless they call `--tests-file`.
-
-## Automation and wiring (§18.E)
-
-- **New scripts:**
-  - `scripts/heal_reproduce.sh` (P2), called from `scripts/workflow_failure_heal_intake.sh` and `scripts/heal_isolated_implement.sh`.
-  - `scripts/heal_port_to_default.sh` (P6), wired into `.github/workflows/issue_pr_status.yml`'s existing merged-PR path in the same PR.
-  - Everything else extends existing scripts.
-- **Entry points (no new triggers):**
-  - `.github/workflows/workflow-failure-heal-intake.yml`: the intake job (`workflow_run`, `repository_dispatch`, `workflow_dispatch`) and the hourly `recovery-scan` job.
-  - `.github/workflows/plan.yml`: the heal counterfactual gate step.
-  - `.github/workflows/implement.yml`: the heal isolated editor step.
-  - `.github/workflows/orchestrate_clarify_respond.yml`.
-  - `.github/workflows/issue_pr_status.yml`: the merged-PR handler.
-- **Long-running supervisor:** none. P7 uses the existing hourly `recovery-scan`.
-- **DB work:** none.
-- **`docs/scripts-pending-removal.md`:** no entries. The new scripts are permanent library steps called by automation, not single-use, long-running or supervisor scripts.
+6. Consumer repos (§14): only P2's additive gate option reaches them via `workflow-templates/.claude/hooks/prepush_affected_tests.py`. Their pipelines are unchanged unless they call `--tests-file`. P6's step in the reusable `issue_pr_status.yml` runs only in this repository, so consumer runs skip it.
 
 ## References
 
