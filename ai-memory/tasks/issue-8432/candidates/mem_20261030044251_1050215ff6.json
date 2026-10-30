@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The heal-scope marker locks the paths to `.github/workflows/test-and-mark-stable.yml`, `tests/**` and `changelog.d/*.md`, so `cancel_on_pr_close.yml` is out of scope. Options B and C would hold planning until someone outside this run (the intake or an operator) acts, which is a circular dead-end. This checkout shows the reporting defect is real and fixable inside the scope:\n- In the Phase 7 step, `test-and-mark-stable.yml:3430-3435` treats an empty `NEW_CONCLUSION` (the deadline case) as a failed run. It prints `concluded ` and writes `status=`.\n- In the results step, `test-and-mark-stable.yml:3622-3623` maps an empty `CANCEL` to `SKIPPED (no PR to close)` and never sets `PASSED=false`.\n- The shared group `cancel-on-pr-close-${{ github.repository }}` is still at `cancel_on_pr_close.yml:15`. It reaches `stable` through the normal main\u2192stable promotion of #8327, not through this heal.\n\nQ2: The intake calls item 3 optional and says it is not needed to match `main`. Adding it would make `stable` differ from `main`, which is scope expansion. Leave it to a separate issue that lands on `main` first.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered. Binding notes for the planner on Q1=A:\n- **Edit only these files:**\n  - `.github/workflows/test-and-mark-stable.yml`\n  - one new test file under `tests/`, for example `tests/test_test_and_mark_stable_phase7_cancel_timeout_status.py`, following the pattern of `tests/test_test_and_mark_stable_phase7_unconflict.py`\n  - one new changelog fragment, `changelog.d/<this-issue>-phase7-cancel-timeout-stable.md`\n- **Do not touch `cancel_on_pr_close.yml`.** Do not raise `PHASE7_WAIT_BUDGET_MINUTES`.\n- **Phase 7 step (`verify-cancel-on-close`):** add a new branch after the no-run block that ends at line 3429 and before the `NEW_CONCLUSION != success` check at line 3430. It applies when a candidate run was found (`NEW_RUN_ID` non-empty) but `STATUS != completed`. It must:\n  - emit `::error::cancel-on-close run #${NEW_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS:-?})`;\n  - write `status=timeout` and `cancel_run_id=${NEW_RUN_ID}` to `$GITHUB_OUTPUT`;\n  - `exit 1`.\n  \n  This matches the wording the existing-run path already uses at line 3121.\n- **Results step (lines 3618-3627):** keep the PASSED and FAILED branches. Split the empty-`CANCEL` branch:\n  - If a smoke PR was opened or closed this run, print `\u2717 Cancel-PR .. FAILED (no status ...)` and set `PASSED=false`. Use an existing step output that Phase 7 already depends on to tell whether the PR existed; add no new GitHub API call (\u00a714).\n  - Otherwise keep the existing `SKIPPED (no PR to close)` text.\n- **Tests:** the new contract test must fail on the current file and pass after the change. It asserts:\n  - the timeout branch writes `status=timeout` and `cancel_run_id` and exits 1;\n  - the error string contains `did not complete within`;\n  - the timeout branch sits before the conclusion check;\n  - the results step sets `PASSED=false` on empty `CANCEL` when a smoke PR exists, and still prints SKIPPED when none exists.\n- **Plan and PR body:** state that `stable`'s gate may keep failing until the concurrency change in #8327 is promoted from `main`. From now on the reason is reported correctly as `timeout`. Do not claim that this change makes the gate pass.\n- **Reversibility:** every edit is a reporting-only change in one workflow plus new test and changelog files. A revert restores the current behaviour, and nothing else depends on the new `timeout` value.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone.",
+  "fingerprint": "a73dcbc83cd97cb202647437175043d6c2c08d5091b4f8d504c6da07c09301af",
+  "lineage": {
+    "issue_number": 8432,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41003762215",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41003762215",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8432"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261030044251_1050215ff6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8432,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41003762215"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8432",
+  "timestamps": {
+    "created_at": "2026-10-30T04:42:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
