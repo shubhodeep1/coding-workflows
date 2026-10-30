@@ -157,7 +157,7 @@ while :; do
 	[ "${oidc_attempt}" -lt "${oidc_max_attempts}" ] || break
 	[[ "${oidc_code}" =~ ^(000|429|5[0-9][0-9])$ ]] || break
 	echo "CLAUDE_POOL oidc_retry attempt=$((oidc_attempt + 1)) code=${oidc_code}"
-	sleep "${oidc_retry_sleeps[oidc_attempt - 1]}"
+	sleep "$((10#${oidc_retry_sleeps[oidc_attempt - 1]}))"
 	oidc_attempt=$((oidc_attempt + 1))
 done
 rm -f -- "${work}/oidc-request-headers"
