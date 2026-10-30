@@ -300,7 +300,7 @@ class PollStepContractTest(unittest.TestCase):
 		self.assertNotIn(" rg ", self.run)
 
 	def test_the_three_single_file_modules_still_run(self) -> None:
-		"""Since #8080 they run once, in their own group-1 step, not in the sharded step."""
+		"""They run once, in their own group-3 step (group 1 from #8080, group 3 from #8396), not in the sharded step."""
 		single_file_run = poll_job_step(SINGLE_FILE_MODULES_STEP)["run"]
 		positions = []
 		for module in SINGLE_FILE_MODULES:
@@ -315,6 +315,15 @@ class PollStepContractTest(unittest.TestCase):
 	def test_no_group_zero_step_names_the_single_file_modules(self) -> None:
 		for step in load_poll_job()["steps"]:
 			if str(step.get("if", "")) != "strategy.job-index == 0":
+				continue
+			for module in SINGLE_FILE_MODULES:
+				with self.subTest(step=step.get("name"), module=module):
+					self.assertNotIn(module, step.get("run", ""))
+
+	def test_no_group_one_step_names_the_single_file_modules(self) -> None:
+		"""#8396 moved them out of group 1; no group-1 step may run them again."""
+		for step in load_poll_job()["steps"]:
+			if str(step.get("if", "")) != "strategy.job-index == 1":
 				continue
 			for module in SINGLE_FILE_MODULES:
 				with self.subTest(step=step.get("name"), module=module):
@@ -1117,8 +1126,8 @@ GROUP_PINNED_STEPS = {
 	"Isolated agent container tests (codex_isolated_exec.sh)": 2,
 	"Prebuilt sandbox image tests": 2,
 	"Review sandbox image build retry tests": 2,
-	# Moved from group 0 to group 1 in #8080.
-	"Orchestrate poll single-file module tests": 1,
+	# Moved from group 0 to group 1 in #8080, and to group 3 in #8396.
+	"Orchestrate poll single-file module tests": 3,
 	# Moved from static-checks into group 3 in budget-watch issue #8394.
 	"Validation self-test unit tests": 3,
 }

@@ -1,2 +1,0 @@
-<!-- changelog: changed -->
-- **The cancel-on-close concurrency test now parses the job's group (#8327).** `test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe` in `tests/test_review_merge_train.py` used a substring check that also matched the old repository-wide group. It now reads `jobs.cancel-active-runs.concurrency.group` from `cancel_on_pr_close.yml` and requires the pull-request runs to be keyed by `github.event.pull_request.number`.
