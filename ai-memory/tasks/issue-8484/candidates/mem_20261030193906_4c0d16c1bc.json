@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8484,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8484\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8486\",\"pr_number\":8486,\"branch\":\"ai/issue-8484\",\"run_id\":\"41113848189\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41113848189\",\"changed_files\":[\"changelog.d/8484-claude-pool-oidc-retry.md\",\"scripts/claude_pool_token.sh\",\"scripts/workflow_failure_heal.py\",\"tests/test_claude_pool_token.py\"]}",
+  "fingerprint": "bf8fa887ab2e4753ec06e169ff18a3785e5ef61410077b6edaf9fbaed0b082d0",
+  "lineage": {
+    "issue_number": 8484,
+    "parent_ids": [],
+    "pr_number": 8486,
+    "run_id": "41113848189",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41113848189",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8486"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261030193906_4c0d16c1bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8484,
+    "level": "run",
+    "pr_number": 8486,
+    "run_id": "41113848189"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8484: https://github.com/shubhodeep1/coding-workflows/pull/8486",
+  "timestamps": {
+    "created_at": "2026-10-30T19:39:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
