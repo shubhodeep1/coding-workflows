@@ -4956,3 +4956,47 @@ def test_earlier_failure_skip_logs_label_none_for_a_missing_label(tmp_path: Path
 def test_dispatch_error_file_is_removed(tmp_path: Path) -> None:
 	_result, _state, _tg, runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), FAKE_GH_FAIL_HEAL_DISPATCH="1")
 	assert not (runtime / "heal_dispatch_error.txt").exists()
+
+
+# --- attempt journal in the unblock judge context (issue #8428, P1) -----------------
+
+def _unblock_journal_block() -> str:
+	text = JUDGE.read_text(encoding="utf-8")
+	start = text.index("unblock_ask_model()\n")
+	body = text[start:text.index("\n}\n", start)]
+	return body[body.index("# Attempt journal (issue #8428, P1)"):body.index('\t{\n\t\tbash "${SUPPORT_DIR}/scripts/render_prompt.sh" "${SUPPORT_DIR}/prompts/mode-judge-unblock.txt"')]
+
+
+def test_unblock_journal_is_switch_gated_trusts_only_the_pipeline_login_and_makes_no_call():
+	block = _unblock_journal_block()
+	assert block.count('if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ]') == 1
+	assert '--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}"' in block
+	assert "--max-bytes 4096" in block and "--rawfile journal" in block
+	assert "gh api" not in block and "--repo" not in block
+
+
+def test_unblock_journal_merge_adds_the_field_only_when_on(tmp_path):
+	sys.path.insert(0, str(ROOT / "scripts"))
+	import attempt_journal  # noqa: PLC0415
+	entry = attempt_journal.normalise_entry({"ts": "2026-10-30T10:00:00Z", "stage": "implement", "run_id": "1", "attempt": "1", "outcome": "fail"})
+	body = attempt_journal.build_comment([entry])
+	runtime = tmp_path / "rt"
+	(runtime / "support" / "scripts").mkdir(parents=True)
+	shutil.copy2(ROOT / "scripts" / "attempt_journal.py", runtime / "support" / "scripts" / "attempt_journal.py")
+	comments = [{"id": 1, "body": body, "user": {"login": "pipeline-bot"}}, {"id": 2, "body": body.replace("implement", "review"), "user": {"login": "mallory"}}]
+	(runtime / "item_comments.json").write_text(json.dumps(comments), encoding="utf-8")
+	original = {"block": {"item": 5}}
+	harness = 'set -uo pipefail\n' + _unblock_journal_block() + '\ncat "${RUNTIME_DIR}/judge_context.json"\n'
+	results = {}
+	for value in ("true", "false"):
+		(runtime / "judge_context.json").write_text(json.dumps(original), encoding="utf-8")
+		env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+		env.update({"PERSIST_JOURNAL_ENABLED": value, "RUNTIME_DIR": str(runtime), "SUPPORT_DIR": str(runtime / "support"),
+			"UNBLOCK_LOGIN": "pipeline-bot", "PYTHONDONTWRITEBYTECODE": "1"})
+		proc = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, timeout=60)
+		assert proc.returncode == 0, proc.stderr
+		results[value] = proc.stdout
+	assert json.loads(results["false"]) == original and results["false"].strip() == json.dumps(original)
+	merged = json.loads(results["true"])
+	assert merged["block"] == original["block"]
+	assert "| implement |" in merged["attempt_journal"] and "| review |" not in merged["attempt_journal"]

@@ -19472,6 +19472,55 @@ The judge will evaluate this gap when the wave completes and decide whether to r
   return 0
 }
 
+# persist_journal_stall_context ISSUE COMMENTS_ISSUE COMMENTS_JSON OUT
+# (issue #8428, P1; caller checks PERSIST_JOURNAL_ENABLED). Writes the
+# rendered attempt journal (<= 4 KiB, empty when absent) to OUT and sets
+# PERSIST_JOURNAL_LAST_KEY. Comments come only from data this tick already
+# holds: COMMENTS_JSON when it is ISSUE's own thread, else the per-tick
+# _current_wave_details_json / _candidate_details_json caches (REST shape).
+# The pipeline login is resolved at most once per tick
+# (PERSIST_JOURNAL_LOGIN_CACHE; section 14: the only identity read, shared by
+# every judged item); an unknown login trusts no journal. Always returns 0.
+PERSIST_JOURNAL_LOGIN_CACHE="${PERSIST_JOURNAL_LOGIN_CACHE:-}"
+persist_journal_stall_context() {
+  local issue="$1" comments_issue="$2" comments_json="$3" out="$4" comments_file cached=""
+  PERSIST_JOURNAL_LAST_KEY=""
+  : > "${out}" 2>/dev/null || return 0
+  comments_file="${out}.comments.json"
+  : > "${comments_file}"
+  if [ "${comments_issue}" = "${issue}" ]; then
+    printf '%s' "${comments_json}" > "${comments_file}"
+  else
+    for cached in "${_current_wave_details_json:-}" "${_candidate_details_json:-}"; do
+      [ -n "${cached}" ] || continue
+      if printf '%s' "${cached}" | jq -ce --arg n "${issue}" '.[$n].comments | arrays' > "${comments_file}" 2>/dev/null; then
+        break
+      fi
+      : > "${comments_file}"
+    done
+  fi
+  if [ ! -s "${comments_file}" ]; then
+    echo "PERSIST journal outcome=skipped reason=comments_absent issue=${issue}" >&2
+    rm -f "${comments_file}"
+    return 0
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ]; then
+    PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+    [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ]; then
+    echo "PERSIST journal outcome=skipped reason=identity_unavailable issue=${issue}" >&2
+    rm -f "${comments_file}"
+    return 0
+  fi
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py render --comments-file "${comments_file}" \
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --max-bytes 4096 --out "${out}" || true
+  PERSIST_JOURNAL_LAST_KEY="$(PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py latest-key \
+    --comments-file "${comments_file}" --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" 2>/dev/null)" || PERSIST_JOURNAL_LAST_KEY=""
+  rm -f "${comments_file}"
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -19577,6 +19626,19 @@ invoke_stall_judge() {
     | .[:3]
   ' 2>/dev/null || echo '[]')"
 
+  # Attempt journal (issue #8428, P1). Only with PERSIST_JOURNAL_ENABLED=true
+  # (default false): render the item's journal from comments this tick
+  # already holds (issue_comments_json for a standalone issue, the per-tick
+  # GraphQL details caches for a managed item; no new API call) and remember
+  # its newest entry key for the decision-cache key below. With the switch
+  # off nothing here runs and the cache key and diagnostics are unchanged.
+  local _persist_journal_file="" _persist_journal_key=""
+  if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f scripts/attempt_journal.py ]; then
+    _persist_journal_file="${RUNTIME_DIR:-/tmp}/attempt_journal_stall_${issue_num}.txt"
+    persist_journal_stall_context "${issue_num}" "${comments_issue_num}" "${issue_comments_json}" "${_persist_journal_file}" || true
+    _persist_journal_key="${PERSIST_JOURNAL_LAST_KEY:-}"
+  fi
+
   # Judge decision cache (Q1d): memoise judge output by
   # sha256({issue_num, head_sha, phase, last_conclusion,
   # recent_comments_hash_excluding_prior_stall_judge_comments}). When the same
@@ -19597,7 +19659,12 @@ invoke_stall_judge() {
     _judge_last_conclusion="$(printf '%s' "${workflow_outcomes}" | jq -r '.[0].conclusion // ""' 2>/dev/null || echo "")"
     _judge_cacheable_comments="$(printf '%s' "${recent_comments}" | jq -c '[.[] | select(((.body // "") | startswith("## 🧑‍⚖️ Stall Judge")) | not)]' 2>/dev/null || echo '[]')"
     _judge_recent_comments_hash="$(printf '%s' "${_judge_cacheable_comments}" | sha256sum 2>/dev/null | awk '{print $1}')"
-    _judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    if [ -n "${_persist_journal_key}" ]; then
+      # A new journal entry (a new attempt) re-asks the judge (#8428).
+      _judge_cache_key="$(printf '%s|%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" "${_persist_journal_key}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    else
+      _judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum 2>/dev/null | awk '{print $1}')"
+    fi
     if [ -n "${_judge_cache_key}" ]; then
       _judge_cache_hit_action="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].action // ""' "${_judge_state_file}" 2>/dev/null || echo "")"
       _judge_cache_replay_count="$(jq -r --arg k "${_judge_cache_key}" '.judge_decision_cache[$k].replay_count // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
@@ -19688,6 +19755,14 @@ invoke_stall_judge() {
         },
         diagnostics_build_failed: true
       }' 2>/dev/null || echo '{"diagnostics_build_failed":true}')"
+  fi
+  if [ -n "${_persist_journal_file}" ]; then
+    # attempt_journal (at most 4 KiB, via --rawfile: no MAX_ARG_STRLEN risk).
+    local _persist_diag
+    if _persist_diag="$(printf '%s' "${diagnostics}" | jq -c --rawfile journal "${_persist_journal_file}" \
+      '. + {attempt_journal: (if $journal == "" then null else $journal end)}' 2>/dev/null)" && [ -n "${_persist_diag}" ]; then
+      diagnostics="${_persist_diag}"
+    fi
   fi
 
   local stall_judge_prompt_file="${RUNTIME_DIR}/stall_judge_prompt_${issue_num}.txt"

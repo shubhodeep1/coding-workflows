@@ -29070,5 +29070,96 @@ def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
 	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in sweep
 
 
+# --- attempt journal in the stall judge (issue #8428, P1) ---------------------------
+
+def _persist_journal_body() -> str:
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import attempt_journal  # noqa: PLC0415
+	entry = attempt_journal.normalise_entry({"ts": "2026-10-30T10:00:00Z", "stage": "review", "run_id": "77", "attempt": "1",
+		"outcome": "fail", "note": "gate failed"})
+	return attempt_journal.build_comment([entry])
+
+
+def _run_persist_stall_context(tmp_path: Path, issue: str, comments_issue: str, comments_json: str, candidate_cache: str = "",
+		login_cache: str = "") -> tuple[subprocess.CompletedProcess, Path, Path]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	func = _extract_bash_function(script, "persist_journal_stall_context() {")
+	calls = tmp_path / "gh_calls.log"
+	out = tmp_path / "journal.txt"
+	harness = (
+		"set -uo pipefail\n"
+		f"gh_retry() {{ echo \"$*\" >> '{calls}'; echo pipeline-bot; }}\n"
+		f"PERSIST_JOURNAL_LOGIN_CACHE='{login_cache}'\n"
+		f"_candidate_details_json=\"$(cat '{tmp_path / 'cache.json'}')\"\n"
+		+ func +
+		f"persist_journal_stall_context \"$1\" \"$2\" \"$(cat '{tmp_path / 'comments.json'}')\" '{out}'\n"
+		"echo \"KEY=${PERSIST_JOURNAL_LAST_KEY}\"\n"
+	)
+	(tmp_path / "comments.json").write_text(comments_json, encoding="utf-8")
+	(tmp_path / "cache.json").write_text(candidate_cache, encoding="utf-8")
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+	env.update({"PERSIST_JOURNAL_ENABLED": "true", "PYTHONDONTWRITEBYTECODE": "1"})
+	proc = subprocess.run(["bash", "-c", harness, "persist", issue, comments_issue], cwd=REPO_ROOT, env=env,
+		capture_output=True, text=True, timeout=60)
+	return proc, out, calls
+
+
+def test_stall_judge_journal_standalone_reads_fetched_comments():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		comments = json.dumps([{"id": 5, "body": _persist_journal_body(), "user": {"login": "pipeline-bot"}}])
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "42", comments)
+		assert "KEY=review|77|1" in proc.stdout, proc.stderr
+		text = out.read_text(encoding="utf-8")
+		assert text.startswith("=== BEGIN UNTRUSTED ATTEMPT JOURNAL") and "UNTRUSTED_DATA: gate failed" in text
+		assert len(text.encode("utf-8")) <= 4096
+		# Only the once-per-tick identity read; no comments call.
+		assert calls.read_text(encoding="utf-8").splitlines() == ["gh api user --jq .login"]
+
+
+def test_stall_judge_journal_ignores_forged_author_and_reuses_login_cache():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		comments = json.dumps([{"id": 5, "body": _persist_journal_body(), "user": {"login": "mallory"}}])
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "42", comments, login_cache="pipeline-bot")
+		assert "KEY=\n" in proc.stdout and out.read_text(encoding="utf-8") == ""
+		assert not calls.exists()
+
+
+def test_stall_judge_journal_managed_item_uses_the_tick_cache():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		cache = json.dumps({"42": {"comments": [{"id": 5, "body": _persist_journal_body(), "user": {"login": "pipeline-bot"}}]}})
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "9", "[]", candidate_cache=cache, login_cache="pipeline-bot")
+		assert "KEY=review|77|1" in proc.stdout, proc.stderr
+		assert "UNTRUSTED_DATA: gate failed" in out.read_text(encoding="utf-8")
+		assert not calls.exists()
+
+
+def test_stall_judge_journal_cache_miss_is_null_without_api_call():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "9", "[]", candidate_cache="{}")
+		assert "PERSIST journal outcome=skipped reason=comments_absent" in proc.stderr
+		assert out.read_text(encoding="utf-8") == "" and "KEY=\n" in proc.stdout
+		assert not calls.exists()
+
+
+def test_stall_judge_journal_is_switch_gated_and_keeps_the_cache_key_when_off():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(script, "invoke_stall_judge() {")
+	assert 'if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f scripts/attempt_journal.py ]; then' in body
+	legacy = """_judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum"""
+	assert body.count(legacy) == 1
+	guarded = body.index('if [ -n "${_persist_journal_key}" ]; then')
+	assert guarded < body.index(legacy)
+	assert '"${_judge_recent_comments_hash}" "${_persist_journal_key}"' in body
+	assert 'if [ -n "${_persist_journal_file}" ]; then' in body and "--rawfile journal" in body
+	assert body.index("diagnostics_build_failed: true") < body.index("attempt_journal: (if $journal")
+	# The journal never triggers a new comments read inside the judge.
+	func = _extract_bash_function(script, "persist_journal_stall_context() {")
+	assert "/comments" not in func
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

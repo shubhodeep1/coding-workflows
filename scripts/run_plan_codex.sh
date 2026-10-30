@@ -299,6 +299,20 @@ EOF
   cat "${PLANNING_CONTEXT_FILE}"
 } > "${CODEX_PROMPT_FILE}"
 
+# Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true
+# (default false), append the issue's fenced journal after the dynamic
+# planning context. Off, or no journal yet: the prompt is unchanged.
+if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f scripts/attempt_journal.py ] && [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py render --repo "${GITHUB_REPOSITORY:-}" \
+    --issue "${ISSUE_NUMBER}" --out "${RUNTIME_DIR}/attempt_journal.txt" || true
+  if [ -s "${RUNTIME_DIR}/attempt_journal.txt" ]; then
+    {
+      echo
+      cat "${RUNTIME_DIR}/attempt_journal.txt"
+    } >> "${CODEX_PROMPT_FILE}"
+  fi
+fi
+
 if [ "${HEAL_ROUTE:-false}" = true ]; then
 	[ -s "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" ] || { echo '::error::Heal evidence bundle missing' >&2; exit 1; }
 	cat "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" >> "${CODEX_PROMPT_FILE}"

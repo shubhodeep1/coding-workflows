@@ -25,6 +25,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-judge.txt` — Role: judge. Goal: evaluate whether the project is progressing correctly after a wave of issues has been implemented and merged.
 - `prompts/mode-orchestrate-poll-judge.txt` — Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly.
 - `prompts/mode-orchestrate.txt` — Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph.
+- `prompts/mode-persist-journal-rules.txt` — Role: pre-push gate repair rules fragment. Goal: tell the repair turn to update a test to match a deliberate deletion instead of restoring the deleted code (attempt journal, issue #8428).
 - `prompts/mode-plan-heal-counterfactual.txt` — Role: workflow-heal planner. Goal: append a `## Counterfactual check` with one `HEAL_COUNTERFACTUAL:` line to workflow-heal plans so plan auto-approval can tell whether the change would have made the failing run pass (issue #8249).
 - `prompts/mode-plan.txt` — Role: planning-phase auditor. Goal: emit a structured implementation plan or `BLOCKED:` line.
 - `prompts/mode-security-audit.txt` — Role: Chief Security Officer. Goal: emit a JSON-array security audit for default-branch scope.
@@ -121,6 +122,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/assemble_agents.py` — Fold per-PR agents.d fragments into agents.md / AGENTS.md (assemble at release and consumer sync, render for readers, check for CI).
 - `scripts/assemble_changelog.py` — Fold per-PR changelog.d fragments into CHANGELOG.md (Keep a Changelog or date-heading layout) and manage the .gitattributes union backstop.
 - `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
+- `scripts/attempt_journal.py` — Keep the per-issue attempt journal comment (AI_ATTEMPT_JOURNAL_V1): append stage outcomes and render the fenced journal for prompts and judges (issue #8428, default off).
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
 - `scripts/auto_decisions.py` — Parse RECOMMENDED clarify answers and keep the standalone auto-decisions (AD) comment and PR-body section (port P3).
 - `scripts/auto_release_stable.sh` — Dispatch the release gate when the stable branch is ahead of its tag.

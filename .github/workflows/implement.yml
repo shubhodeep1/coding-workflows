@@ -17,6 +17,8 @@ env:
   # `core` install profile, which has no orchestrate-poll wrapper to resume
   # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
+  # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
+  PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: implement
   # Unattended §13: no Python bytecode in the checkout. Host steps import the
@@ -1471,7 +1473,7 @@ jobs:
           mkdir -p scripts
           mkdir -p -- "${RUNTIME_DIR}/host_python"
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh attempt_journal.py gh_api_retry.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1831,7 +1833,8 @@ jobs:
           # Pre-push affected-test gate (#8190): optional pre-editor copies, run dir only.
           mkdir -p -- "${RUNTIME_DIR}/staged_support_run/prompts"
           for _gate_pair in scripts/implement_step_prepush_test_gate.sh:scripts scripts/prepush_test_gate_run.sh:scripts \
-            workflow-templates/.claude/hooks/prepush_affected_tests.py:scripts prompts/mode-implement-repair-tests.txt:prompts; do
+            workflow-templates/.claude/hooks/prepush_affected_tests.py:scripts prompts/mode-implement-repair-tests.txt:prompts \
+            prompts/mode-persist-journal-rules.txt:prompts; do
             _gate_src=".codex-workflow-src/${_gate_pair%%:*}"
             if [ -f "${_gate_src}" ] && [ ! -L "${_gate_src}" ]; then
               install -m 0755 "${_gate_src}" "${RUNTIME_DIR}/staged_support_run/${_gate_pair##*:}/${_gate_src##*/}"
@@ -2277,6 +2280,13 @@ jobs:
           if [ "${found_approval_comment}" != "true" ]; then
             echo "Unable to fetch triggering approval comment from issue comments."
             exit 1
+          fi
+          # Attempt journal (issue #8428, P1): rendered from the comments fetched
+          # above (no API read beyond the identity lookup); the implementation
+          # prompt and the pre-push gate repair prompt append it.
+          if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/attempt_journal.py" render \
+              --comments-file "${ISSUE_COMMENTS_FILE}" --out "${RUNTIME_DIR}/attempt_journal.txt" || true
           fi
 
       - name: Heal route preflight
@@ -3175,6 +3185,10 @@ jobs:
             echo "=== IMPLEMENTATION CONTEXT ==="
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+          if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -s "${RUNTIME_DIR}/attempt_journal.txt" ]; then
+            # Attempt journal (issue #8428, P1): fenced, after the dynamic context.
+            { echo; cat "${RUNTIME_DIR}/attempt_journal.txt"; } >> "${CODEX_PROMPT_FILE}"
+          fi
           if [ "${HEAL_ROUTE:-false}" = true ]; then
             cat "${RUNTIME_DIR}/heal_evidence.md" >> "${CODEX_PROMPT_FILE}"
           fi
@@ -6299,6 +6313,30 @@ jobs:
             exit 1
           fi
           echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Record attempt journal entry (implement)
+        if: always() && env.PERSIST_JOURNAL_ENABLED == 'true' && env.SKIP_IMPLEMENT != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          PR_OUTCOME: ${{ steps.create_pr.outcome }}
+          DID_COMMIT: ${{ steps.commit_changes.outputs.did_commit }}
+        run: |
+          # Attempt journal (issue #8428, P1): gate fields from the pre-push gate's
+          # final result (run2 after a repair turn, else run1); fail-open.
+          outcome=fail gate=""
+          [ "${PR_OUTCOME}" != success ] || outcome=ok
+          for g in "${RUNTIME_DIR}/prepush_gate/run2/result.json" "${RUNTIME_DIR}/prepush_gate/run1/result.json"; do
+            if [ -f "${g}" ]; then gate="${g}"; break; fi
+          done
+          : > "${RUNTIME_DIR}/attempt_journal_files.txt"
+          if [ "${DID_COMMIT}" = true ]; then
+            git diff --name-only HEAD~1 HEAD > "${RUNTIME_DIR}/attempt_journal_files.txt" 2>/dev/null || true
+          fi
+          python3 -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/attempt_journal.py" append --repo "${GITHUB_REPOSITORY}" \
+            --issue "${ISSUE_NUMBER}" --stage implement --outcome "${outcome}" --approach inherit \
+            --files-file "${RUNTIME_DIR}/attempt_journal_files.txt" ${gate:+--gate-result "${gate}"} || true
 
       - name: Backstop E2E smoke-test labels on PR after creation
         # Best-effort post-create backstop. The atomic `--label` path
