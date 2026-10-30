@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, the destinations of the three moved `static-checks` test steps (all three in `tests-promote-stall-and-review`, the job with the most recorded room, `ci.yml:1966-1969`)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The three steps are split across `tests-hooks-and-orchestrator` (ci.yml:866), `tests-promote-stall-and-review` (ci.yml:1971) and `orchestrate-poll` group 3 (ci.yml:2810, pinned via `if: strategy.job-index == 3`), not moved to a single job with the most headroom, and `changelog.d/8394-static-checks-steps-moved.md` documents \"The steps are spread over three jobs so that no single destination takes all of them\". Step timings were unreadable, so placement is an estimate. Severity disagreement: NIT (anthropic_claude-sonnet-5_5 conf 2, minimax_minimax-m3 conf 3) vs MAJOR (openai_gpt-6-luna and z-ai_glm-5_3-flash, conf 5); highest is MAJOR. The names, bodies, `timeout-minutes` and job names constraints are met.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, where the three test steps were moved out of `static-checks`.\n  Evidence of absence: Hard constraints are met (steps removed from `static-checks` and added elsewhere with names and bodies unchanged, no `timeout-minutes` raised, no job added or renamed). The steps are spread over three existing jobs instead of one, documented in `ci.yml` comments and `changelog.d/8394-static-checks-steps-moved.md`. Step timings could not be read, so any placement is an estimate. Kept as a NIT.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n(All other checklist sections: NONE. HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, the destinations of the three moved `static-checks` test steps\n  Evidence of absence: The issue's singular \"the CI job with the most headroom\" implies a single destination. The PR spreads the steps across `tests-hooks-and-orchestrator` (ci.yml:866), `orchestrate-poll` group 3 (ci.yml:2810, `if: strategy.job-index == 3`) and `tests-promote-stall-and-review` (ci.yml:1971). ci.yml:1966-1969 identifies `tests-promote-stall-and-review` as having \"the most recorded room (#8278)\", yet only one step lands there. The changelog fragment documents the spread. Deliberate, but not a measured outcome (timings unreadable).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n(All other checklist sections: NONE.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, the destination and selection of the three moved `static-checks` test steps.\n  Evidence of absence: The steps are split across `tests-hooks-and-orchestrator` (line 866), `tests-promote-stall-and-review` (line 1971) and `orchestrate-poll` group 3 (line 2810), rather than all moving to the job with the most headroom. The workflow and changelog state placement was estimated because step timings were unavailable.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n(All other checklist sections: NONE.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (verbatim from `scripts/ci_budget_watch.py:127`)\n  Expected change site: `.github/workflows/ci.yml`, the destinations for all three moved `static-checks` test steps, all in `tests-promote-stall-and-review` (`ci.yml:1966-1969`).\n  Evidence of absence: The steps are split across `tests-hooks-and-orchestrator` (`ci.yml:866`), `orchestrate-poll` group 3 (`ci.yml:2810`) and `tests-promote-stall-and-review` (`ci.yml:1971`). `changelog.d/8394-static-checks-steps-moved.md:10` documents \"The steps are spread over three jobs so that no single destination takes all of them.\" The issue has no deferral disclaimer. Mitigation: the deviation is deliberate and documented, and the \"unchanged\", \"do not raise timeout-minutes\" and \"no new required job names\" constraints are met. Gap is the destination instruction only, delivered 1 of 3.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n(All other checklist sections: NONE.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6c674f5156d02ab74f3e7161e4d622e9c1e16ff632203960a2abad751166b117",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8401,
+    "run_id": "41034411573",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41034411573",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030103752_53242acc95",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8401,
+    "run_id": "41034411573"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T10:37:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
