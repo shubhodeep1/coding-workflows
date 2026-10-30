@@ -7,12 +7,9 @@ import json
 import os
 import stat
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "promote_main_cycle.sh"
@@ -196,39 +193,6 @@ if os.environ.get("STUB_TICK_FAIL") == "1":
     sys.exit(2)
 print(json.dumps({"issue": 5, "ticked": ["pr-1"], "skipped": {}}))
 '''
-
-
-def _dir_runs_executables(base: str) -> bool:
-	"""True when a chmod +x stub under ``base`` can be executed (not a noexec mount)."""
-	try:
-		with tempfile.TemporaryDirectory(dir=base) as probe_dir:
-			probe = Path(probe_dir) / "exec_probe.sh"
-			probe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-			probe.chmod(0o755)
-			return subprocess.run([str(probe)], capture_output=True, timeout=30).returncode == 0
-	except (OSError, subprocess.SubprocessError):
-		return False
-
-
-@pytest.fixture(autouse=True, scope="module")
-def _exec_capable_tempdir():
-	# The mock gh/git binaries are found on PATH, so the temp directory must
-	# allow exec. A credential-free container may mount /tmp noexec; only then
-	# redirect this module's scratch directories to an exec-capable base
-	# ($HOME), and restore the default afterwards.
-	previous = tempfile.tempdir
-	scratch = None
-	if not _dir_runs_executables(tempfile.gettempdir()):
-		home = str(Path.home())
-		if os.path.isdir(home) and _dir_runs_executables(home):
-			scratch = tempfile.mkdtemp(prefix="promote-cycle-tests-", dir=home)
-			tempfile.tempdir = scratch
-	try:
-		yield
-	finally:
-		tempfile.tempdir = previous
-		if scratch is not None:
-			shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, script: Path = SCRIPT) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
