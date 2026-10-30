@@ -312,8 +312,9 @@ def test_invalid_timeout_minutes_falls_back(h: Env) -> None:
 	data, err = h.run(h.tests_file("tests/test_a.py::test_x"), env={"WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES": "abc"})
 	assert "phase=config outcome=config_invalid name=WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES fallback=10" in err
 	assert data["status"] == "reproduced"
-	# 10 minutes less the 180 s reserve leaves a 7-minute gate (wall = 7*60+120).
-	assert "--timeout-minutes 7 " in h.read("docker.log")
+	# 10 minutes less the 180 s reserve leaves a 7-minute gate (wall = 7*60+120);
+	# floor division gives 6 once the inner pass's setup crosses a second.
+	assert re.search(r"--timeout-minutes [67] ", h.read("docker.log"))
 	h.assert_clean(err)
 
 
@@ -374,4 +375,21 @@ def test_bad_arguments_are_unverified(h: Env, extra: list, reason: str) -> None:
 def test_invalid_sha_is_refused(h: Env) -> None:
 	data, err = h.run(h.tests_file("tests/test_a.py::test_x"), sha="HEAD;id")
 	assert (data["status"], data["reason"]) == ("unverified", "invalid_sha")
+	h.assert_clean(err)
+
+
+def test_whole_list_rejection_carries_gate_reason(h: Env) -> None:
+	h.gate(_gate("unverified", ran=[], unverified=[{"item": "tests_file", "reason": "tests_file_unreadable"}]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
+	assert (data["status"], data["reason"]) == ("unverified", "tests_file_unreadable")
+	assert data["tests"][0]["reason"] == "tests_file_unreadable"
+	h.assert_clean(err)
+
+
+def test_named_test_absent_from_inherited_unit_names_passes(h: Env) -> None:
+	h.gate(_gate("pass", inherited=[{"test": "tests/test_a.py", "file": "tests/test_a.py",
+		"names": ["tests/test_a.py::test_other"]}]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x", "tests/test_a.py::test_other"))
+	assert [(t["status"], t["reason"]) for t in data["tests"]] == [
+		("not_reproduced", "passes_at_failing_sha"), ("not_reproduced", "pre_existing")]
 	h.assert_clean(err)

@@ -25,9 +25,14 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "heal_reproduce.sh"
 
-TEST_FILE = """import unittest
+TEST_FILE = """import os
+import sys
+import unittest
 
-from lib import value
+# Run as `python3 tests/test_regress.py`, so sys.path[0] is tests/: add the root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from lib import value  # noqa: E402
 
 
 class Regress(unittest.TestCase):

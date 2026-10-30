@@ -188,10 +188,20 @@ def map_entry(data, number, test_path, name):
 			return "reproduced", "regression"
 	for item in items(data, "inherited"):
 		if item.get("test") == test_path:
+			names = [n for n in (item.get("names") or []) if isinstance(n, str)]
+			if name is not None and names:
+				node = f"{test_path}::{name}"
+				if not any(n == node or n.startswith(node + "[") for n in names):
+					# The named test passed at the failing SHA (a sibling failed on both trees).
+					return "not_reproduced", "passes_at_failing_sha"
 			return "not_reproduced", "pre_existing"
 	ran = data.get("ran") if isinstance(data.get("ran"), list) else []
 	if test_path in ran:
 		return "not_reproduced", "passes_at_failing_sha"
+	for item in unverified:
+		# Whole-list rejection (tests_file_unreadable, _too_large, _too_many_entries).
+		if item.get("item") == "tests_file":
+			return "unverified", token(item.get("reason"))
 	if data.get("reason"):
 		return "unverified", token(data.get("reason"))
 	return "unverified", "not_run"
@@ -488,9 +498,10 @@ heal_repro_child=""
 
 heal_repro_cleanup()
 {
-	local tree prep
+	local tree prep added=""
 	[ -n "${heal_repro_root}" ] && [ -d "${heal_repro_root}" ] || return 0
 	if [ -f "${heal_repro_root}/worktree_added" ]; then
+		added=1
 		tree="$(head -n 1 "${heal_repro_root}/worktree_added")"
 		if [ "${tree}" = "${heal_repro_root}/tree" ] && [ -e "${tree}" ]; then
 			heal_repro_git "${heal_repro_repo}" worktree remove --force "${tree}" >/dev/null 2>&1 \
@@ -506,7 +517,8 @@ heal_repro_cleanup()
 	fi
 	# Only this run's private temp root is removed.
 	rm -rf -- "${heal_repro_root}" 2>/dev/null || heal_repro_log "phase=cleanup outcome=failed step=root"
-	if [ -n "${heal_repro_repo}" ] && [ -d "${heal_repro_repo}" ]; then
+	# Prune only when this run added a worktree (never touch unrelated entries).
+	if [ -n "${added}" ] && [ -n "${heal_repro_repo}" ] && [ -d "${heal_repro_repo}" ]; then
 		heal_repro_git "${heal_repro_repo}" worktree prune >/dev/null 2>&1 || heal_repro_log "phase=cleanup outcome=failed step=prune"
 	fi
 	heal_repro_root=""
@@ -622,6 +634,8 @@ elif [ ! -e "${heal_repro_tests_file}" ]; then
 	heal_repro_list_reason="tests_file_missing"
 elif [ ! -f "${heal_repro_tests_file}" ]; then
 	heal_repro_list_reason="tests_file_not_regular"
+elif [ "$(stat -c %s "${heal_repro_tests_file}" 2>/dev/null || echo 0)" -gt "${heal_repro_tests_file_max}" ]; then
+	heal_repro_list_reason="tests_file_too_large"
 elif ! cp -- "${heal_repro_tests_file}" "${heal_repro_root}/tests.txt" 2>/dev/null; then
 	heal_repro_list_reason="tests_file_unreadable"
 elif [ "$(stat -c %s "${heal_repro_root}/tests.txt" 2>/dev/null || echo 999999999)" -gt "${heal_repro_tests_file_max}" ]; then
