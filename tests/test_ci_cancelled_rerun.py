@@ -377,6 +377,7 @@ def test_workflow_trusted_checkout_snapshot_and_permissions():
 	assert "actions: write" in text
 	assert "checks: read" in text
 	assert "CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}" in text
+	assert "CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}" in text
 
 
 # --- Runner-shutdown recovery (issue #7109) -------------------------------
