@@ -1,6 +1,0 @@
-<!-- changelog: fixed -->
-- **Planners now keep `## Deferred scope` to bullets only, and the heal hold comment says why a visible section was rejected (#8327).** The parser behind partial delivery and the heal counterfactual gate (`scripts/partial_delivery.py`) treats any prose line inside `## Deferred scope` as malformed, but the plan prompt never said so. The plan for heal issue #8327 ended that section with a one-sentence note after three valid bullets, so its `HEAL_COUNTERFACTUAL: PARTIAL: e2e-smoke-test` line was held with `deferred_scope_missing` even though every bullet named the job (plan run 40820071344).
-
-  Rule 12 of the plan prompt and the heal counterfactual prompt now state that the section holds only `- ` bullets and that any note goes in another section. The `deferred_scope_missing` hold comment, posted by `plan.yml` and by the poller, now adds that the section must appear once and hold only `- ` bullets, because a prose line or note inside it makes it unreadable. The parser and the gate's decisions are unchanged.
-
-  What this means for maintainers: a heal plan with a correctly deferred `PARTIAL` result is no longer held over a stray note, and a partially delivered issue no longer closes at merge for the same reason. When a hold does say `deferred_scope_missing`, look for a non-bullet line inside the section.
