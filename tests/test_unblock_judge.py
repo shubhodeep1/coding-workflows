@@ -3722,14 +3722,42 @@ def test_judge_waits_until_an_operator_placeholder_is_retired(tmp_path: Path) ->
 	pending = _target_repo(tmp_path / "a", "Gate the new path on DOC_SYNC_UNSET_OPERATOR_STEP.\n")
 	result, state = _judge(tmp_path / "a", ISSUE, comments=[hold], TARGET_DIR=str(pending))
 	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=holding" in result.stdout, result.stdout
-	# Only the changelog still names it: the step is done.
-	retired = _target_repo(tmp_path / "b", "Nothing pending.\n")
-	result, state = _judge(tmp_path / "b", ISSUE, comments=[hold], TARGET_DIR=str(retired))
+	# Only the changelog names it (a docs-only step, like #603's label repair):
+	# that alone does not show the step is done, so the hold keeps waiting.
+	docs_only = _target_repo(tmp_path / "b", "Nothing pending.\n")
+	result, state = _judge(tmp_path / "b", ISSUE, comments=[hold], TARGET_DIR=str(docs_only))
+	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=holding" in result.stdout, result.stdout
+	assert state["comments"] == []
+	# The refreshed hold tells the person how a docs-only step ends.
+	refreshed = state["patched"][0][1]["body"]
+	assert "post this item's resume command yourself" in refreshed and "resumes this item afterwards" not in refreshed
+	# Set as a repository variable: the step is done.
+	result, state = _judge(tmp_path / "b", ISSUE, comments=[hold], TARGET_DIR=str(docs_only),
+		FAKE_GH_ACTIONS_VARIABLES="DOC_SYNC_UNSET_OPERATOR_STEP")
 	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=met" in result.stdout, result.stdout
 	assert state["comments"][0]["body"].startswith("/answer waited for operator step")
 	(tmp_path / "c").mkdir()
 	result, state = _judge(tmp_path / "c", ISSUE, comments=[hold], TARGET_DIR=str(tmp_path / "missing"))
 	assert "reason=hold_check_unavailable" in result.stdout
+
+
+def test_a_manual_resume_ends_an_open_hold(tmp_path: Path) -> None:
+	# A person resumed the item themselves while the hold was open; a later
+	# block is judged again instead of inheriting the old hold.
+	hold = _hold_comment("placeholder_retired", "DOC_SYNC_UNSET_OPERATOR_STEP")
+	docs_only = _target_repo(tmp_path, "Nothing pending.\n")
+	resume = _comment("/reclarify\nLabels fixed by hand.", "owner", "2026-10-04T11:30:00Z")
+	resume["author_association"] = "OWNER"
+	result, state = _judge(tmp_path, ISSUE, comments=[hold, resume], TARGET_DIR=str(docs_only),
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "i"})
+	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=expired reason=resumed" in result.stdout, result.stdout
+	assert state["patched"][0][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP expired -->")
+	assert "outcome=acted" in result.stdout
+	# An untrusted or older slash command does not end it.
+	outsider = _comment("/reclarify", "someone", "2026-10-04T11:30:00Z")
+	older = _comment("/answer Q1: A", BOT, "2026-10-04T10:30:00Z")
+	result, state = _judge(tmp_path, ISSUE, comments=[older, hold, outsider], TARGET_DIR=str(docs_only))
+	assert "hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=holding" in result.stdout, result.stdout
 
 
 def _operator_step_comments(placeholder_line: str) -> list[dict]:
@@ -3747,6 +3775,7 @@ def test_merged_operator_step_fixup_holds_until_the_person_acts(tmp_path: Path) 
 	assert "fixup=50 op=hold hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP outcome=held" in result.stdout, result.stdout
 	assert [c["body"].rstrip().splitlines()[-1] for c in state["comments"]] == [
 		"<!-- ai:unblock-wait:v1 item=7 hold=placeholder_retired ref=DOC_SYNC_UNSET_OPERATOR_STEP -->"]
+	assert "post this item's resume command yourself" in state["comments"][0]["body"]
 	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
 	# Waits off: today's immediate resume.
 	result, state = _judge(tmp_path, ISSUE, comments=comments, issues=merged, UNBLOCK_JUDGE_WAIT_ENABLED="false")
