@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8432_6515242176_approved",
   "issue_number": 8432,
   "metadata": {
+    "branch": "ai/issue-8432",
+    "changed_files": [
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/8432-phase7-cancel-timeout-stable.md",
+      "tests/test_test_and_mark_stable_phase7_cancel_timeout_status.py"
+    ],
+    "issue_number": 8432,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8432",
+    "pr_number": 8437,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8437",
+    "run_attempt": "1",
+    "run_id": "41005033968",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41005033968"
   },
   "run_attempt": 1,
   "run_id": "41005033968",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-30T04:52:20Z",
+  "status": "completed",
+  "timestamp": "2026-10-30T05:05:11Z",
   "workflow": "implement"
 }
