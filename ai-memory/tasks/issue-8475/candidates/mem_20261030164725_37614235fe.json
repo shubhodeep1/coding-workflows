@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8475,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8475\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8478\",\"pr_number\":8478,\"branch\":\"ai/issue-8475\",\"run_id\":\"41084227492\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41084227492\",\"changed_files\":[\"agents.d/heal-evidence-pack-issue-runs.md\",\"changelog.d/heal-evidence-pack-issue-runs.md\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/fixtures/heal/p1_compare_stable_main.json\",\"tests/fixtures/heal/p1_issue_linked_runs.json\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "d1554c3bca7e89c4d3eee38f2624209b0a6c9dcef0edf47aac31838d71d63bcc",
+  "lineage": {
+    "issue_number": 8475,
+    "parent_ids": [],
+    "pr_number": 8478,
+    "run_id": "41084227492",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41084227492",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8478"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261030164725_37614235fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8475,
+    "level": "run",
+    "pr_number": 8478,
+    "run_id": "41084227492"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8475: https://github.com/shubhodeep1/coding-workflows/pull/8478",
+  "timestamps": {
+    "created_at": "2026-10-30T16:47:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
