@@ -1039,8 +1039,8 @@ _FAILING_FAILS = _repro("not_reproduced", "pre_existing")
 
 
 def _repro_run(tmp_path: Path, **kwargs) -> dict:
-	defaults = dict(status="pass", repro_enabled=True, approval_body=_REPRO_APPROVAL, plan_text=_REPRO_PLAN,
-		issue_body=_REPRO_BODY, repro_results={"edited": _EDITED_PASSES, "failing": _FAILING_FAILS})
+	defaults = {"status": "pass", "repro_enabled": True, "approval_body": _REPRO_APPROVAL, "plan_text": _REPRO_PLAN,
+		"issue_body": _REPRO_BODY, "repro_results": {"edited": _EDITED_PASSES, "failing": _FAILING_FAILS}}
 	defaults.update(kwargs)
 	return _gate_heal_run(tmp_path, **defaults)
 
@@ -1085,7 +1085,7 @@ def test_repro_required_fail_then_pass_hands_back_normally(tmp_path: Path) -> No
 	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
 	assert len(run["repro_calls"]) == 2
 	edited, failing = run["repro_calls"]
-	assert f"--worktree " in edited and f"--baseline {_FAILING_SHA}" in edited and "/repro-tree" in edited
+	assert "--worktree " in edited and f"--baseline {_FAILING_SHA}" in edited and "/repro-tree" in edited
 	assert f"--sha {_FAILING_SHA}" in failing and f"--baseline {_FAILING_SHA}" in failing
 	# Run 1 tested the edited tree, before the host transfer.
 	assert (tmp_path / "repro-saw").read_text() == "new\n"
@@ -1172,3 +1172,33 @@ def test_implement_workflow_maps_exit_43_to_repro_not_fixed() -> None:
 	assert len(workflow.encode()) < 480_000
 	runner = (ROOT / "scripts/heal_isolated_implement.sh").read_text()
 	assert "exit 43" in runner and 'WORKFLOW_HEAL_REPRODUCE_ENABLED:-false' in runner
+
+
+def test_repro_mixed_results_report_not_fixed_not_unverified(tmp_path: Path) -> None:
+	# One test passes on the edited tree, one still fails: run 2 is skipped on
+	# purpose and the outcome is the mismatch, not `not_run_at_failing_sha`.
+	other = "tests/test_fix.py::test_other"
+	edited = {"schema": "heal_repro.v1", "status": "not_reproduced", "reason": "mixed", "failing_at": "", "passing_at": "",
+		"tests": [{"test": _REPRO_TEST, "status": "not_reproduced", "reason": "passes_at_failing_sha"},
+			{"test": other, "status": "not_reproduced", "reason": "pre_existing"}]}
+	plan = "HEAL_COUNTERFACTUAL: REPRODUCIBLE: " + _REPRO_TEST + ", " + other + "\n"
+	run = _repro_run(tmp_path, plan_text=plan, repro_results={"edited": edited})
+	assert run["rc"] == 43, run["stderr"]
+	assert len(run["repro_calls"]) == 1
+	assert run["repro_result"]["outcome"] == "not_fixed"
+	assert run["repro_result"]["reason"] == "still_failing"
+
+
+def test_repro_marker_on_a_later_line_still_requires_the_check(tmp_path: Path) -> None:
+	run = _repro_run(tmp_path, approval_body="/approved\n[repro-required]\n")
+	assert run["rc"] == 0, run["stderr"]
+	assert len(run["repro_calls"]) == 2
+	assert run["repro_result"]["outcome"] == "fixed"
+
+
+def test_repro_parametrized_id_with_comma_stays_whole(tmp_path: Path) -> None:
+	param = "tests/test_fix.py::test_fix[a,b]"
+	plan = "HEAL_COUNTERFACTUAL: REPRODUCIBLE: " + param + ", " + _REPRO_TEST + "\n"
+	run = _repro_run(tmp_path, plan_text=plan, repro_results={"edited": _repro("unverified", "timeout")})
+	assert run["rc"] == 43, run["stderr"]
+	assert [row["test"] for row in run["repro_result"]["tests"]] == [param, _REPRO_TEST]

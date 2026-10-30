@@ -317,7 +317,7 @@ heal_prepush_test_gate()
 	if [ "${heal_impl_repro_enabled}" = true ]; then
 		local gate_prep=""
 		if [ -f "${support}/codex_isolated_exec.sh" ] && [ ! -L "${support}/codex_isolated_exec.sh" ]; then
-			gate_prep="$("${heal_impl_repro_clean_env[@]}" bash "${support}/codex_isolated_exec.sh" prepare --workdir "${root}/gate-tree" --deps </dev/null | tail -n 1)" || gate_prep=""
+			gate_prep="$("${heal_impl_repro_clean_env[@]}" timeout --kill-after=30s 600 bash "${support}/codex_isolated_exec.sh" prepare --workdir "${root}/gate-tree" --deps </dev/null | tail -n 1)" || gate_prep=""
 		fi
 		if [[ "${gate_prep}" == /* ]] && [ -d "${gate_prep}" ]; then
 			heal_gate_prep_root="${gate_prep}"
@@ -493,9 +493,22 @@ def cmd_tests(support, plan, out):
 	if not match:
 		return 1
 	# Assumed list format (the sibling parser is not on this ref): ids split on
-	# commas and/or whitespace; one pair of surrounding backticks is dropped.
+	# whitespace and on commas outside [...] (so parametrized ids such as
+	# `test_x[a,b]` stay whole); one pair of surrounding backticks is dropped.
 	ids = []
-	for raw in re.split(r"[,\s]+", match.group(1)):
+	pieces = []
+	for word in match.group(1).split():
+		depth, start = 0, 0
+		for index, char in enumerate(word):
+			if char == "[":
+				depth += 1
+			elif char == "]" and depth:
+				depth -= 1
+			elif char == "," and not depth:
+				pieces.append(word[start:index])
+				start = index + 1
+		pieces.append(word[start:])
+	for raw in pieces:
 		if raw.startswith("`") and raw.endswith("`") and len(raw) > 2:
 			raw = raw[1:-1]
 		if raw:
@@ -558,7 +571,10 @@ def cmd_final(tests_file, edited, failing, sha, out, forced):
 					unverified = unverified or reason2
 				elif at == "passes":
 					mismatch = mismatch or reason2
-			else:
+			elif failing:
+				# Run 2 was expected but left no per-test result. When it was
+				# skipped on purpose (a test failed on the edited tree), the
+				# mismatch above decides the outcome instead.
 				unverified = unverified or "not_run_at_failing_sha"
 			rows.append({"test": test, "at_failing_sha": at, "on_edited_tree": on})
 	if unverified:
@@ -612,8 +628,13 @@ heal_impl_repro_required()
 		echo unreadable
 		return 0
 	fi
-	first_line="$(jq -r --arg id "${comment_id}" '[.[] | select((.id | tostring) == $id)] | if length == 1 then (.[0].body // "" | split("\n")[0] | rtrimstr("\r")) else error("missing") end' "${comments}" 2>/dev/null)" || { echo unreadable; return 0; }
-	if [[ "${first_line}" == /approved* ]] && [[ "${first_line}" == *"[repro-required]"* ]]; then
+	local body
+	body="$(jq -r --arg id "${comment_id}" '[.[] | select((.id | tostring) == $id)] | if length == 1 then (.[0].body // "") else error("missing") end' "${comments}" 2>/dev/null)" || { echo unreadable; return 0; }
+	first_line="${body%%$'\n'*}"
+	first_line="${first_line%$'\r'}"
+	# implement.yml triggers on any body that starts with /approved, so the
+	# marker counts on any line of that comment.
+	if [[ "${first_line}" == /approved* ]] && [[ "${body}" == *"[repro-required]"* ]]; then
 		echo required
 	else
 		echo none
@@ -665,7 +686,7 @@ heal_impl_repro_check()
 	required="$(heal_impl_repro_required)"
 	[ "${required}" = none ] && return 0
 	: > "${root}/repro-tests.txt"
-	rm -f -- "${root}/results/repro-edited.json" "${root}/results/repro-failing.json"
+	rm -f -- "${root}/results/repro-edited.json" "${root}/results/repro-failing.json" "${heal_impl_repro_result_file}"
 	[ "${required}" = required ] || heal_impl_repro_finish approval_unreadable
 	heal_impl_repro_py_run tests "${support}" "${PLAN_FILE:-}" "${root}/repro-tests.txt.new" 2>/dev/null \
 		&& mv -f -- "${root}/repro-tests.txt.new" "${root}/repro-tests.txt" || true
@@ -690,12 +711,13 @@ heal_impl_repro_check()
 		[ -f "${manifest_part}" ] || continue
 		cp -f "${manifest_part}" "${root}/manifest.repro.json${manifest_part#"${root}/manifest.json"}" 2>/dev/null || true
 	done
-	# The same scoped transfer as the host's below: a failure here is the one
-	# the host transfer would hit, so it keeps that exit code (42).
+	# The repro tree is a clean HEAD checkout while the manifest baseline is the
+	# host workspace, so this transfer can fail (host baseline changed) where the
+	# host transfer would not. Hold with an accurate reason (exit 43); the heal
+	# is held and handed to a person either way.
 	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer \
 		"${root}/repro-tree" "${root}/source" "${root}/manifest.repro.json" --scope-file "${scope}" >/dev/null 2>&1; then
-		echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope" >&2
-		exit 42
+		heal_impl_repro_finish repro_tree_unavailable "${failing_sha}"
 	fi
 	# Run 1: the edited tree, baseline the failing SHA.
 	"${heal_impl_repro_clean_env[@]}" WORKFLOW_HEAL_REPRODUCE_TIMEOUT_SECS="${per_run}" bash "${reproduce}" \

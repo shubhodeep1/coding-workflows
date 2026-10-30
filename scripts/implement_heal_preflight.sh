@@ -78,7 +78,7 @@ def tok(value):
 	return text or "unknown"
 def tid(value):
 	text = value if isinstance(value, str) else ""
-	text = re.sub(r"[`<>@|\r\n]", "", text)[:200]
+	text = re.sub(r"[`<>@|\x00-\x1f\x7f\u200b-\u200f\u2028\u2029\ufeff]", "", text)[:200]
 	return text or "(empty)"
 sha = data.get("failing_sha")
 sha = sha if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha) else "unknown"
