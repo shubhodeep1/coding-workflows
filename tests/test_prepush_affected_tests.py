@@ -753,12 +753,29 @@ def test_wrapper_runs_an_isolated_container_and_copies_back_only_results(tmp_pat
 	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
 	for flag in ("--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--rm", "--init"):
 		assert flag in run_line
+	# Docker's --tmpfs defaults to noexec; tests that run a stub script from
+	# a temp dir need exec (PR #8371 loop).
+	assert "--tmpfs /tmp:rw,exec,nosuid,nodev,size=512m" in run_line
 	assert "--env" not in run_line and " -e " not in run_line
 	assert f"src={MODULE_PATH.resolve()},dst=/gate/prepush_affected_tests.py,readonly" in run_line
 	assert "dst=/baseline,readonly" in run_line
 	assert sorted(p.name for p in out.iterdir()) == ["result.json", "summary.md"]
 	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass"
 	assert "PREPUSH_TEST_GATE phase=wrapper outcome=pass" in proc.stderr
+
+
+@pytest.mark.parametrize("dockerfile_source", [
+	"scripts/codex_isolated_exec.sh",  # implement gate (generated Dockerfile)
+	"scripts/review_sandbox/Dockerfile",  # review and conflict-resolver gates
+	"scripts/clarify_sandbox/Dockerfile",  # heal gate
+])
+def test_gate_images_install_jq(dockerfile_source):
+	# Most repo scripts call jq; without it their tests fail on both trees in
+	# the gate container and the gate reports noise instead of results.
+	text = (REPO_ROOT / dockerfile_source).read_text(encoding="utf-8")
+	installs = [line for line in text.splitlines() if "apt-get install" in line]
+	assert installs, dockerfile_source
+	assert any("jq" in line.split() for line in installs), dockerfile_source
 
 
 def test_wrapper_refuses_a_module_inside_the_worktree(tmp_path):
