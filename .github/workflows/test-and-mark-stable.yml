@@ -3432,6 +3432,16 @@ jobs:
             echo "status=no_run" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          # A run was found but never reached `completed` inside the budget
+          # (for example still `pending` behind its concurrency group). This
+          # used to write an empty `status=`, which the results table showed
+          # as SKIPPED (run 40794181365).
+          if [ "${STATUS:-}" != "completed" ]; then
+            echo "::error::cancel-on-close run #${NEW_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS:-?})"
+            echo "status=timeout" >> "$GITHUB_OUTPUT"
+            echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if [ "${NEW_CONCLUSION}" != "success" ]; then
             echo "::error::cancel-on-close run #${NEW_RUN_ID} concluded ${NEW_CONCLUSION}"
             echo "status=${NEW_CONCLUSION}" >> "$GITHUB_OUTPUT"
@@ -3625,7 +3635,14 @@ jobs:
           if [ "$CANCEL" = "success" ]; then
             echo "  ✓ Cancel-PR .. PASSED (cancel_on_pr_close ran successfully; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
           elif [ -z "$CANCEL" ]; then
-            echo "  - Cancel-PR .. SKIPPED (no PR to close)"
+            if [ -n "${PR_NUMBER:-}" ]; then
+              # A smoke PR exists, so Phase 7 should have written a status;
+              # an empty one means it aborted or never ran. Fail closed.
+              echo "  ✗ Cancel-PR .. FAILED (no status; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
+              PASSED=false
+            else
+              echo "  - Cancel-PR .. SKIPPED (no PR to close)"
+            fi
           else
             echo "  ✗ Cancel-PR .. FAILED (${CANCEL}; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
             PASSED=false
