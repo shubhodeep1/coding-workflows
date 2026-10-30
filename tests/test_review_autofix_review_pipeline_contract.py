@@ -9288,6 +9288,11 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	block = apply_fixes.split("SANDBOX WORKSPACE LIMITS", 1)[1].split("=== BEGIN UNTRUSTED", 1)[0]
 	assert ".claude/commands/" in block
 	assert "sandbox-excluded path" in block
+	# #8321: twinned .claude/docs/ reference files are admitted; both copies are edited together.
+	assert '".claude/docs/<name>.md" reference' in block
+	assert "edit both copies in the same run so they stay byte-identical" in block
+	assert 'new ".claude/docs/" files' in block and "cannot be created" in block
+	assert "selected .claude/docs/ reference files" in apply_fixes
 	assert "`" not in block and "$" not in block and "\\" not in block
 	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
 	assert spec is not None and spec.loader is not None
@@ -9298,6 +9303,102 @@ def test_review_editor_prompt_explains_sandbox_limits() -> None:
 	assert not workspace_module.allowed(".claude/hooks/pr_merge_status_guard.py")
 	assert workspace_module.allowed(".github/workflows/x.yml")
 	assert workspace_module.allowed(".claude/hooks/gh_api_write_guard.py")
+
+
+def test_review_isolation_admits_only_twinned_claude_docs() -> None:
+	"""#8321: .claude/docs/<name>.md is admitted like .claude/commands/*.md (twin-only)."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	spec = importlib.util.spec_from_file_location("review_workspace_docs_admission", workspace_helper)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	admitted = {".claude/docs/x.md"}
+	assert module.allowed(".claude/docs/x.md", commands=admitted)
+	assert not module.allowed(".claude/docs/x.md")
+	assert not module.allowed(".claude/docs/y.md", commands=admitted)
+	for rejected in (".claude/docs/a/x.md", ".claude/docs/.x.md", ".claude/docs/x.txt", ".claude/hooks/other.py", ".claude/settings.json", ".claude/settings.local.json"):
+		assert not module.allowed(rejected, commands=admitted | {rejected}), rejected
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / ".claude/docs").mkdir(parents=True)
+		(host / ".claude/docs/x.md").write_text("live before\n")
+		(host / ".claude/docs/y.md").write_text("untwinned\n")
+		(host / "workflow-templates/.claude/docs").mkdir(parents=True)
+		(host / "workflow-templates/.claude/docs/x.md").write_text("live before\n")
+		(host / "workflow-templates/.claude/docs/y.md").write_text("PR-only twin\n")
+		# z.md is twinned on both sides but has no live copy: never admitted.
+		(host / "workflow-templates/.claude/docs/z.md").write_text("template only\n")
+		trusted = root / "verified" / ".codex-workflow-src" / "workflow-templates/.claude/docs"
+		trusted.mkdir(parents=True)
+		(trusted / "x.md").write_text("trusted template\n")
+		(trusted / "z.md").write_text("trusted template\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".claude", "workflow-templates"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "verified")},
+				capture_output=True, text=True, check=False,
+			)
+
+		snap = run("snapshot")
+		assert snap.returncode == 0, snap.stderr
+		inventory = json.loads(manifest.with_name(manifest.name + ".admitted_commands.json").read_text())
+		assert inventory == [".claude/docs/x.md"]
+		assert (source / ".claude/docs/x.md").exists()
+		assert not (source / ".claude/docs/y.md").exists()
+		assert (source / "workflow-templates/.claude/docs/x.md").exists()
+		# An unadmitted new docs file is dropped by refresh and never transferred.
+		(source / ".claude/docs/new.md").write_text("new instructions\n")
+		refreshed = run("refresh")
+		assert refreshed.returncode == 0, refreshed.stderr
+		assert not (source / ".claude/docs/new.md").exists()
+		# Both copies transfer back together; a new docs file does not.
+		(source / ".claude/docs/x.md").write_text("live after\n")
+		(source / "workflow-templates/.claude/docs/x.md").write_text("live after\n")
+		(source / ".claude/docs/new.md").write_text("new instructions\n")
+		(source / ".claude/docs/z.md").write_text("created live copy\n")
+		moved = run("transfer")
+		assert moved.returncode == 0, moved.stderr
+		assert (host / ".claude/docs/x.md").read_text() == "live after\n"
+		assert (host / "workflow-templates/.claude/docs/x.md").read_text() == "live after\n"
+		assert not (host / ".claude/docs/new.md").exists()
+		assert not (host / ".claude/docs/z.md").exists()
+		assert (host / ".claude/docs/y.md").read_text() == "untwinned\n"
+		# Heal scope (strict enumeration, no admitted inventory) still refuses .claude/docs/.
+		with pytest.raises(ValueError, match="out of heal scope|unsafe workspace directory"):
+			list(module.enumerate_workspace(source, None, None, strict=True))
+		# A forged nested docs entry in the frozen inventory fails closed.
+		inventory_path = manifest.with_name(manifest.name + ".admitted_commands.json")
+		inventory_path.write_text(json.dumps([".claude/docs/a/b.md"]))
+		with pytest.raises(ValueError, match="admitted command inventory missing"):
+			module.load_admitted_commands(manifest)
+		forged = run("transfer")
+		assert forged.returncode == 1
+		assert "reason=admitted_inventory_missing" in forged.stderr
+	# Without docs twins in the verified checkout, creating .claude/docs/ stays an unsafe directory.
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / "scripts/a.py").write_text("x = 1\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		env = {**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "verified")}
+		assert subprocess.run([sys.executable, str(workspace_helper), "snapshot", str(host), str(source), str(manifest)], env=env, capture_output=True, text=True).returncode == 0
+		(source / ".claude/docs").mkdir(parents=True)
+		(source / ".claude/docs/x.md").write_text("new\n")
+		rejected_run = subprocess.run([sys.executable, str(workspace_helper), "transfer", str(host), str(source), str(manifest)], env=env, capture_output=True, text=True)
+		assert rejected_run.returncode == 1 and "reason=unsafe_directory" in rejected_run.stderr
+		assert not (host / ".claude").exists()
 
 
 def test_review_isolation_transfer_failure_evidence() -> None:
@@ -9925,7 +10026,7 @@ def test_review_sandbox_transfer_reason_is_reported_and_archived() -> None:
 	assert 'cp "${transfer_reason_file}" "${PREVIOUS_REVIEWS_DIR}/review_sandbox_transfer_reason_${attempt}.txt"' in block
 	assert "::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason=${transfer_reason}" in block
 	assert 'transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"' in block
-	assert "including selected .claude/commands/ files, .claude/hooks/gh_api_write_guard.py" in apply_fixes
+	assert "including selected .claude/commands/ files, selected .claude/docs/ reference files, .claude/hooks/gh_api_write_guard.py" in apply_fixes
 	assert "sandbox-excluded path" in apply_fixes
 
 

@@ -155,6 +155,26 @@ def test_release_gate_validation_refresh_watch_covers_child_budget() -> None:
 	assert sum(int(m) for m in dispatch_steps) < job_minutes, (dispatch_steps, job_minutes)
 
 
+def test_release_gate_validation_refresh_watch_includes_queue_allowance() -> None:
+	# Run 40831286935: the child run sat 20m22s queued, ran 41m45s and finished
+	# success 5s after the gate gave up on a 3720s window measured from
+	# dispatch. The window must also cover runner queueing (issue #8347).
+	child_minutes = _job_header_timeout(
+		_job_block(WORKFLOW_PATH.read_text(encoding="utf-8"), "refresh")
+	)
+	release_text = RELEASE_GATE_PATH.read_text(encoding="utf-8")
+	job = _job_block(release_text, "orphan-workflows-test")
+	step = _step_block(job, "Dispatch & watch — validation-refresh")
+
+	watch = re.search(r"--completion-timeout-secs (\d+)", step)
+	assert watch, "--completion-timeout-secs missing"
+	assert int(watch.group(1)) >= child_minutes * 60 + 60 + 1800, watch.group(1)
+	assert "--completion-timeout-secs 5520" in step
+	assert re.search(r"^        timeout-minutes: 95$", step, re.MULTILINE)
+	assert _job_header_timeout(job) == 165
+	assert "8520s" in job
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

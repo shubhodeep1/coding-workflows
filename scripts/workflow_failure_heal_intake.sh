@@ -1481,6 +1481,8 @@ _non_retryable_route_apply()
 	NON_RETRYABLE_PATHS="$(jq -r '.paths | join(", ")' "${NON_RETRYABLE_FILE}")"
 	if [ "${NON_RETRYABLE_REASON}" = "conflict_resolver_sandbox_support_missing" ]; then
 		NON_RETRYABLE_ACTION="workflow support lacks the conflict resolver's sandbox files; a maintainer must fix workflow support (or merge the conflict by hand)"
+	elif [ "${NON_RETRYABLE_REASON}" = "review_editor_sandbox_path_excluded" ]; then
+		NON_RETRYABLE_ACTION="the fix needs a path the review editor sandbox does not admit; make that change by hand"
 	elif [ -n "${NON_RETRYABLE_PATHS}" ]; then
 		NON_RETRYABLE_ACTION="${NON_RETRYABLE_PATHS} need a manual merge"
 	else

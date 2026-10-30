@@ -9620,45 +9620,104 @@ def test_security_pass_validation_complete_deleted_branch_findings_repair_conver
 	_assert_deleted_branch_security_repair_converges(validation_enabled=True)
 
 
+_SECURITY_PASS_CREATE_RACE_MARKERS = ("SECURITY_PASS_", "[external-finalize", "[security-pass]", "SECURITY_PASS_AUDIT_TREE")
+
+
+def _security_pass_create_race_failure_context(result: dict, *, final_pr_number: int, race_sha: str) -> str:
+	"""Describe how far the poller got, for the create-race test's failure messages (#8352).
+
+	Read-only: it never changes ``result``. Every lookup tolerates a missing key,
+	so the message itself cannot raise while reporting a failure.
+	"""
+	latest_state = result.get("latest_state") or {}
+	if not isinstance(latest_state, dict):
+		latest_state = {}
+	audit_capture = result.get("security_audit_capture")
+	audit_head = audit_capture.get("diff_head") if isinstance(audit_capture, dict) else None
+	stdout_text = str(result.get("stdout") or "")
+	stderr_text = str(result.get("stderr") or "")
+	marker_lines = [
+		line
+		for line in (stdout_text.splitlines() + stderr_text.splitlines())
+		if any(marker in line for marker in _SECURITY_PASS_CREATE_RACE_MARKERS)
+	][:80]
+	stdout_tail = stdout_text.splitlines()[-60:]
+	stderr_tail = stderr_text.splitlines()[-60:]
+	return "\n".join(
+		[
+			f"case: final_pr={final_pr_number} race_sha={race_sha}",
+			f"state: status={latest_state.get('status')!r} security_pass_status={latest_state.get('security_pass_status')!r}"
+			f" final_merge_pr={latest_state.get('final_merge_pr')!r} final_merge_status={latest_state.get('final_merge_status')!r}",
+			f"audit_ran={audit_capture is not None} audit_diff_head={audit_head!r}",
+			f"branch_create_calls={result.get('branch_create_calls')!r}",
+			f"created_branches={result.get('created_branches')!r}",
+			f"branch_ref_shas={result.get('branch_ref_shas')!r}",
+			f"created_issues={result.get('created_issues')!r}",
+			"--- marker lines (first 80) ---",
+			*marker_lines,
+			"--- stdout tail (last 60 lines) ---",
+			*stdout_tail,
+			"--- stderr tail (last 60 lines) ---",
+			*stderr_tail,
+		]
+	)
+
+
+def _assert_security_pass_create_race_case(
+	*, integration_branch: str, final_pr_number: int, race_sha: str, expect_fix_issue: bool
+) -> None:
+	final_pr = {
+		"number": final_pr_number,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": integration_branch,
+		"headSha": "__integration_head__",
+	}
+	state = _base_state()
+	state.update({"integration_branch": integration_branch, "final_merge_pr": final_pr_number})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		prs=[final_pr],
+		existing_branches=["main"],
+		missing_git_branch_fetches=[integration_branch],
+		pull_ref_shas={final_pr_number: "__integration_head__"},
+		branch_create_race_shas={integration_branch: race_sha},
+	)
+	ctx = _security_pass_create_race_failure_context(result, final_pr_number=final_pr_number, race_sha=race_sha)
+	assert result["security_audit_capture"] is not None, ctx
+	audited_head_sha = result["security_audit_capture"]["diff_head"]
+	assert result.get("branch_create_calls", []) == [{"branch": integration_branch, "sha": audited_head_sha}], ctx
+	assert bool(result.get("created_issues", [])) is expect_fix_issue, ctx
+	latest_state = result.get("latest_state") or {}
+	if expect_fix_issue:
+		assert latest_state.get("status") == "security-pass-fixing", ctx
+	else:
+		assert latest_state.get("status") == "security-pass", ctx
+		assert latest_state.get("security_pass_status") == "failed", ctx
+		assert latest_state.get("final_merge_pr") == final_pr_number, ctx
+		assert result.get("created_branches", []) == [], ctx
+		assert integration_branch in result.get("branch_ref_shas", {}), ctx
+		assert result["branch_ref_shas"][integration_branch] != audited_head_sha, ctx
+
+
 def test_security_pass_deleted_branch_repair_accepts_only_exact_sha_create_race() -> None:
 	integration_branch = "orchestrator/project-192"
 	for final_pr_number, race_sha, expect_fix_issue in (
 		(402, "__integration_head__", True),
 		(403, "__default_head__", False),
 	):
-		final_pr = {
-			"number": final_pr_number,
-			"state": "closed",
-			"merged": True,
-			"baseRefName": "main",
-			"headRefName": integration_branch,
-			"headSha": "__integration_head__",
-		}
-		state = _base_state()
-		state.update({"integration_branch": integration_branch, "final_merge_pr": final_pr_number})
-		result = _run_poller(
-			state=state,
-			enable_validation="false",
-			max_validate_cycles="3",
-			enable_security_pass="true",
-			security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
-			issue_labels={10: ["ai:merged"]},
-			prs=[final_pr],
-			existing_branches=["main"],
-			missing_git_branch_fetches=[integration_branch],
-			pull_ref_shas={final_pr_number: "__integration_head__"},
-			branch_create_race_shas={integration_branch: race_sha},
+		_assert_security_pass_create_race_case(
+			integration_branch=integration_branch,
+			final_pr_number=final_pr_number,
+			race_sha=race_sha,
+			expect_fix_issue=expect_fix_issue,
 		)
-		assert result["branch_create_calls"] == [{"branch": integration_branch, "sha": result["security_audit_capture"]["diff_head"]}]
-		assert bool(result.get("created_issues", [])) is expect_fix_issue
-		if expect_fix_issue:
-			assert result["latest_state"]["status"] == "security-pass-fixing"
-		else:
-			assert result["latest_state"]["status"] == "security-pass"
-			assert result["latest_state"]["security_pass_status"] == "failed"
-			assert result["latest_state"]["final_merge_pr"] == final_pr_number
-			assert result.get("created_branches", []) == []
-			assert result["branch_ref_shas"][integration_branch] != result["security_audit_capture"]["diff_head"]
 
 
 def test_security_pass_deleted_branch_repair_fails_closed_when_created_ref_cannot_be_verified() -> None:

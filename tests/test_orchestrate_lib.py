@@ -3850,6 +3850,192 @@ def test_prepush_gate_orchestrator_scoping_wiring_contract():
 
 
 # ---------------------------------------------------------------------------
+# Issue #8314: Wave 1 deferral reasons + missing child issue number
+# ---------------------------------------------------------------------------
+
+def _wave1_create_issues_step_body() -> str:
+	"""Return the dedented run: body of the orchestrate.yml create_issues step.
+
+	Extracted textually (PyYAML is not a dependency of this suite): the body is
+	every line after ``run: |`` up to the next step, with the 10-space block
+	indentation removed, which is what the runner executes.
+	"""
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
+	lines = workflow.splitlines()
+	start = lines.index("      - name: Create Wave 1 issues only")
+	assert lines[start + 2] == "        id: create_issues", lines[start + 2]
+	run_idx = next(i for i in range(start, len(lines)) if lines[i] == "        run: |")
+	body: list[str] = []
+	for line in lines[run_idx + 1:]:
+		if line.startswith("      - name:"):
+			break
+		assert line == "" or line.startswith(" " * 10), line
+		body.append(line[10:])
+	return "\n".join(body) + "\n"
+
+
+def _run_wave1_create_issues_step(data: dict, create_output: str = "https://github.com/o/r/issues/101", create_rc: int = 0) -> dict:
+	import shutil
+	tmp = Path(tempfile.mkdtemp(prefix="wave1-deferral-"))
+	try:
+		scripts_dir = tmp / "scripts"
+		scripts_dir.mkdir()
+		shutil.copy(REPO_ROOT / "scripts" / "orchestrate_lib.py", scripts_dir / "orchestrate_lib.py")
+		(scripts_dir / "gh_helpers.sh").write_text(
+			'gh_retry() { printf \'%s\\n\' "$*" >> "${RUNTIME_DIR}/gh_calls.txt"; '
+			'printf \'%s\' "${STUB_CREATE_OUTPUT}"; return "${STUB_CREATE_RC:-0}"; }\n',
+			encoding="utf-8",
+		)
+		runtime = tmp / "runtime"
+		runtime.mkdir()
+		decomposition = runtime / "decomposition.json"
+		decomposition.write_text(json.dumps(data), encoding="utf-8")
+		script = _wave1_create_issues_step_body().replace("${{ github.repository }}", "o/r")
+		env = dict(os.environ)
+		env.update({
+			"DECOMPOSITION_FILE": str(decomposition),
+			"RUNTIME_DIR": str(runtime),
+			"TRACKING_ISSUE_NUMBER": "1",
+			"INTEGRATION_BRANCH": "x",
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"STUB_CREATE_OUTPUT": create_output,
+			"STUB_CREATE_RC": str(create_rc),
+		})
+		env.pop("PROJECT_ENGINE_LABEL", None)
+		proc = subprocess.run(["bash", "-c", script], cwd=str(tmp), env=env, capture_output=True, text=True, check=False)
+		issue_map_path = runtime / "issue_map.json"
+		issue_map = json.loads(issue_map_path.read_text(encoding="utf-8")) if issue_map_path.exists() else None
+		return {"rc": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "issue_map": issue_map}
+	finally:
+		shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _wave1_deferral_reasons(stdout: str, local_id: str, wave: int) -> list:
+	prefix = f"  Deferring {local_id} (not in Wave 1): wave={wave} deferral_reasons="
+	line = next((ln for ln in stdout.splitlines() if ln.startswith(prefix)), None)
+	assert line is not None, stdout
+	return json.loads(line[len(prefix):])
+
+
+def _wave1_two_issue_decomposition(files_a: list, files_b: list, edges: list) -> dict:
+	return {
+		"project_title": "P",
+		"project_summary": "S",
+		"issues": [
+			{"id": "T1", "title": "One", "body": "b1", "priority": 1, "files_touched": files_a},
+			{"id": "T2", "title": "Two", "body": "b2", "priority": 2, "files_touched": files_b},
+		],
+		"dependency_edges": edges,
+	}
+
+
+def _wave1_tools_available() -> bool:
+	import shutil
+	if shutil.which("jq") is None or shutil.which("bash") is None:
+		print("  SKIP  jq or bash not installed; create_issues step not executed")
+		return False
+	return True
+
+
+def test_wave1_create_issues_step_static_contract():
+	body = _wave1_create_issues_step_body()
+	assert 'echo "  Deferring ${LOCAL_ID} (not in Wave 1): ${_wave1_defer_detail:-deferral_reasons=unavailable}"' in body
+	assert "ensure_ascii=True" in body and "wave1_deferrals.json" in body
+	assert '"${child_create_args[@]}")" || _wave1_create_rc=$?' in body
+	assert "::error::Wave 1 child issue creation for local id ${LOCAL_ID} returned no issue number" in body
+	assert body.index("::error::Wave 1 child issue creation") < body.index('ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"')
+
+
+def test_wave1_deferral_logs_model_dependency_edge():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["a.py"], ["b.py"], [{"from": "T1", "to": "T2"}])
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	assert _wave1_deferral_reasons(result["stdout"], "T2", 2) == [{"from": "T1", "source": "model"}]
+	assert result["issue_map"] == {"T1": 101}, result
+
+
+def test_wave1_deferral_logs_auto_serialize_pair_after_write_back():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["shared.py", "a.py"], ["shared.py", "b.py"], [])
+	# Mirror the partition-guard step's compute-waves --write-back.
+	orchestrate_lib.compute_waves(data, hot_files=set())
+	assert data["dependency_edges"] == [{"from": "T1", "to": "T2"}]
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	assert _wave1_deferral_reasons(result["stdout"], "T2", 2) == [
+		{"from": "T1", "source": "auto_serialize", "overlap_type": "pair", "files": ["shared.py"]},
+	]
+	assert result["issue_map"] == {"T1": 101}, result
+
+
+def test_wave1_deferral_logs_auto_serialize_hot_file_after_write_back():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["README.md", "a.py"], ["README.md", "b.py"], [])
+	orchestrate_lib.compute_waves(data, hot_files={"README.md"})
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert len(reasons) == 1, reasons
+	assert reasons[0]["source"] == "auto_serialize" and reasons[0]["from"] == "T1", reasons
+	assert reasons[0]["overlap_type"] == "hot_file", reasons
+	assert "README.md" in reasons[0]["files"], reasons
+
+
+def test_wave1_deferral_logs_all_shared_files_for_mixed_hot_overlap():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["README.md", "shared.py", "a.py"], ["README.md", "shared.py", "b.py"], [])
+	orchestrate_lib.compute_waves(data, hot_files={"README.md"})
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert len(reasons) == 1 and reasons[0]["overlap_type"] == "hot_file", reasons
+	assert reasons[0]["files"] == ["README.md", "shared.py"], reasons
+
+
+def test_wave1_deferral_omits_paths_augmented_for_both_issues():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["shared.py", "tests/test_x.py", "a.py"], ["shared.py", "tests/test_x.py", "b.py"], [])
+	data["prepush_augmented_paths"] = {"T1": ["tests/test_x.py"], "T2": ["tests/test_x.py"]}
+	orchestrate_lib.compute_waves(data, hot_files=set())
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert len(reasons) == 1 and reasons[0]["source"] == "auto_serialize", reasons
+	assert reasons[0]["files"] == ["shared.py"], reasons
+
+
+def test_wave1_deferral_logs_auto_serialize_without_write_back():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["shared.py"], ["shared.py"], [])
+	assert "partition_serializations" not in data
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert [(r["from"], r["source"]) for r in reasons] == [("T1", "auto_serialize")], reasons
+	assert "shared.py" in reasons[0]["files"], reasons
+
+
+def test_wave1_create_without_issue_number_fails_with_error():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["a.py"], ["b.py"], [{"from": "T1", "to": "T2"}])
+	for output, rc in (("", 0), ("not a url", 0), ("https://github.com/o/r/issues/7", 1)):
+		result = _run_wave1_create_issues_step(data, create_output=output, create_rc=rc)
+		assert result["rc"] != 0, (output, rc, result)
+		assert "::error::Wave 1 child issue creation for local id T1 returned no issue number" in result["stdout"], (output, rc, result)
+		assert f"gh_retry exit={rc}," in result["stdout"], (output, rc, result)
+		assert result["issue_map"] is None, (output, rc, result)
+		assert "Created #" not in result["stdout"], (output, rc, result)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
