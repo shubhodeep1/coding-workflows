@@ -604,7 +604,12 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 					unverified.append({"item": path, "reason": "pytest_unavailable"})
 				else:
 					targets = [f"{path}::{name}" for name in names] or [path]
-					units.append({"id": path, "file": path, "argv": ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets], "kind": "test"})
+					unit = {"id": path, "file": path, "argv": ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets], "kind": "test"}
+					if names and "tests_file" in (entry.get("reasons") or []):
+						# Named `--tests-file` targets: a node missing on the
+						# baseline is not evidence the failure is inherited.
+						unit["tests_file_nodes"] = True
+					units.append(unit)
 			else:
 				units.append({"id": path, "file": path, "argv": ["python3", path], "kind": "test"})
 		elif path.endswith(".sh"):
@@ -817,7 +822,13 @@ def classify_baseline(
 		baseline_statuses = {unit["id"]: unit.get("status") for unit in reran}
 		for unit in rerun:
 			unit["baseline_status"] = baseline_statuses.get(unit["id"])
-		inherited_ids = {unit["id"] for unit in reran if unit.get("status") == "fail"}
+		# pytest exits 4 (node not found) or 5 (nothing collected) when a named
+		# `--tests-file` test does not exist on the baseline, for example a test
+		# the change added. That is not an inherited failure.
+		inherited_ids = {
+			unit["id"] for unit in reran
+			if unit.get("status") == "fail" and not (unit.get("tests_file_nodes") and unit.get("rc") in (4, 5))
+		}
 	if repo is not None:
 		for unit in failed:
 			if unit.get("kind") != "static":
@@ -1424,6 +1435,9 @@ def parse_tests_file(repo: Path, text: str) -> tuple[list[dict], list[dict]]:
 			reason = _tests_file_path_reason(repo, path)
 			if not reason and separator and not _TESTS_FILE_NAME_RE.fullmatch(name):
 				reason = "tests_file_invalid_name"
+			elif not reason and separator and not path.endswith(".py"):
+				# Only Python units take test names; other runners get the path.
+				reason = "tests_file_name_unsupported"
 		if reason:
 			rejected.append({"item": f"tests_file:line{number}", "reason": reason})
 			continue
@@ -1521,7 +1535,7 @@ def main(argv: list[str] | None = None) -> int:
 		changed = list(parse_changes(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines()))
 		print(json.dumps(assertion_diff(Path(args.repo_root).resolve(), Path(args.baseline_tree), changed), indent=2))
 		return 0
-	if args.command == "run" and args.tests_file:
+	if args.command == "run" and args.tests_file is not None:
 		selection = tests_file_selection(Path(args.repo_root), args.tests_file, list(_changes_from_args(args)))
 	else:
 		selection = _selection_from_args(args)

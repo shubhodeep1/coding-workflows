@@ -30,7 +30,7 @@
 # at most 256 KiB. It is copied into the private run root and mounted
 # read-only at /gate/tests.txt, and the module validates every line. A bad
 # file gives a synthetic tests_file_missing / tests_file_not_regular /
-# tests_file_too_large / tests_file_copy_failed result; it never falls back
+# tests_file_unreadable / tests_file_too_large / tests_file_copy_failed result; it never falls back
 # to the selection.
 #
 # --nested-node-modules-root mounts each DIR/<project>/node_modules (the
@@ -158,7 +158,11 @@ if [ "${tests_file_given}" -eq 1 ]; then
 		exit 0
 	fi
 	tests_file_size="$(stat -c %s "${tests_file_real}" 2>/dev/null)" || tests_file_size=""
-	if ! [[ "${tests_file_size}" =~ ^[0-9]+$ ]] || [ "${tests_file_size}" -gt 262144 ]; then
+	if ! [[ "${tests_file_size}" =~ ^[0-9]+$ ]]; then
+		synthetic_result tests_file_unreadable
+		exit 0
+	fi
+	if [ "${tests_file_size}" -gt 262144 ]; then
 		synthetic_result tests_file_too_large
 		exit 0
 	fi

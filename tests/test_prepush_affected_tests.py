@@ -1287,3 +1287,40 @@ def test_wrapper_rejects_bad_tests_file(tmp_path, kind, reason):
 	assert result["status"] == "unverified" and result["reason"] == reason
 	assert f"reason={reason}" in proc.stderr
 	assert not log.exists()
+
+
+TF_PR_NEW = "def test_ok():\n\tpass\n\n\ndef test_added_break():\n\tassert False\n"
+TF_BASE_NEW = "def test_ok():\n\tpass\n"
+
+
+def test_tests_file_named_test_missing_on_baseline_is_caused_by_the_change(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_NEW})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_added_break\n", baseline)
+	# pytest exits 4 on the baseline (node not found); that is not inherited.
+	assert result["status"] == "fail"
+	assert [f["test"] for f in result["failures"]] == ["tests/test_a.py"]
+	assert result["inherited"] == []
+
+
+def test_tests_file_rejects_names_on_non_python_tests(tmp_path):
+	root = _repo(tmp_path, {"tests/test_ok.py": "", "tests/test_run.sh": "true\n"})
+	affected, rejected = gate.parse_tests_file(root, "tests/test_ok.py\ntests/test_run.sh::case_x\ntests/test_run.sh\n")
+	assert rejected == [{"item": "tests_file:line2", "reason": "tests_file_name_unsupported"}]
+	assert [entry["path"] for entry in affected] == ["tests/test_ok.py", "tests/test_run.sh"]
+
+
+def test_tests_file_empty_value_never_falls_back_to_selection(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_ok.py": ""})
+
+	def boom(*args, **kwargs):
+		raise AssertionError("an empty --tests-file must not run the selection")
+
+	monkeypatch.setattr(gate, "select_tests", boom)
+	changed = tmp_path / "changed.txt"
+	changed.write_text("M\ttests/test_ok.py\n", encoding="utf-8")
+	out = tmp_path / "result.json"
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--tests-file", "", "--timeout-minutes", "2", "--out", str(out)]) == 0
+	result = json.loads(out.read_text(encoding="utf-8"))
+	assert result["ran"] == []
+	assert result["unverified"] == [{"item": "tests_file", "reason": "tests_file_unreadable"}]
