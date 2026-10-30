@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:42-45 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The new static-checks header comment says the job's remaining test steps are the small contract tests for its own guards, but the job also still runs the Python \"Prompt tier budget\" step (lines 390-393, `python3 tests/prompt_size_budget.py`), so the list is incomplete.\n  WHY: A future operator who audits the job's test steps from this comment would miss one Python-running step. The reviewer rated it NIT and said there is no runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: The moved-step destination declarations in .github/workflows/ci.yml (tests-hooks-and-orchestrator ~865-868, tests-promote-stall-and-review ~1970-1984, orchestrate-poll group 3 ~2809-2833)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The three steps are spread across three jobs instead of one job with the most headroom, and the placement is an estimate rather than measured step timings (comments at ci.yml lines 861-864 and 2802-2808). Severity disagreement: sonnet rated it NIT with confidence 2 because the hard constraints are met and the choice is documented. The other three rated it MAJOR with confidence 5. minimax-m3 notes that an earlier editor round accepted the deviation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: the destination job declarations in `.github/workflows/ci.yml`.\n  Evidence of absence: The steps were chosen by estimate, not from measured timings, and are spread over three existing jobs rather than one. The `ci.yml` comments (around lines 861-864 and 2802-2808) and the changelog say so openly. The hard constraints are met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\n  Expected change site: The destination declarations for the three moved steps in .github/workflows/ci.yml\n  Evidence of absence: The workflow spreads the three slow steps across three different jobs (tests-hooks-and-orchestrator, orchestrate-poll, and tests-promote-stall-and-review) instead of moving them into the single job identified as having the most headroom (tests-promote-stall-and-review).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: The destination declarations for the three moved steps in `.github/workflows/ci.yml` (lines ~865, ~1970, ~2809).\n  Evidence of absence: The issue says \"the CI job\" in the singular, but the three steps go to three destinations (lines 855-868, 1965-1970, 2802-2812). Only the bootstrap step is in the job with the most recorded room (#8278). The comments at lines 861-864 and 2802-2804 say the pick is an estimate, not measured. The firm constraints are met, so the reviewer calls this a documented, editor-accepted deviation and re-emits it so the next editor pass can confirm or override the standing decision.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: The moved-step destination declarations in `.github/workflows/ci.yml`.\n  Evidence of absence: The three steps are split across `tests-hooks-and-orchestrator` (lines 865-868), `tests-promote-stall-and-review` (lines 1970-1984) and `orchestrate-poll` group 3 (lines 2809-2833). The workflow says the selections were estimates (lines 861-864, 2802-2808). It names `tests-promote-stall-and-review` as having the most recorded room but puts only one of the three steps there.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:42-45 (compared with lines 390-393) | severity=NIT | confidence=3\n  PROBLEM: The new header sentence says \"Its remaining test steps are the small contract tests for its own guards (shell-block, CI job split, CI test wiring, agents.d fragments)\", but the job also still runs a Python test step, \"Prompt tier budget\" (line 390-393), which executes `python3 tests/prompt_size_budget.py`. The list of remaining test steps is incomplete.\n  WHY: This is a comment-accuracy issue with no runtime failure. A future operator auditing the job's test steps from this comment would miss one Python-running step.\n\nTASK_GAP: (none reported). The reviewer verified the earlier gap and did not re-flag it. It found the three-job spread documented deliberately and accepted in two prior editor rounds.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9c667da94f46b90d3aa9c69f558d2f70d865c9d59c7d8b77df764e08a07bdcb1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8401,
+    "run_id": "41016308555",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41016308555",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030080224_0875b823e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8401,
+    "run_id": "41016308555"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T08:02:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
