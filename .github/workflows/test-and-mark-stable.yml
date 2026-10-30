@@ -1619,36 +1619,6 @@ jobs:
             fi
             if [ -z "$IMPL_RUN_ID_WORKING" ]; then IMPL_RUN_ID_WORKING="$IMPL_RUN_ID_LATEST"; fi
             IMPL_RUN_CONCLUSION_LATEST=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .conclusion // "unknown"') || IMPL_RUN_CONCLUSION_LATEST="unknown"
-            # Watch the newest in_progress run: a peer held pending by the
-            # ai-implement-<repo>-<issue> concurrency group has no jobs and hid
-            # the working run's steps (run 40608957733, issue #8241).
-            IMPL_RUN_ID_WORKING=$(printf '%s' "$progress_matches" | jq -r '[.[] | select(.status == "in_progress")] | sort_by(.created_at) | last | .id // empty') || IMPL_RUN_ID_WORKING=""
-            # The matching page held only a pending/queued run and was full, so
-            # the older in_progress run may sit on a later page. Look for it
-            # there (bounded by the page cap); counts stay from the first page,
-            # and a failed read keeps the latest-run fallback.
-            if [ -z "$IMPL_RUN_ID_WORKING" ] && [ "$IMPL_RUN_IN_PROGRESS" != "0" ] && [ "$progress_count" -ge 100 ]; then
-              local working_page=$((progress_page + 1))
-              local working_json=""
-              local working_found=""
-              while [ "$working_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
-                working_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${working_page}&created=>${IMPL_CREATED_AFTER}") || break
-                working_found=$(printf '%s' "$working_json" | jq -sre --arg title "$ISSUE_TITLE" '
-                  if length != 1 or (.[0].workflow_runs | type) != "array" then error("invalid runs page") else .[0].workflow_runs end
-                  | {count: length, id: ([.[] | select((.name | type) == "string" and (.name | test("Implement"; "i"))) | select(.display_title == $title) | select(.status == "in_progress") | select(.id | type == "number" and . > 0 and floor == .)] | sort_by(.created_at) | last | .id // "")}
-                  | "\(.count) \(.id)"
-                ' 2>/dev/null) || break
-                if [ -n "${working_found#* }" ]; then
-                  IMPL_RUN_ID_WORKING="${working_found#* }"
-                  break
-                fi
-                if [ "${working_found%% *}" -lt 100 ]; then
-                  break
-                fi
-                working_page=$((working_page + 1))
-              done
-            fi
-            if [ -z "$IMPL_RUN_ID_WORKING" ]; then IMPL_RUN_ID_WORKING="$IMPL_RUN_ID_LATEST"; fi
             return 0
           }
 

@@ -875,6 +875,11 @@ def test_implement_activity_state_tracks_working_run() -> None:
 	counter = script[script.index("scoped_implement_progress_counts() {"):script.index("IMPL_PREV_LABELS=\"\"")]
 	assert 'select(.status == "in_progress")' in counter
 	assert 'IMPL_RUN_ID_WORKING="$IMPL_RUN_ID_LATEST"' in counter
+	# Exactly one working-run selection and later-page scan (a duplicated
+	# copy from a merge resolution re-ran the scan and could fall back to the
+	# pending run).
+	assert counter.count("IMPL_RUN_ID_WORKING=$(printf") == 1, counter
+	assert counter.count("local working_page=") == 1, counter
 	assert "actions/runs/${IMPL_RUN_ID_WORKING}/jobs?per_page=10" in script
 	assert "actions/runs/${IMPL_RUN_ID_LATEST}/jobs?per_page=10" not in script
 	cur_state = next(line for line in script.splitlines() if line.strip().startswith("CUR_STATE="))
