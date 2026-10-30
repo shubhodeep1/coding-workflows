@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:119 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test tests/test_workflow_checkout_integration_ref_audit.py is failing upon adding scripts/claude_pool_token.sh to ENGINE_FALLBACK_SCOPE_PATHS.\n  WHY: The audit test reportedly requires scripts in the engine fallback heal scope to be registered in the workflow checkout audit, which is missing the new script path. Severity is mapped from the source's BLOCKER. Other reviewers (minimax_minimax-m3, z-ai_glm-5_3-flash) refute this claim because the audit reads only workflow files the diff does not touch.\n- tests/test_workflow_checkout_integration_ref_audit.py:82-88 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate attributes a failure of this test to this change, but the PR diff touches no workflow files that the test reads, so the attribution appears wrong or the run was flaky.\n  WHY: Severity is NIT in both sources. Minimax cited lines 82-88 and glm cited lines 18-67 and 74-88. Neither reproduced a failure from the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Register the new fallback script scripts/claude_pool_token.sh in the workflow checkout audit, as required by the infrastructure tests.\n  expected_change_site: The workflow checkout audit registry (likely audited by tests/test_workflow_checkout_integration_ref_audit.py).\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: tests/test_workflow_checkout_integration_ref_audit.py fails when scripts/claude_pool_token.sh is added to ENGINE_FALLBACK_SCOPE_PATHS, and the PR diff contains no changes to the audit registry configuration. Severity was BLOCKER in the source.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:119 | severity=BLOCKER | confidence=4\n  PROBLEM: The test tests/test_workflow_checkout_integration_ref_audit.py is failing upon adding scripts/claude_pool_token.sh to ENGINE_FALLBACK_SCOPE_PATHS.\n  WHY: The audit test enforces that all scripts included in the engine fallback heal scope must also be registered in the workflow checkout audit, which is missing the new script path.\n- TASK_GAP\n  Requirement: Register the new fallback script scripts/claude_pool_token.sh in the workflow checkout audit, as required by the infrastructure tests.\n  Expected change site: The workflow checkout audit registry (likely audited by tests/test_workflow_checkout_integration_ref_audit.py).\n  Evidence of absence: The test tests/test_workflow_checkout_integration_ref_audit.py fails when scripts/claude_pool_token.sh is added to ENGINE_FALLBACK_SCOPE_PATHS, and the PR diff does not contain any changes to the audit registry configuration.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_checkout_integration_ref_audit.py:82-88 | severity=NIT | confidence=3\n  PROBLEM: The PR description reports this test as a \"failure caused by this change\", but the PR diff only touches `changelog.d/8484-...md`, `scripts/claude_pool_token.sh`, `scripts/workflow_failure_heal.py`, and `tests/test_claude_pool_token.py`. The test reads only `.github/workflows/*.yml` (and `scripts/resolve_integration_ref.sh`), none of which are modified.\n  WHY: It does not fail on this PR's diff. The mis-attribution likely reflects a stale checkout at gate time or inherited-failure bookkeeping.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_checkout_integration_ref_audit.py:18-67, 74-88 | severity=NIT | confidence=2\n  PROBLEM: The pre-push gate attributes a failure of this test file to this change, but the PR diff touches only scripts/claude_pool_token.sh, scripts/workflow_failure_heal.py, tests/test_claude_pool_token.py and changelog.d/8484-claude-pool-oidc-retry.md. The test reads only `.github/workflows/*.yml` and `scripts/resolve_integration_ref.sh`, none of which the diff modifies. The reviewer verified statically that every checkout@v5 workflow is classified. The audit never reads ENGINE_FALLBACK_SCOPE_PATHS, so the first pass's claim is refuted.\n  WHY: It does not fail from this diff; any failure is not reproducible from the changed hunks.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c51d8b4ec2ae27e6fb8217eff1d9c479bc11da0c66d2ee5cf7b4d0da17449fac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8486,
+    "run_id": "41116941686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41116941686",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030200153_3889a49f29",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8486,
+    "run_id": "41116941686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T20:01:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
