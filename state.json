@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-30T15:18:26Z",
+  "tick_at": "2026-10-30T15:28:56Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -76,7 +76,7 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "45",
+      "integration_ahead_by": "46",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -97,7 +97,7 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "14",
+      "integration_ahead_by": "15",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -118,13 +118,13 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "12",
+      "integration_ahead_by": "14",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 2,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -132,10 +132,10 @@
       },
       "number": 8434,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)",
       "total_waves": 15,
-      "wave_complete": false
+      "wave_complete": true
     }
   ]
 }
