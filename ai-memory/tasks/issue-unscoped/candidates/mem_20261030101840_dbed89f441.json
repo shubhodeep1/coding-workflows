@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue is a \"Test-only follow-up\" and says \"Leave the rest of that test and test_cancel_on_close_event_runs_get_their_own_concurrency_group unchanged.\" The only deliverables are the stronger assertion in `test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe` and the changelog fragment.\n  expected_change_site: `tests/test_review_merge_train.py`, with the diff limited to `test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: tests/test_review_merge_train.py lines 1166, 1168, 1280, 1360, 1419, 1512, 1524, 1558, 1602, 1621, 1740, 1913 and 1915 still have \"path\" continuation lines re-indented to three tabs (base used two tabs plus a space), whitespace-only hunks in pr_diff.patch touching unrelated tests; autofix commit e39c59a touched only the changelog; no runtime effect (severity NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: The issue is a \"Test-only follow-up\" and says \"Leave the rest of that test and test_cancel_on_close_event_runs_get_their_own_concurrency_group unchanged.\" The only deliverables are the stronger assertion in `test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe` and the changelog fragment.\n  Expected change site: `tests/test_review_merge_train.py`, with the diff limited to `test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe`.\n  Evidence of absence: Lines 1166, 1168, 1280, 1360, 1419, 1512, 1524, 1558, 1602, 1621, 1740, 1913 and 1915 now start with three tabs; the base used two tabs plus a space. Whitespace-only hunks in `pr_diff.patch` touch unrelated tests. Editor summaries claim restoration but no commit carried it; latest autofix commit e39c59a touched only the changelog. A literal revert restores the original indentation. No runtime effect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===",
+  "fingerprint": "d2ae43f93af6fe80760d49527d65baf837390a1f79bfbaa49b345d4b85127f3b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8414,
+    "run_id": "41032932611",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41032932611",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030101840_dbed89f441",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8414,
+    "run_id": "41032932611"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T10:18:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
