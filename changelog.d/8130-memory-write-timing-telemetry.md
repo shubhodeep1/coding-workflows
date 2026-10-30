@@ -1,4 +1,0 @@
-<!-- changelog: added -->
-- **Memory writes report how long each part took.** `persist_memory_operation` in `scripts/ai_memory_lib.py` now returns `clone_ms` (cloning the memory branch), `write_ms` (running the operation, `git add` and the commit) and `push_ms` (every push attempt, including backoff sleeps and the fetch and rebase between them). All three are whole milliseconds, never negative, and `push_ms` is `0` when nothing changed and nothing was pushed.
-
-The values appear in the JSON that `scripts/ai_memory.py` prints and in the `AI_MEMORY_TELEMETRY` lines for `record-run-event` and `record-candidate`, which show `0` when the result has no timing. This splits up memory events such as the poller's `poll_started` and `poll_completed`, which took about 55 seconds each in poll run 36203394070. Nothing else changes: retries, backoff, errors and the existing fields are as before. Refs #8125.
