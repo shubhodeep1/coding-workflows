@@ -3427,6 +3427,15 @@ jobs:
             echo "status=no_run" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          # A run found but still not completed at DEADLINE is a timeout, not
+          # a failed conclusion: run 40982514785 printed "concluded " and
+          # wrote an empty status= when run #41000719920 was still pending.
+          if [ "${STATUS:-}" != "completed" ]; then
+            echo "::error::cancel-on-close run #${NEW_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS:-?})"
+            echo "status=timeout" >> "$GITHUB_OUTPUT"
+            echo "cancel_run_id=${NEW_RUN_ID}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if [ "${NEW_CONCLUSION}" != "success" ]; then
             echo "::error::cancel-on-close run #${NEW_RUN_ID} concluded ${NEW_CONCLUSION}"
             echo "status=${NEW_CONCLUSION}" >> "$GITHUB_OUTPUT"
@@ -3619,6 +3628,11 @@ jobs:
           CANCEL_UNCONFLICT="${{ steps.verify-cancel-on-close.outputs.unconflict }}"
           if [ "$CANCEL" = "success" ]; then
             echo "  ✓ Cancel-PR .. PASSED (cancel_on_pr_close ran successfully; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
+          elif [ -z "$CANCEL" ] && [ -n "${PR_NUMBER:-}" ]; then
+            # A smoke PR existed, so Phase 7 should have reported an outcome;
+            # no status means it never ran or crashed, which is a failure.
+            echo "  ✗ Cancel-PR .. FAILED (no status — smoke PR #${PR_NUMBER} existed but Phase 7 reported no outcome; pre-close unconflict=${CANCEL_UNCONFLICT:-n/a})"
+            PASSED=false
           elif [ -z "$CANCEL" ]; then
             echo "  - Cancel-PR .. SKIPPED (no PR to close)"
           else
@@ -3968,6 +3982,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_phase7_cancel_timeout_status.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
