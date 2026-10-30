@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Collect bounded, authenticated diagnostics before a heal editor is started.
+# P1 step 5 (docs/plans/heal-evidence-reproduction-and-trends-plan.md): when
+# the scope-verified issue body has an `## Evidence pack` section, it is put
+# first inside the same byte budget and the per-job tails shrink to fit.
+# Without a pack the output is byte-identical to the legacy bundle.
 set -euo pipefail
 heal_py="${WORKFLOW_HEAL_PY:-scripts/workflow_failure_heal.py}"
 out="${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR:-/tmp}/heal_evidence.md}"
@@ -43,6 +47,18 @@ trap 'rm -rf -- "${scratch}"' EXIT
 jobs_count=0
 runs_count=0
 : > "${scratch}/content"
+# The pack comes only from the body already fetched above (no new API call)
+# and only after the scope check passed. The awk reads all of its input
+# (no early exit) so pipefail cannot see a SIGPIPE upstream.
+: > "${scratch}/pack_content"
+printf '%s' "${live}" | jq -r '.data.repository.issue.body // ""' | tr -d '\r' \
+	| awk 'done{next} on && /^## /{done=1; next} /^## Evidence pack[[:space:]]*$/{on=1} on{print}' > "${scratch}/pack" || : > "${scratch}/pack"
+if [ -s "${scratch}/pack" ]; then
+	{
+		printf '\nHeal issue evidence pack (UNTRUSTED, copied from the verified issue body):\n'
+		cat "${scratch}/pack"
+	} > "${scratch}/pack_content"
+fi
 while IFS= read -r ref; do
 	[ "${runs_count}" -lt "${max_runs}" ] || break
 	case "${ref}" in
@@ -67,14 +83,28 @@ while IFS= read -r ref; do
 		fi
 	done < <(jq -r '.[].id' "${scratch}/selected.json")
 done < <(printf '%s' "${verification}" | jq -r '.runs[]')
-[ "${jobs_count}" -gt 0 ] || stub logs_unavailable
+if [ "${jobs_count}" -eq 0 ]; then
+	# A pack is still evidence when no job log could be read.
+	[ -s "${scratch}/pack_content" ] || stub logs_unavailable
+	printf '\n(job logs unavailable: logs_unavailable)\n' >> "${scratch}/content"
+fi
 # A log line that repeats a fence delimiter must not close the evidence fence.
 sed -E 's/={3}([[:space:]]*(BEGIN|END)[[:space:]]+UNTRUSTED)/= = =\1/Ig' "${scratch}/content" > "${scratch}/fenced"
+sed -E 's/={3}([[:space:]]*(BEGIN|END)[[:space:]]+UNTRUSTED)/= = =\1/Ig' "${scratch}/pack_content" > "${scratch}/pack_fenced"
+# Pack first, then the tails: the single cut below keeps the pack whole
+# whenever it fits and shrinks the tails to the remaining budget.
+cat "${scratch}/pack_fenced" "${scratch}/fenced" > "${scratch}/combined"
 {
 	echo '=== BEGIN UNTRUSTED WORKFLOW FAILURE EVIDENCE ==='
 	# Bounded before publication; filtered content was already redacted before disk.
-	head -c "$((max_bytes - 128))" "${scratch}/fenced"
+	head -c "$((max_bytes - 128))" "${scratch}/combined"
 	echo
 	echo '=== END UNTRUSTED WORKFLOW FAILURE EVIDENCE ==='
 } > "${out}"
-echo "WORKFLOW_HEAL_EVIDENCE runs=${runs_count} jobs=${jobs_count} bytes=$(wc -c < "${out}") outcome=written"
+pack_suffix=""
+pack_bytes="$(wc -c < "${scratch}/pack_fenced" | tr -d '[:space:]')"
+if [ "${pack_bytes}" -gt 0 ]; then
+	pack_suffix=" pack_bytes=${pack_bytes}"
+	[ "${pack_bytes}" -le "$((max_bytes - 128))" ] || pack_suffix="${pack_suffix} pack_truncated=true"
+fi
+echo "WORKFLOW_HEAL_EVIDENCE runs=${runs_count} jobs=${jobs_count} bytes=$(wc -c < "${out}") outcome=written${pack_suffix}"
