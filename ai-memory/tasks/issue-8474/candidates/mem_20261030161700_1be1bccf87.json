@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8474,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8474\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8477\",\"pr_number\":8477,\"branch\":\"ai/issue-8474\",\"run_id\":\"41082936671\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41082936671\",\"changed_files\":[\".github/workflows/ci.yml\",\"agents.d/heal-reproduce.md\",\"changelog.d/heal-reproduce.md\",\"docs/INVENTORY.md\",\"docs/scripts-pending-removal.md\",\"scripts/heal_reproduce.sh\",\"tests/test_heal_reproduce.py\",\"tests/test_heal_reproduce_docker_e2e.py\"]}",
+  "fingerprint": "1451a1c6c7c0aee5041989fe61206074497d3c01999843fd53cc43a2bddee23d",
+  "lineage": {
+    "issue_number": 8474,
+    "parent_ids": [],
+    "pr_number": 8477,
+    "run_id": "41082936671",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41082936671",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8477"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261030161700_1be1bccf87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8474,
+    "level": "run",
+    "pr_number": 8477,
+    "run_id": "41082936671"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8474: https://github.com/shubhodeep1/coding-workflows/pull/8477",
+  "timestamps": {
+    "created_at": "2026-10-30T16:17:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
