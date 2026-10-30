@@ -2240,6 +2240,23 @@ unblock_ask_model()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=context_failed"
 		return 1
 	}
+	# Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true
+	# (default false) is `attempt_journal` added, so the context is
+	# byte-identical with the switch off. Rendered from the comments already
+	# read (item_comments.json) and trusted only from UNBLOCK_LOGIN: no API call.
+	if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f "${SUPPORT_DIR}/scripts/attempt_journal.py" ]; then
+		: > "${RUNTIME_DIR}/attempt_journal.txt"
+		PYTHONDONTWRITEBYTECODE=1 python3 -B "${SUPPORT_DIR}/scripts/attempt_journal.py" render \
+			--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" \
+			--max-bytes 4096 --out "${RUNTIME_DIR}/attempt_journal.txt" || true
+		if jq --rawfile journal "${RUNTIME_DIR}/attempt_journal.txt" \
+			'. + {attempt_journal: (if $journal == "" then null else $journal end)}' \
+			"${RUNTIME_DIR}/judge_context.json" > "${RUNTIME_DIR}/judge_context.json.tmp" 2>/dev/null; then
+			mv -f "${RUNTIME_DIR}/judge_context.json.tmp" "${RUNTIME_DIR}/judge_context.json"
+		else
+			rm -f "${RUNTIME_DIR}/judge_context.json.tmp"
+		fi
+	fi
 	{
 		bash "${SUPPORT_DIR}/scripts/render_prompt.sh" "${SUPPORT_DIR}/prompts/mode-judge-unblock.txt" 2>/dev/null \
 			|| cat "${SUPPORT_DIR}/prompts/mode-judge-unblock.txt"

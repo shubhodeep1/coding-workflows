@@ -677,6 +677,39 @@ PY
   echo "DID_COMMIT=true" >> "$GITHUB_ENV"
   echo "did_commit=true" >> "$GITHUB_OUTPUT"
 
+  # Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true
+  # (default false), record this review round after the editor commit, with
+  # the committed files and deletions and the pre-push gate's final result.
+  # The helper comes only from the trusted support copy, never from the PR
+  # checkout. Fail-open: never affects the commit.
+  if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ]; then
+    _review_journal_helper=""
+    for _review_journal_candidate in "${SUPPORT_SCRIPTS_DIR:-}/attempt_journal.py" \
+      "${GITHUB_WORKSPACE:-.}/.codex-workflow-src/scripts/attempt_journal.py"; do
+      if [[ "${_review_journal_candidate}" == /* ]] && [ -f "${_review_journal_candidate}" ] && [ ! -L "${_review_journal_candidate}" ]; then
+        _review_journal_helper="${_review_journal_candidate}"
+        break
+      fi
+    done
+    _review_journal_gate=""
+    for _review_journal_candidate in "${RUNTIME_DIR:-}/prepush_gate/run2/result.json" "${RUNTIME_DIR:-}/prepush_gate/run1/result.json"; do
+      if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${_review_journal_candidate}" ]; then
+        _review_journal_gate="${_review_journal_candidate}"
+        break
+      fi
+    done
+    if [ -n "${_review_journal_helper}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
+      git diff --name-only HEAD~1 HEAD > "${RUNTIME_DIR}/attempt_journal_review_files.txt" 2>/dev/null || true
+      GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 python3 -B "${_review_journal_helper}" append \
+        --repo "${GITHUB_REPOSITORY}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${GITHUB_HEAD_REF:-}}}" \
+        --stage review --outcome ok --approach inherit --deletions-from-commit \
+        --files-file "${RUNTIME_DIR}/attempt_journal_review_files.txt" \
+        ${_review_journal_gate:+--gate-result "${_review_journal_gate}"} || true
+    else
+      echo "PERSIST journal outcome=skipped reason=helper_absent stage=review" >&2
+    fi
+  fi
+
   # Detect ledger-only commits: the autofix bookkeeping ledger
   # (REVIEW_LEDGER_PATH, default .ai/review_issue_ledger/pr-<PR_NUMBER>.txt)
   # is updated by scripts/review_issue_ledger.sh on every review pass

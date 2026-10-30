@@ -17,6 +17,8 @@ env:
   # `core` install profile, which has no orchestrate-poll wrapper to resume
   # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
+  # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
+  PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -480,7 +482,7 @@ jobs:
           echo "CLARIFY_HOST_PYTHON_DIR=${CLARIFY_HOST_PYTHON_DIR}" >> "$GITHUB_ENV"
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh check_triage_resolution.py codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh attempt_journal.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh check_triage_resolution.py codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -2078,6 +2080,25 @@ jobs:
             --run-id "${{ github.run_id }}" \
             --actor "${{ github.actor }}" \
             --issue-number "${ISSUE_NUMBER}"
+
+      - name: Record attempt journal entry (clarify)
+        if: always() && env.PERSIST_JOURNAL_ENABLED == 'true' && steps.refctx.outputs.label_missing_hold != 'true' && env.CLAUDE_CAPACITY_WAIT != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          CLEAR_OUTCOME: ${{ steps.post_clear.outcome }}
+          QUESTIONS_OUTCOME: ${{ steps.post_questions.outcome }}
+        run: |
+          # Attempt journal (issue #8428, P1): one entry per clarify run; fail-open.
+          outcome=fail
+          if [ "${CLEAR_OUTCOME}" = success ]; then
+            outcome=ok
+          elif [ "${QUESTIONS_OUTCOME}" = success ]; then
+            outcome=blocked
+          fi
+          python3 -B scripts/attempt_journal.py append --repo "${GITHUB_REPOSITORY}" --issue "${ISSUE_NUMBER}" \
+            --stage clarify --outcome "${outcome}" --approach inherit || true
 
       - name: Telegram clarification notification
         if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'))

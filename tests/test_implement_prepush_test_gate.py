@@ -485,3 +485,48 @@ def test_step_script_is_executable_ascii_and_defaults_its_variables():
 			'PREPUSH_TEST_GATE_LARGE_FILE_TESTS:-50', 'PREPUSH_TEST_GATE_SHARDS:-4'):
 		assert default in text
 	assert "api.github.com" not in text and "gh api" not in text
+
+
+# --- attempt journal (issue #8428, P1) ----------------------------------------------
+
+def _journal_prompt(tmp_path: Path, persist: str | None) -> str:
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	prompts = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"]).parent / "prompts"
+	shutil.copy2(REPO_ROOT / "prompts" / "mode-persist-journal-rules.txt", prompts / "mode-persist-journal-rules.txt")
+	(tmp_path / "runtime" / "attempt_journal.txt").write_text(
+		"=== BEGIN UNTRUSTED ATTEMPT JOURNAL (host-recorded; note fields are model text) ===\nrow\n=== END UNTRUSTED ATTEMPT JOURNAL ===\n",
+		encoding="utf-8")
+	env.pop("PERSIST_JOURNAL_ENABLED", None)
+	if persist is not None:
+		env["PERSIST_JOURNAL_ENABLED"] = persist
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	return (_work(tmp_path) / "editor_prompt.txt").read_text(encoding="utf-8")
+
+
+def test_journal_on_repair_prompt_shows_implement_deletions_and_rules(tmp_path):
+	prompt = _journal_prompt(tmp_path, "true")
+	block = prompt.split("\n=== EDITOR DELETIONS THIS ROUND ===\n", 1)[1].split("\n=== END EDITOR DELETIONS THIS ROUND ===\n", 1)[0]
+	assert "UNTRUSTED_DATA: (file) lib/a.py" in block and "UNTRUSTED_DATA: -X = 1" in block
+	assert "=== BEGIN UNTRUSTED ATTEMPT JOURNAL" in prompt
+	assert "=== ATTEMPT JOURNAL REPAIR RULES ===" in prompt
+
+
+def test_journal_off_repair_prompt_is_byte_identical(tmp_path):
+	unset = _journal_prompt(tmp_path / "a", None)
+	off = _journal_prompt(tmp_path / "b", "false")
+	assert unset == off
+	assert "EDITOR DELETIONS" not in unset and "ATTEMPT JOURNAL" not in unset
+
+
+def test_journal_rules_prompt_is_staged_and_the_helper_is_staged():
+	text = IMPLEMENT_YML.read_text(encoding="utf-8")
+	assert "prompts/mode-persist-journal-rules.txt:prompts" in text
+	assert "PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}" in text
+	steps = dict(_steps(text))
+	block = steps["Record attempt journal entry (implement)"]
+	assert "        continue-on-error: true\n" in block
+	assert "if: always() && env.PERSIST_JOURNAL_ENABLED == 'true'" in block
+	assert "--stage implement" in block and "prepush_gate/run2/result.json" in block
+	names = [name for name, _ in _steps(text)]
+	assert names.index("Record attempt journal entry (implement)") == names.index("Create Pull Request") + 1

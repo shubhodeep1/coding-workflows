@@ -257,6 +257,17 @@ implement_prepush_test_gate_locate()
 	if [ -z "${gate_template}" ] && found="$(implement_prepush_test_gate_pick "${src}/prompts/mode-implement-repair-tests.txt")"; then
 		install -m 0644 "${found}" "${fallback}/mode-implement-repair-tests.txt" 2>/dev/null && gate_template="${fallback}/mode-implement-repair-tests.txt"
 	fi
+	# Attempt journal rules fragment (issue #8428), located like gate_template.
+	gate_journal_rules=""
+	if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ]; then
+		if [ -n "${run_dir}" ]; then
+			gate_journal_rules="$(implement_prepush_test_gate_pick "${run_dir%/scripts}/prompts/mode-persist-journal-rules.txt")" || gate_journal_rules=""
+		fi
+		if [ -z "${gate_journal_rules}" ] && found="$(implement_prepush_test_gate_pick "${src}/prompts/mode-persist-journal-rules.txt")" \
+			&& mkdir -p "${fallback}" 2>/dev/null; then
+			install -m 0644 "${found}" "${fallback}/mode-persist-journal-rules.txt" 2>/dev/null && gate_journal_rules="${fallback}/mode-persist-journal-rules.txt"
+		fi
+	fi
 	[ -n "${gate_module}" ] && [ -n "${gate_wrapper}" ]
 }
 
@@ -400,6 +411,46 @@ implement_prepush_test_gate_restore_symlinks()
 	done < <(git ls-files -s -z 2>/dev/null)
 }
 
+# Attempt journal blocks of the repair prompt (issue #8428, P1). Only with
+# PERSIST_JOURNAL_ENABLED=true (default false); otherwise prints nothing, so
+# the prompt is byte-identical with the switch off. Prints the removed lines
+# of `git diff HEAD` for the allow-list files (each line UNTRUSTED_DATA-
+# prefixed, at most 4 KiB), the journal rendered for this run's editor prompt
+# (${RUNTIME_DIR}/attempt_journal.txt, already fenced; no API call) and the
+# trusted rules fragment.
+implement_prepush_test_gate_journal_blocks()
+{
+	local allow="$1" rules="$2" path removed
+	[ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] || return 0
+	[ -n "${allow}" ] && [ -f "${allow}" ] || return 0
+	git rev-parse --git-dir >/dev/null 2>&1 || return 0
+	echo
+	echo "=== EDITOR DELETIONS THIS ROUND ==="
+	{
+		while IFS= read -r path; do
+			[ -n "${path}" ] || continue
+			git ls-files --error-unmatch -- "${path}" >/dev/null 2>&1 || continue
+			removed="$(git diff --src-prefix=a/ --dst-prefix=b/ HEAD -- "${path}" 2>/dev/null | grep -v -e '^--- a/' -e '^--- /dev/null' | grep '^-' || true)"
+			[ -n "${removed}" ] || continue
+			printf 'UNTRUSTED_DATA: (file) %s\n' "${path}"
+			printf '%s\n' "${removed}" | sed 's/^/UNTRUSTED_DATA: /'
+		done < "${allow}"
+	} | head -c 4096 || true
+	echo
+	echo "=== END EDITOR DELETIONS THIS ROUND ==="
+	if [ -s "${RUNTIME_DIR:-}/attempt_journal.txt" ]; then
+		echo
+		cat "${RUNTIME_DIR}/attempt_journal.txt"
+	fi
+	if [ -n "${rules}" ] && [ -f "${rules}" ]; then
+		echo
+		cat "${rules}"
+	else
+		echo "PERSIST journal outcome=skipped reason=rules_absent" >&2
+	fi
+	return 0
+}
+
 implement_prepush_test_gate_build_prompt()
 {
 	local result="$1" out="$2" path
@@ -430,6 +481,7 @@ implement_prepush_test_gate_build_prompt()
 				echo "(file not found in working tree)"
 			fi
 		done < "${gate_allow_file}"
+		implement_prepush_test_gate_journal_blocks "${gate_allow_file}" "${gate_journal_rules:-}"
 	} > "${out}"
 	if [ -n "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] && [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" ]; then
 		# shellcheck source=/dev/null

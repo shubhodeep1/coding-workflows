@@ -277,10 +277,41 @@ resolve_ledger_substate_helper() {
 
 LEDGER_SUBSTATE_HELPER="$(resolve_ledger_substate_helper || true)"
 
+# Attempt journal (issue #8428, P1): one `resolver` entry per resolver
+# attempt end, only with PERSIST_JOURNAL_ENABLED=true (default false). The
+# helper comes only from the trusted support copy. Fail-open.
+_resolver_attempt_journal_append() {
+  local substate="$1" attempt_number="$2" helper="" candidate outcome=fail
+  [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] || return 0
+  for candidate in "${SUPPORT_SCRIPTS_DIR:-}/attempt_journal.py" \
+    "${GITHUB_WORKSPACE:-.}/.codex-workflow-src/scripts/attempt_journal.py"; do
+    if [[ "${candidate}" == /* ]] && [ -f "${candidate}" ] && [ ! -L "${candidate}" ]; then
+      helper="${candidate}"
+      break
+    fi
+  done
+  if [ -z "${helper}" ]; then
+    echo "PERSIST journal outcome=skipped reason=helper_absent stage=resolver" >&2
+    return 0
+  fi
+  [ "${substate}" != "Succeeded" ] || outcome=ok
+  GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 python3 -B "${helper}" append \
+    --repo "${GITHUB_REPOSITORY:-}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${GITHUB_HEAD_REF:-}}}" \
+    --stage resolver --outcome "${outcome}" --approach inherit \
+    --attempt "${GITHUB_RUN_ATTEMPT:-1}.${attempt_number}" || true
+  return 0
+}
+
 emit_conflict_resolver_substate() {
   local event_or_substate="$1"
   local attempt_number="$2"
   local args=()
+
+  case "${event_or_substate}" in
+    Succeeded|Failed|TimedOut|Stalled)
+      _resolver_attempt_journal_append "${event_or_substate}" "${attempt_number}" || true
+      ;;
+  esac
 
   [ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
 

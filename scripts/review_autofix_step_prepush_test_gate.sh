@@ -291,6 +291,16 @@ review_prepush_test_gate_locate()
 		&& install -m 0644 "${found}" "${copy_dir}/mode-implement-repair-tests.txt"; then
 		rpg_template="${copy_dir}/mode-implement-repair-tests.txt"
 	fi
+	# Attempt journal rules fragment (issue #8428), located like rpg_template.
+	rpg_journal_rules=""
+	if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && found="$(review_prepush_test_gate_pick \
+		"${pd:+${pd}/mode-persist-journal-rules.txt}" \
+		"${dir:+${dir}/../prompts/mode-persist-journal-rules.txt}" \
+		"${ws}/.codex-workflow-src/prompts/mode-persist-journal-rules.txt" \
+		"${ws}/.codex-workflow-src-main/prompts/mode-persist-journal-rules.txt")" \
+		&& install -m 0644 "${found}" "${copy_dir}/mode-persist-journal-rules.txt"; then
+		rpg_journal_rules="${copy_dir}/mode-persist-journal-rules.txt"
+	fi
 	[ -n "${rpg_module}" ] && [ -n "${rpg_wrapper}" ]
 }
 
@@ -359,6 +369,46 @@ review_prepush_test_gate_allow_list()
 	return 0
 }
 
+# Attempt journal blocks of the repair prompt (issue #8428, P1). Only with
+# PERSIST_JOURNAL_ENABLED=true (default false); otherwise prints nothing, so
+# the prompt is byte-identical with the switch off. Prints the removed lines
+# of `git diff HEAD` for the allow-list files (each line UNTRUSTED_DATA-
+# prefixed, at most 4 KiB), the journal rendered for this run's editor prompt
+# (${RUNTIME_DIR}/attempt_journal.txt, already fenced; no API call) and the
+# trusted rules fragment.
+review_prepush_test_gate_journal_blocks()
+{
+	local allow="$1" rules="$2" path removed
+	[ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] || return 0
+	[ -n "${allow}" ] && [ -f "${allow}" ] || return 0
+	git rev-parse --git-dir >/dev/null 2>&1 || return 0
+	echo
+	echo "=== EDITOR DELETIONS THIS ROUND ==="
+	{
+		while IFS= read -r path; do
+			[ -n "${path}" ] || continue
+			git ls-files --error-unmatch -- "${path}" >/dev/null 2>&1 || continue
+			removed="$(git diff --src-prefix=a/ --dst-prefix=b/ HEAD -- "${path}" 2>/dev/null | grep -v -e '^--- a/' -e '^--- /dev/null' | grep '^-' || true)"
+			[ -n "${removed}" ] || continue
+			printf 'UNTRUSTED_DATA: (file) %s\n' "${path}"
+			printf '%s\n' "${removed}" | sed 's/^/UNTRUSTED_DATA: /'
+		done < "${allow}"
+	} | head -c 4096 || true
+	echo
+	echo "=== END EDITOR DELETIONS THIS ROUND ==="
+	if [ -s "${RUNTIME_DIR:-}/attempt_journal.txt" ]; then
+		echo
+		cat "${RUNTIME_DIR}/attempt_journal.txt"
+	fi
+	if [ -n "${rules}" ] && [ -f "${rules}" ]; then
+		echo
+		cat "${rules}"
+	else
+		echo "PERSIST journal outcome=skipped reason=rules_absent" >&2
+	fi
+	return 0
+}
+
 review_prepush_test_gate_build_prompt()
 {
 	local result="$1" out="$2" allow="${3:-}" changed="${4:-}" path
@@ -396,6 +446,7 @@ review_prepush_test_gate_build_prompt()
 				done < "${allow}"
 			fi
 		fi
+		review_prepush_test_gate_journal_blocks "${allow}" "${rpg_journal_rules:-}"
 	} > "${out}"
 }
 
