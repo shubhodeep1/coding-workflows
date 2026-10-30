@@ -1230,7 +1230,9 @@ def branch_divergence(compare: Any, *, target: Any, default: Any) -> dict[str, A
 	if len(commits) > EVIDENCE_PACK_DIVERGENCE_COMMIT_LIMIT:
 		lines.append(f"  ({len(commits) - EVIDENCE_PACK_DIVERGENCE_COMMIT_LIMIT} earlier commits not shown)")
 	lines.extend(commits[-EVIDENCE_PACK_DIVERGENCE_COMMIT_LIMIT:] or ["  (none)"])
-	truncated = total_commits > len(commits_raw) or len(commits_raw) >= COMPARE_COMMIT_CAP or len(files_raw) >= COMPARE_FILE_CAP
+	# total_commits counts the whole range, so a cut commit list shows as total > listed;
+	# files[] has no total, so a full 300-entry list is the only sign of a cut.
+	truncated = total_commits > len(commits_raw) or len(files_raw) >= COMPARE_FILE_CAP
 	if truncated:
 		lines.append(f"(truncated: the compare response hit GitHub's {COMPARE_COMMIT_CAP}-commit or {COMPARE_FILE_CAP}-file limit)")
 	return {"ok": True, "text": "\n".join(lines) + "\n", "reason": "", "truncated": truncated}
@@ -1338,7 +1340,9 @@ def _build_evidence_pack(*, failed_runs, linked_runs, repo, stall_minutes, max_b
 			reasons.append("issue_unreadable")
 			continue
 		# The heading holds fixed text and an integer only; the title stays in the fenced body.
-		subsections.append((f"Runs started for issue #{entry_number}", lambda entry=entry, entry_number=entry_number: _optional(
+		# The heading is outside the fence: a code span keeps `#N` from autolinking to
+		# an unrelated issue of the repository the heal issue is filed in.
+		subsections.append((f"Runs started for issue `#{entry_number}`", lambda entry=entry, entry_number=entry_number: _optional(
 			lambda: issue_linked_runs(number=entry_number, issue=entry.get("issue"), pages=entry.get("pages") or (), repo=repo))))
 	if isinstance(divergence, dict):
 		subsections.append(("Branch divergence", lambda: _optional(lambda: branch_divergence(

@@ -41,8 +41,8 @@
 #      WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES (default 12000). For a
 #      workflow_run report the same switch adds the runs started for up to 2
 #      issues the failed jobs' logs name, and (self repo only) the commits on
-#      the default branch that are not on WORKFLOW_HEAL_TARGET_BRANCH, at most
-#      5 extra GitHub GETs (#8475).
+#      the default branch that are not on the heal issue's target branch (the
+#      failed run's branch), at most 5 extra GitHub GETs (#8475).
 #   3. Fingerprints the failure (workflow + failing step + normalised error
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
@@ -2794,9 +2794,11 @@ _heal_collect_linked_runs || log "warn linked_runs_failed"
 #     - repos/<source>/actions/runs?created=<window>&per_page=100&page=<p>,
 #       shared by every issue, page 2 only when page 1 is full and
 #       total_count > 100;
-#     - repos/<self>/compare/<TARGET_BRANCH_DEFAULT>...<PROVENANCE_DEFAULT_BRANCH>,
-#       self-repo reports only, skipped quietly when either branch is empty or
-#       invalid, or the two are equal.
+#     - repos/<self>/compare/<target>...<PROVENANCE_DEFAULT_BRANCH>, where
+#       <target> is the heal issue's target (the failed run's HEAD_BRANCH, the
+#       promote-candidate mirror mapped to the default branch, else
+#       TARGET_BRANCH_DEFAULT); self-repo reports only, skipped quietly when
+#       either branch is empty or invalid, or the two are equal.
 #   Audited: none of the intake's earlier reads (run/jobs GETs, the linked-run
 #   reads, the failed-sha...branch compare of the branch-progress block)
 #   returns an issue title, a time-windowed runs list or a target...default
@@ -2864,7 +2866,13 @@ _heal_fetch_evidence_pack_api()
 			jq -e '(.total_count | type == "number") and .total_count > 100 and (.workflow_runs | length) >= 100' "${runs_file}" >/dev/null 2>&1 || break
 		done
 	fi
+	# The heal issue's own target, as the Route block below sets it for a
+	# workflow_run report: the failed run's branch, with the promote-candidate
+	# mirror retargeted to the default branch. A main-targeted heal skips the
+	# compare (target == default).
 	divergence_target="${TARGET_BRANCH_DEFAULT:-}"
+	[ -z "${HEAD_BRANCH:-}" ] || divergence_target="${HEAD_BRANCH}"
+	[ "${divergence_target}" != "${HEAL_PIPELINE_MIRROR_BRANCH}" ] || divergence_target="${PROVENANCE_DEFAULT_BRANCH:-main}"
 	divergence_default="${PROVENANCE_DEFAULT_BRANCH:-}"
 	if [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ] && [ -n "${divergence_target}" ] && [ -n "${divergence_default}" ] \
 		&& [[ "${divergence_target}" != *..* ]] && [[ "${divergence_default}" != *..* ]] \
