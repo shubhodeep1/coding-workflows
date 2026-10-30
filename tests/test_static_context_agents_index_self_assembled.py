@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
@@ -332,9 +333,14 @@ def test_scripts_default_to_index() -> None:
 
 
 def test_agents_fragment_documents_the_switch_and_log_prefixes() -> None:
-	fragment = (REPO_ROOT / "agents.d" / "8269-unattended-prompt-diet.md").read_text(encoding="utf-8")
-	assert '<!-- agents: section="Isolated Codex agents" -->' in fragment
-	assert '<!-- agents: section="Stable log prefixes (contractual)" -->' in fragment
-	assert "LOG_PREFIX.name=STATIC_CONTEXT_SIZE" in fragment
-	assert "LOG_PREFIX.name=STATIC_CONTEXT_AGENTS" in fragment
-	assert "STATIC_CONTEXT_AGENTS_MODE" in fragment
+	# Read agents.md with pending fragments folded in: the #8269 fragment is
+	# deleted by the release fold, which also strips its section markers.
+	sys.path.insert(0, str(Path(__file__).resolve().parent))
+	from agents_doc import agents_text
+
+	text = agents_text(REPO_ROOT)
+	assert "\n## Isolated Codex agents\n" in text
+	assert "\n## Stable log prefixes (contractual)\n" in text
+	assert "LOG_PREFIX.name=STATIC_CONTEXT_SIZE" in text
+	assert "LOG_PREFIX.name=STATIC_CONTEXT_AGENTS" in text
+	assert "STATIC_CONTEXT_AGENTS_MODE" in text
