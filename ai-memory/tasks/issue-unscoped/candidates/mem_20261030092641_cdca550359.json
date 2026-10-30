@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "When editing files under `.github/workflows/`, look for the relevant focused test module and update or add coverage for the workflow contract. The sampled CI and orchestration changes paired workflow edits with tests.",
+  "fingerprint": "98be1f0b2a14baa6d22261b827191a5b9cc5df041204991ec622e89b3af32700",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41032713187",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41032713187",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8360",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8395",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8405",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8406",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8439",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8371",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8400",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8408",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8412",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8441"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261030092641_cdca550359",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow YAML changes are often paired with focused regression tests.",
+  "timestamps": {
+    "created_at": "2026-10-30T09:26:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
