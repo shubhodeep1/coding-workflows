@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "When planning a behavioral or workflow change, include the relevant changelog fragment rather than treating it as optional documentation. Changes that add or revise agent guidance may also require a matching file under `agents.d/`.",
+  "fingerprint": "08c9f9be1845e89772dd1cb0d97a2fb4aeeff08c562ce5ceef7d4d2e36ef5bdc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40987888191",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40987888191",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8281",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8314",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8333",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8369",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8380",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8285",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8324",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8345",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8375",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8381"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261030015334_247568cbab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Substantive changes in this repository generally include a `changelog.d/` entry.",
+  "timestamps": {
+    "created_at": "2026-10-30T01:53:34Z",
+    "promoted_at": "2026-10-30T01:54:10Z",
+    "superseded_at": null
+  }
+}
