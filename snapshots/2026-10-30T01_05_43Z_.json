@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-29T00:54:57Z",
+  "tick_at": "2026-10-30T01:05:43Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 5
+    "tracking_issues": 4
   },
   "tracking_issues": [
     {
@@ -75,14 +75,14 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "1",
+      "current_wave": 2,
+      "integration_ahead_by": "31",
       "issue_counts": {
         "closed": 0,
-        "done": 2,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 1,
-        "merged": 0,
+        "merged": 2,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -94,27 +94,6 @@
       "title": "[Orchestrator] Unattended pipeline: remove stuck states (plan P2a-P13 remainder)",
       "total_waves": 20,
       "wave_complete": false
-    },
-    {
-      "current_wave": 1,
-      "integration_ahead_by": "1",
-      "issue_counts": {
-        "closed": 2,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8299,
-      "project_complete": false,
-      "status": "failed",
-      "title": "[Orchestrator] [E2E Orchestrate Smoke 40794181365] Update both smoke canary files",
-      "total_waves": 1,
-      "wave_complete": true
     }
   ]
 }
