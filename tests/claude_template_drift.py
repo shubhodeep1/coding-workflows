@@ -9,8 +9,10 @@ It returns an empty set (strict parity) unless `CLAUDE_PARITY_PR_BASE_SHA` is
 a 40-hex commit. CI sets that variable only on pull-request events, so pushes
 to `main` and both release gates stay strict. With it set, a drifted path is
 tolerated when this PR changed the template, or when the same drift already
-existed on the PR's base (a sync PR still waiting on a human merge). Any git
-error yields the empty set, so the tests fail closed.
+existed on the PR's base (a sync PR still waiting on a human merge), unless
+this PR changed both copies and left them different (issue #8405: the post-merge
+sync must not be the only repair for that state). Any git error yields the
+empty set, so the tests fail closed.
 """
 
 from __future__ import annotations
@@ -79,15 +81,27 @@ def pending_template_paths(repo_root: Path) -> set[str]:
 		drift = set(sync.mismatched(repo_root))
 		if not drift:
 			return set()
-		diff = _git(repo_root, "diff", "--name-only", f"{base}...HEAD", "--", sync.TEMPLATE_PREFIX)
+		diff = _git(repo_root, "diff", "--name-only", f"{base}...HEAD", "--", sync.TEMPLATE_PREFIX, sync.LIVE_PREFIX)
 		if diff.returncode != 0:
 			return set()
+		diff_lines = diff.stdout.decode("utf-8", "replace").splitlines()
 		changed = {
 			line[len(sync.TEMPLATE_PREFIX):]
-			for line in diff.stdout.decode("utf-8", "replace").splitlines()
+			for line in diff_lines
 			if line.startswith(sync.TEMPLATE_PREFIX)
 		}
-		return {relative for relative in drift if relative in changed or _drifted_at(repo_root, base, relative, sync)}
+		# `.claude/` is not a prefix of `workflow-templates/.claude/`, so a line
+		# lands in at most one of the two sets.
+		live_changed = {
+			line[len(sync.LIVE_PREFIX):]
+			for line in diff_lines
+			if line.startswith(sync.LIVE_PREFIX)
+		}
+		return {
+			relative for relative in drift
+			if not (relative in changed and relative in live_changed)
+			and (relative in changed or _drifted_at(repo_root, base, relative, sync))
+		}
 	except Exception:  # noqa: BLE001 - any failure keeps parity strict
 		return set()
 
