@@ -38,7 +38,11 @@
 #      (default false) renders an `## Evidence pack` for the issue body: the
 #      failed runs' step timelines and the linked runs' timelines with their
 #      head refs, from JSON already saved (no API call), capped at
-#      WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES (default 12000).
+#      WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES (default 12000). For a
+#      workflow_run report the same switch adds the runs started for up to 2
+#      issues the failed jobs' logs name, and (self repo only) the commits on
+#      the default branch that are not on the heal issue's target branch (the
+#      failed run's branch), at most 5 extra GitHub GETs (#8475).
 #   3. Fingerprints the failure (workflow + failing step + normalised error
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
@@ -2776,6 +2780,116 @@ _heal_collect_linked_runs || log "warn linked_runs_failed"
 
 # --- Evidence pack (P1, evidence only) --------------------------------------
 
+# _heal_fetch_evidence_pack_api (#8475, P1 steps 2 and 3)
+#   Called only from _heal_build_evidence_pack, after its switch-off return, so
+#   with WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED off it makes no call. Runs for a
+#   workflow_run report only. `workflow_failure_heal.py evidence-pack-requests`
+#   parses the failed jobs' filtered logs (same-repo `issues/<n>` URLs and
+#   `issue #<n>`, at most 2) and the saved jobs JSON (the failed jobs'
+#   started_at..completed_at window); the shell never parses log text. It then
+#   appends `evidence-pack` arguments to the caller's `pack_api_args` array.
+#   Batching contract (CLAUDE.md §14): at most 5 GitHub REST GETs per report,
+#   each a single attempt (GH_RETRY_MAX_ATTEMPTS=1) counted in GH_PAT_BUDGET:
+#     - repos/<source>/issues/<n> (title), at most 2;
+#     - repos/<source>/actions/runs?created=<window>&per_page=100&page=<p>,
+#       shared by every issue, page 2 only when page 1 is full and
+#       total_count > 100;
+#     - repos/<self>/compare/<target>...<PROVENANCE_DEFAULT_BRANCH>, where
+#       <target> is the heal issue's target (the failed run's HEAD_BRANCH, the
+#       promote-candidate mirror mapped to the default branch, else
+#       TARGET_BRANCH_DEFAULT); self-repo reports only, skipped quietly when
+#       either branch is empty or invalid, or the two are equal.
+#   Audited: none of the intake's earlier reads (run/jobs GETs, the linked-run
+#   reads, the failed-sha...branch compare of the branch-progress block)
+#   returns an issue title, a time-windowed runs list or a target...default
+#   compare. No issue is read when no failed-job window exists.
+#   Fails open: a failed read adds a `--pack-reason <token>` (issue_unreadable,
+#   runs_unreadable, compare_unreadable, job_window_unavailable,
+#   requests_failed) that the single `evidence_pack` log line reports; it
+#   never returns non-zero. The files stay under ${RUNTIME_DIR}/evidence_pack_api/
+#   and feed nothing but the pack.
+_heal_fetch_evidence_pack_api()
+{
+	local api_dir="${RUNTIME_DIR}/evidence_pack_api"
+	local requests_json="" requests_reason="" requests_window="" request_run_id="" issue_number="" issue_file=""
+	local runs_page="" runs_file="" divergence_file="" divergence_target="" divergence_default=""
+	local titles_read=0
+	local -a request_logs=() request_jobs_files=() request_issue_numbers=()
+	[ "${SOURCE_KIND:-}" = workflow_run ] || return 0
+	[ -s "${SUMMARIES_FILE:-}" ] || return 0
+	# Stale responses from an earlier call must never be reused; the directory
+	# is this function's own scratch space under RUNTIME_DIR.
+	rm -rf "${api_dir}"
+	mkdir -p "${api_dir}" || return 0
+	mapfile -t request_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+	while IFS= read -r request_run_id; do
+		[[ "${request_run_id}" =~ ^[0-9]+$ ]] || continue
+		if [ -s "${LOG_DIR}/run-${request_run_id}-jobs.json" ]; then
+			request_jobs_files+=("${LOG_DIR}/run-${request_run_id}-jobs.json")
+		fi
+	done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+	if ! requests_json="$(python3 "${HEAL_PY}" evidence-pack-requests --repo "${SOURCE_REPO}" \
+		--log-files "${request_logs[@]}" --jobs-json "${request_jobs_files[@]}" 2>/dev/null)" \
+		|| ! jq -e 'type == "object" and (.issues | type == "array")' <<< "${requests_json}" >/dev/null 2>&1; then
+		pack_api_args+=(--pack-reason requests_failed)
+		requests_json='{"issues":[],"created":"","reason":""}'
+	fi
+	requests_reason="$(jq -r '.reason // ""' <<< "${requests_json}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+	[ -z "${requests_reason}" ] || pack_api_args+=(--pack-reason "${requests_reason}")
+	requests_window="$(jq -r '.created // ""' <<< "${requests_json}" 2>/dev/null || true)"
+	[[ "${requests_window}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\.\.[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || requests_window=""
+	mapfile -t request_issue_numbers < <(jq -r '.issues[]? | tostring' <<< "${requests_json}" 2>/dev/null | head -n 2)
+	if [ -n "${requests_window}" ]; then
+		for issue_number in "${request_issue_numbers[@]}"; do
+			[[ "${issue_number}" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+			issue_file="${api_dir}/issue-${issue_number}.json"
+			if GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${issue_file}" gh api --method GET "repos/${SOURCE_REPO}/issues/${issue_number}" 2>/dev/null \
+				&& jq -e --argjson n "${issue_number}" 'type == "object" and .number == $n and (.title | type == "string")' "${issue_file}" >/dev/null 2>&1; then
+				pack_api_args+=(--issue-runs "${issue_number}" "${issue_file}")
+				titles_read=$((titles_read + 1))
+			else
+				pack_api_args+=(--pack-reason issue_unreadable)
+			fi
+		done
+	fi
+	if [ "${titles_read}" -gt 0 ]; then
+		for runs_page in 1 2; do
+			runs_file="${api_dir}/runs-page-${runs_page}.json"
+			if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${runs_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs" \
+				-f "created=${requests_window}" -F per_page=100 -F "page=${runs_page}" 2>/dev/null \
+				|| ! jq -e 'type == "object" and (.workflow_runs | type == "array")' "${runs_file}" >/dev/null 2>&1; then
+				pack_api_args+=(--pack-reason runs_unreadable)
+				break
+			fi
+			pack_api_args+=(--issue-runs-page "${runs_file}")
+			# Page 2 only when page 1 is full and the window holds more runs.
+			jq -e '(.total_count | type == "number") and .total_count > 100 and (.workflow_runs | length) >= 100' "${runs_file}" >/dev/null 2>&1 || break
+		done
+	fi
+	# The heal issue's own target, as the Route block below sets it for a
+	# workflow_run report: the failed run's branch, with the promote-candidate
+	# mirror retargeted to the default branch. A main-targeted heal skips the
+	# compare (target == default). The Route block's branch-exists fallback is
+	# not applied here: a run branch deleted since the run makes the compare
+	# 404, which fails open as reason=compare_unreadable.
+	divergence_target="${TARGET_BRANCH_DEFAULT:-}"
+	[ -z "${HEAD_BRANCH:-}" ] || divergence_target="${HEAD_BRANCH}"
+	[ "${divergence_target}" != "${HEAL_PIPELINE_MIRROR_BRANCH}" ] || divergence_target="${PROVENANCE_DEFAULT_BRANCH:-main}"
+	divergence_default="${PROVENANCE_DEFAULT_BRANCH:-}"
+	if [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ] && [ -n "${divergence_target}" ] && [ -n "${divergence_default}" ] \
+		&& [[ "${divergence_target}" != *..* ]] && [[ "${divergence_default}" != *..* ]] \
+		&& [[ "${divergence_target}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] && [[ "${divergence_default}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] \
+		&& [ "${divergence_target}" != "${divergence_default}" ]; then
+		divergence_file="${api_dir}/divergence.json"
+		if GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${divergence_file}" gh api --method GET "repos/${SELF_REPO}/compare/${divergence_target}...${divergence_default}" 2>/dev/null; then
+			pack_api_args+=(--divergence-compare "${divergence_file}" --divergence-target "${divergence_target}" --divergence-default "${divergence_default}")
+		else
+			pack_api_args+=(--pack-reason compare_unreadable)
+		fi
+	fi
+	return 0
+}
+
 # _heal_build_evidence_pack
 #   Renders ${RUNTIME_DIR}/evidence_pack.md for the heal issue body through
 #   `workflow_failure_heal.py evidence-pack`: the step timeline of each
@@ -2786,7 +2900,10 @@ _heal_collect_linked_runs || log "warn linked_runs_failed"
 #   fingerprint, and the diagnosis prompt does not see it.
 #   Batching contract (CLAUDE.md §14): 0 GitHub API calls. Input is the run and
 #   jobs JSON the reported-run loop and _heal_fetch_linked_runs already saved;
-#   a run without both files is left out. Output is the pack file plus one
+#   a run without both files is left out. Since #8475 the builder also calls
+#   _heal_fetch_evidence_pack_api (switch on, workflow_run only), which makes
+#   at most 5 GitHub GETs (see its batching contract above); the timelines
+#   still make none. Output is the pack file plus one
 #   `evidence_pack outcome=ok|partial|skipped bytes=<n> [reason=<token>] [truncated=true]` line.
 #   Fails open: a helper failure empties the pack and the issue is composed
 #   exactly as with the switch off.
@@ -2795,7 +2912,7 @@ _heal_build_evidence_pack()
 	local linked_dir="${RUNTIME_DIR}/linked_runs"
 	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
 	local pack_json="" pack_outcome="" pack_reason="" pack_bytes="" pack_run_id="" pack_seen_ids=" " pack_truncated="" pack_neutralized=""
-	local -a pack_args=() pack_parent_logs=()
+	local -a pack_args=() pack_parent_logs=() pack_api_args=()
 	EVIDENCE_PACK_FILE="${RUNTIME_DIR}/evidence_pack.md"
 	: > "${EVIDENCE_PACK_FILE}"
 	if [ "${EVIDENCE_PACK_ENABLED}" != true ]; then
@@ -2822,6 +2939,9 @@ _heal_build_evidence_pack()
 			fi
 		done < "${fetched_ids_file}"
 	fi
+	# Issue-linked runs and branch divergence (#8475); fills pack_api_args and fails open.
+	_heal_fetch_evidence_pack_api || true
+	pack_args+=("${pack_api_args[@]}")
 	if [ "${#pack_args[@]}" -eq 0 ]; then
 		log "evidence_pack outcome=skipped bytes=0 reason=no_data"
 		return 0
