@@ -1352,12 +1352,51 @@ jobs:
         run: |
           set -euo pipefail
           echo "Posting /approved on issue #${ISSUE_NUMBER}..."
-          gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+          APPROVE_TS_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+          APPROVE_POSTED_AT=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
             -f body="/approved
 
-          E2E smoke test auto-approval (run ${GITHUB_RUN_ID})."
-          echo "approved_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          E2E smoke test auto-approval (run ${GITHUB_RUN_ID})." --jq '.created_at // empty')
+          if ! [[ "$APPROVE_POSTED_AT" =~ $APPROVE_TS_RE ]]; then
+            APPROVE_POSTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          fi
           echo "✓ Posted /approved comment"
+          # Issue #8391 (run 40932430968): the plan's auto-approval can start an
+          # Implement run before ours; it holds ai-implement-<repo>-<issue> and
+          # does the work while ours waits pending. Phase 3b's window therefore
+          # starts at the earliest trusted /approved (Implement's job predicate).
+          # A failed or malformed read keeps our own timestamp.
+          APPROVE_COMMENTS_JSON=""
+          for _approve_attempt in 1 2 3; do
+            if APPROVE_COMMENTS_JSON=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null); then
+              break
+            fi
+            APPROVE_COMMENTS_JSON=""
+            if [ "$_approve_attempt" -lt 3 ]; then sleep 2; fi
+          done
+          APPROVE_EARLIEST_LINE=$(printf '%s' "$APPROVE_COMMENTS_JSON" | jq -r '
+            if type == "array" then
+              [ .[] | select(type == "object")
+                | select((.body | type) == "string" and (.body | startswith("/approved")))
+                | select((((.user.type // "") == "User") and ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+                    or (((.user.type // "") == "Bot") and (.body | contains("[auto-approved-by-plan]"))))
+                | select((.created_at | type) == "string" and (.created_at | length) == 20
+                    and (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))
+              ] | sort_by(.created_at) | first // empty
+              | "\(.created_at) \(if (.body | contains("[auto-approved-by-plan]")) then "plan_auto" else "existing" end)"
+            else empty end' 2>/dev/null | head -n 1 || echo "")
+          APPROVE_EARLIEST="${APPROVE_EARLIEST_LINE%% *}"
+          APPROVE_SOURCE="${APPROVE_EARLIEST_LINE#* }"
+          APPROVED_AT="$APPROVE_POSTED_AT"
+          if [[ "$APPROVE_EARLIEST" =~ $APPROVE_TS_RE ]] && [[ "$APPROVE_EARLIEST" < "$APPROVE_POSTED_AT" ]] \
+            && { [ "$APPROVE_SOURCE" = "plan_auto" ] || [ "$APPROVE_SOURCE" = "existing" ]; }; then
+            APPROVED_AT="$APPROVE_EARLIEST"
+          else
+            APPROVE_SOURCE="e2e"
+          fi
+          echo "approved_at=${APPROVED_AT}" >> "$GITHUB_OUTPUT"
+          echo "approval_source=${APPROVE_SOURCE}" >> "$GITHUB_OUTPUT"
+          echo "approval_source=${APPROVE_SOURCE} approved_at=${APPROVED_AT} posted_at=${APPROVE_POSTED_AT}"
 
       - name: "Phase 3b: Wait for PR creation (implement phase)"
         id: wait-implement
@@ -1413,10 +1452,10 @@ jobs:
           # API, and pages past the first 100 runs (find_latest_scoped_run_field) in case of high concurrent
           # workflow run volume on the target repo. Returns the run id on stdout
           # (empty string if all attempts fail).
-          # Use approval timestamp to filter implement runs so we exclude
-          # stale runs triggered by AUTO_IMPLEMENT_ON_CLEAR_PLAN auto-approval
-          # during the plan phase. Fall back to issue creation time if Phase 3a
-          # was skipped (plan auto-approved directly to ai:implementing).
+          # The window starts at the earliest trusted /approved, the plan's
+          # auto-approval included, because that run can hold the per-issue
+          # concurrency group (issue #8391, run 40932430968). Fall back to issue
+          # creation time if Phase 3a was skipped.
           IMPL_CREATED_AFTER="${IMPL_WINDOW_CREATED_AFTER:-}"
 
           # The progress-counter metrics below are only progress signals. A terminal
