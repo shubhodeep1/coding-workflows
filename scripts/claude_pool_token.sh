@@ -29,6 +29,12 @@
 #   CLAUDE_POOL_PROBE_TIMEOUT_SECS   per-probe limit (default 120)
 #   CLAUDE_POOL_REASON_FILE  the outcome token for ai_engine.sh
 #                            (default $RUNNER_TEMP/claude-pool-reason)
+#   CLAUDE_POOL_OIDC_RETRY_ENABLED   bounded retry of the OIDC token request
+#                            (default on; unset, empty or `true` in any case
+#                            is on, `false` is off, any other value is off
+#                            with a warning) (#8481)
+#   CLAUDE_POOL_OIDC_RETRY_SLEEPS    the two sleeps between OIDC attempts, in
+#                            seconds (default '2 5'; each 0-60)
 #   ACTIONS_ID_TOKEN_REQUEST_URL / ACTIONS_ID_TOKEN_REQUEST_TOKEN (runner)
 set -uo pipefail
 
@@ -39,6 +45,24 @@ probe_enabled="${CLAUDE_POOL_PROBE:-true}"
 probe_timeout="${CLAUDE_POOL_PROBE_TIMEOUT_SECS:-120}"
 [[ "${probe_timeout}" =~ ^[0-9]+$ ]] && [ "${probe_timeout}" -gt 0 ] || probe_timeout=120
 output_file="${GITHUB_OUTPUT:-/dev/null}"
+# The OIDC retry off switch and its sleeps (#8481). Neither raw value is ever
+# echoed, so a value cannot inject a workflow command or leak into the log.
+oidc_retry_raw="${CLAUDE_POOL_OIDC_RETRY_ENABLED:-}"
+case "${oidc_retry_raw,,}" in
+	""|true) oidc_retry_on=true ;;
+	false) oidc_retry_on=false ;;
+	*)
+		oidc_retry_on=false
+		echo "::warning::claude_pool_token.sh: CLAUDE_POOL_OIDC_RETRY_ENABLED is neither true nor false; OIDC retry off" >&2
+		;;
+esac
+read -r -a oidc_retry_sleeps <<< "${CLAUDE_POOL_OIDC_RETRY_SLEEPS:-2 5}" || true
+if [ "${#oidc_retry_sleeps[@]}" -ne 2 ] \
+	|| ! [[ "${oidc_retry_sleeps[0]}" =~ ^[0-9]{1,2}$ && "${oidc_retry_sleeps[1]}" =~ ^[0-9]{1,2}$ ]] \
+	|| [ "$((10#${oidc_retry_sleeps[0]}))" -gt 60 ] || [ "$((10#${oidc_retry_sleeps[1]}))" -gt 60 ]; then
+	echo "CLAUDE_POOL oidc_retry_sleeps_invalid fallback=2,5"
+	oidc_retry_sleeps=(2 5)
+fi
 # The pool directory is removed on failure only under the runner's temp root.
 case "${RUNNER_TEMP:-/tmp}:${pool_dir}" in
 	/*:/*) ;;
@@ -118,9 +142,24 @@ umask 077
 
 # 2. The OIDC token (ACTIONS_ID_TOKEN_REQUEST_TOKEN authenticates the request).
 printf 'Authorization: bearer %s\n' "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" > "${work}/oidc-request-headers"
-oidc_code="$(curl -sS -o "${work}/oidc.json" -w '%{http_code}' --max-time 30 \
-	-H @"${work}/oidc-request-headers" \
-	"${ACTIONS_ID_TOKEN_REQUEST_URL}$([[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" == *\?* ]] && printf '&' || printf '?')audience=${audience}" 2>/dev/null)" || oidc_code="000"
+# Bounded retry (#8481): at most 3 attempts, only on 000 (no response), 429 or
+# 5xx; 401, 403 and every other code fail at once. The header file is kept
+# until the loop ends. Each retry line carries only the attempt number (the
+# attempt about to be made, 2 or 3) and the 3-digit code, never the URL.
+oidc_max_attempts=1
+[ "${oidc_retry_on}" != "true" ] || oidc_max_attempts=3
+oidc_attempt=1
+while :; do
+	oidc_code="$(curl -sS -o "${work}/oidc.json" -w '%{http_code}' --max-time 30 \
+		-H @"${work}/oidc-request-headers" \
+		"${ACTIONS_ID_TOKEN_REQUEST_URL}$([[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" == *\?* ]] && printf '&' || printf '?')audience=${audience}" 2>/dev/null)" || oidc_code="000"
+	[ "${oidc_code}" != "200" ] || break
+	[ "${oidc_attempt}" -lt "${oidc_max_attempts}" ] || break
+	[[ "${oidc_code}" =~ ^(000|429|5[0-9][0-9])$ ]] || break
+	echo "CLAUDE_POOL oidc_retry attempt=$((oidc_attempt + 1)) code=${oidc_code}"
+	sleep "${oidc_retry_sleeps[oidc_attempt - 1]}"
+	oidc_attempt=$((oidc_attempt + 1))
+done
 rm -f -- "${work}/oidc-request-headers"
 [ "${oidc_code}" = "200" ] || finish false "oidc_request_failed_${oidc_code}"
 if ! python3 - "${work}/oidc.json" "${work}/broker-request-headers" <<'PY'

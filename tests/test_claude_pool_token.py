@@ -14,6 +14,7 @@ consumer whose root package.json sets "type": "module".
 from __future__ import annotations
 
 import http.server
+import importlib.util
 import json
 import os
 import re
@@ -56,6 +57,8 @@ class _Stub(http.server.BaseHTTPRequestHandler):
 	broker_status = 200
 	broker_body: dict = {}
 	seen: list[dict] = []
+	# Queued OIDC statuses (#8481 retry tests); empty keeps the plain 200.
+	oidc_statuses: list[int] = []
 
 	def log_message(self, *_args):
 		pass
@@ -71,7 +74,11 @@ class _Stub(http.server.BaseHTTPRequestHandler):
 	def do_GET(self):
 		_Stub.seen.append({"method": "GET", "path": self.path, "auth": self.headers.get("Authorization")})
 		if self.path.startswith("/oidc?") and self.headers.get("Authorization") == f"bearer {REQUEST_TOKEN}":
-			self._send(200, {"value": JWT})
+			if _Stub.oidc_statuses:
+				status = _Stub.oidc_statuses.pop(0)
+				self._send(status, {"value": JWT} if status == 200 else {})
+			else:
+				self._send(200, {"value": JWT})
 		else:
 			self._send(401, {})
 
@@ -90,6 +97,7 @@ def env(tmp_path: Path):
 	thread.start()
 	port = server.server_address[1]
 	_Stub.seen = []
+	_Stub.oidc_statuses = []
 	_Stub.broker_status = 200
 	_Stub.broker_body = {
 		"accounts": [{"name": "ALPHA", "token": "tok-alpha\n"}, {"name": "BETA", "token": " tok-beta "}],
@@ -282,6 +290,74 @@ def test_oidc_request_url_without_query_string(env: dict) -> None:
 def test_oidc_request_rejected(env: dict) -> None:
 	_, outputs = _run(env, ACTIONS_ID_TOKEN_REQUEST_TOKEN="wrong")
 	assert (outputs["available"], outputs["reason"]) == ("false", "oidc_request_failed_401")
+
+
+def _gets() -> list[dict]:
+	return [entry for entry in _Stub.seen if entry["method"] == "GET"]
+
+
+def test_oidc_retry_recovers_after_503(env: dict) -> None:
+	_Stub.oidc_statuses = [503, 200]
+	result, outputs = _run(env, CLAUDE_POOL_OIDC_RETRY_SLEEPS="0 0")
+	assert (outputs["available"], outputs["reason"]) == ("true", "selected")
+	assert len(_gets()) == 2
+	assert "CLAUDE_POOL oidc_retry attempt=2 code=503" in result.stdout
+	rest = _without_masks(result.stdout + result.stderr)
+	for secret in (REQUEST_TOKEN, JWT, "audience="):
+		assert secret not in rest
+
+
+def test_oidc_retry_gives_up_after_three_503(env: dict) -> None:
+	_Stub.oidc_statuses = [503, 503, 503, 200]
+	result, outputs = _run(env, CLAUDE_POOL_OIDC_RETRY_SLEEPS="0 0")
+	assert (outputs["available"], outputs["reason"]) == ("false", "oidc_request_failed_503")
+	assert len(_gets()) == 3
+	assert not [entry for entry in _Stub.seen if entry["method"] == "POST"]
+	assert "CLAUDE_POOL oidc_retry attempt=2 code=503" in result.stdout
+	assert "CLAUDE_POOL oidc_retry attempt=3 code=503" in result.stdout
+	assert "attempt=4" not in result.stdout
+	assert not env["pool"].exists()
+
+
+def test_oidc_401_is_not_retried(env: dict) -> None:
+	result, outputs = _run(env, ACTIONS_ID_TOKEN_REQUEST_TOKEN="wrong", CLAUDE_POOL_OIDC_RETRY_SLEEPS="0 0")
+	assert (outputs["available"], outputs["reason"]) == ("false", "oidc_request_failed_401")
+	assert len(_gets()) == 1
+	assert "oidc_retry" not in result.stdout
+
+
+def test_oidc_retry_flag_false_makes_one_attempt(env: dict) -> None:
+	_Stub.oidc_statuses = [503, 200]
+	result, outputs = _run(env, CLAUDE_POOL_OIDC_RETRY_ENABLED="FALSE", CLAUDE_POOL_OIDC_RETRY_SLEEPS="0 0")
+	assert (outputs["available"], outputs["reason"]) == ("false", "oidc_request_failed_503")
+	assert len(_gets()) == 1
+	assert "oidc_retry" not in result.stdout
+	assert "::warning::" not in result.stderr
+
+
+def test_oidc_retry_flag_invalid_is_off_with_warning(env: dict) -> None:
+	_Stub.oidc_statuses = [503, 200]
+	result, outputs = _run(env, CLAUDE_POOL_OIDC_RETRY_ENABLED="maybe", CLAUDE_POOL_OIDC_RETRY_SLEEPS="0 0")
+	assert (outputs["available"], outputs["reason"]) == ("false", "oidc_request_failed_503")
+	assert len(_gets()) == 1
+	assert "::warning::" in result.stderr and "CLAUDE_POOL_OIDC_RETRY_ENABLED" in result.stderr
+	assert "maybe" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("sleeps", ["0", "0 0 0", "x y", "61 0", "-1 0"])
+def test_oidc_retry_invalid_sleeps_fall_back(env: dict, sleeps: str) -> None:
+	result, outputs = _run(env, CLAUDE_POOL_OIDC_RETRY_SLEEPS=sleeps)
+	assert outputs["available"] == "true"
+	# The fallback line is fixed text: the raw value is never echoed.
+	assert [line for line in result.stdout.splitlines() if "oidc_retry_sleeps_invalid" in line] == ["CLAUDE_POOL oidc_retry_sleeps_invalid fallback=2,5"]
+
+
+def test_pool_token_script_is_in_engine_fallback_heal_scope() -> None:
+	spec = importlib.util.spec_from_file_location("workflow_failure_heal_scope_probe", REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	module = importlib.util.module_from_spec(spec)
+	assert spec.loader is not None
+	spec.loader.exec_module(module)
+	assert "scripts/claude_pool_token.sh" in module.ENGINE_FALLBACK_SCOPE_PATHS
 
 
 def test_cli_missing(env: dict) -> None:
