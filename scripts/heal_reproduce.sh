@@ -190,23 +190,29 @@ def map_entry(data, number, test_path, name):
 				# Script-style and unittest units report bare names (test_x), and
 				# every name in this item belongs to test_path.
 				short = name.split("::")[-1]
+				tail = item.get("tail") if isinstance(item.get("tail"), str) else ""
+				node_matched = any(n == node or n.startswith(node + "[") for n in names)
+				# The gate matches only FAILED lines, so an `ERROR <node>`
+				# setup/teardown error is missing from its names. Only pytest's
+				# summary line (optionally after a log timestamp) counts, not the
+				# same text printed mid-line by a test. It is the exact node, so it
+				# is checked before the weaker bare-name match below.
+				if not node_matched and re.search(
+						r"^(?:\d{4}-\d{2}-\d{2}T\S+\s+)?ERROR\s+" + re.escape(node) + r"(?:\[|\s|$)", tail, re.M):
+					return "reproduced", "regression"
 				# A bare name proves the failure only for an unqualified listed name
-				# in a unit whose parsed names are all bare; a class-qualified name,
-				# or a bare name inside a pytest unit (captured output), is ambiguous.
-				bare_ok = "::" not in name and not any("::" in n for n in names)
-				if not any(n == node or n.startswith(node + "[") for n in names) \
-						and any(n == short or n.startswith(short + "[") for n in names):
+				# in a unit whose parsed names are all bare and whose tail shows no
+				# pytest summary output; a class-qualified name, or a bare name
+				# inside a pytest unit (captured output), is ambiguous.
+				pytest_tail = bool(re.search(r"^(?:\d{4}-\d{2}-\d{2}T\S+\s+)?(?:FAILED|ERROR)\s+\S+::", tail, re.M)) \
+					or "short test summary info" in tail
+				bare_ok = "::" not in name and not any("::" in n for n in names) and not pytest_tail
+				if not node_matched and any(n == short or n.startswith(short + "[") for n in names):
 					return ("reproduced", "regression") if bare_ok else ("unverified", "names_ambiguous")
-				if not any(n == node or n.startswith(node + "[") for n in names):
+				if not node_matched:
 					# Absence from the gate's parsed names proves a pass only when
 					# that list is complete: the gate keeps the last TAIL_BYTES
-					# (4096) of output, at most 50 names, and matches only FAILED
-					# lines, so an `ERROR <node>` setup/teardown error is missed.
-					tail = item.get("tail") if isinstance(item.get("tail"), str) else ""
-					# Only pytest's summary line (optionally after a log timestamp)
-					# counts, not the same text printed mid-line by a test.
-					if re.search(r"^(?:\d{4}-\d{2}-\d{2}T\S+\s+)?ERROR\s+" + re.escape(node) + r"(?:\[|\s|$)", tail, re.M):
-						return "reproduced", "regression"
+					# (4096) of output and at most 50 names.
 					if not tail or len(names) >= GATE_NAMES_MAX or len(tail.encode("utf-8")) >= GATE_TAIL_COMPLETE_BYTES:
 						return "unverified", "names_incomplete"
 					# The named test passed at the failing SHA (a sibling failed).

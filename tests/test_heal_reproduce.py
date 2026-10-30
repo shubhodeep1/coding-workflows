@@ -458,3 +458,25 @@ def test_bare_name_in_pytest_unit_is_unverified(h: Env) -> None:
 	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
 	assert (data["status"], data["reason"]) == ("unverified", "names_ambiguous")
 	h.assert_clean(err)
+
+
+def test_bare_name_in_pytest_unit_with_only_error_lines_is_unverified(h: Env) -> None:
+	# A pytest unit that failed only in setup/teardown has no FAILED nodes; a bare
+	# name then came from captured output, not from a failure summary.
+	fail = _fail(names=["test_x"])
+	fail["tail"] = "ERROR tests/test_a.py::test_y - fixture\nFAIL: test_x (printed)\n"
+	h.gate(_gate("fail", failures=[fail]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
+	assert (data["status"], data["reason"]) == ("unverified", "names_ambiguous")
+	h.assert_clean(err)
+
+
+def test_error_line_beats_ambiguous_bare_name(h: Env) -> None:
+	# An exact `ERROR path::Class::test` summary line is proof even when a bare
+	# name also matched.
+	fail = _fail(names=["test_x"])
+	fail["tail"] = "ERROR tests/test_a.py::ClassB::test_x - fixture\n"
+	h.gate(_gate("fail", failures=[fail]))
+	data, err = h.run(h.tests_file("tests/test_a.py::ClassB::test_x"))
+	assert (data["status"], data["reason"]) == ("reproduced", "regression")
+	h.assert_clean(err)
