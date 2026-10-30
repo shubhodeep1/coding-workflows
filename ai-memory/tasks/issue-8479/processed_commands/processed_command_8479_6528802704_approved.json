@@ -5,13 +5,33 @@
   "entry_id": "processed_command_8479_6528802704_approved",
   "issue_number": 8479,
   "metadata": {
+    "branch": "ai/issue-8479",
+    "changed_files": [
+      ".github/workflows/implement.yml",
+      ".github/workflows/plan.yml",
+      "agents.d/8427-p2-persist-acceptance.md",
+      "changelog.d/8427-p2-persist-acceptance.md",
+      "prompts/_templates/mode-plan-acceptance.txt",
+      "prompts/mode-plan-acceptance.txt",
+      "scripts/acceptance_check.py",
+      "scripts/attempt_journal.py",
+      "scripts/run_plan_codex.sh",
+      "tests/inventory_exemptions.txt",
+      "tests/test_acceptance_check.py",
+      "tests/test_attempt_journal.py"
+    ],
+    "issue_number": 8479,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8479",
+    "pr_number": 8482,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8482",
+    "run_attempt": "1",
+    "run_id": "41097120084",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41097120084"
   },
   "run_attempt": 1,
   "run_id": "41097120084",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-30T17:16:22Z",
+  "status": "completed",
+  "timestamp": "2026-10-30T18:45:59Z",
   "workflow": "implement"
 }
