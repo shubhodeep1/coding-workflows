@@ -444,7 +444,8 @@ implement_prepush_test_gate_journal_blocks()
 	fi
 	if [ -n "${rules}" ] && [ -f "${rules}" ]; then
 		echo
-		cat "${rules}"
+		# Body only: the fragment's tier and Role/Goal metadata lines stay out.
+		sed -n '/^=== ATTEMPT JOURNAL REPAIR RULES ===$/,$p' "${rules}" || true
 	else
 		echo "PERSIST journal outcome=skipped reason=rules_absent" >&2
 	fi
