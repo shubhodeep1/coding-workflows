@@ -323,6 +323,11 @@ def main(argv: list[str] | None = None, runner: Runner = _run_gh) -> int:
 		except OSError as exc:
 			# Fail open: a local write failure must not drop the facts block.
 			print(f"heal evidence pack write failed: {exc.__class__.__name__}", file=sys.stderr)
+			# A part-written pack must not reach the prompt (the workflow checks `-s`).
+			try:
+				Path(args.heal_evidence_pack_output).unlink(missing_ok=True)
+			except OSError:
+				pass
 	text = ""
 	for path in args.text_file:
 		try:
