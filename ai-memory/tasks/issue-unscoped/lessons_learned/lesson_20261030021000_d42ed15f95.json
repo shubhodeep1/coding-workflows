@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-30T02:10:00Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/prepush_test_gate_run.sh:1; cited_path=scripts/prepush_test_gate_run.sh, scripts/implement_step_prepush_test_gate.sh, scripts/review_autofix_step_prepush_test_gate.sh; files_touched=.claude/hooks/prepush_affected_tests.py.",
+  "phase": "review_autofix",
+  "pr_number": 8404,
+  "record_id": "lesson_20261030021000_d42ed15f95",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/prepush_test_gate_run.sh, scripts/implement_step_prepush_test_gate.sh, scripts/review_autofix_step_prepush_test_gate.sh",
+    "scripts/prepush_test_gate_run.sh",
+    ".claude/hooks/prepush_affected_tests.py"
+  ]
+}
