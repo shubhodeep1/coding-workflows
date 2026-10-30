@@ -65,6 +65,9 @@ def _rejection_line(exc):
 		line += f" depth={depth}"
 	return line
 COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
+# .claude/docs/<name>.md reference files are admitted like commands: only a
+# name whose twin exists in the verified workflow-support checkout (#8321).
+DOCS_TWIN_DIR = "workflow-templates/.claude/docs"
 # Live copies the resolver may sync from their workflow-templates twin
 # (issue #6595). The live path stays excluded from allowed(), snapshot and
 # transfer: only the runner writes it, byte-identical to the resolved template.
@@ -140,6 +143,11 @@ def allowed(name, host=None, commands=None):
 		return True
 	# Command admission must use the inventory frozen by snapshot.
 	if len(parts) == 3 and parts[:2] == (".claude", "commands") and parts[2].endswith(".md") and not parts[2].startswith("."):
+		return commands is not None and name in commands
+	# ``commands`` is the frozen admitted .claude/ inventory: command files and,
+	# since #8321, twinned .claude/docs/<name>.md reference files. Nested,
+	# dot-prefixed and untwinned docs paths fall through to the reject below.
+	if len(parts) == 3 and parts[:2] == (".claude", "docs") and parts[2].endswith(".md") and not parts[2].startswith("."):
 		return commands is not None and name in commands
 	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
 		return False
@@ -239,16 +247,16 @@ def synthetic_git_config_path(manifest):
 	return manifest.with_name(manifest.name + ".git_config.sha256")
 
 
-def template_command_inventory(host):
+def template_command_inventory(host, *, twin_dir=COMMAND_TWIN_DIR, live_prefix=".claude/commands/"):
 	try:
-		directory = checked_path(host, COMMAND_TWIN_DIR)
+		directory = checked_path(host, twin_dir)
 	except ValueError:
 		return frozenset()
 	if not directory.is_dir():
 		return frozenset()
 	commands = set()
 	for entry in directory.iterdir():
-		name = ".claude/commands/" + entry.name
+		name = live_prefix + entry.name
 		if entry.is_file() and not entry.is_symlink() and allowed(name, commands={name}):
 			commands.add(name)
 	return frozenset(commands)
@@ -259,7 +267,7 @@ def load_admitted_commands(manifest):
 		inventory = json.loads(admitted_commands_path(manifest).read_text(encoding="utf-8"))
 	except (OSError, ValueError, UnicodeError):
 		raise ValueError("admitted command inventory missing") from None
-	if not isinstance(inventory, list) or any(not isinstance(name, str) or not re.fullmatch(r"\.claude/commands/[^/.][^/]*\.md", name) or not allowed(name, commands={name}) for name in inventory):
+	if not isinstance(inventory, list) or any(not isinstance(name, str) or not re.fullmatch(r"\.claude/(?:commands|docs)/[^/.][^/]*\.md", name) or not allowed(name, commands={name}) for name in inventory):
 		raise ValueError("admitted command inventory missing")
 	return frozenset(inventory)
 
@@ -328,7 +336,8 @@ def enumerate_workspace(root, host=None, commands=None, strict=False):
 				continue
 			if (Path(directory) / child).is_symlink():
 				raise UnsafeWorkspaceDirectory(name, is_symlink=True)
-			if name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not (name == ".claude/commands" and commands) and not allowed(name + "/placeholder.py"):
+			admitted_dir = name in (".claude/commands", ".claude/docs") and commands and any(entry.startswith(name + "/") for entry in commands)
+			if name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not admitted_dir and not allowed(name + "/placeholder.py"):
 				raise UnsafeWorkspaceDirectory(name)
 		for child in files:
 			entries += 1
@@ -369,8 +378,16 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 	# The PR worktree can add twins before snapshot; only names present in the
 	# verified workflow-support checkout may authorize a command for this run.
 	trusted_checkout = os.environ.get("GITHUB_WORKSPACE")
-	commands = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src") &
-		template_command_inventory(host)) if trusted_checkout else frozenset()
+	commands = frozenset()
+	if trusted_checkout:
+		commands = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src") &
+			template_command_inventory(host))
+		docs_names = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src", twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/") &
+			template_command_inventory(host, twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/"))
+		# A docs name is admitted only while its live copy already exists as a
+		# regular file on the host, so the editor can edit an existing
+		# reference file but never create a new one (#8321).
+		commands |= frozenset(name for name in docs_names if (host / name).is_file() and not (host / name).is_symlink())
 	baseline = {}
 	total = 0
 	oversized = 0
@@ -583,12 +600,14 @@ def refresh(host, workspace, manifest):
 		host_file = checked_path(host, name)
 		if not host_file.exists() or fingerprint(host_file) != old:
 			raise _rejection("host baseline changed before editor", "host_baseline_changed")
-	# Excluded command writes are not in results, but must not survive a retry.
-	command_dir = checked_path(workspace, ".claude/commands")
-	if command_dir.is_dir():
-		for target in command_dir.iterdir():
-			if (target.is_file() or target.is_symlink()) and not target.name.startswith(".") and ".claude/commands/" + target.name not in commands:
-				target.unlink()
+	# Excluded command and docs writes are not in results, but must not
+	# survive a retry.
+	for admitted_dir_name in (".claude/commands", ".claude/docs"):
+		command_dir = checked_path(workspace, admitted_dir_name)
+		if command_dir.is_dir():
+			for target in command_dir.iterdir():
+				if (target.is_file() or target.is_symlink()) and not target.name.startswith(".") and admitted_dir_name + "/" + target.name not in commands:
+					target.unlink()
 	for name in sorted(set(baseline) | set(results)):
 		target = checked_path(workspace, name)
 		if name not in baseline:
@@ -941,7 +960,9 @@ def main():
 			scope = None
 			if len(sys.argv) == 7:
 				scope = Path(sys.argv[6]).read_text(encoding="utf-8").splitlines()
-				if not scope or any(not entry or entry not in ("tests/**", "changelog.d/*.md") and not re.fullmatch(r"[A-Za-z0-9_./-]+", entry) for entry in scope):
+				# Besides the marker's two globs, the issue's own agents.md
+				# fragment glob that implement_heal_preflight.sh adds (#8064).
+				if not scope or any(not entry or entry not in ("tests/**", "changelog.d/*.md") and not re.fullmatch(r"[A-Za-z0-9_./-]+", entry) and not re.fullmatch(r"agents\.d/[1-9][0-9]{0,9}-\*\.md", entry) for entry in scope):
 					raise ValueError("out of heal scope")
 			transfer(host, workspace, manifest, scope)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:

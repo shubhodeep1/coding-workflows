@@ -132,6 +132,12 @@ EOF
   exit 1
 fi
 
+# Records whether the editor wrote a real summary, before the synthetic
+# fallback below fills the file in (#8321: the sandbox-excluded escalation
+# reads only a real summary).
+editor_summary_is_real=0
+[ -s "${EDITOR_SUMMARY_FILE}" ] && editor_summary_is_real=1
+
 if [ ! -s "${EDITOR_SUMMARY_FILE}" ]; then
   cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
 Changes made:
@@ -173,7 +179,84 @@ fi
 
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")" >/dev/null; then
+# Sandbox-excluded escalation (#8321). PR #8250 was re-reviewed 29 times on
+# unchanged heads because the editor declined its only fix as
+# "sandbox-excluded path" and the run still ended as a success, so nothing
+# counted it. When the editor's real summary reports "Change status:
+# not-edited", nothing was committed, and at least one "Ignored suggestions"
+# bullet ends with the fixed reason "sandbox-excluded path" (the wording the
+# editor prompt in review_apply_fixes.sh pins), the posted summary ends with a
+# review-autofix-failure:v1 marker for the non-retryable reason
+# review_editor_sandbox_path_excluded. The gate's identical-failure cap then
+# stops the head on the next dispatch; a new push resets it. The marker rides
+# on this step's existing comment (no extra API call). Only the integer count
+# is logged, never summary text. Fail-open: no helper or no marker leaves the
+# run as it was, and the step's exit status is unchanged.
+# "Nothing committed" needs positive evidence: the commit step writes "- none"
+# or a "- commit skipped (...)" marker line when it committed nothing, and one
+# "- <path>" line per committed file otherwise. An unset or missing file is
+# unknown, so no marker is written (fail closed toward not capping).
+sandbox_excluded_marker_suffix=""
+sandbox_excluded_nothing_committed=0
+if [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -f "${COMMITTED_FILES_FILE}" ] && [ -r "${COMMITTED_FILES_FILE}" ] \
+  && ! grep -q -v -E '^[[:space:]]*$|^- none$|^- none \(edits withheld for safety: .*\)$|^- commit skipped \(.*\)$' "${COMMITTED_FILES_FILE}"; then
+  sandbox_excluded_nothing_committed=1
+fi
+# The commit step's own flag wins over the file text: a committed path that
+# prints like a placeholder line never counts as nothing committed.
+if [ "${DID_COMMIT:-}" = "true" ]; then
+  sandbox_excluded_nothing_committed=0
+fi
+if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_committed}" = "1" ]; then
+  sandbox_excluded_findings="$(tr -d '\r' < "${EDITOR_SUMMARY_FILE}" | awk '
+    BEGIN { section = ""; status = ""; count = 0; trail = "[] \t.\"\047`)*]+$" }
+    /^(Changes made|Change status|Already satisfied \(suggested but already present\)|Ignored suggestions \(with short reason\)|Reviewer files processed|Review file issue audit|PR comment audit|Regression fingerprint|Runtime failure path):[ \t]*$/ {
+      section = $0
+      sub(/:[ \t]*$/, "", section)
+      next
+    }
+    section == "Change status" && status == "" && /^[ \t]*-[ \t]+/ {
+      value = $0
+      sub(/^[ \t]*-[ \t]+/, "", value)
+      sub(/[ \t]+$/, "", value)
+      status = tolower(value)
+      next
+    }
+    section == "Ignored suggestions (with short reason)" && /^[ \t]*-[ \t]+/ {
+      value = tolower($0)
+      sub(trail, "", value)
+      if (value ~ /sandbox-excluded path$/) count++
+    }
+    END { print (status == "not-edited" ? count : 0) }
+  ' 2>/dev/null || echo 0)"
+  case "${sandbox_excluded_findings}" in
+    ''|*[!0-9]*) sandbox_excluded_findings=0 ;;
+  esac
+  if [ "${sandbox_excluded_findings}" -gt 0 ]; then
+    sandbox_excluded_outcome="marker_unavailable"
+    sandbox_excluded_reason=" reason=helper_missing"
+    if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+      sandbox_excluded_reason=" reason=no_marker"
+      sandbox_excluded_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
+        --failure-reason review_editor_sandbox_path_excluded \
+        --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+        --support-sha "${REVIEW_SUPPORT_SHA:-}" \
+        --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
+      if [ -n "${sandbox_excluded_marker_line}" ]; then
+        sandbox_excluded_marker_suffix=$'\n\n'"${sandbox_excluded_marker_line}"
+        sandbox_excluded_outcome="marker"
+        sandbox_excluded_reason=""
+      fi
+    fi
+    sandbox_excluded_head="$(printf '%s' "${AUTOFIX_FAILURE_HEAD_SHA:-}" | tr 'A-F' 'a-f')"
+    [[ "${sandbox_excluded_head}" =~ ^[0-9a-f]{40}$ ]] || sandbox_excluded_head="unknown"
+    sandbox_excluded_pr="${PR_NUMBER:-}"
+    [[ "${sandbox_excluded_pr}" =~ ^[0-9]+$ ]] || sandbox_excluded_pr="unknown"
+    echo "AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=${sandbox_excluded_pr} head=${sandbox_excluded_head} findings=${sandbox_excluded_findings} outcome=${sandbox_excluded_outcome}${sandbox_excluded_reason}"
+  fi
+fi
+
+if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${sandbox_excluded_marker_suffix}" >/dev/null; then
   echo "Posted editor summary comment."
   # Signal to the failure-comment step (line ~3269) that the
   # editor summary already landed on the PR thread. The generic

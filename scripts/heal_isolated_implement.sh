@@ -15,6 +15,15 @@ support="${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE:-.}/.codex-workflow-src/
 # write container on this script's snapshot (never on the host). The snapshot
 # then goes through the same syntax validation and scoped transfer as a codex
 # edit. Claude unavailable (exit 75) runs the isolated codex editor below.
+# A Codex-written snapshot that reaches the host leaves the codex_thread_reuse.sh
+# fallback marker, so implement_commit_changes.sh commits the edits as
+# codex-bot, not claude-bot. Returns non-zero when the marker cannot be written.
+heal_mark_claude_unavailable()
+{
+	local runtime="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR:-}}"
+	[ -n "${runtime}" ] || return 0
+	{ mkdir -p "${runtime}/codex-thread-reuse/states" && : > "${runtime}/codex-thread-reuse/states/claude-implement.unavailable"; } 2>/dev/null
+}
 heal_engine=codex
 if [ "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" = claude ]; then
 	if [ -f "${support}/ai_engine.sh" ] && [ ! -L "${support}/ai_engine.sh" ]; then
@@ -26,9 +35,17 @@ fi
 root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/heal-isolated.XXXXXXXX")"
 container="heal-editor-${GITHUB_RUN_ID:-local}-$$"
 broker_pid=""
+gate_tree_added=false
+# Set only for the pre-push gate's repair turn: run_editor's codex fallback
+# after a Claude exit 75 gets what is left of it, not a second full wall.
+heal_repair_deadline=""
 cleanup()
 {
 	[ -z "${broker_pid}" ] || { kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; }
+	if [ "${gate_tree_added}" = true ]; then
+		git -C "${WORKSPACE_PATH:-${PWD}}" worktree remove --force "${root}/gate-tree" >/dev/null 2>&1 || true
+		git -C "${WORKSPACE_PATH:-${PWD}}" worktree prune >/dev/null 2>&1 || true
+	fi
 	env -i PATH="${PATH}" docker rm -f "${container}" >/dev/null 2>&1 || true
 	rm -rf -- "${root}"
 }
@@ -106,6 +123,14 @@ run_editor()
 		[ "${rc}" -eq 80 ] && return 80
 		[ "${rc}" -eq 75 ] || return 1
 		rc=0
+		if [ -n "${heal_repair_deadline}" ]; then
+			local wall="${wall}" repair_left=$(( heal_repair_deadline - SECONDS ))
+			if [ "${repair_left}" -lt 60 ]; then
+				echo 'HEAL_ISOLATED_EDITOR phase=run engine=codex outcome=skipped reason=step_budget' >&2
+				return 1
+			fi
+			[ "${repair_left}" -ge "${wall}" ] || wall="${repair_left}"
+		fi
 	fi
 	env -i PATH="${PATH}" timeout --kill-after=30s "${wall}" docker run --rm --init --name "${container}" \
 	--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
@@ -194,9 +219,144 @@ while ! validate_snapshot; do
 	} > "${root}/repair-prompt"
 	run_editor "${root}/repair-prompt"
 done
+# Pre-push affected-test gate (plan P4). Tests run only in the gate's
+# credential-free container. The editor can rewrite the snapshot's synthetic
+# .git, so the gate never runs host git on ${root}/source: it runs on a
+# detached worktree of the heal checkout (whose .git the editor never saw) that
+# receives the snapshot's content through the same scoped transfer. On
+# failures the change caused, one more editor turn runs with the test-repair
+# prompt and validate_snapshot runs once more; a syntax failure restores the
+# pre-repair snapshot. Fail-open: the transfer below always follows.
+# Seconds the gate budget has used: from the job's start (JOB_START_EPOCH,
+# which implement.yml exports) when it is set, so a heal retry later in the
+# job does not start a fresh budget; else from this script's start.
+heal_gate_elapsed()
+{
+	local now job_elapsed
+	now="$(date +%s)"
+	if [[ "${JOB_START_EPOCH:-}" =~ ^[1-9][0-9]{8,10}$ ]] && [ "${JOB_START_EPOCH}" -le "${now}" ]; then
+		job_elapsed=$(( now - JOB_START_EPOCH ))
+		[ "${job_elapsed}" -ge "${SECONDS}" ] && { echo "${job_elapsed}"; return 0; }
+	fi
+	echo "${SECONDS}"
+}
+heal_prepush_test_gate()
+{
+	local gate_step="" gate_mode gate_ws="${WORKSPACE_PATH:-${PWD}}" gate_base gate_status="" gate_pr=0 gate_inh=0 rc
+	local candidate
+	for candidate in "${support}/review_autofix_step_prepush_test_gate.sh" "${GITHUB_WORKSPACE:-.}/.codex-workflow-src/scripts/review_autofix_step_prepush_test_gate.sh"; do
+		if [ -f "${candidate}" ] && [ ! -L "${candidate}" ]; then
+			gate_step="${candidate}"
+			break
+		fi
+	done
+	if [ -z "${gate_step}" ]; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=skipped reason=module_absent' >&2
+		return 0
+	fi
+	gate_mode="$(bash "${gate_step}" mode 2>/dev/null || echo repair)"
+	if [ "${gate_mode}" = off ]; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=skipped reason=mode_off' >&2
+		return 0
+	fi
+	# Step budget: heal_gate_elapsed counts from the job's start. The heal step runs
+	# under implement.yml's 180-minute job cap, after earlier steps and before
+	# the commit and push, so the gate and its repair turn must leave room for
+	# the scoped transfer below. One gate run is at most 10 minutes plus the
+	# wrapper's 120 s overhead and 30 s kill grace.
+	local gate_budget="${HEAL_PREPUSH_GATE_BUDGET_SECS:-9000}"
+	[[ "${gate_budget}" =~ ^[1-9][0-9]{0,5}$ ]] || gate_budget=9000
+	if [ $(( gate_budget - $(heal_gate_elapsed) )) -lt 750 ]; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=skipped reason=step_budget' >&2
+		return 0
+	fi
+	if git -C "${gate_ws}" -c core.hooksPath=/dev/null worktree add --detach "${root}/gate-tree" HEAD >/dev/null 2>&1; then
+		gate_tree_added=true
+	fi
+	# A private manifest copy (with its sidecars, such as the admitted-command
+	# inventory) keeps the real transfer's baseline untouched.
+	local manifest_part
+	for manifest_part in "${root}"/manifest.json*; do
+		[ -f "${manifest_part}" ] || continue
+		cp -f "${manifest_part}" "${root}/manifest.gate.json${manifest_part#"${root}/manifest.json"}" 2>/dev/null || true
+	done
+	if [ "${gate_tree_added}" != true ] || ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer \
+		"${root}/gate-tree" "${root}/source" "${root}/manifest.gate.json" --scope-file "${scope}" >/dev/null 2>&1; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=unverified reason=gate_tree_unavailable' >&2
+		return 0
+	fi
+	# An exported GIT_DIR / GIT_WORK_TREE would point the gate's git at the heal
+	# checkout instead of the gate tree.
+	gate_base="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${root}/gate-tree" rev-parse HEAD 2>/dev/null || true)"
+	# PREPUSH_TEST_GATE_TIMEOUT_MINUTES=10 matches validate_snapshot's 600 s bound.
+	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE PREPUSH_TEST_GATE_TIMEOUT_MINUTES=10 bash "${gate_step}" gate --phase heal --worktree "${root}/gate-tree" --base "${gate_base}" --image "${image}" \
+		--out "${root}/results/prepush" > "${root}/results/prepush.status" || true
+	read -r gate_status gate_pr gate_inh < "${root}/results/prepush.status" || true
+	if [ "${gate_status}" != fail ] || ! [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null || [ "${gate_mode}" != repair ]; then
+		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=${gate_status:-unverified} failures=${gate_pr:-0} inherited=${gate_inh:-0} repair=none" >&2
+		return 0
+	fi
+	# The allow-list and the prompt's diff come from the gate tree (the
+	# snapshot's content on a checkout the editor never saw); the transfer
+	# still enforces the heal scope.
+	if ! ( cd "${root}/gate-tree" && unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE \
+		&& { git diff --name-only HEAD -- 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | sed '/^$/d' | sort -u > "${root}/results/prepush-changed.txt" \
+		&& bash "${gate_step}" allow-list "${root}/gate-tree" "${root}/results/prepush-changed.txt" "${root}/results/prepush/result.json" "${root}/results/prepush-allow.txt" \
+		&& [ -s "${root}/results/prepush-allow.txt" ] \
+		&& bash "${gate_step}" repair-prompt "${root}/results/prepush/result.json" "${root}/repair-prompt-tests" "${root}/results/prepush-allow.txt" ) 2>/dev/null; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=repair_prompt_unavailable' >&2
+		return 0
+	fi
+	# The repair turn gets what is left of the budget after validate_snapshot
+	# (600 s plus 30 s kill grace); run_editor reads this local wall.
+	local wall="${wall}" repair_wall=$(( gate_budget - $(heal_gate_elapsed) - 630 ))
+	if [ "${repair_wall}" -lt 300 ]; then
+		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail failures=${gate_pr} repair=skipped reason=step_budget" >&2
+		return 0
+	fi
+	[ "${repair_wall}" -ge "${wall}" ] || wall="${repair_wall}"
+	rm -rf -- "${root}/source.pre-gate"
+	cp -a "${root}/source" "${root}/source.pre-gate" || { echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=backup_failed' >&2; return 0; }
+	rc=0
+	heal_repair_deadline=$(( SECONDS + wall ))
+	run_editor "${root}/repair-prompt-tests" || rc=$?
+	heal_repair_deadline=""
+	# validate_snapshot exits the script on validator infrastructure failures;
+	# a subshell keeps that from skipping the restore and the transfer below.
+	# The rc file is written only when validate_snapshot returns.
+	local vrc=0
+	if [ "${rc}" -eq 0 ]; then
+		rm -f -- "${root}/results/prepush-validate.rc"
+		( r=0; validate_snapshot || r=$?; echo "${r}" > "${root}/results/prepush-validate.rc" ) || true
+		vrc="$(cat "${root}/results/prepush-validate.rc" 2>/dev/null || echo unavailable)"
+	fi
+	if [ "${rc}" -eq 0 ] && [ "${vrc}" = 0 ]; then
+		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repaired failures=${gate_pr} repair=ran" >&2
+		rm -rf -- "${root}/source.pre-gate"
+		return 0
+	fi
+	# Editor failure or broken syntax: the transfer gets the pre-repair snapshot.
+	rm -rf -- "${root}/source"
+	mv -- "${root}/source.pre-gate" "${root}/source"
+	if [ "${rc}" -ne 0 ]; then
+		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repair_reverted reason=editor_exit_${rc}" >&2
+	elif [ "${vrc}" = unavailable ]; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repair_reverted reason=validator_unavailable' >&2
+	else
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repair_reverted reason=syntax' >&2
+	fi
+	return 0
+}
+heal_prepush_test_gate || true
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" --scope-file "${scope}"; then
 	echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope" >&2
 	exit 42
+fi
+# Mark only once Codex edits reached the host: a Codex attempt that never
+# transferred must not relabel a later Claude-written heal commit, and a
+# later Claude success never clears edits Codex already transferred.
+if [ "${heal_engine}" = codex ] && ! heal_mark_claude_unavailable; then
+	echo '::warning::HEAL_ISOLATED_EDITOR phase=transfer engine=codex outcome=marker_write_failed (commit identity may read claude-bot)' >&2
 fi
 install -m 0600 "${root}/results/output" "${output}"
 echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=success reason=validated"

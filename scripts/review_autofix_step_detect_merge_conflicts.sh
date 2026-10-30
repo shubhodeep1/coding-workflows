@@ -9,6 +9,7 @@ set -euo pipefail
 echo "Checking for merge conflicts"
 echo "MERGE_CONFLICT=false" >> "$GITHUB_ENV"
 echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+echo "MERGE_CRISS_CROSS_CLEAN=false" >> "$GITHUB_ENV"
 
 # Consumer-updater PRs (#7004): the updater rebuilds its own branch, and a
 # review push could not land anyway ("Push all pending commits" skips these
@@ -120,7 +121,7 @@ fi
 # steps may set this, but after git clean / reset it can be lost if
 # the runner has no global git config.
 git config user.name  "codex-bot"        2>/dev/null || true
-git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
+git config user.email "codex-bot@users.noreply.invalid" 2>/dev/null || true
 
 # Move untracked content out of the working tree so it doesn't
 # collide with files coming from origin/BASE_BRANCH during the
@@ -307,6 +308,57 @@ if [ -z "$(git ls-files --unmerged)" ]; then
     done
     rm -rf "${UNTRACKED_BACKUP}"
     exit 0
+  fi
+  # Criss-cross history (PR #8170): when HEAD and origin/<base> have more
+  # than one merge base, git's merge folds them into a virtual base and can
+  # merge cleanly while GitHub, which merges from a single base, reports the
+  # PR as conflicting (mergeable_state=dirty). Nothing here pushed a merge
+  # commit, so the PR stayed dirty forever: the judge could never merge it
+  # and the poller's conflict sweep re-dispatched no-op runs. Probe each
+  # merge base on its own; if any of them conflicts, hand the clean merge to
+  # review_conflict_prepare.sh, which commits it (no model run) so the PR
+  # head contains origin/<base> and GitHub's mergeability becomes trivial.
+  # Fail open: a probe error (old git without --merge-base, a blobless fetch
+  # failure) keeps the previous "no conflicts" outcome.
+  if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+    _criss_cross_bases="$(git merge-base --all HEAD "origin/${BASE_BRANCH}" 2>/dev/null || true)"
+    _criss_cross_base_count="$(printf '%s\n' "${_criss_cross_bases}" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+    if [ "${_criss_cross_base_count:-0}" -gt 1 ]; then
+      _criss_cross_conflict_base=""
+      _criss_cross_probe_rc=0
+      while IFS= read -r _criss_cross_base; do
+        [ -n "${_criss_cross_base}" ] || continue
+        _criss_cross_rc=0
+        git merge-tree --write-tree --name-only --merge-base="${_criss_cross_base}" HEAD "origin/${BASE_BRANCH}" >/dev/null 2>&1 || _criss_cross_rc=$?
+        if [ "${_criss_cross_rc}" -eq 1 ]; then
+          _criss_cross_conflict_base="${_criss_cross_base}"
+          break
+        elif [ "${_criss_cross_rc}" -ne 0 ]; then
+          _criss_cross_probe_rc="${_criss_cross_rc}"
+        fi
+      done <<< "${_criss_cross_bases}"
+      if [ -n "${_criss_cross_conflict_base}" ]; then
+        echo "AUTOFIX_MERGE_CRISS_CROSS pr=${PR_NUMBER:-unknown} outcome=route_clean_merge bases=${_criss_cross_base_count} conflict_base=${_criss_cross_conflict_base:0:12}"
+        echo "::warning::HEAD and origin/${BASE_BRANCH} have ${_criss_cross_base_count} merge bases. git merges them cleanly, but a single-base merge from ${_criss_cross_conflict_base:0:12} conflicts, so GitHub reports this PR as conflicting. Committing the clean merge so the PR becomes mergeable."
+        echo "MERGE_CONFLICT=true" >> "$GITHUB_ENV"
+        echo "MERGE_CRISS_CROSS_CLEAN=true" >> "$GITHUB_ENV"
+        git merge --abort || true
+        git reset --hard HEAD || true
+        for d in scripts prompts; do
+          if [ -d "${UNTRACKED_BACKUP}/${d}" ]; then
+            cp -a "${UNTRACKED_BACKUP}/${d}" .
+          fi
+        done
+        rm -rf "${UNTRACKED_BACKUP}"
+        rm -f "${MERGE_STDERR_FILE}"
+        exit 0
+      fi
+      if [ "${_criss_cross_probe_rc}" -ne 0 ]; then
+        echo "AUTOFIX_MERGE_CRISS_CROSS pr=${PR_NUMBER:-unknown} outcome=probe_failed bases=${_criss_cross_base_count} rc=${_criss_cross_probe_rc}"
+      else
+        echo "AUTOFIX_MERGE_CRISS_CROSS pr=${PR_NUMBER:-unknown} outcome=no_single_base_conflict bases=${_criss_cross_base_count}"
+      fi
+    fi
   fi
   echo "No merge conflicts detected"
   # Only abort if a merge is actually in progress (MERGE_HEAD exists).

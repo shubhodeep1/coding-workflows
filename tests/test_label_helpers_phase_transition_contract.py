@@ -89,6 +89,25 @@ with open(log, "a", encoding="utf-8") as fh:
 	fh.write(json.dumps(args) + "\n")
 
 if args[:2] == ["label", "create"]:
+	mode = os.environ.get("FAKE_LABEL_CREATE", "ok")
+	if mode == "exists":
+		sys.stderr.write('label with name "x" already exists; use --force to update its color and description\n')
+		sys.exit(1)
+	if mode == "fail":
+		sys.stderr.write("gh: Server Error (HTTP 500)\n")
+		sys.exit(1)
+	if mode == "fail_once":
+		counter = state_path + ".create_count"
+		try:
+			with open(counter, encoding="utf-8") as fh:
+				seen = int(fh.read().strip() or "0")
+		except FileNotFoundError:
+			seen = 0
+		with open(counter, "w", encoding="utf-8") as fh:
+			fh.write(str(seen + 1))
+		if seen == 0:
+			sys.stderr.write("gh: Server Error (HTTP 500)\n")
+			sys.exit(1)
 	sys.exit(0)
 if args and args[0] == "api":
 	method = "GET"
@@ -199,6 +218,57 @@ def _run_swap(
 		if line.startswith("OUTCOME="):
 			outcome = line[len("OUTCOME="):]
 	return proc.returncode, outcome, proc.stderr, calls
+
+
+def _run_bash(
+	script_body: str,
+	env_extra: dict[str, str] | None = None,
+	labels: list[str] | None = None,
+) -> tuple[int, str, str, list[list[str]]]:
+	"""Run *script_body* under set -euo pipefail with the fake gh on PATH.
+
+	``HELPERS`` holds the path of the copied label_helpers.sh.
+	"""
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		scripts_dir = tmp_path / "scripts"
+		scripts_dir.mkdir()
+		shutil.copy(LABEL_HELPERS, scripts_dir / "label_helpers.sh")
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		fake = bin_dir / "gh"
+		fake.write_text(_FAKE_GH, encoding="utf-8")
+		fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+		log = tmp_path / "gh_calls.jsonl"
+		log.write_text("", encoding="utf-8")
+		state_file = tmp_path / "labels.json"
+		state_file.write_text(json.dumps(labels or []), encoding="utf-8")
+		env = dict(os.environ)
+		env.update(
+			{
+				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+				"FAKE_GH_LOG": str(log),
+				"FAKE_GH_STATE": str(state_file),
+				"GITHUB_REPOSITORY": "o/r",
+				"HELPERS": str(scripts_dir / "label_helpers.sh"),
+			}
+		)
+		env.pop("GH_TOKEN", None)
+		env.update(env_extra or {})
+		proc = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + script_body],
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+			check=False,
+		)
+		calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+	return proc.returncode, proc.stdout, proc.stderr, calls
+
+
+def _label_create_calls(calls: list[list[str]]) -> list[list[str]]:
+	return [args for args in calls if args[:2] == ["label", "create"]]
 
 
 def _jq_available() -> bool:
@@ -316,6 +386,133 @@ def test_phase_swap_never_deletes_target_already_present() -> None:
 	assert deletes == ["repos/o/r/issues/5/labels/ai%3Adone"]
 
 
+# --- ensure_label_exists per-process cache ----------------------------------
+
+
+def test_ensure_label_exists_cache_is_declared_with_resource_guard() -> None:
+	text = _script_text()
+	assert "declare -gA _AI_LABEL_ENSURED_CACHE=()" in text
+	guard = 'if [[ "$(declare -p _AI_LABEL_ENSURED_CACHE 2>/dev/null)" != "declare -A"* ]]; then'
+	assert guard in text
+	assert text.index(guard) < text.index("declare -gA _AI_LABEL_ENSURED_CACHE=()")
+	body = _function_body(text, "ensure_label_exists")
+	assert '${_AI_LABEL_ENSURED_CACHE["${_label_cache_key}"]+x}' in body
+	assert body.index("repo required") < body.index("_label_cache_key")
+	assert body.count('_AI_LABEL_ENSURED_CACHE["${_label_cache_key}"]=1') == 2
+
+
+def test_ensure_label_exists_cache_same_repo_and_label_creates_once() -> None:
+	rc, stdout, stderr, calls = _run_bash(
+		'source "${HELPERS}"\n'
+		'a=0; ensure_label_exists ai:review-blocked o/r || a=$?\n'
+		'b=0; ensure_label_exists ai:review-blocked o/r || b=$?\n'
+		'echo "RC=${a},${b}"\n'
+	)
+	assert rc == 0, stderr
+	assert "RC=0,0" in stdout
+	assert len(_label_create_calls(calls)) == 1
+	assert "already ensured in this process for 'o/r'" in stderr
+
+
+def test_ensure_label_exists_cache_is_keyed_by_repo_and_label() -> None:
+	rc, stdout, stderr, calls = _run_bash(
+		'source "${HELPERS}"\n'
+		'ensure_label_exists ai:planning o/r\n'
+		'ensure_label_exists ai:done o/r\n'
+		'ensure_label_exists ai:planning o/x\n'
+		'ensure_label_exists ai:planning o/r\n'
+		'echo DONE\n'
+	)
+	assert rc == 0, stderr
+	assert "DONE" in stdout
+	creates = _label_create_calls(calls)
+	assert len(creates) == 3
+	pairs = {(c[2], c[c.index("--repo") + 1]) for c in creates}
+	assert pairs == {("ai:planning", "o/r"), ("ai:done", "o/r"), ("ai:planning", "o/x")}
+
+
+def test_ensure_label_exists_failure_is_not_cached() -> None:
+	rc, stdout, stderr, calls = _run_bash(
+		'source "${HELPERS}"\n'
+		'a=0; ensure_label_exists ai:planning o/r || a=$?\n'
+		'b=0; ensure_label_exists ai:planning o/r || b=$?\n'
+		'echo "RC=${a},${b}"\n',
+		{"FAKE_LABEL_CREATE": "fail"},
+	)
+	assert rc == 0, stderr
+	assert "RC=1,1" in stdout
+	assert len(_label_create_calls(calls)) == 2
+	assert stderr.count("::warning::ensure_label_exists: failed to create label") == 2
+
+	rc, stdout, stderr, calls = _run_bash(
+		'source "${HELPERS}"\n'
+		'a=0; ensure_label_exists ai:planning o/r || a=$?\n'
+		'b=0; ensure_label_exists ai:planning o/r || b=$?\n'
+		'c=0; ensure_label_exists ai:planning o/r || c=$?\n'
+		'echo "RC=${a},${b},${c}"\n',
+		{"FAKE_LABEL_CREATE": "fail_once"},
+	)
+	assert rc == 0, stderr
+	assert "RC=1,0,0" in stdout
+	assert len(_label_create_calls(calls)) == 2
+
+
+def test_ensure_label_exists_already_exists_is_cached() -> None:
+	rc, stdout, stderr, calls = _run_bash(
+		'source "${HELPERS}"\n'
+		'a=0; ensure_label_exists ai:planning o/r || a=$?\n'
+		'b=0; ensure_label_exists ai:planning o/r || b=$?\n'
+		'echo "RC=${a},${b}"\n',
+		{"FAKE_LABEL_CREATE": "exists"},
+	)
+	assert rc == 0, stderr
+	assert "RC=0,0" in stdout
+	assert len(_label_create_calls(calls)) == 1
+
+
+def test_set_issue_phase_label_resilient_second_call_skips_create() -> None:
+	if not _jq_available():
+		return
+	rc, stdout, stderr, calls = _run_bash(
+		'source "${HELPERS}"\n'
+		'set_issue_phase_label_resilient 5 ai:planning o/r\n'
+		'echo "OUT1=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME}"\n'
+		'set_issue_phase_label_resilient 5 ai:planning o/r\n'
+		'echo "OUT2=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME}"\n',
+		labels=["ai:clarification"],
+	)
+	assert rc == 0, stderr
+	assert "OUT1=applied" in stdout
+	assert "OUT2=applied" in stdout
+	assert len(_label_create_calls(calls)) == 1
+
+
+def test_label_helpers_resource_keeps_cache() -> None:
+	rc, stdout, stderr, calls = _run_bash(
+		'source "${HELPERS}"\n'
+		'ensure_label_exists ai:planning o/r\n'
+		'source "${HELPERS}"\n'
+		'ensure_label_exists ai:planning o/r\n'
+		'echo DONE\n'
+	)
+	assert rc == 0, stderr
+	assert "DONE" in stdout
+	assert len(_label_create_calls(calls)) == 1
+
+
+def test_ensure_label_exists_missing_repo_unchanged() -> None:
+	rc, stdout, stderr, calls = _run_bash(
+		'source "${HELPERS}"\n'
+		'a=0; ensure_label_exists ai:planning || a=$?\n'
+		'echo "RC=${a}"\n',
+		{"GITHUB_REPOSITORY": ""},
+	)
+	assert rc == 0, stderr
+	assert "RC=1" in stdout
+	assert "ensure_label_exists: repo required" in stderr
+	assert _label_create_calls(calls) == []
+
+
 if __name__ == "__main__":
 	test_set_issue_phase_label_resilient_contract()
 	test_ensure_label_exists_backward_compatible_contract()
@@ -326,4 +523,12 @@ if __name__ == "__main__":
 	test_phase_swap_post_failure_skips_deletes()
 	test_phase_swap_get_failure_falls_back_to_single_post()
 	test_phase_swap_never_deletes_target_already_present()
+	test_ensure_label_exists_cache_is_declared_with_resource_guard()
+	test_ensure_label_exists_cache_same_repo_and_label_creates_once()
+	test_ensure_label_exists_cache_is_keyed_by_repo_and_label()
+	test_ensure_label_exists_failure_is_not_cached()
+	test_ensure_label_exists_already_exists_is_cached()
+	test_set_issue_phase_label_resilient_second_call_skips_create()
+	test_label_helpers_resource_keeps_cache()
+	test_ensure_label_exists_missing_repo_unchanged()
 	print("PASS")

@@ -52,7 +52,7 @@ otherwise) and classifies the call:
              substitution Bash would run (single-quoted text is data), handed
              to an executor such as `bash -c`, `sudo`, `xargs`, `python3`, or
              in a heredoc fed to one). Forces the permission prompt, in every
-             permission mode. `gh api` text handed to any other command
+             permission mode (Auto mode: see below). `gh api` text handed to any other command
              (`git commit -m`, `grep`, `echo`) is data and is ignored.
              Quoted or escaped spellings (`'gh' api`, `gh a''pi`,
              `gh \\<newline>api`, `gh a\\<newline>pi`) are read like the plain
@@ -101,6 +101,40 @@ Decision for the whole Bash call (a hook decides once per tool call):
     counter `echo`, with only safe pipe filters and `2>&1`. Writes still ask;
     unvetted loops still receive no decision.
 
+Auto mode (`permission_mode` `auto` in the hook payload): a hook "ask"
+forces a human prompt even in Auto mode, so the asks above that only mean
+"the guard cannot read this command's shell shape" step aside there and give
+no decision, leaving the command to the Auto-mode classifier. They are the
+unparseable command, the hidden `gh api` call, and the ANSI-C / comment /
+brace hazard. An unquoted `$` or backtick in a direct `gh api` argument is
+denied in Auto mode instead, with the rewrite steps: Bash can split the word
+into a method flag (such as `-XDELETE`) that the guard read as part of a GET
+endpoint (issue #8198). Only the fully validated literal-ID read loop is
+exempt, and it is allowed. A call the guard reads
+and classifies as a write (unreadable calls included) still asks, a flag
+between `gh` and `api` still asks, and the malformed-jq deny and every allow
+are unchanged. A command that an allow rule could match does not step aside
+(it is denied, see below), because Auto mode resolves a matching allow rule
+before its classifier runs:
+the shipped `Bash(gh api repos/*)` / `Bash(gh api user *)` prefixes (quoted
+spellings included), and any `Bash(...)` rule in the project settings (next
+to this hook and under `CLAUDE_PROJECT_DIR`, `settings.local.json` too), the
+user's `~/.claude/settings.json` or `CLAUDE_CONFIG_DIR`, or the managed
+settings files, such as `Bash(test *)` around a hidden
+`$(gh api -X DELETE ...)`. A piece that starts with a wrapper (`timeout`,
+`nice`, `env`, `sudo`, `xargs`, ...) is also matched with its leading words
+dropped, so `timeout 60 git diff "$(...)"` counts as matching
+`Bash(git diff *)`. A settings file that exists but cannot be read counts as
+a match. A brace / ANSI-C / comment hazard never steps aside when the command
+holds an `@` or an escape that can produce one, because it could hide a
+file-backed `-F key=@file` field. Any other or missing mode keeps the prompts.
+
+Where Auto mode cannot step aside (an allow rule could match, the `@`
+hazard case, or an unquoted `gh api` argument expansion), the hook denies instead of asking, with a reason that says how to
+rewrite the command: a hook ask prompts a human even in Auto mode, while a
+deny runs nothing and the session can retry with plain `gh api` calls. Write
+classifications and the flag-between-`gh`-and-`api` check still ask.
+
 Unlike the other hooks in this directory this one fails CLOSED: an unreadable,
 invalid, or non-object payload, or an internal error, asks instead of allowing,
 because it is the only thing standing where the ask rules were. Empty or
@@ -134,6 +168,42 @@ SETTINGS_MATCHER = "Bash"
 DECISION_ASK = "ask"
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
+
+# Claude Code's `permission_mode` hook field for Auto mode (hooks reference,
+# "Common input fields").
+AUTO_PERMISSION_MODE = "auto"
+# Auto mode resolves a matching allow rule before its classifier runs, so a
+# no-decision on a command that the shipped `Bash(gh api repos/*)` or
+# `Bash(gh api user *)` allow rule could match would approve it unprompted.
+# Such commands keep the ask in Auto mode. Quoted forms count too, because the
+# guard cannot tell how Claude Code normalises a command before matching.
+_GH_API_ALLOW_RULE_RE = re.compile(r"""(?<![\w./-])gh\s+api\s+["']?(?:repos/|user(?=["']?(?:[\s;&|)`]|$)))""")
+# Settings files whose `permissions.allow` rules Auto mode resolves before its
+# classifier runs; see `_may_match_bash_allow_rule`.
+_SETTINGS_FILE_NAMES = ("settings.json", "settings.local.json")
+_SETTINGS_READ_BYTES = 1048576
+_ALLOW_RULE_COARSE_SPLIT_RE = re.compile(r"&&|\|\||[;&|\n]")
+_ALLOW_RULE_FINE_SPLIT_RE = re.compile(r"&&|\|\||\$\(|[;&|\n()`]")
+_ALLOW_RULE_LEADING_WORDS_RE = re.compile(r"^(?:(?:do|then|else|elif|if|while|until|time|!|\{)\s+)+")
+_ALLOW_RULE_LEADING_ASSIGNMENTS_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*\+?=\S*\s+)+")
+# Commands that run their remaining words as a command. Claude Code can match
+# an allow rule against the wrapped command (`timeout 60 git diff ...` against
+# `Bash(git diff *)`), so a piece that starts with one is also tried with up to
+# _ALLOW_RULE_WRAPPER_MAX_DROP leading words dropped.
+_ALLOW_RULE_WRAPPER_WORDS = frozenset({
+	"builtin", "command", "doas", "env", "exec", "ionice", "nice", "nohup", "noglob",
+	"setsid", "stdbuf", "sudo", "time", "timeout", "xargs",
+})
+_ALLOW_RULE_WRAPPER_MAX_DROP = 16
+# Managed (administrator) settings files, which also hold allow rules.
+_MANAGED_SETTINGS_FILES = (
+	"/etc/claude-code/managed-settings.json",
+	"/Library/Application Support/ClaudeCode/managed-settings.json",
+)
+# In Auto mode a brace / ANSI-C / comment hazard is denied (never steps aside) when the command
+# holds an `@` or an escape that can produce one (`\x40`, `\100`), because the
+# hazard could turn a word into a file-backed `-F key=@file` field (#4619).
+_AUTO_HAZARD_FILE_FIELD_RE = re.compile(r"@|\\(?:[xuU][0-9A-Fa-f]|[0-7])")
 
 KIND_READ = "read"
 KIND_ROUTINE = "routine"
@@ -950,6 +1020,99 @@ def placeholder_repo_slug(cwd: str) -> str:
 	return slug
 
 
+def _settings_files() -> list[str]:
+	"""Settings files that can hold allow rules for this session."""
+	directories = [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+	project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+	if project_dir:
+		directories.append(os.path.join(project_dir, ".claude"))
+	home = os.path.expanduser("~")
+	if home and home != "~":
+		directories.append(os.path.join(home, ".claude"))
+	config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+	if config_dir:
+		directories.append(config_dir)
+	paths: list[str] = []
+	for directory in directories:
+		for name in _SETTINGS_FILE_NAMES:
+			path = os.path.realpath(os.path.join(directory, name))
+			if path not in paths:
+				paths.append(path)
+	for managed in _MANAGED_SETTINGS_FILES:
+		path = os.path.realpath(managed)
+		if path not in paths:
+			paths.append(path)
+	return paths
+
+
+def _bash_allow_rule_patterns() -> list[re.Pattern] | None:
+	"""Compile every `Bash(...)` allow rule; None when a settings file cannot be checked."""
+	patterns: list[re.Pattern] = []
+	for path in _settings_files():
+		try:
+			info = os.stat(path)
+		except FileNotFoundError:
+			continue
+		except OSError:
+			return None
+		if not stat.S_ISREG(info.st_mode) or info.st_size > _SETTINGS_READ_BYTES:
+			return None
+		try:
+			with open(path, encoding="utf-8") as handle:
+				settings = json.load(handle)
+		except (OSError, ValueError):
+			return None
+		permissions = settings.get("permissions") if isinstance(settings, dict) else None
+		allow = permissions.get("allow") if isinstance(permissions, dict) else None
+		if allow is None:
+			continue
+		if not isinstance(allow, list):
+			return None
+		for rule in allow:
+			rule = rule.strip() if isinstance(rule, str) else ""
+			if rule == "Bash":
+				body = "*"
+			elif rule.startswith("Bash(") and rule.endswith(")"):
+				body = rule[5:-1].strip()
+			else:
+				continue
+			if body.endswith(":*"):
+				body = body[:-2] + " *"
+			regex = re.escape(body).replace(r"\*", ".*")
+			if regex.endswith(r"\ .*"):
+				regex = regex[: -len(r"\ .*")] + r"(?:\s.*)?"
+			patterns.append(re.compile(regex, re.DOTALL))
+	return patterns
+
+
+def _may_match_bash_allow_rule(command: str) -> bool:
+	"""True when a `Bash(...)` allow rule could match the command or one of its parts.
+
+	Auto mode resolves a matching allow rule before its classifier runs, so a
+	no-decision on such a command could approve a hidden write unprompted.
+	Every split piece is tried (more matches only keep more asks), and an
+	unreadable settings file counts as a match (fail closed).
+	"""
+	patterns = _bash_allow_rule_patterns()
+	if patterns is None:
+		return True
+	if not patterns:
+		return False
+	pieces: set[str] = set()
+	for text in (command, _normalize_for_gh_api_scan(command)):
+		candidates = [text, *_ALLOW_RULE_COARSE_SPLIT_RE.split(text), *_ALLOW_RULE_FINE_SPLIT_RE.split(text)]
+		for candidate in candidates:
+			piece = _ALLOW_RULE_LEADING_WORDS_RE.sub("", candidate.strip())
+			pieces.add(piece)
+			unassigned = _ALLOW_RULE_LEADING_ASSIGNMENTS_RE.sub("", piece)
+			pieces.add(unassigned)
+			words = unassigned.split()
+			if words and words[0] in _ALLOW_RULE_WRAPPER_WORDS:
+				for drop in range(1, min(len(words), _ALLOW_RULE_WRAPPER_MAX_DROP + 1)):
+					pieces.add(" ".join(words[drop:]))
+	return any(pattern.fullmatch(piece) for piece in pieces if piece for pattern in patterns)
+
+
 def _session_redirects_gh() -> str:
 	"""Name a session setting that sends gh elsewhere, or "" when there is none.
 
@@ -1515,6 +1678,14 @@ def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bo
 
 
 _ECHO_READ_PLACEHOLDER = "__GH_API_GUARD_ECHO_READ__"
+# Appended when Auto mode denies a shape ask instead of prompting a human.
+_AUTO_SHAPE_DENY_SUFFIX = (
+	"\n\nAuto mode: nothing ran. Rewrite the command so the guard can read it: run each gh api call as its "
+	"own plain command with IDs typed out (for example `gh api repos/o/r/issues/comments/123`), and read its "
+	"output directly instead of redirecting it to a `$VAR` file. A `for ID in 1 2 3; do gh api .../$ID; done` "
+	"loop over literal IDs with no redirect is allowed. If `gh api` is only text being written, edit the file "
+	"with the Edit or Write tool instead of a heredoc fed to python3 or another interpreter."
+)
 _ECHO_READ_HINT = (
 	" For reads, run the call separately, e.g. `for n in 1 2; do echo $n; "
 	"gh api repos/o/r/issues/$n --jq .title; done`."
@@ -1728,6 +1899,19 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		if not command.lstrip().startswith("for "):
 			return None, ""
 
+	# In Auto mode, doubts about the command's shell shape step aside instead of
+	# asking (see the module docstring); `shape_doubt` records that one fired.
+	# An unquoted `gh api` argument expansion never steps aside: it is denied.
+	auto_mode = (
+		payload.get("permission_mode") == AUTO_PERMISSION_MODE
+		and not _GH_API_ALLOW_RULE_RE.search(command)
+		and not _GH_API_ALLOW_RULE_RE.search(_normalize_for_gh_api_scan(command))
+		and not _may_match_bash_allow_rule(command)
+	)
+	shape_doubt = False
+	# Auto mode where a shape ask would otherwise reach a human: deny instead.
+	auto_shape_deny = payload.get("permission_mode") == AUTO_PERMISSION_MODE and not auto_mode
+
 	stripped_command, heredocs = strip_heredoc_bodies(command)
 	if not heredocs:
 		approved_echo = _approved_echo_read_command(command)
@@ -1746,16 +1930,22 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	try:
 		segments = shell_segments(stripped_command)
 	except ValueError:
-		return DECISION_ASK, (
+		if auto_mode:
+			return None, ""
+		return (DECISION_DENY if auto_shape_deny else DECISION_ASK), (
 			"gh api guard (CLAUDE.md §23.H): the command could not be parsed, so its gh api call is treated as a write."
 			+ (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if auto_shape_deny else "")
 		)
 	invocations = gh_api_invocations(segments)
-	if has_hidden_gh_api(segments, heredocs, stripped_command):
-		return DECISION_ASK, (
+	if has_hidden_gh_api(segments, heredocs, stripped_command) and auto_mode:
+		shape_doubt = True
+	elif has_hidden_gh_api(segments, heredocs, stripped_command):
+		return (DECISION_DENY if auto_shape_deny else DECISION_ASK), (
 			"gh api guard (CLAUDE.md §23.H): a gh api call could run hidden inside a $(...) or backtick word, "
 			"an executor (bash -c, sudo, xargs, python3, ...), or a heredoc fed to one, so it is treated as a "
 			"write. Run it as its own plain command." + (_ECHO_READ_HINT if "$(" in command else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if auto_shape_deny else "")
 		)
 	if _gh_flag_before_api(segments):
 		return DECISION_ASK, (
@@ -1807,17 +1997,31 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 
 	hazard = _shell_rewrite_hazard(stripped_command)
 	# Only a fully validated literal-ID loop may bypass the shell-hazard check.
-	if hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)):
-		return DECISION_ASK, (
+	if (
+		hazard
+		and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results))
+		and auto_mode
+		and not _AUTO_HAZARD_FILE_FIELD_RE.search(stripped_command)
+	):
+		shape_doubt = True
+	elif hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)):
+		hazard_auto_deny = payload.get("permission_mode") == AUTO_PERMISSION_MODE
+		return (DECISION_DENY if hazard_auto_deny else DECISION_ASK), (
 			f"gh api guard (CLAUDE.md §23.H): the command uses {hazard}, which Bash expands or parses differently "
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if hazard_auto_deny and _may_invoke_gh_api(command) else "")
 		)
 	if _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results):
-		return DECISION_ASK, (
+		# Bash can split the word into a method flag (`EP="-XDELETE repos/..."; gh api $EP`)
+		# that the guard read as a GET endpoint, so Auto mode denies instead of
+		# leaving the call to its classifier (issue #8198).
+		unquoted_auto_deny = payload.get("permission_mode") == AUTO_PERMISSION_MODE
+		return (DECISION_DENY if unquoted_auto_deny else DECISION_ASK), (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."
 			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if unquoted_auto_deny else "")
 		)
 
 	writes = [description for kind, description in results if kind == KIND_WRITE]
@@ -1826,6 +2030,9 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"gh api guard (CLAUDE.md §23.H): not a read or a §23.B routine write: " + "; ".join(writes) + "."
 			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
 		)
+	if shape_doubt:
+		# Never allow a command whose shape the guard could not trust.
+		return None, ""
 	if invocations and _is_approvable_command(command):
 		summary = "; ".join(f"{kind} call {description}" for kind, description in results)
 		return DECISION_ALLOW, f"gh api guard (CLAUDE.md §23.H): {summary}."

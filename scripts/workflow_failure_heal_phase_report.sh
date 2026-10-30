@@ -33,7 +33,7 @@
 #   GITHUB_REPOSITORY              owner/repo of the issue
 #   GH_TOKEN                       GitHub token (GH_PAT) able to read the issue and
 #                                  dispatch to coding-workflows
-#   WORKFLOW_HEAL_PHASE            clarify | plan | implement
+#   WORKFLOW_HEAL_PHASE            clarify | plan | implement | validate
 #   WORKFLOW_HEAL_ISSUE_NUMBER     the issue the phase ran on
 #   GITHUB_RUN_ID                  the failed run (the phase job's run)
 #
@@ -45,6 +45,20 @@
 #   REPORT_WORKFLOW_NAME                 caller workflow display name (github.workflow)
 #   REPORT_WRAPPER_SHA                   coding-workflows commit the run's support scripts came from
 #   RUNTIME_DIR                          scratch dir
+#
+# Validate phase (WORKFLOW_HEAL_PHASE=validate; plan
+# docs/plans/validation-failure-harness-routing-plan.md, Phase 1): the validate
+# run's heal-report job sends one `validation_failure` report for a runtime
+# validation failure owned by the harness this repository ships. The issue is
+# the project's tracking issue. Optional env, each with a default; a missing or
+# malformed value skips with a log line and exits 0:
+#   WORKFLOW_HEAL_VALIDATION_STAGE           harness stage (default empty)
+#   WORKFLOW_HEAL_VALIDATION_REASON          harness reason (default empty)
+#   WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE  regular file holding the error signature (default empty)
+#   WORKFLOW_HEAL_VALIDATION_FP              fingerprint the validate run computed (default empty)
+#   VALIDATION_HARNESS_HEAL_ENABLED          "false" (any case) skips this phase (default true)
+# API calls for this phase: the OIDC report-identity request and one dispatch;
+# no issue, /user or comment read (the intake verifies the run itself).
 
 set -uo pipefail
 
@@ -67,6 +81,11 @@ case "${STREAK_THRESHOLD}" in
 	''|*[!0-9]*|0) STREAK_THRESHOLD=1 ;;
 esac
 export PYTHONDONTWRITEBYTECODE=1
+VALIDATION_STAGE="${WORKFLOW_HEAL_VALIDATION_STAGE:-}"
+VALIDATION_REASON="${WORKFLOW_HEAL_VALIDATION_REASON:-}"
+VALIDATION_SIGNATURE_FILE="${WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE:-}"
+VALIDATION_FP="$(printf '%s' "${WORKFLOW_HEAL_VALIDATION_FP:-}" | tr '[:upper:]' '[:lower:]')"
+VALIDATION_HEAL_SWITCH="${VALIDATION_HARNESS_HEAL_ENABLED:-true}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HEAL_PY="${WORKFLOW_HEAL_PY:-${script_dir}/workflow_failure_heal.py}"
@@ -84,7 +103,7 @@ if [ "$(printf '%s' "${ENABLED}" | tr '[:upper:]' '[:lower:]')" = "false" ]; the
 	exit 0
 fi
 case "${PHASE}" in
-	clarify|plan|implement) ;;
+	clarify|plan|implement|validate) ;;
 	*)
 		log "skip reason=unknown_phase phase=${PHASE:-none}"
 		exit 0
@@ -103,6 +122,85 @@ WORK_DIR="${RUNTIME_DIR:-${TMPDIR:-/tmp}}"
 mkdir -p "${WORK_DIR}" 2>/dev/null || WORK_DIR="${TMPDIR:-/tmp}"
 REPORT_DIR="${WORK_DIR}/workflow_heal_phase_report"
 mkdir -p "${REPORT_DIR}"
+
+# --- Validate phase: one validation_failure dispatch ---------------------------
+
+if [ "${PHASE}" = "validate" ]; then
+	if [ "$(printf '%s' "${VALIDATION_HEAL_SWITCH}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
+		log "skip reason=disabled (VALIDATION_HARNESS_HEAL_ENABLED=false) issue=${ISSUE_NUMBER} run=${RUN_ID}"
+		exit 0
+	fi
+	if ! [[ "${VALIDATION_STAGE}" =~ ^[a-z_]{1,40}$ ]]; then
+		log "skip reason=missing_validation_context field=stage issue=${ISSUE_NUMBER} run=${RUN_ID}"
+		exit 0
+	fi
+	if ! [[ "${VALIDATION_REASON}" =~ ^[a-z_]{1,40}$ ]]; then
+		log "skip reason=missing_validation_context field=reason issue=${ISSUE_NUMBER} run=${RUN_ID}"
+		exit 0
+	fi
+	if [ -z "${VALIDATION_SIGNATURE_FILE}" ] || [ -L "${VALIDATION_SIGNATURE_FILE}" ] || [ ! -f "${VALIDATION_SIGNATURE_FILE}" ] || [ ! -s "${VALIDATION_SIGNATURE_FILE}" ]; then
+		log "skip reason=missing_validation_context field=signature_file issue=${ISSUE_NUMBER} run=${RUN_ID}"
+		exit 0
+	fi
+	if ! [[ "${VALIDATION_FP}" =~ ^[0-9a-f]{64}$ ]]; then
+		log "skip reason=missing_validation_context field=fp issue=${ISSUE_NUMBER} run=${RUN_ID}"
+		exit 0
+	fi
+	V_PAYLOAD_FILE="${REPORT_DIR}/validation_payload.json"
+	V_BUILD_ERROR_FILE="${REPORT_DIR}/validation_build_error.txt"
+	if ! python3 "${HEAL_PY}" build-validation-payload --repo "${REPO}" --issue-number "${ISSUE_NUMBER}" --run-id "${RUN_ID}" \
+		--wrapper-sha "${WRAPPER_SHA}" --stage "${VALIDATION_STAGE}" --reason "${VALIDATION_REASON}" \
+		--signature-file "${VALIDATION_SIGNATURE_FILE}" --workflow-name "${WORKFLOW_NAME}" \
+		--reporter-run-url "${REPORTER_RUN_URL}" > "${V_PAYLOAD_FILE}" 2> "${V_BUILD_ERROR_FILE}"; then
+		log "skip reason=payload_build_failed issue=${ISSUE_NUMBER} phase=validate detail=$(head -c 200 "${V_BUILD_ERROR_FILE}" | tr '\n' ' ')"
+		exit 0
+	fi
+	# The intake deduplicates on this fingerprint: recompute it from the built
+	# payload so a report can only carry the key its own fields produce.
+	V_SIGNATURE_FILE="${REPORT_DIR}/validation_signature.txt"
+	V_COMPUTED_FP=""
+	if jq -r '.validation_signature // ""' "${V_PAYLOAD_FILE}" > "${V_SIGNATURE_FILE}" 2>/dev/null; then
+		V_COMPUTED_FP="$(python3 "${HEAL_PY}" validation-failure-fingerprint --stage "$(jq -r '.validation_stage // ""' "${V_PAYLOAD_FILE}")" \
+			--reason "$(jq -r '.validation_reason // ""' "${V_PAYLOAD_FILE}")" --signature-file "${V_SIGNATURE_FILE}" --source-repo "${REPO}" 2>/dev/null || true)"
+	fi
+	if ! [[ "${V_COMPUTED_FP}" =~ ^[0-9a-f]{64}$ ]]; then
+		log "skip reason=fingerprint_unavailable issue=${ISSUE_NUMBER} phase=validate run=${RUN_ID}"
+		exit 0
+	fi
+	if [ "${V_COMPUTED_FP}" != "${VALIDATION_FP}" ]; then
+		log "skip reason=fingerprint_mismatch issue=${ISSUE_NUMBER} phase=validate run=${RUN_ID} expected=${VALIDATION_FP} computed=${V_COMPUTED_FP}"
+		exit 0
+	fi
+	V_SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${V_PAYLOAD_FILE}" --self-repo "${REPO}" 2>/dev/null || echo "")"
+	if [ -n "${V_SKIP_REASON}" ]; then
+		log "skip reason=${V_SKIP_REASON} issue=${ISSUE_NUMBER} phase=validate"
+		exit 0
+	fi
+	# Report identity: as for the other phases (OIDC token, 0600 file, never
+	# printed, removed on exit).
+	V_IDENTITY_FILE="${REPORT_DIR}/report_identity.jwt"
+	V_DISPATCH_FILE="${REPORT_DIR}/dispatch.json"
+	trap 'rm -f "${V_IDENTITY_FILE}" "${V_DISPATCH_FILE}"' EXIT
+	V_WRAP_ARGS=(--payload-json "${V_PAYLOAD_FILE}")
+	V_IDENTITY_STATUS="$(python3 "${HEAL_PY}" request-report-identity --out "${V_IDENTITY_FILE}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+	V_IDENTITY_STATUS="$(printf '%s' "${V_IDENTITY_STATUS}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+	log "${V_IDENTITY_STATUS:-identity=absent reason=unknown} issue=${ISSUE_NUMBER} phase=validate"
+	if [ -s "${V_IDENTITY_FILE}" ]; then
+		V_WRAP_ARGS+=(--report-identity-file "${V_IDENTITY_FILE}")
+	fi
+	if ! python3 "${HEAL_PY}" wrap-dispatch "${V_WRAP_ARGS[@]}" > "${V_DISPATCH_FILE}" 2> "${V_BUILD_ERROR_FILE}"; then
+		log "skip reason=dispatch_envelope_failed issue=${ISSUE_NUMBER} phase=validate detail=$(head -c 200 "${V_BUILD_ERROR_FILE}" | tr '\n' ' ')"
+		exit 0
+	fi
+	V_DISPATCH_ERROR_FILE="${REPORT_DIR}/dispatch_error.txt"
+	if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${V_DISPATCH_FILE}" >/dev/null 2> "${V_DISPATCH_ERROR_FILE}"; then
+		log "skip reason=dispatch_denied issue=${ISSUE_NUMBER} phase=validate upstream=${UPSTREAM_REPO} detail=$(head -c 300 "${V_DISPATCH_ERROR_FILE}" | tr '\n' ' ')"
+		echo "::warning::Workflow failure heal report for ${REPO}#${ISSUE_NUMBER} (validate) could not be dispatched to ${UPSTREAM_REPO}."
+		exit 0
+	fi
+	log "dispatched issue=${ISSUE_NUMBER} phase=validate stage=${VALIDATION_STAGE} reason=${VALIDATION_REASON} fp=${VALIDATION_FP} run=${RUN_ID} workflow=${WORKFLOW_NAME} wrapper_sha=${WRAPPER_SHA:-none} upstream=${UPSTREAM_REPO}"
+	exit 0
+fi
 
 # --- Issue + comments ----------------------------------------------------------
 

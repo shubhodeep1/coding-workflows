@@ -178,7 +178,7 @@ def test_success_logs_expected_and_actual_sha(tmp_path: Path) -> None:
 	env_text = env_file.read_text()
 	assert "HEAL_ROUTE=true" in env_text
 	assert "SKIP_IMPLEMENT=true" not in env_text
-	assert (tmp_path / "heal-scope-91.txt").read_text().split() == ["scripts/fix.py", "tests/**", "changelog.d/*.md"]
+	assert (tmp_path / "heal-scope-91.txt").read_text().split() == ["scripts/fix.py", "tests/**", "changelog.d/*.md", "agents.d/42-*.md"]
 	assert (tmp_path / "heal_evidence.md").read_text().strip() == "evidence-ran"
 	assert "issue comment" not in calls.read_text()
 
@@ -404,7 +404,7 @@ def test_pipeline_only_edits_are_accepted(tmp_path: Path) -> None:
 	env_text = env_file.read_text()
 	assert "HEAL_ROUTE=true" in env_text
 	assert "SKIP_IMPLEMENT=true" not in env_text
-	assert (tmp_path / "heal-scope-91.txt").read_text().split() == ["scripts/fix.py", "tests/**", "changelog.d/*.md"]
+	assert (tmp_path / "heal-scope-91.txt").read_text().split() == ["scripts/fix.py", "tests/**", "changelog.d/*.md", "agents.d/42-*.md"]
 	assert len(_graphql_calls(calls)) == 2
 
 

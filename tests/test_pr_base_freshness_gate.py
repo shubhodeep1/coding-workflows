@@ -219,7 +219,9 @@ class Wiring(unittest.TestCase):
 	def test_review_rb_judge_gates_both_merge_sites(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
 		self.assertEqual(text.count('if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
-		for site in text.split('--squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]:
+		sites = text.split('"${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]
+		self.assertEqual(len(sites), 2)
+		for site in sites:
 			self.assertIn("_pr_base_fresh_for_merge", site[-1200:])
 		# merge_with_followup's synchronous merge is gated too.
 		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then', text)
@@ -967,8 +969,9 @@ class FreshnessSyncWiring(unittest.TestCase):
 		block = text.split("gate_freshness_sync_fast_path()", 1)[1].split("# Size check uses", 1)[0]
 		self.assertIn('bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}"', block)
 		self.assertIn('[ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1', block)
-		# The skip job runs no conflict resolver and no single-issue security
-		# pass, so both suppressors apply before any API call.
+		# The skip job runs no conflict resolver, and it runs the single-issue
+		# security pass only with AUTOFIX_SKIP_RUNS_SECURITY_PASS=true (#8333),
+		# so both suppressors apply before any API call.
 		fast_path = block.split("if [ \"${FORCE_REVIEW}\" = \"true\" ]; then", 1)[0]
 		self.assertIn('reason=merge_conflict pr=${PR_NUMBER}', fast_path)
 		self.assertIn('reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync', fast_path)
@@ -983,6 +986,17 @@ class FreshnessSyncWiring(unittest.TestCase):
 				'&& [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]'):
 			self.assertIn(cond, fast_path)
 			self.assertIn(cond, skip_block)
+		# #8333: with AUTOFIX_SKIP_RUNS_SECURITY_PASS=true the skip job runs
+		# the pass; a PR labelled ai:security-pass-failed stays on codex-agent.
+		# Anything other than an exact `true` keeps today's suppression.
+		switch_off = 'if [ "${AUTOFIX_SKIP_RUNS_SECURITY_PASS:-false}" != "true" ]; then'
+		label_check = '[[ ",${pr_labels}," == *,ai:security-pass-failed,* ]]'
+		for path_text, candidate in ((fast_path, "freshness_sync"), (text.split('SECURITY_PASS_SKIP_SUPPRESSED="false"', 1)[1].split("FRESHNESS_CI_FAILED_SKIP_SUPPRESSED=", 1)[0], "${candidate_skip_reason}")):
+			self.assertLess(path_text.index(switch_off), path_text.index("reason=single_issue_security_pass"))
+			self.assertLess(path_text.index("reason=single_issue_security_pass"), path_text.index(label_check))
+			self.assertIn(f"reason=security_pass_failed pr=${{PR_NUMBER}} candidate={candidate}", path_text)
+			self.assertLess(path_text.index(label_check), path_text.index('DET_SKIP_SECURITY_PASS_REQUIRED="true"'))
+		self.assertIn("AUTOFIX_GATE_DET_SKIP_SECURITY_PASS pr=${PR_NUMBER} candidate=${DET_SKIP_REASON} route=skip_job", text)
 		branch = block.split("elif gate_freshness_sync_fast_path; then", 1)[1]
 		for line in ('DETERMINISTIC_SKIP="true"', 'DET_SKIP_REASON="freshness_sync"', 'SHOULD_RUN="false"'):
 			self.assertIn(line, branch)

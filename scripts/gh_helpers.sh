@@ -815,6 +815,110 @@ _gh_cmd_is_unsafe_post()
 	return 1
 }
 
+# _gh_cmd_log_summary <full command…> — bounded, credential-free summary of
+# a gh_retry-style command for failure diagnostics (issue #8095, SEC-001).
+# Prints the gh subcommand words, the `gh api` endpoint without its query,
+# or a plain issue/PR number, and the names of the flags passed. Flag values
+# (comment bodies, fields, titles, --input files) are never printed. The
+# output is at most 200 characters, uses a restricted character set and has
+# every `::` broken up, so it cannot form a workflow command.
+_gh_cmd_log_summary()
+{
+	local _ghsum_words="" _ghsum_target="" _ghsum_flags="" _ghsum_rest_start=2 _ghsum_api=0
+	local _ghsum_word_re='^[a-z][a-z-]{0,30}$'
+	local _ghsum_num_re='^[0-9]{1,12}$'
+	local _ghsum_cmd_re='^[A-Za-z0-9_.-]{1,40}$'
+	local _ghsum_flag_re='^--?[A-Za-z][A-Za-z0-9-]{0,30}$'
+	local _ghsum_bad='[^A-Za-z0-9._~/{}@:-]'
+	local -a _ghsum_args=("$@")
+	local _ghsum_n="${#_ghsum_args[@]}"
+	if [ "${1:-}" = "gh" ] && [ "${2:-}" = "api" ]; then
+		_ghsum_words="gh api"; _ghsum_api=1; _ghsum_rest_start=2
+	elif [ "${1:-}" = "_safe_gh_jq" ]; then
+		# `gh_retry _safe_gh_jq <endpoint> …` passes the wrapper name first.
+		_ghsum_words="_safe_gh_jq gh api"; _ghsum_api=1; _ghsum_rest_start=1
+	elif [ "${1:-}" = "gh" ]; then
+		_ghsum_words="gh"
+		local _ghsum_i=1 _ghsum_count=0
+		while [ "${_ghsum_i}" -lt "${_ghsum_n}" ] && [ "${_ghsum_count}" -lt 2 ]; do
+			[[ "${_ghsum_args[${_ghsum_i}]}" =~ ${_ghsum_word_re} ]] || break
+			_ghsum_words+=" ${_ghsum_args[${_ghsum_i}]}"
+			_ghsum_i=$(( _ghsum_i + 1 )); _ghsum_count=$(( _ghsum_count + 1 ))
+		done
+		if [ "${_ghsum_i}" -lt "${_ghsum_n}" ] && [[ "${_ghsum_args[${_ghsum_i}]}" =~ ${_ghsum_num_re} ]]; then
+			_ghsum_target="${_ghsum_args[${_ghsum_i}]}"
+			_ghsum_i=$(( _ghsum_i + 1 ))
+		fi
+		_ghsum_rest_start="${_ghsum_i}"
+	elif [ "${_ghsum_n}" -gt 0 ]; then
+		if [[ "${1}" =~ ${_ghsum_cmd_re} ]]; then _ghsum_words="${1}"; else _ghsum_words="<command>"; fi
+		_ghsum_rest_start=1
+	fi
+	if [ "${_ghsum_api}" = "1" ]; then
+		local _ghsum_ep
+		_ghsum_ep="$(_gh_api_endpoint "${_ghsum_args[@]:${_ghsum_rest_start}}")"
+		_ghsum_ep="${_ghsum_ep%%\?*}"
+		_ghsum_ep="${_ghsum_ep%%#*}"
+		_ghsum_ep="${_ghsum_ep//${_ghsum_bad}/_}"
+		_ghsum_target="${_ghsum_ep:0:120}"
+	fi
+	# Flag names only. A flag without an attached value always treats the
+	# next token as its value and skips it, even one that starts with "-",
+	# so a value such as `--project --x` is never logged as a flag name.
+	# Only the known boolean flags listed below leave the next token alone.
+	# Over-skipping only drops information from the log line.
+	local _ghsum_j="${_ghsum_rest_start}" _ghsum_skip=0 _ghsum_force=0 _ghsum_a _ghsum_name _ghsum_attached
+	local _ghsum_pos_seen=0
+	while [ "${_ghsum_j}" -lt "${_ghsum_n}" ]; do
+		_ghsum_a="${_ghsum_args[${_ghsum_j}]}"
+		_ghsum_j=$(( _ghsum_j + 1 ))
+		if [ "${_ghsum_skip}" = "1" ]; then
+			_ghsum_skip=0
+			if [ "${_ghsum_force}" = "1" ]; then _ghsum_force=0; continue; fi
+			case "${_ghsum_a}" in -*) ;; *) continue ;; esac
+		fi
+		[ "${_ghsum_a}" = "--" ] && break
+		case "${_ghsum_a}" in
+			-*) ;;
+			*)
+				# Non-api gh: the first positional counts only as a plain number.
+				if [ "${_ghsum_api}" = "0" ] && [ "${_ghsum_words%% *}" = "gh" ] && [ "${_ghsum_pos_seen}" = "0" ] \
+					&& [ -z "${_ghsum_target}" ] && [[ "${_ghsum_a}" =~ ${_ghsum_num_re} ]]; then
+					_ghsum_target="${_ghsum_a}"
+				fi
+				_ghsum_pos_seen=1
+				continue
+				;;
+		esac
+		_ghsum_name="${_ghsum_a}"; _ghsum_attached=0
+		case "${_ghsum_a}" in
+			--*=*) _ghsum_name="${_ghsum_a%%=*}"; _ghsum_attached=1 ;;
+			--*) ;;
+			-?*)
+				if [ "${#_ghsum_a}" -gt 2 ]; then _ghsum_name="${_ghsum_a:0:2}"; _ghsum_attached=1; fi
+				;;
+		esac
+		if [ "${_ghsum_attached}" != "1" ]; then
+			case "${_ghsum_name}" in
+				--paginate|--slurp|-i|--include|--silent|--verbose|--web|--draft|--fill|--squash|--merge|--rebase|--auto|--admin|--delete-branch|--yes|--disable-auto|--comments) ;;
+				*) _ghsum_skip=1; _ghsum_force=1 ;;
+			esac
+		fi
+		[[ "${_ghsum_name}" =~ ${_ghsum_flag_re} ]] || continue
+		case " ${_ghsum_flags} " in
+			*" ${_ghsum_name} "*) ;;
+			*) _ghsum_flags="${_ghsum_flags:+${_ghsum_flags} }${_ghsum_name}" ;;
+		esac
+	done
+	local _ghsum_out="${_ghsum_words}"
+	if [ -n "${_ghsum_target}" ]; then _ghsum_out="${_ghsum_out:+${_ghsum_out} }${_ghsum_target}"; fi
+	if [ -n "${_ghsum_flags}" ]; then _ghsum_out="${_ghsum_out:+${_ghsum_out} }(flags: ${_ghsum_flags})"; fi
+	while [[ "${_ghsum_out}" == *::* ]]; do
+		_ghsum_out="${_ghsum_out//::/: :}"
+	done
+	printf '%s' "${_ghsum_out:0:200}"
+}
+
 # _gh_api_header <headers_file> <name> — value of the first matching header.
 _gh_api_header()
 {
@@ -1070,11 +1174,11 @@ gh_retry()
 	local attempt=1
 	local stderr_file stdout_file
 	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_retry: failed to create stderr temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
 		return 1
 	fi
 	if ! stdout_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
 		rm -f "${stderr_file}"
 		return 1
 	fi
@@ -1097,7 +1201,7 @@ gh_retry()
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
 
 		if _is_gh_permanent_failure "${stderr_content}"; then
-			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
+			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $(_gh_cmd_log_summary "$@")" >&2
 			if [ -n "${stderr_content}" ]; then
 				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 			fi
@@ -1127,9 +1231,9 @@ gh_retry()
 	done
 
 	if [ "${max_attempts}" = "1" ] && [ "${_ghr_idem}" != "true" ] && _gh_cmd_is_unsafe_post "$@"; then
-		echo "::notice::gh_retry: single attempt for non-idempotent create: $*" >&2
+		echo "::notice::gh_retry: single attempt for non-idempotent create: $(_gh_cmd_log_summary "$@")" >&2
 	fi
-	echo "::error::gh command failed after ${max_attempts} attempts: $*" >&2
+	echo "::error::gh command failed after ${max_attempts} attempts: $(_gh_cmd_log_summary "$@")" >&2
 	if [ -s "${stderr_file}" ]; then
 		cat "${stderr_file}" >&2
 	fi
@@ -1161,11 +1265,11 @@ gh_retry_to_file()
 	local attempt=1
 	local stderr_file attempt_file
 	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_retry_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
 		return 1
 	fi
 	if ! attempt_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry_to_file: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_retry_to_file: failed to create stdout temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
 		rm -f "${stderr_file}"
 		return 1
 	fi
@@ -1182,7 +1286,7 @@ gh_retry_to_file()
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
 
 		if _is_gh_permanent_failure "${stderr_content}"; then
-			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
+			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $(_gh_cmd_log_summary "$@")" >&2
 			if [ -n "${stderr_content}" ]; then
 				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 			fi
@@ -1212,7 +1316,7 @@ gh_retry_to_file()
 		attempt=$(( attempt + 1 ))
 	done
 
-	echo "::error::gh command failed after ${max_attempts} attempts: $*" >&2
+	echo "::error::gh command failed after ${max_attempts} attempts: $(_gh_cmd_log_summary "$@")" >&2
 	if [ -s "${stderr_file}" ]; then
 		cat "${stderr_file}" >&2
 	fi
@@ -1242,7 +1346,7 @@ _safe_gh_jq()
 {
 	local _tmpf
 	if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then
-		echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary gh api "$@")" >&2
 		return 1
 	fi
 	if gh api "$@" > "${_tmpf}"; then
@@ -1280,7 +1384,7 @@ gh_api_json_to_file()
 	local attempt=1
 	local stderr_file
 	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_api_json_stderr.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_api_json_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_api_json_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
 		return 1
 	fi
 
@@ -1293,9 +1397,19 @@ gh_api_json_to_file()
 			fi
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh api returned invalid JSON (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
-			echo "::group::Raw response (first 50 lines)" >&2
-			head -50 "${outfile}" >&2
-			echo "::endgroup::" >&2
+			# Never print the response itself (issue #8095, SEC-002): it may
+			# hold private API data. Size, hash prefix and category only.
+			local _ghj_bytes _ghj_sha="" _ghj_cat
+			_ghj_bytes="$(wc -c < "${outfile}" 2>/dev/null | tr -d '[:space:]' || true)"
+			[[ "${_ghj_bytes}" =~ ^[0-9]+$ ]] || _ghj_bytes="unknown"
+			if command -v sha256sum >/dev/null 2>&1; then
+				_ghj_sha="$(sha256sum < "${outfile}" 2>/dev/null | cut -c1-12 || true)"
+			elif command -v shasum >/dev/null 2>&1; then
+				_ghj_sha="$(shasum -a 256 < "${outfile}" 2>/dev/null | cut -c1-12 || true)"
+			fi
+			[[ "${_ghj_sha}" =~ ^[0-9a-f]{12}$ ]] || _ghj_sha="unavailable"
+			if [ -s "${outfile}" ]; then _ghj_cat="invalid_json"; else _ghj_cat="empty"; fi
+			echo "::warning::gh api response summary (attempt ${attempt}/${max_attempts}): bytes=${_ghj_bytes} sha256=${_ghj_sha} category=${_ghj_cat}" >&2
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
 				sleep "${wait_secs}"
 			fi
@@ -1325,7 +1439,7 @@ gh_api_json_to_file()
 		attempt=$(( attempt + 1 ))
 	done
 
-	echo "::error::gh api failed to return valid JSON after ${max_attempts} attempts: $*" >&2
+	echo "::error::gh api failed to return valid JSON after ${max_attempts} attempts: $(_gh_cmd_log_summary "$@")" >&2
 	if [ -s "${stderr_file}" ]; then
 		cat "${stderr_file}" >&2
 	fi
