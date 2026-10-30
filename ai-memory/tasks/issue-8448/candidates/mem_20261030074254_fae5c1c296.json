@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: replace the contents of `tests/e2e_smoke_canary.txt`\n\nThe plan is based on the planning ref `main` at `04eae968b214c78efc5cfafd083c18b5c271fd00`. The integration branch mismatch line reads `unknown`, not `true`, so planning can go ahead.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for exactly one change: overwrite one existing file with three fixed lines. Nothing else should be touched. The file exists today and holds two lines: `status: ok` and `decompose-run: 40427433026`. The whole file is replaced. No new script, scheduler wiring or supervisor is needed, so \u00a720 does not apply.\n\n## Functions or modules to implement\nNone. Only the file's data changes.\n\n## Data structures affected\nThe file must end up with exactly these bytes: `status: ok\\nrun_id: 41015530085\\nupdated-by: ai-pipeline\\n`.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: Replace the entire file with the three lines, ending with one newline after the last line.\n- Alternatives considered: Edit only the second line and add a third line.\n- Why: The issue requires a full replacement. Overwriting gives the exact bytes with no leftover content.\n\n## Security considerations\nNo trust boundary, endpoint or input handling is involved. The file only holds test data, and the run ID in it is not a secret.\n\n## Potential risks or edge cases\n- A missing trailing newline, or an extra blank line at the end, would break the \"exactly three lines\" requirement.\n- The sibling files `tests/e2e_smoke_canary_b.txt` and `tests/e2e_smoke_canary_spec.txt` must not be modified.\n\n## Testing considerations\n- `printf 'status: ok\\nrun_id: 41015530085\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt` should exit 0.\n- `git diff --stat` should list only this one file.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "4d8eb14ea84efba2353b20708381bfff21e5f806a74c6a207c9bc23ad4b99288",
+  "lineage": {
+    "issue_number": 8448,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41019977962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41019977962",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8448"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261030074254_fae5c1c296",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8448,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41019977962"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8448",
+  "timestamps": {
+    "created_at": "2026-10-30T07:42:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
