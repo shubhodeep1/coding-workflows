@@ -39,7 +39,8 @@ jobs:
     # It then took 11m17s of its 15 minutes on main (run 40954844196,
     # budget-watch issue #8394), so its three test steps moved out to
     # tests-hooks-and-orchestrator, orchestrate-poll (3) and
-    # tests-promote-stall-and-review. Its remaining test steps are the small
+    # tests-promote-stall-and-review (the last one moved on to
+    # tests-release-and-log-analysis in #8466). Its remaining test steps are the small
     # contract tests for its own guards (shell-block, CI job split, CI test
     # wiring, agents.d fragments) and the "Prompt tier budget" check
     # (tests/prompt_size_budget.py); the test steps moved in by #7250 and
@@ -2210,10 +2211,9 @@ jobs:
       # could not be read (an estimate, not a measurement). Needs no Node or
       # prepared .claude/ live copies. Name and body unchanged.
       # Moved from static-checks, which took 11m17s of its 15 minutes on main
-      # (run 40954844196, budget-watch issue #8394). The pick is an estimate
-      # from test and subprocess counts, not measured. This job has the most
-      # recorded room (#8278; its last own budget-watch issue was #7677).
-      # Name and body unchanged.
+      # (run 40954844196, budget-watch issue #8394), first to
+      # tests-promote-stall-and-review. That pick was an estimate from test
+      # and subprocess counts, not measured. Name and body unchanged.
       - name: Validation bootstrap and family direct-run tests
         run: |
           set -euo pipefail
