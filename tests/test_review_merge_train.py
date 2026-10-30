@@ -1163,9 +1163,9 @@ def test_release_ignores_ref_suffixed_runs_of_other_workflows(tmp_path: Path) ->
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [
 		{"id": 1, "status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
-		 "path": ".github/workflows/ci.yml@refs/heads/main"},
+			"path": ".github/workflows/ci.yml@refs/heads/main"},
 		{"id": 2, "status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
-		 "path": ".github/workflows/not-ai-review.yml@refs/heads/ai-review.yml"},
+			"path": ".github/workflows/not-ai-review.yml@refs/heads/ai-review.yml"},
 	])
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
 	assert result.returncode == 0, result.stderr
@@ -1277,7 +1277,7 @@ def test_release_holds_pr_for_review_run_that_changes_status_twice_mid_listing(t
 	# the workflow ran from, so it never attributes the run to a PR.
 	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent"},
 	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent",
-	 "path": ".github/workflows/review_autofix.yml"},
+		"path": ".github/workflows/review_autofix.yml"},
 ])
 def test_release_leaves_pr_queued_when_a_review_run_has_no_key(tmp_path: Path, run_fields: dict) -> None:
 	"""PR #5451, review of head fd3ad67 (AD-14): a review run with no non-empty
@@ -1357,7 +1357,7 @@ def test_release_reads_every_page_before_deciding(tmp_path: Path) -> None:
 	_queued_pr_4077(fixtures)
 	runs = [
 		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
+			"path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
 		for i in range(150)
 	]
 	runs.append({"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064",
@@ -1416,7 +1416,7 @@ def test_release_leaves_pr_queued_when_listing_shifts(tmp_path: Path) -> None:
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [
 		{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
-		 "path": ".github/workflows/ci.yml"},
+			"path": ".github/workflows/ci.yml"},
 	], total_count_override={"queued": 3})
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
 	assert result.returncode == 0, result.stderr
@@ -1509,7 +1509,7 @@ def test_listing_shift_retry_budget_is_configurable_and_validated(tmp_path: Path
 		_queued_pr_4077(fixtures)
 		_write_runs(fixtures, [
 			{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
-			 "path": ".github/workflows/ci.yml"},
+				"path": ".github/workflows/ci.yml"},
 		], total_count_override={"queued": 3})
 		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log,
 			MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES=value, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
@@ -1521,7 +1521,7 @@ def test_listing_shift_retry_budget_is_configurable_and_validated(tmp_path: Path
 def _in_progress_runs_with_review_at(count: int, review_index: int) -> list[dict]:
 	runs = [
 		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
+			"path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
 		for i in range(count)
 	]
 	runs[review_index] = {"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064",
@@ -1555,7 +1555,7 @@ def test_release_holds_pr_when_listing_grows_between_pages(tmp_path: Path) -> No
 	runs = _in_progress_runs_with_review_at(150, 120)
 	newer = [
 		{"id": 9000 + i, "status": "in_progress", "head_branch": f"hotfix/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml", "created_at": "2026-09-30T08:05:00Z"}
+			"path": ".github/workflows/ci.yml", "created_at": "2026-09-30T08:05:00Z"}
 		for i in range(5)
 	]
 	_write_runs(fixtures, runs, runs_after_page1=newer + runs)
@@ -1599,7 +1599,7 @@ def test_release_leaves_pr_queued_when_listing_exceeds_ten_pages(tmp_path: Path)
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [
 		{"id": 10000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
+			"path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
 		for i in range(1001)
 	])
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
@@ -1618,7 +1618,7 @@ def test_release_leaves_pr_queued_when_bounded_query_adds_no_run(tmp_path: Path)
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [
 		{"id": 10000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml", "created_at": "2026-09-30T08:00:00Z"}
+			"path": ".github/workflows/ci.yml", "created_at": "2026-09-30T08:00:00Z"}
 		for i in range(150)
 	])
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
@@ -1737,7 +1737,7 @@ def test_release_leaves_pr_queued_on_fractional_total_count(tmp_path: Path) -> N
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [
 		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
-		 "path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
+			"path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
 		for i in range(100)
 	], total_count_override={"in_progress": 100.5})
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
@@ -1857,7 +1857,13 @@ def test_cancel_on_close_wrappers_keep_event_and_add_matching_schedule() -> None
 
 def test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe() -> None:
 	workflow = (REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8")
-	assert "group: cancel-on-pr-close-${{ github.repository }}" in workflow
+	# Parse the job's own concurrency group: a whole-file substring check also
+	# passed against the old repository-wide group (#8411, follow-up to #8327).
+	cancel_group = yaml.safe_load(workflow)["jobs"]["cancel-active-runs"]["concurrency"]["group"]
+	assert cancel_group.startswith("cancel-on-pr-close-${{ github.repository }}")
+	assert "github.event_name == 'pull_request'" in cancel_group
+	assert "github.event.pull_request.number" in cancel_group
+	assert cancel_group != "cancel-on-pr-close-${{ github.repository }}"
 	assert 'if [ "${EVENT_NAME}" = "schedule" ]; then' in workflow
 	assert workflow.count("-f status=queued") == 1
 	assert workflow.count("-f status=in_progress") == 1
@@ -1904,9 +1910,9 @@ def test_usage_error_for_unknown_subcommand(tmp_path: Path) -> None:
 	# (b) the title on the wrong wrapper path, or under another repository.
 	{"head_branch": "main", "display_title": "AI Review [pr:4077]", "path": ".github/workflows/internal-review.yml"},
 	{"head_branch": "main", "display_title": "Internal: AI Review & Autofix [pr:4077]",
-	 "path": ".github/workflows/review_autofix.yml"},
+		"path": ".github/workflows/review_autofix.yml"},
 	{"head_branch": "main", "display_title": "Internal: AI Review & Autofix [pr:4077]",
-	 "path": "other/repo/.github/workflows/internal-review.yml@refs/heads/main"},
+		"path": "other/repo/.github/workflows/internal-review.yml@refs/heads/main"},
 	# An untitled dispatch on a non-default branch is not a trusted review run (Q3).
 	{"head_branch": "ai/issue-9999", "display_title": "AI Review", "path": ".github/workflows/ai-review.yml"},
 ])
