@@ -1273,3 +1273,16 @@ def test_repro_tree_transfer_failure_logs_its_reason_token(tmp_path: Path) -> No
 	assert "HEAL_ISOLATED_EDITOR phase=repro_transfer outcome=failed reason=host_baseline_changed" in run["stderr"]
 	assert run["repro_result"]["reason"] == "repro_tree_unavailable"
 	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
+
+
+def test_repro_strict_enumeration_failure_reaches_the_scope_check_and_keeps_exit_42(tmp_path: Path) -> None:
+	# A root-level file allowed() rejects (`stray.bin`) makes strict enumeration
+	# fail with reason=unsafe_result_path, not out_of_heal_scope, so the caller
+	# runs the scope-only check, whose ValueError branch keeps exit 42.
+	run = _repro_run(tmp_path, untracked_host_file=True, host_changed_after_snapshot=True,
+		editor_extra_write="stray.bin")
+	assert run["rc"] == 42, run["stderr"]
+	assert run["repro_calls"] == []
+	assert "phase=transfer engine=codex outcome=failed reason=out_of_heal_scope" in run["stderr"]
+	assert "phase=repro_transfer" not in run["stderr"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "old\n"
