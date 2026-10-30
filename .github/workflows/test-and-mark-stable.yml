@@ -1364,8 +1364,10 @@ jobs:
           # Issue #8391 (run 40932430968): the plan's auto-approval can start an
           # Implement run before ours; it holds ai-implement-<repo>-<issue> and
           # does the work while ours waits pending. Phase 3b's window therefore
-          # starts at the earliest trusted /approved (Implement's job predicate).
-          # A failed or malformed read keeps our own timestamp.
+          # starts at the earliest trusted /approved. The filter is a superset of
+          # Implement's job predicate (it does not read AI_PIPELINE_APPROVER_LOGIN),
+          # so at worst it widens the title-scoped window. A failed or malformed
+          # read keeps our own timestamp.
           APPROVE_COMMENTS_JSON=""
           for _approve_attempt in 1 2 3; do
             if APPROVE_COMMENTS_JSON=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null); then
@@ -1393,6 +1395,14 @@ jobs:
             APPROVED_AT="$APPROVE_EARLIEST"
           else
             APPROVE_SOURCE="e2e"
+          fi
+          # Runs are listed with created=>, which excludes the window's own
+          # second; start one second earlier so a run created in the same
+          # second as its /approved stays in the window.
+          if APPROVE_EPOCH=$(date -u -d "$APPROVED_AT" +%s 2>/dev/null) \
+            && APPROVE_WINDOW_AT=$(date -u -d "@$((APPROVE_EPOCH - 1))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) \
+            && [[ "$APPROVE_WINDOW_AT" =~ $APPROVE_TS_RE ]]; then
+            APPROVED_AT="$APPROVE_WINDOW_AT"
           fi
           echo "approved_at=${APPROVED_AT}" >> "$GITHUB_OUTPUT"
           echo "approval_source=${APPROVE_SOURCE}" >> "$GITHUB_OUTPUT"
@@ -1690,7 +1700,14 @@ jobs:
 
             if [ -n "$PR_NUMBER" ]; then
               echo "✓ Implementation PR #${PR_NUMBER} created"
-              IMPL_RUN_ID=$(capture_run_id "Implement")
+              # Report the run that did the work, not a newer duplicate held
+              # pending by the concurrency group (issue #8391).
+              IMPL_RUN_ID=""
+              if [[ "${IMPL_RUN_ID_WORKING:-}" =~ ^[0-9]+$ ]]; then
+                IMPL_RUN_ID="$IMPL_RUN_ID_WORKING"
+              else
+                IMPL_RUN_ID=$(capture_run_id "Implement")
+              fi
               require_scoped_run_id "$IMPL_RUN_ID" "Implement"
               echo "run_id=${IMPL_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"

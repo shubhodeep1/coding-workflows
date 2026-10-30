@@ -1015,6 +1015,9 @@ def test_implement_replay_40876853022_working_run_through_prepush_gate() -> None
 
 PLAN_AUTO_AT = "2026-10-29T19:01:15Z"
 E2E_POSTED_AT = "2026-10-29T19:02:06Z"
+# approved_at starts one second earlier: runs are listed with created=>.
+PLAN_AUTO_WINDOW = "2026-10-29T19:01:14Z"
+E2E_POSTED_WINDOW = "2026-10-29T19:02:05Z"
 
 
 def _approval_comment(created_at: str, body: str = "/approved [auto-approved-by-plan]\n\nAuto approval.", association: str = "OWNER", user_type: str = "User") -> dict:
@@ -1034,9 +1037,9 @@ def test_approve_window_starts_at_earlier_plan_auto_approval() -> None:
 	rc, outputs, calls, log = _run_phase_step("approve", [[]], comments=comments, post_created_at=E2E_POSTED_AT)
 	assert rc == 0, log
 	assert len(_approve_posts(calls)) == 1, calls
-	assert outputs.get("approved_at") == PLAN_AUTO_AT, outputs
+	assert outputs.get("approved_at") == PLAN_AUTO_WINDOW, outputs
 	assert outputs.get("approval_source") == "plan_auto", outputs
-	assert f"approval_source=plan_auto approved_at={PLAN_AUTO_AT} posted_at={E2E_POSTED_AT}" in log, log
+	assert f"approval_source=plan_auto approved_at={PLAN_AUTO_WINDOW} posted_at={E2E_POSTED_AT}" in log, log
 
 
 def test_approve_without_prior_approval_uses_posted_timestamp() -> None:
@@ -1044,7 +1047,7 @@ def test_approve_without_prior_approval_uses_posted_timestamp() -> None:
 	rc, outputs, calls, log = _run_phase_step("approve", [[]], comments=comments, post_created_at=E2E_POSTED_AT)
 	assert rc == 0, log
 	assert len(_approve_posts(calls)) == 1, calls
-	assert outputs.get("approved_at") == E2E_POSTED_AT, outputs
+	assert outputs.get("approved_at") == E2E_POSTED_WINDOW, outputs
 	assert outputs.get("approval_source") == "e2e", outputs
 
 
@@ -1057,13 +1060,13 @@ def test_approve_ignores_untrusted_and_malformed_approvals() -> None:
 	]
 	rc, outputs, _calls, log = _run_phase_step("approve", [[]], comments=comments, post_created_at=E2E_POSTED_AT)
 	assert rc == 0, log
-	assert outputs == {"approved_at": E2E_POSTED_AT, "approval_source": "e2e"}, outputs
+	assert outputs == {"approved_at": E2E_POSTED_WINDOW, "approval_source": "e2e"}, outputs
 
 
 def test_approve_comment_read_failure_fails_open() -> None:
 	rc, outputs, calls, log = _run_phase_step("approve", [[]], comments_fail=True, post_created_at=E2E_POSTED_AT)
 	assert rc == 0, log
-	assert outputs == {"approved_at": E2E_POSTED_AT, "approval_source": "e2e"}, outputs
+	assert outputs == {"approved_at": E2E_POSTED_WINDOW, "approval_source": "e2e"}, outputs
 	assert len(_approve_reads(calls)) == 3, calls
 
 
@@ -1072,7 +1075,7 @@ def test_approve_malformed_post_timestamp_falls_back_to_the_clock() -> None:
 	assert rc == 0, log
 	assert re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", outputs.get("approved_at", "")), outputs
 	# The real clock is later than the plan approval, so the plan's comment wins.
-	assert outputs.get("approved_at") == PLAN_AUTO_AT and outputs.get("approval_source") == "plan_auto", outputs
+	assert outputs.get("approved_at") == PLAN_AUTO_WINDOW and outputs.get("approval_source") == "plan_auto", outputs
 
 
 def test_replay_run_40932430968_window_includes_plan_approved_working_run() -> None:
@@ -1080,7 +1083,7 @@ def test_replay_run_40932430968_window_includes_plan_approved_working_run() -> N
 	# Phase 3a /approved 19:02:06, pending duplicate 40936365554 created 19:02:09.
 	# The working run's "Pre-push affected-test gate" step ran 30m42s.
 	rc, outputs, _calls, log = _run_phase_step("approve", [[]], comments=[_approval_comment(PLAN_AUTO_AT)], post_created_at=E2E_POSTED_AT)
-	assert rc == 0 and outputs.get("approved_at") == PLAN_AUTO_AT, (outputs, log)
+	assert rc == 0 and outputs.get("approved_at") == PLAN_AUTO_WINDOW, (outputs, log)
 	pages = [[
 		_run(40936365554, name="Internal: AI Implement", conclusion=None, status="pending", created_at="2026-10-29T19:02:09Z"),
 		_run(40936238289, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-10-29T19:01:20Z"),
@@ -1089,13 +1092,26 @@ def test_replay_run_40932430968_window_includes_plan_approved_working_run() -> N
 		"wait-implement", pages, labels="ai:implementing", terminal=True, terminal_timeout="30",
 		jobs_json=_in_progress_step_jobs(PREPUSH_GATE_STEP), window_created_after=outputs["approved_at"],
 	)
-	assert all(f"created=>{PLAN_AUTO_AT}" in path for path in _poll_run_pages_requested(calls)), calls
+	assert all(f"created=>{PLAN_AUTO_WINDOW}" in path for path in _poll_run_pages_requested(calls)), calls
 	assert _jobs_lookup_run_ids(calls) == {"40936238289"}, calls
 	# Past 30 minutes (and the 30m42s gate step) without the plain stall firing.
 	assert "idle 1920s" in log, log
 	assert "Implement phase stalled — no activity for 30 minutes\n" not in log + "\n", log
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
 	assert "(pre-push gate step: limit 35m)" in log, log
+
+
+def test_implement_success_reports_the_working_run_not_the_pending_duplicate() -> None:
+	# Issue #8391: the PR appears while the plan-approved run is in progress and
+	# Phase 3a's newer duplicate waits pending; run_id must name the working run.
+	pages = [[
+		_run(40936365554, name="Internal: AI Implement", conclusion=None, status="pending", created_at="2026-10-29T19:02:09Z"),
+		_run(40936238289, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-10-29T19:01:20Z"),
+	]]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, labels="ai:implementing", pr_recheck_number=42, window_created_after=PLAN_AUTO_WINDOW)
+	assert rc == 0, log
+	assert outputs.get("status") == "success" and outputs.get("pr_number") == "42", outputs
+	assert outputs.get("run_id") == "40936238289", outputs
 
 
 def main() -> int:
