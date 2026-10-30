@@ -201,6 +201,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
 - `scripts/heal_isolated_implement.sh` — Run a heal editor and validator in disposable credential-free containers and scope-check transfer.
+- `scripts/heal_reproduce.sh` — Run a heal's listed failing tests at a SHA and its baseline in the credential-free pre-push gate container and write heal_repro.v1.
 - `scripts/implement_commit_changes.sh` — implement_commit_changes.sh — stage + commit implement-phase editor output.
 - `scripts/implement_heal_preflight.sh` — Verify the pipeline-authored heal scope before granting an isolated editor access to an issue.
 - `scripts/implement_diagnose_post_codex_failure.sh` — validation failures in implement.yml and file fix-up issues.
