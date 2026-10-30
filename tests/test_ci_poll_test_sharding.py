@@ -85,6 +85,15 @@ def poll_job_step(step_name: str) -> dict:
 	raise AssertionError(f"{step_name!r} step not found in the ci.yml {POLL_JOB_ID} job")
 
 
+def ci_job_step(job_id: str, step_name: str) -> dict:
+	"""The named step of any ci.yml job (steps moved out of the matrix, #8472)."""
+	jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+	for step in jobs[job_id]["steps"]:
+		if step.get("name") == step_name:
+			return step
+	raise AssertionError(f"{step_name!r} step not found in the ci.yml {job_id} job")
+
+
 def poll_step() -> dict:
 	for step in load_poll_job()["steps"]:
 		if step.get("name") == "Orchestrate poll process unit tests":
@@ -300,8 +309,8 @@ class PollStepContractTest(unittest.TestCase):
 		self.assertNotIn(" rg ", self.run)
 
 	def test_the_three_single_file_modules_still_run(self) -> None:
-		"""They run once, in their own group-3 step (group 1 from #8080, group 3 from #8396), not in the sharded step."""
-		single_file_run = poll_job_step(SINGLE_FILE_MODULES_STEP)["run"]
+		"""They run once, in their own step (group 1 from #8080, group 3 from #8396, static-checks from #8472), not in the sharded step."""
+		single_file_run = ci_job_step("static-checks", SINGLE_FILE_MODULES_STEP)["run"]
 		positions = []
 		for module in SINGLE_FILE_MODULES:
 			with self.subTest(module=module):
@@ -325,6 +334,13 @@ class PollStepContractTest(unittest.TestCase):
 		for step in load_poll_job()["steps"]:
 			if str(step.get("if", "")) != "strategy.job-index == 1":
 				continue
+			for module in SINGLE_FILE_MODULES:
+				with self.subTest(step=step.get("name"), module=module):
+					self.assertNotIn(module, step.get("run", ""))
+
+	def test_no_poll_job_step_names_the_single_file_modules(self) -> None:
+		"""#8472 moved them to static-checks; no orchestrate-poll step of any group may run them."""
+		for step in load_poll_job()["steps"]:
 			for module in SINGLE_FILE_MODULES:
 				with self.subTest(step=step.get("name"), module=module):
 					self.assertNotIn(module, step.get("run", ""))
@@ -1126,10 +1142,9 @@ GROUP_PINNED_STEPS = {
 	"Isolated agent container tests (codex_isolated_exec.sh)": 2,
 	"Prebuilt sandbox image tests": 2,
 	"Review sandbox image build retry tests": 2,
-	# Moved from group 0 to group 1 in #8080, and to group 3 in #8396.
-	"Orchestrate poll single-file module tests": 3,
-	# Moved from static-checks into group 3 in budget-watch issue #8394.
-	"Validation self-test unit tests": 3,
+	# "Orchestrate poll single-file module tests" (group 3 since #8396) and
+	# "Validation self-test unit tests" (group 3 since #8394) left the matrix
+	# in #8472, for static-checks and tests-promote-stall-and-review.
 }
 # The only steps pinned to the last matrix group (#8118).
 LAST_GROUP_PINNED_STEPS = (
@@ -2417,8 +2432,10 @@ MOVED_STATIC_8394_STEPS = {
 		"tests-hooks-and-orchestrator",
 		("tests/test_implement_post_codex_recovery.py",),
 	),
+	# Re-homed from orchestrate-poll (3) to tests-promote-stall-and-review in
+	# budget-watch issue #8472.
 	"Validation self-test unit tests": (
-		POLL_JOB_ID,
+		"tests-promote-stall-and-review",
 		(
 			"tests/test_validation_selftest_runner.py",
 			"tests/test_validation_selftest_status.py",
@@ -2533,6 +2550,85 @@ class MovedStatic8394StepsContractTest(unittest.TestCase):
 				self.assertIn(STATIC_8394_SETUP_STEP, names, job_id)
 				self.assertIn(name, names)
 				self.assertLess(names.index(STATIC_8394_SETUP_STEP), names.index(name))
+
+
+# Steps moved out of orchestrate-poll (3), which took 19m30s of its 20 minutes
+# (run 41071474282, budget-watch issue #8472): step name -> (new job id, module
+# paths its body names). The picks are estimates; the run's step timings were
+# not readable. The module tuples are the ones the earlier tables pin.
+POLL_GROUP_THREE_8472_SETUP_STEP = "Install Python CI dependencies"
+MOVED_POLL_GROUP_THREE_8472_STEPS = {
+	SINGLE_FILE_MODULES_STEP: ("static-checks", SINGLE_FILE_MODULES),
+	"Validation self-test unit tests": (
+		"tests-promote-stall-and-review",
+		MOVED_STATIC_8394_STEPS["Validation self-test unit tests"][1],
+	),
+}
+# Group 3's pinned steps once #8472 moved the two steps above out.
+POLL_GROUP_THREE_8472_REMAINING_STEPS = {
+	"Orchestrator judges on the Claude engine tests (Phase 5c)",
+	"Validation harness sandbox tests",
+}
+
+
+class MovedPollGroupThree8472StepsContractTest(unittest.TestCase):
+	"""The steps moved out of orchestrate-poll (3) run once, unguarded, in their new jobs (#8472)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_THREE_8472_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_moved_steps_have_no_guard(self) -> None:
+		# The target jobs have no matrix, so a leftover job-index guard would
+		# skip the step silently.
+		for name in MOVED_POLL_GROUP_THREE_8472_STEPS:
+			for owner, step in self.owning_steps(name):
+				with self.subTest(step=name, job=owner):
+					self.assertNotIn("if", step)
+					self.assertNotIn("strategy", self.jobs()[owner])
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_THREE_8472_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(POLL_GROUP_THREE_8472_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(POLL_GROUP_THREE_8472_SETUP_STEP), names.index(name))
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_POLL_GROUP_THREE_8472_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_poll_job(self) -> None:
+		poll_names = {step.get("name") for step in load_poll_job()["steps"]}
+		for name in MOVED_POLL_GROUP_THREE_8472_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, poll_names)
+
+	def test_group_three_pins_only_the_judges_and_harness_steps(self) -> None:
+		guarded = {
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 3"
+		}
+		self.assertEqual(guarded, POLL_GROUP_THREE_8472_REMAINING_STEPS)
 
 
 class MovedHealToHooksStepsContractTest(unittest.TestCase):
