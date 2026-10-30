@@ -1113,8 +1113,12 @@ def _build_evidence_pack(*, failed_runs, linked_runs, repo, stall_minutes, max_b
 		note = f"(evidence pack truncated at {cap} bytes)\n"
 		room = cap - len((out + prefix + note + "```\n" + more).encode("utf-8"))
 		if room <= 0:
-			# Not even the subsection header fits: close with the notes only.
-			out += f"\n{note}" + (f"({left + 1} more subsections not shown)\n")
+			# Not even the subsection header fits: close with the notes only,
+			# and only as much of them as stays within the cap.
+			tail = f"\n{note}({left + 1} more subsections not shown)\n"
+			if len((out + tail).encode("utf-8")) > cap:
+				tail = f"\n{note}" if len((out + f"\n{note}").encode("utf-8")) <= cap else ""
+			out += tail
 			break
 		kept = (body + "\n").encode("utf-8")[:room].decode("utf-8", errors="ignore")
 		kept = kept[:kept.rfind("\n") + 1]
@@ -1126,7 +1130,8 @@ def _build_evidence_pack(*, failed_runs, linked_runs, repo, stall_minutes, max_b
 		outcome, reason = "partial", "truncated"
 	else:
 		outcome, reason = "ok", ""
-	return {"outcome": outcome, "reason": reason, "bytes": len(out.encode("utf-8")), "text": out, "neutralized": neutralized}
+	# ``truncated`` keeps a cap cut visible when a fail-open reason wins above.
+	return {"outcome": outcome, "reason": reason, "bytes": len(out.encode("utf-8")), "text": out, "neutralized": neutralized, "truncated": truncated}
 
 
 def slice_log_to_window(text: str, start: str, end: str) -> str:
@@ -8009,7 +8014,7 @@ def _cmd_evidence_pack(args: argparse.Namespace) -> int:
 		Path(args.out).write_text(result.get("text") or "", encoding="utf-8")
 	except OSError:
 		result = {"outcome": "partial", "reason": "write_failed", "bytes": 0, "text": "", "neutralized": 0}
-	sys.stdout.write(json.dumps({key: result.get(key) for key in ("outcome", "reason", "bytes", "neutralized")}) + "\n")
+	sys.stdout.write(json.dumps({key: result.get(key) for key in ("outcome", "reason", "bytes", "neutralized", "truncated")}) + "\n")
 	return 0
 
 

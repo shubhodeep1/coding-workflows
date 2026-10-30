@@ -2794,7 +2794,7 @@ _heal_build_evidence_pack()
 {
 	local linked_dir="${RUNTIME_DIR}/linked_runs"
 	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
-	local pack_json="" pack_outcome="" pack_reason="" pack_bytes="" pack_run_id="" pack_seen_ids=" "
+	local pack_json="" pack_outcome="" pack_reason="" pack_bytes="" pack_run_id="" pack_seen_ids=" " pack_truncated="" pack_neutralized=""
 	local -a pack_args=() pack_parent_logs=()
 	EVIDENCE_PACK_FILE="${RUNTIME_DIR}/evidence_pack.md"
 	: > "${EVIDENCE_PACK_FILE}"
@@ -2838,7 +2838,15 @@ _heal_build_evidence_pack()
 	pack_reason="$(jq -r '.reason // ""' <<< "${pack_json}" | tr -cd 'a-z_' | head -c 40)"
 	pack_bytes="$(jq -r '(.bytes // 0) | tostring' <<< "${pack_json}" 2>/dev/null || true)"
 	[[ "${pack_bytes}" =~ ^[0-9]+$ ]] || pack_bytes=0
-	log "evidence_pack outcome=${pack_outcome} bytes=${pack_bytes}${pack_reason:+ reason=${pack_reason}}"
+	pack_truncated=""
+	if [ "${pack_reason}" != truncated ] && [ "$(jq -r '.truncated == true' <<< "${pack_json}" 2>/dev/null)" = true ]; then
+		pack_truncated=" truncated=true"
+	fi
+	log "evidence_pack outcome=${pack_outcome} bytes=${pack_bytes}${pack_reason:+ reason=${pack_reason}}${pack_truncated}"
+	pack_neutralized="$(jq -r '(.neutralized // 0) | tostring' <<< "${pack_json}" 2>/dev/null || true)"
+	if [[ "${pack_neutralized}" =~ ^[0-9]+$ ]] && [ "${pack_neutralized}" -gt 0 ]; then
+		log "neutralized count=${pack_neutralized} source=evidence_pack"
+	fi
 	return 0
 }
 _heal_build_evidence_pack || { : > "${RUNTIME_DIR}/evidence_pack.md"; log "evidence_pack outcome=partial bytes=0 reason=helper_failed"; }

@@ -9810,6 +9810,23 @@ def test_build_evidence_pack_truncates_skips_and_fails_open() -> None:
 	assert heal.build_evidence_pack(failed_runs=[("not", "a", "pair")], linked_runs=[], repo=SELF_REPO)["reason"] == "timeline_failed"
 
 
+def test_build_evidence_pack_tail_stays_within_cap_and_mixed_reason_keeps_truncation() -> None:
+	# The first subsection fits but leaves less room than the next one's header:
+	# the closing notes must not push the pack past the cap.
+	linked = [(_p1_linked_run(), {"jobs": _linked_jobs(9600)})]
+	first = heal.build_evidence_pack(failed_runs=[(_p1_run(), _p1_jobs())], linked_runs=[], repo=SELF_REPO, max_bytes=heal.EVIDENCE_PACK_MAX_BYTES_CEILING)
+	assert first["outcome"] == "ok"
+	for slack in range(0, 120, 7):
+		cap = first["bytes"] + slack
+		pack = heal.build_evidence_pack(failed_runs=[(_p1_run(), _p1_jobs())], linked_runs=linked, repo=SELF_REPO, max_bytes=cap)
+		assert pack["truncated"] is True and pack["reason"] == "truncated"
+		assert pack["bytes"] <= cap and pack["bytes"] == len(pack["text"].encode("utf-8"))
+	# A fail-open timeline plus a cap cut: the reason is the fail-open one, the flag stays set.
+	mixed = heal.build_evidence_pack(failed_runs=[(_p1_run(), None), (_p1_run(), _p1_jobs())], linked_runs=[], repo=SELF_REPO, max_bytes=1024)
+	assert (mixed["outcome"], mixed["reason"], mixed["truncated"]) == ("partial", "jobs_malformed", True)
+	assert mixed["bytes"] <= 1024
+
+
 def test_compose_issue_body_evidence_pack_is_optional_and_validated() -> None:
 	payload = heal.validate_payload(_p1_payload())
 	kwargs = dict(payload=payload, diagnosis=DIAG_WORKFLOW_DEFECT, fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect",
@@ -9838,7 +9855,7 @@ def test_evidence_pack_cli_fails_open_and_compose_reads_the_file(tmp_path: Path,
 	assert heal.main(["evidence-pack", "--failed-run", str(run_file), str(jobs_file), "--linked-run", str(tmp_path / "missing.json"), str(jobs_file),
 		"--repo", SELF_REPO, "--out", str(out_file)]) == 0
 	summary = json.loads(capsys.readouterr().out)
-	assert set(summary) == {"outcome", "reason", "bytes", "neutralized"}
+	assert set(summary) == {"outcome", "reason", "bytes", "neutralized", "truncated"}
 	assert (summary["outcome"], summary["reason"]) == ("partial", "run_malformed")
 	assert out_file.read_text(encoding="utf-8").startswith("## Evidence pack\n") and summary["bytes"] == len(out_file.read_bytes())
 	assert heal.main(["evidence-pack", "--repo", SELF_REPO, "--out", str(out_file)]) == 0
