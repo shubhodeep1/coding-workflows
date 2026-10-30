@@ -36,8 +36,8 @@ Subcommands:
     sha256 digests of the bytes a sync from ``REV`` leaves there: wrappers
     rendered by ``scripts/workflow_wrapper_refs.py`` with the commit SHA,
     ``.claude/`` assets and ``CLAUDE.md`` as stored, audit-gate
-    ``managed_files`` targets from their source (``seed_only`` targets are
-    left out), and every released version
+    ``managed_files`` targets from their source (``seed_only`` targets
+    excluded), and every released version
     listed for a retired file. A consumer file whose sha256 is in its list is
     an unmodified upstream copy. Each wrapper also gets the digest of the
     template rendered with ``PIN_NORMALIZED_SHA`` (40 zeros), so a consumer
@@ -256,12 +256,14 @@ def derive_allowed_paths(repo_root: Path, commit: str = "HEAD", include_consumer
 			raise ManifestError("audit-gate contract.json is not valid JSON") from exc
 		for item in contract.get("managed_files", []) or []:
 			target = item.get("target") if isinstance(item, dict) else None
-			# A seed_only target (the advisory allowlist) is created when
-			# missing and then owned by the consumer, so it is not managed.
-			if not include_consumer_owned and isinstance(item, dict) and item.get("seed_only") is True:
+			if not (isinstance(target, str) and target):
 				continue
-			if isinstance(target, str) and target:
-				allowed.add(target)
+			if not isinstance(item.get("seed_only", False), bool):
+				raise ManifestError("audit-gate contract.json seed_only must be a boolean")
+			# A seed_only target is created once and then consumer-owned.
+			if not include_consumer_owned and item.get("seed_only") is True:
+				continue
+			allowed.add(target)
 	retired_oid = wanted.get("workflow-templates/retired_files.txt")
 	if retired_oid:
 		for line in blobs[retired_oid].decode("utf-8", "replace").splitlines():
@@ -327,7 +329,9 @@ def derive_managed_digests(repo_root: Path, commit: str = "HEAD") -> dict:
 		except (UnicodeDecodeError, json.JSONDecodeError) as exc:
 			raise ManifestError("audit-gate contract.json is not valid JSON") from exc
 		for item in contract.get("managed_files", []) or []:
-			if not isinstance(item, dict):
+			if isinstance(item, dict) and not isinstance(item.get("seed_only", False), bool):
+				raise ManifestError("audit-gate contract.json seed_only must be a boolean")
+			if not isinstance(item, dict) or item.get("seed_only") is True:
 				continue
 			source, target = item.get("source"), item.get("target")
 			if not (isinstance(source, str) and source and isinstance(target, str) and target):

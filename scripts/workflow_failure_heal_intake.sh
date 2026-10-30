@@ -23,11 +23,17 @@
 #   2. Fetches the failed jobs + a filtered tail of their logs for the linked
 #      runs (bounded: WORKFLOW_HEAL_MAX_RUNS runs, WORKFLOW_HEAL_MAX_FAILED_JOBS
 #      jobs per run, WORKFLOW_HEAL_MAX_RUN_LOG_BYTES per job).
-#      Runs those logs link to (same repository only) are read later, after
-#      the heal-scope freeze, as evidence for the diagnosis only (#8248):
-#      WORKFLOW_HEAL_MAX_LINKED_RUNS runs (default 4, 0 turns it off), each
-#      with a step timeline and the log of its longest step
-#      (WORKFLOW_HEAL_LINKED_RUN_LOG_BYTES, default 30000).
+#      Runs those logs link to (same repository only, #8248) are read before
+#      the heal-scope freeze (the run and its jobs) and rendered after it as
+#      diagnosis evidence: WORKFLOW_HEAL_MAX_LINKED_RUNS runs (default 4, 0
+#      turns it off), each with a step timeline and the log of its longest
+#      step (WORKFLOW_HEAL_LINKED_RUN_LOG_BYTES, default 30000). For a release
+#      or promotion workflow_run report of this repository they also feed the
+#      frozen scope (#8360): each linked run's workflow file, the reusable
+#      workflows it calls (one hop) and the scripts its failed or longest step
+#      runs, read from the scope-commit tree, never from the diagnosis.
+#      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED=false (default true)
+#      turns that scope part off and leaves the frozen inputs as before.
 #   3. Fingerprints the failure (workflow + failing step + normalised error
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
@@ -111,6 +117,10 @@
 #   WORKFLOW_HEAL_MAX_FAILED_JOBS         failed jobs inspected per run (default 3)
 #   WORKFLOW_HEAL_MAX_RUN_LOG_BYTES       filtered log bytes kept per job (default 60000)
 #   WORKFLOW_HEAL_LOG_TAIL_LINES          log tail lines kept per job (default 400)
+#   WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED  default "true": a release or promotion
+#                                         workflow_run report's linked runs add their workflow,
+#                                         called workflows and step scripts to the frozen scope
+#                                         (#8360); "false" (any case) turns that off
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
@@ -276,6 +286,8 @@ LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
 # Linked runs (#8248): runs the failed-job logs link to. 0 turns it off.
 MAX_LINKED_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_LINKED_RUNS:-}" 4)"
 LINKED_RUN_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_LINKED_RUN_LOG_BYTES:-}" 30000)"
+# Linked-run scope paths (#8360): only the literal 'false' turns them off.
+SCOPE_LINKED_WORKFLOWS_ENABLED="${WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED:-true}"
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
@@ -2502,6 +2514,11 @@ fi
 # untrusted evidence (#6463): only validated report fields, authenticated run metadata
 # and the ownership facts computed above. _open_issue reads this snapshot,
 # never the diagnosis, so neither evidence nor a model verdict can widen it.
+# self_workflows has three authenticated inputs: the verified runs' own and
+# referenced workflow paths, the engine_fallback support paths, and (#8360,
+# release and promotion sources only) the linked runs' workflow and script
+# paths from API metadata and the scope-commit tree (_heal_scope_linked_paths
+# below). An empty linked list leaves the snapshot byte-identical.
 SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"
 # Failing tests reported by the verified runs' own job logs (Q37: A): the
 # render step resolves them to test files and the subjects they cover at the
@@ -2520,55 +2537,41 @@ _heal_slurp_verified_runs()
 	slurped_json="$(jq -s "${slurp_filter}" "${LOG_DIR}"/*.verified 2>/dev/null)" || slurped_json='[]'
 	printf '%s\n' "${slurped_json}"
 }
-jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
-	--argjson failing_tests "${FAILING_TESTS_JSON}" \
-	--argjson engine_runs "${ENGINE_SCOPE_RUNS_JSON:-[]}" \
-	--argjson engine_paths "${ENGINE_SCOPE_PATHS_JSON:-[]}" \
-	--argjson runs "$(_heal_slurp_verified_runs '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique')" \
-	--argjson self_workflows "$(_heal_slurp_verified_runs '[.[] | .referenced_paths[]?] | unique')" \
-	--argjson consumer_workflows "$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')" \
-	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
-	'{crash_file: $crash, runs: (($runs + $engine_runs) | unique), self_workflows: ($self_workflows + $engine_paths), consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
-	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
-	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
+# --- Linked runs: fetch half (#8248, #8360) ---------------------------------
 
-# --- Linked runs (evidence only, #8248) --------------------------------------
-
-# _heal_collect_linked_runs
-#   Follows the same-repository `actions/runs/<id>` links found in the failed
+# _heal_fetch_linked_runs
+#   Selects the same-repository `actions/runs/<id>` links found in the failed
 #   jobs' filtered logs (runs already in run_refs excluded, at most
-#   MAX_LINKED_RUNS, newest mention last) and writes their step timelines plus
-#   the filtered log window of each run's longest step to
-#   ${RUNTIME_DIR}/linked_run_timelines.txt. Files live under
-#   ${RUNTIME_DIR}/linked_runs/, never ${LOG_DIR}, and this runs after the
-#   heal-scope freeze, so linked data never feeds the scope marker, the
-#   ownership inputs or the fingerprint.
-#   API budget (CLAUDE.md §15): at most 3 REST calls per linked run (the run,
-#   its jobs, one job log), so at most 3 x WORKFLOW_HEAL_MAX_LINKED_RUNS per
-#   intake, and none when no linked run is found. Each read makes a single
-#   attempt (GH_RETRY_MAX_ATTEMPTS=1, no retry), so the cap counts HTTP
-#   requests, not logical reads. No existing call returns
-#   these runs: run_refs and the provenance reads cover only reported runs.
+#   MAX_LINKED_RUNS, newest mention last), then reads each run, checks its
+#   identity and reads its jobs, before the heal-scope freeze. The files stay
+#   under ${RUNTIME_DIR}/linked_runs/ (never ${LOG_DIR}) and the ids that passed
+#   go to fetched_ids.txt, which _heal_scope_linked_paths and the render half
+#   (_heal_collect_linked_runs, after the freeze) reuse, so no read repeats.
+#   API budget (CLAUDE.md §15): the run and jobs reads are two of the 3 REST
+#   calls per linked run; each makes a single attempt (GH_RETRY_MAX_ATTEMPTS=1).
 #   Fails open: a failed, malformed or foreign read logs
 #   `warn linked_run_skipped run=<id> reason=<token>` and the run is skipped.
-_heal_collect_linked_runs()
+#   Defaults keep the freeze block runnable on its own (_run_scope_freeze in
+#   tests/test_workflow_failure_heal_scope_tests.py); the real intake sets every
+#   variable before this point, so production behaviour is unchanged (#8377).
+_heal_fetch_linked_runs()
 {
 	local linked_dir="${RUNTIME_DIR}/linked_runs"
-	local out_file="${RUNTIME_DIR}/linked_run_timelines.txt"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
 	local exclude_ids="" linked_json="" linked_id="" linked_run_file="" linked_jobs_file=""
-	local timeline_json="" timeline_reason="" longest_job="" longest_start="" longest_end=""
-	local linked_raw="" linked_window="" linked_filtered=""
 	local -a parent_logs=()
-	: > "${out_file}"
-	[ "${MAX_LINKED_RUNS}" -gt 0 ] 2>/dev/null || return 0
-	[ -s "${SUMMARIES_FILE}" ] || return 0
-	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+	# A stale id list from an earlier call must never be reused.
+	rm -f "${fetched_ids_file}"
+	[ "${MAX_LINKED_RUNS:-0}" -gt 0 ] 2>/dev/null || return 0
+	[ -s "${SUMMARIES_FILE:-}" ] || return 0
+	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE:-}" 2>/dev/null)
 	[ "${#parent_logs[@]}" -gt 0 ] || return 0
-	exclude_ids="$(jq -r '[.run_refs[]?.run_id | tostring] | join(",")' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+	exclude_ids="$(jq -r '[.run_refs[]?.run_id | tostring] | join(",")' "${PAYLOAD_FILE:-}" 2>/dev/null || true)"
 	linked_json="$(python3 "${HEAL_PY}" linked-runs --log-files "${parent_logs[@]}" --repo "${SOURCE_REPO}" \
-		--exclude-run-ids "${exclude_ids}" --limit "${MAX_LINKED_RUNS}" 2>/dev/null)" || return 1
+		--exclude-run-ids "${exclude_ids}" --limit "${MAX_LINKED_RUNS:-0}" 2>/dev/null)" || return 1
 	jq -e 'type == "array" and length > 0' <<< "${linked_json}" >/dev/null 2>&1 || return 0
 	mkdir -p "${linked_dir}" || return 1
+	: > "${fetched_ids_file}" || return 1
 	while IFS= read -r linked_id; do
 		[[ "${linked_id}" =~ ^[0-9]+$ ]] || continue
 		linked_run_file="${linked_dir}/run-${linked_id}.json"
@@ -2590,6 +2593,134 @@ _heal_collect_linked_runs()
 			log "warn linked_run_skipped run=${linked_id} reason=jobs_unreadable"
 			continue
 		fi
+		printf '%s\n' "${linked_id}" >> "${fetched_ids_file}"
+	done < <(jq -r '.[].run_id' <<< "${linked_json}")
+	return 0
+}
+_heal_fetch_linked_runs || log "warn linked_runs_failed"
+
+# _heal_scope_linked_paths (#8360)
+#   Sets LINKED_SCOPE_PATHS_JSON, the scope paths the linked runs add, and logs
+#   exactly one `scope_linked outcome=<added|none|disabled|skipped> paths=<n>
+#   runs=<n>` line. Only a workflow_run report of this repository whose
+#   verified run is a release or promotion workflow (RELEASE_WORKFLOW_FILES)
+#   qualifies; `heal-scope linked-workflow-paths` takes each cached run's
+#   workflow file (API `.path`), the reusable workflows it calls (one hop) and
+#   the scripts its failed or longest step runs, from the tree at HEAD_SHA (the
+#   commit _open_issue renders the scope against), at most
+#   HEAL_SCOPE_LINKED_PATHS_MAX (12). The freeze below then keeps only as many
+#   as fit in the 12 explicit slots ahead of the 8-subject reserve that the
+#   source workflow, engine and crash paths leave free (#6907/#6916). No REST
+#   call: a missing HEAD_SHA commit gets the same git fetch _open_issue makes.
+#   Fails open: any failure leaves `[]`, today's scope.
+#   WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED=false skips the helper.
+#   Defaults keep the freeze block runnable on its own (_run_scope_freeze); the
+#   real intake sets every variable it reads. An unset SOURCE_KIND or SELF_REPO
+#   only fails the eligibility check, so it never widens the scope (#8377).
+LINKED_SCOPE_PATHS_JSON='[]'
+_heal_scope_linked_paths()
+{
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
+	local linked_id="" scope_linked_out="" scope_linked_outcome="skipped" scope_linked_paths='[]' scope_linked_runs=0
+	local scope_linked_sources='[]' scope_linked_count=0
+	local scope_linked_switch="${SCOPE_LINKED_WORKFLOWS_ENABLED:-true}" scope_linked_self_repo="${SELF_REPO:-}"
+	local scope_linked_source_kind="${SOURCE_KIND:-}"
+	local -a scope_linked_pairs=() scope_linked_source_paths=()
+	LINKED_SCOPE_PATHS_JSON='[]'
+	if [ -s "${fetched_ids_file}" ]; then
+		while IFS= read -r linked_id; do
+			[[ "${linked_id}" =~ ^[0-9]+$ ]] || continue
+			scope_linked_pairs+=(--run-json "${linked_dir}/run-${linked_id}.json" --jobs-json "${linked_dir}/run-${linked_id}-jobs.json")
+			scope_linked_runs=$((scope_linked_runs + 1))
+		done < "${fetched_ids_file}"
+	fi
+	if [ "${scope_linked_switch,,}" = "false" ]; then
+		scope_linked_outcome="disabled"
+	elif [ "${scope_linked_source_kind}" = workflow_run ] && [ -n "${scope_linked_self_repo}" ] && [ "${SOURCE_REPO,,}" = "${scope_linked_self_repo,,}" ] && [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		if ! git rev-parse --verify --quiet "${HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+			_git_fetch_ownership_refs "${HEAD_SHA}" || true
+		fi
+		if git rev-parse --verify --quiet "${HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+			scope_linked_sources="$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')"
+			mapfile -t scope_linked_source_paths < <(jq -r '.[]? | strings' <<< "${scope_linked_sources}" 2>/dev/null)
+			if scope_linked_out="$(python3 "${HEAL_PY}" heal-scope linked-workflow-paths --checkout . --ref "${HEAD_SHA}" \
+				--repo "${SOURCE_REPO}" --self-repo "${scope_linked_self_repo}" --source-kind "${scope_linked_source_kind}" --source-repo "${SOURCE_REPO}" \
+				--enabled "${scope_linked_switch}" --source-workflow-paths "${scope_linked_source_paths[@]}" "${scope_linked_pairs[@]}" 2>/dev/null)" \
+				&& jq -e '(.paths | type == "array") and all(.paths[]; type == "string") and (.outcome | type == "string")' <<< "${scope_linked_out}" >/dev/null 2>&1; then
+				scope_linked_outcome="$(jq -r '.outcome' <<< "${scope_linked_out}" | tr -cd 'a-z' | head -c 20)"
+				case "${scope_linked_outcome}" in
+					added|none|skipped|disabled) scope_linked_paths="$(jq -c '.paths' <<< "${scope_linked_out}")" ;;
+					*) scope_linked_outcome="skipped" ;;
+				esac
+			fi
+		fi
+	fi
+	scope_linked_count="$(jq 'length' <<< "${scope_linked_paths}" 2>/dev/null || echo 0)"
+	LINKED_SCOPE_PATHS_JSON="${scope_linked_paths}"
+	log "scope_linked outcome=${scope_linked_outcome} paths=${scope_linked_count} runs=${scope_linked_runs}"
+	return 0
+}
+_heal_scope_linked_paths || { LINKED_SCOPE_PATHS_JSON='[]'; log "scope_linked outcome=skipped paths=0 runs=0"; }
+jq -e 'type == "array" and all(.[]; type == "string")' <<< "${LINKED_SCOPE_PATHS_JSON}" >/dev/null 2>&1 || LINKED_SCOPE_PATHS_JSON='[]'
+
+# In the freeze program below, 20 is the explicit-path cap of render_heal_scope_marker
+# and 8 is HEAL_SCOPE_SUBJECT_RESERVE (scripts/workflow_failure_heal.py); change them
+# together. test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker pins it.
+jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
+	--argjson failing_tests "${FAILING_TESTS_JSON}" \
+	--argjson engine_runs "${ENGINE_SCOPE_RUNS_JSON:-[]}" \
+	--argjson engine_paths "${ENGINE_SCOPE_PATHS_JSON:-[]}" \
+	--argjson linked_paths "${LINKED_SCOPE_PATHS_JSON:-[]}" \
+	--argjson runs "$(_heal_slurp_verified_runs '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique')" \
+	--argjson self_workflows "$(_heal_slurp_verified_runs '[.[] | .referenced_paths[]?] | unique')" \
+	--argjson consumer_workflows "$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')" \
+	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
+	'($self_workflows + $engine_paths) as $base
+	| ([20 - 8 - ($base | unique | length) - (if $crash != "" and ($base | any(. == $crash) | not) then 1 else 0 end), 0] | max) as $linked_room
+	| {crash_file: $crash, runs: (($runs + $engine_runs) | unique), self_workflows: ($base + (($linked_paths - $base)[:$linked_room])), consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
+	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
+	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
+
+# --- Linked runs: render half (evidence only, #8248) ------------------------
+
+# _heal_collect_linked_runs
+#   Renders the step timelines of the linked runs _heal_fetch_linked_runs read
+#   before the freeze (ids in ${RUNTIME_DIR}/linked_runs/fetched_ids.txt, run
+#   and jobs JSON cached beside them) plus the filtered log window of each
+#   run's longest step to ${RUNTIME_DIR}/linked_run_timelines.txt. Files live
+#   under ${RUNTIME_DIR}/linked_runs/, never ${LOG_DIR}. Nothing here feeds the
+#   scope marker, the ownership inputs or the fingerprint; only the pre-freeze
+#   _heal_scope_linked_paths adds linked paths to the scope (#8360).
+#   API budget (CLAUDE.md §15): unchanged at most 3 REST calls per linked run,
+#   split across the two halves (the run and its jobs before the freeze, one
+#   job log here), so at most 3 x WORKFLOW_HEAL_MAX_LINKED_RUNS per intake, and
+#   none when no linked run is found. Each read makes a single attempt
+#   (GH_RETRY_MAX_ATTEMPTS=1, no retry), so the cap counts HTTP requests, not
+#   logical reads. No existing call returns these runs: run_refs and the
+#   provenance reads cover only reported runs.
+#   Fails open: a failed timeline or log logs
+#   `warn linked_run_skipped run=<id> reason=<token>` and the run is skipped.
+_heal_collect_linked_runs()
+{
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local out_file="${RUNTIME_DIR}/linked_run_timelines.txt"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
+	local linked_id="" linked_run_file="" linked_jobs_file=""
+	local timeline_json="" timeline_reason="" longest_job="" longest_start="" longest_end=""
+	local linked_raw="" linked_window="" linked_filtered=""
+	local -a parent_logs=()
+	: > "${out_file}"
+	[ "${MAX_LINKED_RUNS:-0}" -gt 0 ] 2>/dev/null || return 0
+	[ -s "${fetched_ids_file}" ] || return 0
+	[ -s "${SUMMARIES_FILE:-}" ] || return 0
+	# The parent logs again, for the stall-window hints of the timelines.
+	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE:-}" 2>/dev/null)
+	[ "${#parent_logs[@]}" -gt 0 ] || return 0
+	while IFS= read -r linked_id; do
+		[[ "${linked_id}" =~ ^[0-9]+$ ]] || continue
+		linked_run_file="${linked_dir}/run-${linked_id}.json"
+		linked_jobs_file="${linked_dir}/run-${linked_id}-jobs.json"
 		if ! timeline_json="$(python3 "${HEAL_PY}" linked-run-timeline --run-json "${linked_run_file}" --jobs-json "${linked_jobs_file}" \
 			--repo "${SOURCE_REPO}" --run-id "${linked_id}" --stall-hint-files "${parent_logs[@]}" 2>/dev/null)" \
 			|| ! jq -e 'type == "object" and (.ok | type == "boolean")' <<< "${timeline_json}" >/dev/null 2>&1; then
@@ -2626,7 +2757,7 @@ _heal_collect_linked_runs()
 			rm -f "${linked_raw}" "${linked_window}"
 		fi
 		echo >> "${out_file}"
-	done < <(jq -r '.[].run_id' <<< "${linked_json}")
+	done < "${fetched_ids_file}"
 	return 0
 }
 _heal_collect_linked_runs || log "warn linked_runs_failed"
