@@ -199,11 +199,17 @@ def _comment_id(comment: dict) -> int | None:
 
 
 def parse(comments: Any, trusted_login: str) -> tuple[int | None, list[dict]]:
-	"""Newest trusted journal comment's id and entries (REST or GraphQL shape)."""
+	"""Newest trusted journal comment's id and the entries of every trusted
+	journal comment (REST or GraphQL shape). Two overlapping first appends can
+	each POST a journal; merging all of them keeps the older one's entries
+	visible, and the next append rewrites the newest one."""
 	trusted = _norm_login(trusted_login)
 	if not trusted or not isinstance(comments, list):
 		return None, []
-	for comment in reversed(comments):
+	newest_id: int | None = None
+	found = False
+	collected: list[dict] = []
+	for comment in comments:
 		if not isinstance(comment, dict):
 			continue
 		body = comment.get("body")
@@ -222,9 +228,10 @@ def parse(comments: Any, trusted_login: str) -> tuple[int | None, list[dict]]:
 			continue
 		if not isinstance(data, dict) or data.get("schema") != SCHEMA or not isinstance(data.get("entries"), list):
 			continue
-		entries = [e for e in (normalise_entry(raw) for raw in data["entries"]) if e]
-		return _comment_id(comment), merge(entries, [])
-	return None, []
+		collected = merge(collected, [e for e in (normalise_entry(raw) for raw in data["entries"]) if e])
+		newest_id = _comment_id(comment)
+		found = True
+	return (newest_id, collected) if found else (None, [])
 
 
 def _key(entry: dict) -> tuple[str, str, str]:

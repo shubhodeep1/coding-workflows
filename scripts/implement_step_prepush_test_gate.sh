@@ -420,7 +420,7 @@ implement_prepush_test_gate_restore_symlinks()
 # trusted rules fragment.
 implement_prepush_test_gate_journal_blocks()
 {
-	local allow="$1" rules="$2" path removed
+	local allow="$1" rules="$2" path removed rules_body=""
 	[ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] || return 0
 	[ -n "${allow}" ] && [ -f "${allow}" ] || return 0
 	git rev-parse --git-dir >/dev/null 2>&1 || return 0
@@ -442,10 +442,14 @@ implement_prepush_test_gate_journal_blocks()
 		echo
 		cat "${RUNTIME_DIR}/attempt_journal.txt"
 	fi
+	# Body only: the fragment's tier and Role/Goal metadata lines stay out. A
+	# file without the marker line counts as absent, so the drop is logged.
 	if [ -n "${rules}" ] && [ -f "${rules}" ]; then
+		rules_body="$(sed -n '/^=== ATTEMPT JOURNAL REPAIR RULES ===$/,$p' "${rules}" 2>/dev/null || true)"
+	fi
+	if [ -n "${rules_body}" ]; then
 		echo
-		# Body only: the fragment's tier and Role/Goal metadata lines stay out.
-		sed -n '/^=== ATTEMPT JOURNAL REPAIR RULES ===$/,$p' "${rules}" || true
+		printf '%s\n' "${rules_body}"
 	else
 		echo "PERSIST journal outcome=skipped reason=rules_absent" >&2
 	fi

@@ -161,6 +161,14 @@ def test_bot_suffix_and_case_match_across_shapes():
 	assert cid == 7 and entries
 
 
+def test_duplicate_trusted_journals_are_merged_so_no_entry_is_hidden():
+	# Two overlapping first appends can each POST a journal comment.
+	first = _journal_comment([_entry(stage="implement", run_id="10")], cid=1)
+	second = _journal_comment([_entry(stage="review", run_id="11", ts="2026-10-30T10:05:00Z")], cid=2)
+	cid, entries = aj.parse([first, second], LOGIN)
+	assert cid == 2 and [e["stage"] for e in entries] == ["implement", "review"]
+
+
 def test_marker_inside_a_non_journal_comment_is_never_the_journal():
 	# A pipeline-authored plan comment that echoes a valid marker block must not
 	# be parsed (and so never PATCHed over) as the journal.

@@ -640,7 +640,7 @@ def test_integration_and_resolver_steps_forward_the_dependency_allow_list():
 PROMOTE_FIXTURE = '@pytest.fixture()\ndef promote_cycle_state(tmp_path):\n\treturn {"cycle": 1}\n'
 
 
-def _journal_replay(tmp_path: Path, persist: str | None, journal: str = "", with_rules: bool = True) -> tuple[str, subprocess.CompletedProcess]:
+def _journal_replay(tmp_path: Path, persist: str | None, journal: str = "", with_rules: bool = True, rules_text: str | None = None) -> tuple[str, subprocess.CompletedProcess]:
 	"""PR #8371 replay: HEAD has a fixture in tests/test_promote_main_cycle.py
 	and the editor's working tree deleted it; the file is in the allow-list."""
 	repo, env = _setup(tmp_path, [FAIL])
@@ -648,6 +648,8 @@ def _journal_replay(tmp_path: Path, persist: str | None, journal: str = "", with
 	(script.parent.parent / "prompts").mkdir(exist_ok=True)
 	if with_rules:
 		shutil.copy2(REPO_ROOT / "prompts" / "mode-persist-journal-rules.txt", script.parent.parent / "prompts" / "mode-persist-journal-rules.txt")
+		if rules_text is not None:
+			(script.parent.parent / "prompts" / "mode-persist-journal-rules.txt").write_text(rules_text, encoding="utf-8")
 	target = repo / "tests" / "test_promote_main_cycle.py"
 	target.parent.mkdir(exist_ok=True)
 	target.write_text("import pytest\n\n" + PROMOTE_FIXTURE + "\n\ndef test_cycle(promote_cycle_state):\n\tassert promote_cycle_state\n", encoding="utf-8")
@@ -701,4 +703,12 @@ def test_journal_rules_absent_still_shows_deletions(tmp_path, monkeypatch):
 	text, proc = _journal_replay(tmp_path, "true", with_rules=False)
 	assert "=== EDITOR DELETIONS THIS ROUND ===" in text
 	assert "ATTEMPT JOURNAL REPAIR RULES" not in text
+	assert "PERSIST journal outcome=skipped reason=rules_absent" in proc.stderr
+
+
+def test_journal_rules_without_the_marker_line_are_logged_as_absent(tmp_path, monkeypatch):
+	monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path / "no-workspace"))
+	text, proc = _journal_replay(tmp_path, "true", rules_text="# tier: DEFAULT\nRole: x. Goal: y.\n\nno marker here\n")
+	assert "=== EDITOR DELETIONS THIS ROUND ===" in text
+	assert "no marker here" not in text and "Role: x." not in text
 	assert "PERSIST journal outcome=skipped reason=rules_absent" in proc.stderr
