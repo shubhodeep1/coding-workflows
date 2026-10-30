@@ -1,0 +1,111 @@
+{
+	"_comment": "Hand-built in the shape of GET repos/{repo}/compare/stable...main during the 2026-10-27 release-gate incident (#8475).",
+	"url": "https://api.github.com/repos/shubhodeep1/coding-workflows/compare/stable...main",
+	"html_url": "https://github.com/shubhodeep1/coding-workflows/compare/stable...main",
+	"status": "ahead",
+	"ahead_by": 3,
+	"behind_by": 0,
+	"total_commits": 3,
+	"commits": [
+		{
+			"sha": "8243c0ffee0123456789abcdef0123456789abcd",
+			"node_id": "C_kwDO8243c0ff",
+			"commit": {
+				"author": {
+					"name": "shubhodeep1",
+					"date": "2026-10-26T18:10:00Z"
+				},
+				"committer": {
+					"name": "GitHub",
+					"date": "2026-10-26T18:10:00Z"
+				},
+				"message": "Release gate: poll implement runs by issue title (#8243)\n\n* poll by title\n* tests"
+			},
+			"url": "https://api.github.com/repos/shubhodeep1/coding-workflows/commits/8243c0ffee0123456789abcdef0123456789abcd",
+			"html_url": "https://github.com/shubhodeep1/coding-workflows/commit/8243c0ffee0123456789abcdef0123456789abcd",
+			"parents": [
+				{
+					"sha": "0000000000000000000000000000000000000000"
+				}
+			]
+		},
+		{
+			"sha": "8259beef0123456789abcdef0123456789abcdef",
+			"node_id": "C_kwDO8259beef",
+			"commit": {
+				"author": {
+					"name": "shubhodeep1",
+					"date": "2026-10-26T21:40:00Z"
+				},
+				"committer": {
+					"name": "GitHub",
+					"date": "2026-10-26T21:40:00Z"
+				},
+				"message": "Heal intake: retry the implement wait once (#8259)"
+			},
+			"url": "https://api.github.com/repos/shubhodeep1/coding-workflows/commits/8259beef0123456789abcdef0123456789abcdef",
+			"html_url": "https://github.com/shubhodeep1/coding-workflows/commit/8259beef0123456789abcdef0123456789abcdef",
+			"parents": [
+				{
+					"sha": "0000000000000000000000000000000000000000"
+				}
+			]
+		},
+		{
+			"sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+			"node_id": "C_kwDOa1b2c3d4",
+			"commit": {
+				"author": {
+					"name": "shubhodeep1",
+					"date": "2026-10-26T22:00:00Z"
+				},
+				"committer": {
+					"name": "GitHub",
+					"date": "2026-10-26T22:00:00Z"
+				},
+				"message": "Merge branch 'main' of github.com:shubhodeep1/coding-workflows"
+			},
+			"url": "https://api.github.com/repos/shubhodeep1/coding-workflows/commits/a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+			"html_url": "https://github.com/shubhodeep1/coding-workflows/commit/a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+			"parents": [
+				{
+					"sha": "0000000000000000000000000000000000000000"
+				}
+			]
+		}
+	],
+	"files": [
+		{
+			"sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			"filename": "scripts/test_and_mark_stable_wait_implement.sh",
+			"status": "modified",
+			"additions": 4,
+			"deletions": 1,
+			"changes": 5
+		},
+		{
+			"sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			"filename": ".github/workflows/test-and-mark-stable.yml",
+			"status": "modified",
+			"additions": 4,
+			"deletions": 1,
+			"changes": 5
+		},
+		{
+			"sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			"filename": ".github/ai/consumer_repos.json",
+			"status": "modified",
+			"additions": 4,
+			"deletions": 1,
+			"changes": 5
+		},
+		{
+			"sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+			"filename": "tests/test_test_and_mark_stable_plan_polling_guard.py",
+			"status": "added",
+			"additions": 40,
+			"deletions": 0,
+			"changes": 40
+		}
+	]
+}
