@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for #8411: pin the cancel-on-PR-close concurrency group with a parsed assertion\n\n**Planning ref:** `main` @ `c4c4f740fba949f3c873b35fdb8c2654ab14420b`. The `Integration branch mismatch:` line reads `unknown`, not `true`, so this is not blocked.\n\nThe work is not on the planning ref yet. Line 1860 of `tests/test_review_merge_train.py` still has the substring check `assert \"group: cancel-on-pr-close-${{ github.repository }}\" in workflow`.\n\n## Files likely to change\n- `tests/test_review_merge_train.py`\n- `changelog.d/8411-cancel-close-group-test-pin.md` (new)\n\n## Functions or modules to implement\n\nScope-mode: Hold Scope\nReuse-audit: extends test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe\nScope-mode justification: The follow-up names one assertion in one test and one changelog fragment, and forbids editing any workflow file. Holding to exactly that keeps the change test-only. The test module already uses `yaml.safe_load` (imported at line 26) and `REPO_ROOT` (line 29), so no new helper or dependency is needed. The sibling test `test_cancel_on_close_event_runs_get_their_own_concurrency_group` (line 1877) already parses this workflow the same way; it stays as it is, as the issue requires. Nothing larger is warranted (\u00a76: Correctness & safety comes before Speed, but the issue fixes the scope).\n\n1. **`test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe`** (`tests/test_review_merge_train.py`, around lines 1858\u20131874)\n   - Keep the `workflow = (...).read_text(...)` line, because the other substring assertions use the raw text.\n   - Replace only the line `assert \"group: cancel-on-pr-close-${{ github.repository }}\" in workflow` with a parsed check:\n     - `cancel_group = yaml.safe_load(workflow)[\"jobs\"][\"cancel-active-runs\"][\"concurrency\"][\"group\"]`. The name `cancel_group` is new in this function's scope and shadows nothing; the sibling test uses `concurrency`.\n     - `assert cancel_group.startswith(\"cancel-on-pr-close-${{ github.repository }}\")`\n     - `assert \"github.event_name == 'pull_request'\" in cancel_group`\n     - `assert \"github.event.pull_request.number\" in cancel_group`\n     - `assert cancel_group != \"cancel-on-pr-close-${{ github.repository }}\"`. The issue implies this check: it makes the assertion fail against the old repository-wide group. It is one line and changes no scope.\n   - The checks run on the parsed `group` string, not on the whole file, so a match in a comment or a different job cannot satisfy them.\n   - Leave every other assertion in that test unchanged, in order and in text.\n   - Use tab indentation, matching the file.\n2. **`changelog.d/8411-cancel-close-group-test-pin.md`** (new). It follows the shape of existing fragments such as `changelog.d/8109-deploy-activate-skip-mac-setup.md`:\n   - Line 1: `<!-- changelog: changed -->`\n   - Line 2: one bullet, for example: `- **Tests: the cancel-on-PR-close sweep test now parses the workflow and pins the job's concurrency group to the per-PR key (#8411).** The old substring check also passed against the repository-wide group, so it did not catch a regression.`\n\n## Data structures affected\nNone. The test reads the parsed YAML mapping `jobs.cancel-active-runs.concurrency.group` and changes nothing.\n\n## API or interface changes\nNone. No workflow, script or prompt changes. `.github/workflows/cancel_on_pr_close.yml` is read only.\n\n## Decisions\n\n### D1 \u2014 Assert on the parsed group string instead of a whole-file substring\n- Chosen: load the workflow with `yaml.safe_load` and check that `jobs.cancel-active-runs.concurrency.group` starts with `cancel-on-pr-close-${{ github.repository }}`, contains the `github.event_name == 'pull_request'` branch and `github.event.pull_request.number`, and is not the bare repository-wide group.\n- Alternatives considered: exact equality on the full expression (the sibling test already does that, and the issue asks for a prefix-plus-keying check); keeping the substring check and adding more substrings (these can still match comments or other jobs).\n- Why: this is what the issue asks for. Parsing ties the check to the actual job key, and the explicit per-PR keying check makes it fail against the old shared group.\n\n### D2 \u2014 Changelog fragment filename uses issue number 8411\n- Chosen: `changelog.d/8411-cancel-close-group-test-pin.md`.\n- Alternatives considered: `8327-...`, the parent issue that produced the follow-up.\n- Why: the issue says `changelog.d/<issue>-...`, and this run's memory context records the issue as #8411. Existing fragments use the `<issue>-<slug>.md` pattern.\n\n## Security considerations\n- No trust boundary, endpoint, credential or external input is touched. The test parses a file committed to the repository with `yaml.safe_load` (no unsafe deserialization).\n- No money-handling surface.\n- Abuse case: a later edit could quietly bring back the repository-wide group, so a close event gets dropped when another PR closes within a minute (release run 40794181365, issue #8327). The stronger assertion now fails CI in that case.\n\n## Potential risks or edge cases\n- `yaml.safe_load` and the `on` key: the workflow quotes `\"on\":`, so it parses as a string key. This doesn't matter here because only `jobs` is read.\n- A legitimate future change to the group format (for example renaming the `-pr-` infix) would need this test updated. That is intended. The check uses the prefix and keying tokens rather than the full string, so it is less brittle than the sibling test.\n- Conflict detection: none. The test name, line (~1858), job key `cancel-active-runs` and group expression on the planning ref match the issue's description.\n\n## Testing considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_review_merge_train.py -q` and confirm it passes.\n- Optional sanity check, not committed: temporarily setting the group to the bare repository-wide value should make the edited test fail. Revert it before committing; no workflow file may change in the PR.\n- `tests/test_changelog_fragment_contract.py` covers the fragment system, not individual fragments. If it is in the affected-test set, run it too.\n\n## Pre-execution self-check\n- Files: only the test module and one new changelog fragment. No workflow, script, prompt or `agents.md` edits.\n- `test_cancel_on_close_event_runs_get_their_own_concurrency_group` and the other assertions in the target test stay unchanged.\n- The new assertion uses `yaml.safe_load`, checks the `startswith` prefix, and checks keying on `github.event.pull_request.number` for `pull_request` runs, as the issue specifies.\n- No new dependency; `yaml` is already imported.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "b85a10e50d31ab1e6a7e82605d66efdcb8e4fc3b3c64df3ad5a1948f53c39400",
+  "lineage": {
+    "issue_number": 8411,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40981263861",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40981263861",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8411"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261030004949_97eb8d82dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8411,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40981263861"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8411",
+  "timestamps": {
+    "created_at": "2026-10-30T00:49:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
