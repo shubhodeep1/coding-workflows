@@ -2867,6 +2867,7 @@ jobs:
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
           EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
           HEAL_ISOLATED_EDITOR_WALL_SECS: ${{ vars.HEAL_ISOLATED_EDITOR_WALL_SECS || '' }}
+          WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
           CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
           CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
           CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'false' }}
@@ -3681,6 +3682,10 @@ jobs:
               bash "${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE}/.codex-workflow-src/scripts}/heal_isolated_implement.sh" "${PROMPT_FILE_TO_USE}" "${CODEX_OUTPUT_FILE}" || cmd_rc=$?
               if [ "${cmd_rc}" -eq 42 ]; then
                 bash "${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE}/.codex-workflow-src/scripts}/implement_heal_preflight.sh" refuse out_of_heal_scope
+                exit 0
+              fi
+              if [ "${cmd_rc}" -eq 43 ]; then
+                bash "${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE}/.codex-workflow-src/scripts}/implement_heal_preflight.sh" refuse repro_not_fixed
                 exit 0
               fi
             else
