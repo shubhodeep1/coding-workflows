@@ -29070,10 +29070,6 @@ def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
 	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in sweep
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # --- attempt journal in the stall judge (issue #8428, P1) ---------------------------
 
 def _persist_journal_body() -> str:
@@ -29108,37 +29104,45 @@ def _run_persist_stall_context(tmp_path: Path, issue: str, comments_issue: str, 
 	return proc, out, calls
 
 
-def test_stall_judge_journal_standalone_reads_fetched_comments(tmp_path):
-	comments = json.dumps([{"id": 5, "body": _persist_journal_body(), "user": {"login": "pipeline-bot"}}])
-	proc, out, calls = _run_persist_stall_context(tmp_path, "42", "42", comments)
-	assert "KEY=review|77|1" in proc.stdout, proc.stderr
-	text = out.read_text(encoding="utf-8")
-	assert text.startswith("=== BEGIN UNTRUSTED ATTEMPT JOURNAL") and "UNTRUSTED_DATA: gate failed" in text
-	assert len(text.encode("utf-8")) <= 4096
-	# Only the once-per-tick identity read; no comments call.
-	assert calls.read_text(encoding="utf-8").splitlines() == ["gh api user --jq .login"]
+def test_stall_judge_journal_standalone_reads_fetched_comments():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		comments = json.dumps([{"id": 5, "body": _persist_journal_body(), "user": {"login": "pipeline-bot"}}])
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "42", comments)
+		assert "KEY=review|77|1" in proc.stdout, proc.stderr
+		text = out.read_text(encoding="utf-8")
+		assert text.startswith("=== BEGIN UNTRUSTED ATTEMPT JOURNAL") and "UNTRUSTED_DATA: gate failed" in text
+		assert len(text.encode("utf-8")) <= 4096
+		# Only the once-per-tick identity read; no comments call.
+		assert calls.read_text(encoding="utf-8").splitlines() == ["gh api user --jq .login"]
 
 
-def test_stall_judge_journal_ignores_forged_author_and_reuses_login_cache(tmp_path):
-	comments = json.dumps([{"id": 5, "body": _persist_journal_body(), "user": {"login": "mallory"}}])
-	proc, out, calls = _run_persist_stall_context(tmp_path, "42", "42", comments, login_cache="pipeline-bot")
-	assert "KEY=\n" in proc.stdout and out.read_text(encoding="utf-8") == ""
-	assert not calls.exists()
+def test_stall_judge_journal_ignores_forged_author_and_reuses_login_cache():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		comments = json.dumps([{"id": 5, "body": _persist_journal_body(), "user": {"login": "mallory"}}])
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "42", comments, login_cache="pipeline-bot")
+		assert "KEY=\n" in proc.stdout and out.read_text(encoding="utf-8") == ""
+		assert not calls.exists()
 
 
-def test_stall_judge_journal_managed_item_uses_the_tick_cache(tmp_path):
-	cache = json.dumps({"42": {"comments": [{"id": 5, "body": _persist_journal_body(), "user": {"login": "pipeline-bot"}}]}})
-	proc, out, calls = _run_persist_stall_context(tmp_path, "42", "9", "[]", candidate_cache=cache, login_cache="pipeline-bot")
-	assert "KEY=review|77|1" in proc.stdout, proc.stderr
-	assert "UNTRUSTED_DATA: gate failed" in out.read_text(encoding="utf-8")
-	assert not calls.exists()
+def test_stall_judge_journal_managed_item_uses_the_tick_cache():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		cache = json.dumps({"42": {"comments": [{"id": 5, "body": _persist_journal_body(), "user": {"login": "pipeline-bot"}}]}})
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "9", "[]", candidate_cache=cache, login_cache="pipeline-bot")
+		assert "KEY=review|77|1" in proc.stdout, proc.stderr
+		assert "UNTRUSTED_DATA: gate failed" in out.read_text(encoding="utf-8")
+		assert not calls.exists()
 
 
-def test_stall_judge_journal_cache_miss_is_null_without_api_call(tmp_path):
-	proc, out, calls = _run_persist_stall_context(tmp_path, "42", "9", "[]", candidate_cache="{}")
-	assert "PERSIST journal outcome=skipped reason=comments_absent" in proc.stderr
-	assert out.read_text(encoding="utf-8") == "" and "KEY=\n" in proc.stdout
-	assert not calls.exists()
+def test_stall_judge_journal_cache_miss_is_null_without_api_call():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "9", "[]", candidate_cache="{}")
+		assert "PERSIST journal outcome=skipped reason=comments_absent" in proc.stderr
+		assert out.read_text(encoding="utf-8") == "" and "KEY=\n" in proc.stdout
+		assert not calls.exists()
 
 
 def test_stall_judge_journal_is_switch_gated_and_keeps_the_cache_key_when_off():
@@ -29155,3 +29159,7 @@ def test_stall_judge_journal_is_switch_gated_and_keeps_the_cache_key_when_off():
 	# The journal never triggers a new comments read inside the judge.
 	func = _extract_bash_function(script, "persist_journal_stall_context() {")
 	assert "/comments" not in func
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

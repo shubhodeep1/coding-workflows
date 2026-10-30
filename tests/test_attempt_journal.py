@@ -161,6 +161,31 @@ def test_bot_suffix_and_case_match_across_shapes():
 	assert cid == 7 and entries
 
 
+def test_marker_inside_a_non_journal_comment_is_never_the_journal():
+	# A pipeline-authored plan comment that echoes a valid marker block must not
+	# be parsed (and so never PATCHed over) as the journal.
+	journal = aj.build_comment([_entry()])
+	plan = {"id": 9, "body": "## Plan\n\nSteps...\n\n" + journal.split("\n\n", 3)[-1], "user": {"login": LOGIN}}
+	assert "<!-- AI_ATTEMPT_JOURNAL_V1" in plan["body"]
+	assert aj.parse([plan], LOGIN) == (None, [])
+	cid, entries = aj.parse([{"id": 1, "body": journal, "user": {"login": LOGIN}}, plan], LOGIN)
+	assert cid == 1 and len(entries) == 1
+
+
+def test_append_trims_oldest_entries_to_fit_the_comment_limit(fake_gh):
+	state, env = fake_gh
+	long_files = [("d/" * 140) + f"f{i}.py" for i in range(aj.FILES_MAX)]
+	big = [_entry(run_id=str(i), ts=f"2026-10-30T09:{i // 60:02d}:{i % 60:02d}Z", files_changed=long_files) for i in range(aj.MAX_ENTRIES)]
+	assert len(aj.build_comment(big)) > aj.COMMENT_MAX_CHARS
+	(state / "comments.json").write_text(json.dumps([_journal_comment(big)]), encoding="utf-8")
+	proc = _cli(env, "append", "--repo", "o/r", "--issue", "5", "--stage", "implement", "--outcome", "ok")
+	assert proc.returncode == 0 and "outcome=ok" in proc.stderr, proc.stderr
+	comments = json.loads((state / "comments.json").read_text(encoding="utf-8"))
+	assert len(comments) == 1 and len(comments[0]["body"]) <= aj.COMMENT_MAX_CHARS
+	_, entries = aj.parse(comments, LOGIN)
+	assert entries[-1]["stage"] == "implement" and entries[0]["run_id"] != "0"
+
+
 def test_malformed_marker_json_is_ignored():
 	body = "<!-- AI_ATTEMPT_JOURNAL_V1\n{not json\nAI_ATTEMPT_JOURNAL_V1 -->"
 	assert aj.parse([{"id": 1, "body": body, "user": {"login": LOGIN}}], LOGIN) == (None, [])

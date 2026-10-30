@@ -296,7 +296,7 @@ _resolver_attempt_journal_append() {
   fi
   [ "${substate}" != "Succeeded" ] || outcome=ok
   GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 python3 -B "${helper}" append \
-    --repo "${GITHUB_REPOSITORY:-}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${GITHUB_HEAD_REF:-}}}" \
+    --repo "${GITHUB_REPOSITORY:-}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-${GITHUB_HEAD_REF:-}}}}" \
     --stage resolver --outcome "${outcome}" --approach inherit \
     --attempt "${GITHUB_RUN_ATTEMPT:-1}.${attempt_number}" || true
   return 0

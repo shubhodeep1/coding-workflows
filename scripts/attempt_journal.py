@@ -65,6 +65,12 @@ FILES_MAX = 20
 DELETIONS_MAX = 10
 UNMET_MAX = 10
 VISIBLE_MAX = 10
+# Journal comments start with this header (build_comment); a pipeline-authored
+# comment that merely contains a marker block (a plan echoing the journal) is
+# never treated as, or overwritten as, the journal.
+HEADER = "### AI attempt journal"
+# GitHub rejects comment bodies over 65,536 characters; stay well below it.
+COMMENT_MAX_CHARS = 60000
 STAGES = ("clarify", "plan", "implement", "review", "resolver", "postmerge", "governor", "wave_check")
 OUTCOMES = ("ok", "fail", "partial", "blocked", "held", "unverified")
 ACCEPTANCE_STATES = ("met", "unmet", "invalid", "none")
@@ -203,6 +209,8 @@ def parse(comments: Any, trusted_login: str) -> tuple[int | None, list[dict]]:
 		body = comment.get("body")
 		if not isinstance(body, str) or ("<!-- " + MARKER) not in body:
 			continue
+		if not body.lstrip("\ufeff").startswith(HEADER + "\n"):
+			continue
 		if _norm_login(_comment_author(comment)) != trusted:
 			continue
 		match = _MARKER_RE.search(body)
@@ -318,7 +326,7 @@ def _marker_json(entries: list[dict]) -> str:
 
 
 def build_comment(entries: list[dict]) -> str:
-	lines = ["### AI attempt journal", "",
+	lines = [HEADER, "",
 		"Recorded by the unattended pipeline; read by the next stage and the judges.", "",
 		"| ts | stage | outcome | approach | gate | files |", "|---|---|---|---|---|---|"]
 	for entry in sorted(entries, key=lambda e: e.get("ts", ""), reverse=True)[:VISIBLE_MAX]:
@@ -350,6 +358,7 @@ def _gh(args: list[str]) -> bytes | None:
 		import gh_api_retry  # noqa: PLC0415
 	except Exception:  # noqa: BLE001
 		gh_api_retry = None
+		log("error", "gh_api_retry_unavailable")
 	if gh_api_retry is not None:
 		result = gh_api_retry.call(args, optional=True)
 		return result.stdout if result.rc == 0 else None
@@ -551,6 +560,10 @@ def cmd_append(args: argparse.Namespace) -> None:
 		log("error", "invalid_entry")
 		return
 	merged = merge(entries, [entry])
+	# Drop the oldest entries until the comment fits GitHub's body limit, so an
+	# oversized record never blocks every later append.
+	while len(merged) > 1 and len(build_comment(merged)) > COMMENT_MAX_CHARS:
+		merged = merged[1:]
 	runtime = os.environ.get("RUNTIME_DIR", "")
 	base = Path(runtime) if runtime and os.path.isdir(runtime) else Path(os.environ.get("RUNNER_TEMP", "/tmp"))
 	body_file = base / f"attempt_journal_body.{os.getpid()}.md"

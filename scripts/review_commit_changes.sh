@@ -701,7 +701,7 @@ PY
     if [ -n "${_review_journal_helper}" ] && [ -n "${RUNTIME_DIR:-}" ]; then
       git diff --name-only HEAD~1 HEAD > "${RUNTIME_DIR}/attempt_journal_review_files.txt" 2>/dev/null || true
       GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 python3 -B "${_review_journal_helper}" append \
-        --repo "${GITHUB_REPOSITORY}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${GITHUB_HEAD_REF:-}}}" \
+        --repo "${GITHUB_REPOSITORY}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-${GITHUB_HEAD_REF:-}}}}" \
         --stage review --outcome ok --approach inherit --deletions-from-commit \
         --files-file "${RUNTIME_DIR}/attempt_journal_review_files.txt" \
         ${_review_journal_gate:+--gate-result "${_review_journal_gate}"} || true

@@ -1315,7 +1315,7 @@ __SMOKE_OVERRIDE__
   if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ ! -e "${RUNTIME_DIR}/attempt_journal.txt" ] \
     && [[ "${SUPPORT_SCRIPTS_DIR:-}" == /* ]] && [ -f "${SUPPORT_SCRIPTS_DIR}/attempt_journal.py" ]; then
     GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 python3 -B "${SUPPORT_SCRIPTS_DIR}/attempt_journal.py" render \
-      --repo "${GITHUB_REPOSITORY:-${REPOSITORY:-}}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${GITHUB_HEAD_REF:-}}}" \
+      --repo "${GITHUB_REPOSITORY:-${REPOSITORY:-}}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-${GITHUB_HEAD_REF:-}}}}" \
       --out "${RUNTIME_DIR}/attempt_journal.txt" || true
   fi
   cat <<__EDITOR_PROMPT__

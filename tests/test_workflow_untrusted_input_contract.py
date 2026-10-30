@@ -534,10 +534,6 @@ def run_all_contract_tests() -> None:
 			test_func()
 
 
-if __name__ == "__main__":
-	run_all_contract_tests()
-
-
 # --- attempt journal (issue #8428, P1) ----------------------------------------------
 
 PERSIST_ENV_LINE = "PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}"
@@ -589,6 +585,10 @@ def test_attempt_journal_writers_are_gated_and_fail_open() -> None:
 		assert "        continue-on-error: true\n" in block and re.search(r'attempt_journal\.py"? append', block) and "|| true" in block
 		run_body = block.split("        run: |\n", 1)[1]
 		assert "${{" not in run_body, name
+		if name == "clarify.yml":
+			# Fast-path routes never reach the model, so they record no attempt.
+			assert "steps.clarify_route.outputs.skip_codex != 'true'" in block.split("\n", 1)[0]
+			assert '[ "${CLARIFY_BLOCKED}" = true ]' in run_body
 	for name in ("clarify.yml", "plan.yml", "implement.yml", "orchestrate_poll.yml"):
 		text = (WORKFLOW_DIR / name).read_text(encoding="utf-8")
 		assert re.search(r"(?m)^\s+for f in gh_helpers\.sh .*\battempt_journal\.py\b.*; do$", text), name
@@ -598,3 +598,7 @@ def test_attempt_journal_writers_are_gated_and_fail_open() -> None:
 	resolver = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
 	assert 'if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ]; then' in commit and "--stage review" in commit
 	assert '[ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] || return 0' in resolver and "--stage resolver" in resolver
+
+
+if __name__ == "__main__":
+	run_all_contract_tests()
