@@ -1324,3 +1324,34 @@ def test_tests_file_empty_value_never_falls_back_to_selection(tmp_path, monkeypa
 	result = json.loads(out.read_text(encoding="utf-8"))
 	assert result["ran"] == []
 	assert result["unverified"] == [{"item": "tests_file", "reason": "tests_file_unreadable"}]
+
+
+def test_tests_file_named_test_missing_on_both_trees_is_inherited(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_nowhere\n", baseline)
+	# pytest exits 4 on both trees: the change did not cause it.
+	assert result["failures"] == []
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_a.py"]
+
+
+def test_tests_file_names_ignored_by_whole_file_runners_are_unverified(tmp_path):
+	script = _repo(tmp_path, {"tests/test_m.py": "def test_x():\n\tpass\n\nif __name__ == '__main__':\n\ttest_x()\n"}, name="script")
+	units, unverified = gate.plan_units(script, {"affected_tests": [{"path": "tests/test_m.py", "reasons": ["tests_file"], "functions": ["test_x"]}]})
+	assert units[0]["argv"] == ["python3", "tests/test_m.py"]
+	assert unverified == [{"item": "tests/test_m.py", "reason": "tests_file_names_ignored"}]
+	override = _repo(tmp_path, {".ai/validate.yml": "prepush_test_command: run {files}\n", "tests/test_a.py": ""}, name="override")
+	units, unverified = gate.plan_units(override, {"affected_tests": [{"path": "tests/test_a.py", "reasons": ["tests_file"], "functions": ["test_x"]}]})
+	assert [u["id"] for u in units] == ["prepush_test_command"]
+	assert unverified == [{"item": "tests/test_a.py", "reason": "tests_file_names_ignored"}]
+	# Without --tests-file the selection's functions keep the old behaviour.
+	assert gate.plan_units(script, {"affected_tests": [{"path": "tests/test_m.py", "reasons": [], "functions": ["test_x"]}]})[1] == []
+
+
+def test_wrapper_trailing_tests_file_without_value_is_a_usage_error(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file")
+	assert proc.returncode == 0
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "usage_error"
+	assert not log.exists()

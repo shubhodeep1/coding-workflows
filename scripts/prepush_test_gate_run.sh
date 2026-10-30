@@ -99,7 +99,7 @@ while [ "$#" -gt 0 ]; do
 		--nested-node-modules-root) nested_nm_root="${2:-}"; shift 2 ;;
 		--shards) shards="${2:-}"; shift 2 ;;
 		--large-file-tests) large_file_tests="${2:-}"; shift 2 ;;
-		--tests-file) tests_file="${2:-}"; tests_file_given=1; shift 2 ;;
+		--tests-file) [ "$#" -ge 2 ] || { synthetic_result usage_error; exit 0; }; tests_file="${2:-}"; tests_file_given=1; shift 2 ;;
 		*) gate_log "outcome=error reason=unknown_argument"; synthetic_result usage_error; exit 0 ;;
 	esac
 done

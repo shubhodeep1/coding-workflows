@@ -586,6 +586,10 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 			files = " ".join(shlex.quote(entry["path"]) for entry in affected)
 			command = override.replace("{files}", files)
 			units.append({"id": "prepush_test_command", "file": None, "argv": ["bash", "-c", command], "kind": "test"})
+		for entry in affected:
+			if entry.get("functions") and "tests_file" in (entry.get("reasons") or []):
+				# `{files}` gets paths only: the listed `::name` filters do not apply.
+				unverified.append({"item": entry["path"], "reason": "tests_file_names_ignored"})
 		affected = []
 	for entry in affected:
 		path = entry["path"]
@@ -612,6 +616,9 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 					units.append(unit)
 			else:
 				units.append({"id": path, "file": path, "argv": ["python3", path], "kind": "test"})
+				if names and "tests_file" in (entry.get("reasons") or []):
+					# `python3 <file>` takes no test names: the whole file runs.
+					unverified.append({"item": path, "reason": "tests_file_names_ignored"})
 		elif path.endswith(".sh"):
 			units.append({"id": path, "file": path, "argv": ["bash", path], "kind": "test"})
 		elif re.search(r"\.(?:js|jsx|ts|tsx|mjs|cjs)$", path) and node:
@@ -818,16 +825,20 @@ def classify_baseline(
 	inherited_ids: set[str] = set()
 	rerun = [unit for unit in failed if unit.get("kind") != "static" and (unit.get("file") is None or (baseline / unit["file"]).is_file())]
 	if rerun:
+		pr_rcs = {unit["id"]: unit.get("rc") for unit in rerun}
 		reran = run_units(rerun, baseline, deadline, shards)
 		baseline_statuses = {unit["id"]: unit.get("status") for unit in reran}
 		for unit in rerun:
 			unit["baseline_status"] = baseline_statuses.get(unit["id"])
 		# pytest exits 4 (node not found) or 5 (nothing collected) when a named
 		# `--tests-file` test does not exist on the baseline, for example a test
-		# the change added. That is not an inherited failure.
+		# the change added. That is not an inherited failure. A node missing on
+		# both trees (4/5 on the PR tree too) is still inherited.
 		inherited_ids = {
 			unit["id"] for unit in reran
-			if unit.get("status") == "fail" and not (unit.get("tests_file_nodes") and unit.get("rc") in (4, 5))
+			if unit.get("status") == "fail" and not (
+				unit.get("tests_file_nodes") and unit.get("rc") in (4, 5) and pr_rcs.get(unit["id"]) not in (4, 5)
+			)
 		}
 	if repo is not None:
 		for unit in failed:
