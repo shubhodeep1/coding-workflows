@@ -827,6 +827,18 @@ def test_unreadable_pr_state_still_retries_head_bound_merge(path: str) -> None:
 
 
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+@pytest.mark.parametrize("body", ['{"message":"Server Error"}', "<html>502 Bad Gateway</html>", "garbage\tfalse\tfalse\t" + OTHER])
+def test_error_body_on_stdout_counts_as_unreadable_pr_state(path: str, body: str) -> None:
+	"""gh api prints an HTTP error's body to stdout; it must not read as not_open or head_moved."""
+	responses = _first_failure(path) + [{"code": 1, "stdout": body + "\n", "stderr": "gh: Server Error (HTTP 500)"}, _ok()]
+	proc, output, calls, _sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert not any("outcome=" in line for line in _retry_lines(proc.stdout))
+	assert calls[-1] == _expected_calls(path)[0]
+	_assert_merge_succeeded(path, output, proc.stdout)
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
 def test_transient_error_without_captured_stderr_is_not_retried(path: str) -> None:
 	proc, _output, calls, sleeps = _run_merge_site_scripted(path, _first_failure(path), tmpdir_exists=False)
 	assert proc.returncode == 0, proc.stderr
