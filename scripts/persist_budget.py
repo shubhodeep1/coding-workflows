@@ -17,16 +17,18 @@ Checks, in order:
 	1. no trusted journal entries                         -> ignore journal_absent
 	2. newest entry is a `governor` escalation (outcome blocked)
 		-> ignore already_decided
-	3. oldest entry older than PERSIST_MAX_HOURS          -> escalate max_hours
+	3. oldest entry (after the newest governor escalation, if any) older
+		than PERSIST_MAX_HOURS                            -> escalate max_hours
 		(a newest `governor` re-plan entry otherwise -> ignore already_decided)
-	4. rounds on the current approach >= PERSIST_MAX_ROUNDS and the newest
-		round failed (max_rounds), or
+	4. rounds on the current approach >= PERSIST_MAX_ROUNDS, unless the issue
+		is labelled ai:ready-to-merge (max_rounds), or
 		the newest PERSIST_REPLAN_AFTER_FAILED_ROUNDS rounds all failed
 		(failed_rounds), or the newest 2 rounds both failed with no progress
 		between them (no_progress)                       -> replan, or escalate
 		max_approaches:<trigger> once PERSIST_MAX_APPROACHES approaches exist;
-		a would-be re-plan of an issue labelled ai:done, ai:review-blocked or
-		ai:ready-to-merge (open PR; plan.yml skips planning) escalates
+		a would-be re-plan of an issue labelled ai:implementing, ai:done,
+		ai:review-blocked or ai:ready-to-merge (open PR; plan.yml skips
+		planning) escalates
 		open_pr:<trigger> instead
 	5. newest round is a failed `postmerge` round with no newer `plan` entry
 		(P5 hand-off)                                     -> replan / escalate
@@ -84,7 +86,12 @@ except Exception:  # noqa: BLE001 - fail open below
 SECURITY_LABEL = "ai:security-pass-failed"
 IGNORE_LABELS = ("ai:needs-human", "ai:closed")
 # Phases with an open implementation PR: plan.yml skips planning for them.
-OPEN_PR_LABELS = ("ai:done", "ai:review-blocked", "ai:ready-to-merge")
+# ai:implementing is included because implement.yml swaps it for ai:done only
+# best-effort after opening the PR; an implement run still in progress is
+# skipped earlier by the poller's active-workflow check.
+OPEN_PR_LABELS = ("ai:implementing", "ai:done", "ai:review-blocked", "ai:ready-to-merge")
+# The PR passed review and is waiting to merge: the rounds cap never pulls it back.
+MERGING_LABEL = "ai:ready-to-merge"
 ROUND_STAGES = ("implement", "review", "resolver", "postmerge")
 NO_PROGRESS_ROUNDS = 2
 ACTIONS = ("continue", "replan", "escalate", "ignore")
@@ -315,7 +322,14 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 	# max_hours first.
 	if newest_governor and ordered[-1].get("outcome") == "blocked":
 		return _result(ordered, "ignore", "already_decided", limits)
-	oldest = parse_ts(ordered[0]["ts"])
+	# The time window starts at the first entry after the newest governor
+	# escalation, so work a person resumed gets a fresh window instead of
+	# being escalated again on its first idle tick.
+	start = 0
+	for index, entry in enumerate(ordered):
+		if entry.get("stage") == "governor" and entry.get("outcome") == "blocked":
+			start = index + 1
+	oldest = parse_ts(ordered[start]["ts"])
 	if oldest is not None and (now - oldest).total_seconds() > limits["max_hours"] * 3600:
 		return _result(ordered, "escalate", "max_hours", limits)
 	if newest_governor:
@@ -323,9 +337,10 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 	can_replan = approaches(ordered) < limits["max_approaches"]
 	items = rounds(ordered, current_approach(ordered))
 	trigger = ""
-	# max_rounds counts every round, but only acts when the newest round
-	# failed, so a passing PR is never pulled back to planning.
-	if len(items) >= limits["max_rounds"] and failed(items[-1]):
+	# max_rounds counts every round, whatever its outcome (review rounds are
+	# journalled `ok` because each one is an autofix commit); only a PR that
+	# passed review and waits to merge is never pulled back.
+	if len(items) >= limits["max_rounds"] and MERGING_LABEL not in _labels(labels):
 		trigger = "max_rounds"
 	elif trailing_failed(items) >= limits["replan_after"]:
 		trigger = "failed_rounds"

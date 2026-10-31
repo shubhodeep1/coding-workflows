@@ -29373,6 +29373,15 @@ def test_persist_budget_escalate_adds_label_and_one_comment():
 		assert "--stage governor --outcome blocked" in log
 
 
+def test_persist_budget_failed_escalation_comment_pages_once():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, log = _run_persist_budget(Path(tmp), _pb_decision("escalate", "max_hours"), gh_fail="body=## Persistence budget reached")
+		assert proc.returncode == 0, proc.stderr
+		assert "PERSIST governor outcome=error reason=comment_post_failed issue=12" in proc.stderr
+		assert log.count("--add-label ai:needs-human") == 1 and log.count("TG 12 WARNING") == 1
+		assert "RESULT action=escalate" in proc.stdout and "--stage governor --outcome blocked" in log
+
+
 def test_persist_budget_tick_cap_defers_after_five_decisions():
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, log = _run_persist_budget(Path(tmp), _pb_decision("escalate"), calls_per_run=6)
@@ -29429,7 +29438,8 @@ def test_persist_budget_failed_answer_post_is_retried_next_tick():
 
 
 def test_persist_budget_reads_comments_only_when_the_cache_cannot_be_used():
-	for comments, reads in (('[{"id":1,"body":"x"}]', 0), ("[]", 1), ("", 1), (json.dumps([{"id": i} for i in range(100)]), 1)):
+	# `[]` is an authoritative empty cache (no read); "" means no cache (one read).
+	for comments, reads in (('[{"id":1,"body":"x"}]', 0), ("[]", 0), ("", 1), ("{}", 1), (json.dumps([{"id": i} for i in range(100)]), 1)):
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, log = _run_persist_budget(Path(tmp), _pb_decision("continue", "within_budget"), comments=comments)
 			assert proc.returncode == 0, proc.stderr
@@ -29447,7 +29457,8 @@ def test_persist_budget_hooks_are_switch_gated_and_placed():
 	assert recovery.index('if [ "${phase}" = "ai:claude-capacity-wait" ]; then') < hook
 	assert hook < recovery.index("status_since=\"$(echo \"${updated_state}\" | jq -r '.status_since_ts // 0')\"")
 	block = recovery[hook:recovery.index("status_since=", hook)]
-	assert 'persist_budget_govern_issue "${issue_num}" "${comments_json}" "${labels_json}"' in block
+	assert 'persist_budget_govern_issue "${issue_num}" "${_pb_standalone_comments}" "${labels_json}"' in block
+	assert '_pb_standalone_comments=""' in block
 	assert ".persist_budget_basis // \"\"" in block and ".persist_budget_basis = $basis" in block
 	assert 'write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"\n          continue' in block
 	# Managed: inside the not-stuck branch, before stall detection.
@@ -29506,7 +29517,8 @@ def test_persist_budget_managed_hook_records_basis_on_replan():
 		assert "CHANGED=true" in proc.stdout
 		log = calls.read_text(encoding="utf-8")
 		assert 'GOV 12 [{"id":1}] ["ai:done"] prior= scope=managed active=99' in log
-		assert 'GOV 14 [] ["ai:review-blocked"] prior=old scope=managed' in log
+		# No cached comments for #14: the governor gets "" and reads them itself.
+		assert 'GOV 14  ["ai:review-blocked"] prior=old scope=managed' in log
 		assert "GOV 13" not in log and "GOV 15" not in log and log.count("RUNS") == 1
 		assert "PERSIST governor outcome=skipped reason=dedicated_phase issue=15" in proc.stderr
 		stall_labels = json.loads(proc.stdout.split("STALL_LABELS=", 1)[1].strip())

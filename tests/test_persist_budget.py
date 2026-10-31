@@ -115,19 +115,26 @@ CASES = [
 	("progress_via_failure_key", [_plan(), *_fails(2, keys=KEYS[:2])], [], CAPS, "continue", "within_budget"),
 	(
 		"replan_at_max_rounds_below_cap",
-		[_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(4)], _entry("review", "fail", minutes_ago=200, failure_key=KEYS[0])],
+		# Review rounds are journalled `ok` in production (review_commit_changes.sh).
+		[_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(5)]],
 		[], CAPS, "replan", "max_rounds",
 	),
 	(
-		"max_rounds_with_passing_newest_round_continues",
+		"max_rounds_ready_to_merge_continues",
 		[_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(5)]],
 		["ai:ready-to-merge"], CAPS, "continue", "within_budget",
 	),
 	(
+		"max_rounds_review_cycling_with_open_pr_escalates",
+		[_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(5)]],
+		["ai:done"], CAPS, "escalate", "open_pr:max_rounds",
+	),
+	(
 		"escalate_at_max_rounds_at_cap",
-		[_plan(1, 900), _plan(2, 800), _plan(3, 700), *[_entry("review", "ok", 3, 300 - i) for i in range(4)], _entry("review", "fail", 3, 200, failure_key=KEYS[0])],
+		[_plan(1, 900), _plan(2, 800), _plan(3, 700), *[_entry("review", "ok", 3, 300 - i) for i in range(5)]],
 		[], CAPS, "escalate", "max_approaches:max_rounds",
 	),
+	("implementing_label_escalates_instead_of_replan", [_plan(), *_fails(2)], ["ai:implementing"], CAPS, "escalate", "open_pr:no_progress"),
 	("open_pr_escalates_instead_of_replan", [_plan(), *_fails(2)], ["ai:done"], CAPS, "escalate", "open_pr:no_progress"),
 	("review_blocked_escalates_instead_of_replan", [_plan(), *_fails(3, keys=KEYS[:3], stage="review")], ["ai:review-blocked"], CAPS, "escalate", "open_pr:failed_rounds"),
 	(
@@ -156,6 +163,16 @@ CASES = [
 	(
 		"stranded_replan_escalates_at_max_hours",
 		[_entry("plan", "ok", 1, 49 * 60), *_fails(3, keys=KEYS[:3]), _entry("governor", "ok", minutes_ago=5)],
+		[], CAPS, "escalate", "max_hours",
+	),
+	(
+		"resumed_after_escalation_gets_a_fresh_time_window",
+		[_entry("plan", "ok", 1, 49 * 60), *_fails(3, keys=KEYS[:3]), _entry("governor", "blocked", minutes_ago=30 * 60), _entry("implement", "ok", minutes_ago=10)],
+		[], CAPS, "continue", "within_budget",
+	),
+	(
+		"resumed_after_escalation_escalates_after_a_new_window",
+		[_entry("plan", "ok", 1, 100 * 60), _entry("governor", "blocked", minutes_ago=99 * 60), _entry("implement", "ok", minutes_ago=49 * 60), _entry("implement", "ok", minutes_ago=10)],
 		[], CAPS, "escalate", "max_hours",
 	),
 	(
@@ -251,7 +268,7 @@ def test_cli_decides_from_trusted_comments() -> None:
 		comments.write_text(json.dumps(_journal_comments([_plan(), *_fails(2)], "pipeline-bot[bot]")), encoding="utf-8")
 		proc, out = _run_cli(tmp_path, [
 			"--comments-file", str(comments), "--trusted-login", "pipeline-bot",
-			"--labels", '["ai:implementing"]', "--now", NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
+			"--labels", '["ai:awaiting-approval"]', "--now", NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
 		])
 		assert proc.returncode == 0, proc.stderr
 		decision = json.loads(out.read_text(encoding="utf-8"))

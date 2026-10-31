@@ -19629,7 +19629,9 @@ persist_budget_govern_issue() {
   { [ -n "${pbg_labels}" ] && printf '%s' "${pbg_labels}" | jq -e 'type == "array"' >/dev/null 2>&1; } || pbg_labels='[]'
   # The poller's GraphQL caches hold the newest 100 comments; the journal
   # comment is created early and edited in place, so a full window may hide it.
-  if [ -z "${pbg_comments}" ] || ! printf '%s' "${pbg_comments}" | jq -e 'type == "array" and length > 0 and length < 100' >/dev/null 2>&1; then
+  # An empty string means the caller had no comment cache; an authoritative
+  # empty array `[]` is used as-is (no journal, no API call).
+  if [ -z "${pbg_comments}" ] || ! printf '%s' "${pbg_comments}" | jq -e 'type == "array" and length < 100' >/dev/null 2>&1; then
     if ! pbg_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${pbg_issue}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
       || [ -z "${pbg_comments}" ] || ! printf '%s' "${pbg_comments}" | jq -e 'type == "array"' >/dev/null 2>&1; then
       echo "PERSIST governor outcome=skipped reason=comments_unavailable issue=${pbg_issue}" >&2
@@ -19726,8 +19728,12 @@ persist_budget_govern_issue() {
       return 0
     fi
     pbg_body="$(printf '## Persistence budget reached\n\n%s: %s. The issue is labelled `ai:needs-human`; unattended work stops until a person decides.\n\n%s\n' "${pbg_lead}" "${pbg_reason}" "${pbg_summary}")"
-    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pbg_issue}/comments" -f body="${pbg_body}" >/dev/null 2>&1 \
-      || echo "PERSIST governor outcome=error reason=comment_post_failed issue=${pbg_issue}" >&2
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pbg_issue}/comments" -f body="${pbg_body}" >/dev/null 2>&1; then
+      # The label landed, so the escalation stands; later ticks ignore the
+      # issue (ai:needs-human), so the reason goes out once on Telegram instead.
+      echo "PERSIST governor outcome=error reason=comment_post_failed issue=${pbg_issue}" >&2
+      tg_notify_issue "${pbg_issue}" "${pbg_lead} reached (${pbg_reason}); labelled ai:needs-human, but the explanation comment could not be posted." "WARNING"
+    fi
     pbg_journal_outcome="blocked"
   fi
   PERSIST_BUDGET_TICK_DECISIONS=$((PERSIST_BUDGET_TICK_DECISIONS + 1))
@@ -23105,7 +23111,13 @@ PY
     # journal basis in this issue's state (one decision per journal state)
     # and skips the stall action this tick; an escalation skips it too.
     if _is_truthy "${PERSIST_BUDGET_ENABLED:-false}" && [ -f scripts/persist_budget.py ]; then
-      persist_budget_govern_issue "${issue_num}" "${comments_json}" "${labels_json}" \
+      # Empty string when this issue's comment cache was unavailable, so the
+      # governor reads the comments once; `[]` from a complete cache is used as-is.
+      _pb_standalone_comments="${comments_json}"
+      if [ "${_standalone_staged_support_cache_available}" = "false" ] || [ "${_standalone_staged_support_comments_unavailable}" = "true" ]; then
+        _pb_standalone_comments=""
+      fi
+      persist_budget_govern_issue "${issue_num}" "${_pb_standalone_comments}" "${labels_json}" \
         "$(printf '%s' "${updated_state}" | jq -r '.persist_budget_basis // ""' 2>/dev/null || true)" standalone
       case "${PERSIST_BUDGET_LAST_ACTION}" in
         replan)
@@ -30722,13 +30734,16 @@ fi
         _pb_labels="$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${_pb_issue}" '.[$n] // []' 2>/dev/null || echo '[]')"
         # Dedicated-handler phases (DEDICATED_HANDLER_PHASES in
         # orchestrate_lib.py) and human latches are owned elsewhere; the
-        # standalone loop skips the same phases before its hook.
+        # standalone loop skips a similar (not identical) set before its hook.
         if printf '%s' "${_pb_labels}" | jq -e 'any(.[]; (if type == "object" then .name else . end) | IN("ai:needs-human", "ai:claude-capacity-wait", "ai:split-to-project", "ai:blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing", "ai:security-pass", "ai:security-pass-fixing", "ai:destructive-blocked", "ai:scope-blocked"))' >/dev/null 2>&1; then
           echo "PERSIST governor outcome=skipped reason=dedicated_phase issue=${_pb_issue}" >&2
           continue
         fi
+        # Empty string (not `[]`) when the cache has no comments for this
+        # issue, so the governor reads them once instead of treating the
+        # issue as having none.
         _pb_comments="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${_pb_issue}" \
-          'if (.[$n].comments_available == true) and ((.[$n].comments | type) == "array") then .[$n].comments else [] end' 2>/dev/null || echo '[]')"
+          'if (.[$n].comments_available == true) and ((.[$n].comments | type) == "array") then .[$n].comments else empty end' 2>/dev/null || true)"
         persist_budget_govern_issue "${_pb_issue}" "${_pb_comments}" "${_pb_labels}" "${_pb_prior}" managed < /dev/null
         if [ "${PERSIST_BUDGET_LAST_ACTION}" = "replan" ] || [ "${PERSIST_BUDGET_LAST_ACTION}" = "escalate" ]; then
           PERSIST_BUDGET_STALL_LABELS_JSON="$(printf '%s' "${PERSIST_BUDGET_STALL_LABELS_JSON}" | jq -c --arg n "${_pb_issue}" \
