@@ -412,6 +412,8 @@ When a runtime validation run failed because of the validation harness coding-wo
 
 What this means for operators: a project no longer waits on fix-up issues for a harness defect it cannot repair. Set `VALIDATION_HARNESS_HEAL_ENABLED=false` (default `true`) to turn the report off and keep the old behaviour.
 
+- **The sweep's CI re-run now also covers jobs that failed because an action could not be resolved.** In run 41054179361 (PR #8436) the job `tests-hooks-and-orchestrator` failed before any step ran with GitHub's "Unable to resolve action" error, although the same tags resolved in the run's other jobs. `scripts/ci_cancelled_rerun.py` now treats a failed job as transient when it ran no steps and every failure annotation is that error, and re-runs the run's failed jobs once with log reason `action_resolution`. A run that mixes such jobs with runner-shutdown jobs still re-runs as `runner_shutdown`. Any other annotation keeps the run genuine. The once-per-head cap and the per-tick caps are unchanged, and no extra API reads are made. Set `CI_ACTION_RESOLUTION_RERUN_ENABLED=false` in the helper's environment to turn only this class off; any value other than unset, empty, `true` or `false` also turns it off and logs a warning. The review sweep workflow forwards the repository variable of the same name to the helper (default `true`). Refs #8470.
+
 ### For contributors
 
 - New `workflow_call` outputs: `failure_owner` (`harness`, `project`, `mixed` or `none`), `harness_report`, `harness_stage`, `harness_reason` and `harness_fp`. The existing outputs are unchanged.
@@ -1743,6 +1745,51 @@ What this means for operators: nothing to set or change. Runs that label many is
 | `timeout-minutes`, job names, step names, `CI / lint` | unchanged |
 
 What this means for operators: nothing to do. If `orchestrate-poll (4)` still runs near 15 minutes, the next budget-watch issue will carry its step timings.
+
+- **The three test steps moved out of the CI job `static-checks`.** That job took 11m17s of its 15-minute timeout on `main` (run 40954844196, budget-watch issue #8394). A job that reaches its timeout turns CI red even when the code is fine. The steps run unchanged and keep their names, once per CI run:
+
+  | Step | New job |
+  |---|---|
+  | `Implement post-Codex recovery unit tests` | `tests-hooks-and-orchestrator` |
+  | `Validation self-test unit tests` | `orchestrate-poll`, group 3 only (`if: strategy.job-index == 3`) |
+  | `Validation bootstrap and family direct-run tests` | `tests-promote-stall-and-review` |
+
+  The pick is an estimate, not a measurement: the run's step timings could not be read from the implement sandbox, which has no network. These three were the only test steps in `static-checks` (moved there in #7250 and #7334); the job measured about 2 minutes before those moves, and it again runs only its static checks plus the small contract tests for its own guards. The steps are spread over three jobs so that no single destination takes all of them. The self-test step, the largest by test and subprocess count, goes to `orchestrate-poll` group 3, whose only other pinned steps are two single-module steps and whose slice shrank from 1/4 to 1/5 in #8113. The bootstrap step goes to `tests-promote-stall-and-review`, the job with the most recorded room (#8278). The small post-Codex step goes to `tests-hooks-and-orchestrator`, which shed several steps in #8281. None of the steps needs git history or Node. If a destination job comes near its timeout, the next `budget-watch` run on `main` opens an issue for it that links the run, whose step timings show what to move.
+
+  `tests/test_ci_poll_test_sharding.py` now checks that each moved step runs once, in its new job, after that job installs its Python dependencies, that it still names all its test modules, and that the `orchestrate-poll` step is pinned to group 3. No job was added or renamed, no `timeout-minutes` changed, and the `CI / lint` check works as before. A failure in one of these tests now shows up under the new job's check-run (`orchestrate-poll (3)` for the self-test step; the other groups show it as skipped). Operators have nothing to do.
+
+- **CI: the three single-file orchestrate-poll test modules now run in `orchestrate-poll (3)` instead of `orchestrate-poll (1)` (#8396).** Group 1 took 20m12s of its 20-minute `timeout-minutes` on `main` (run 40954844196). A job that reaches its timeout is cancelled and turns CI red with no code fault. This step was group 1's only pinned step besides its slice, so it moved to group 3, which has not been named by budget-watch since its unblock step left (#8072) and its slice shrank to a fifth (#8113). Group 3 also took `Validation self-test unit tests` from `static-checks` in #8394, so it now pins four steps besides its slice:
+
+  | Step | Old group | New group |
+  |---|---|---|
+  | `Orchestrate poll single-file module tests` (`test_orchestrate_poll_noop_suspicious_recovery.py`, `test_state_snapshot.py`, `test_run_substate_ledger.py`) | 1 | 3 |
+
+  The run's step timings were not readable when this was planned, so the choice of step and destination is an estimate from recorded group totals. The commands and their order are unchanged, and the modules still run once per CI run. No job was added or renamed, no `timeout-minutes` changed, and `CI / lint` is unchanged. A failure in these modules now shows under `orchestrate-poll (3)`. Operators have nothing to do.
+
+- **Tests: the cancel-on-PR-close sweep test now also asserts that the job's concurrency group is not the repository-wide group (#8411).** The test already parsed the workflow and checked the per-PR key; the new assertion fails directly if the group reverts to the repository-wide key.
+
+- **Three test steps moved out of the CI job `tests-promote-stall-and-review`.** That job took 15m33s of its 20-minute timeout on `main` (run 41042353484, budget-watch issue #8466). A job that reaches its timeout turns CI red even when the code is fine. The steps run unchanged and keep their names, once per CI run, at the end of the release job:
+
+  | Step | New job |
+  |---|---|
+  | `Validation bootstrap and family direct-run tests` | `tests-release-and-log-analysis` |
+  | `Review/judge/conflict strict-render contract test` | `tests-release-and-log-analysis` |
+  | `Review synthesize-smoke contract test` | `tests-release-and-log-analysis` |
+
+  `tests-release-and-log-analysis` has had no budget-watch issue of its own since #8278, which moved its largest step out, and #8268 cut its collector coverage gate from about 5 minutes to seconds. The other test jobs had more recent issues (#8281, #8394, #8395). The bootstrap step arrived in `tests-promote-stall-and-review` from `static-checks` in #8394 and now moves on again. The run's step timings could not be read, so the steps were picked by estimated cost (test and subprocess counts), not measured, and the release job's remaining headroom is likewise an estimate. If either job comes near its timeout, the next `budget-watch` run on `main` opens an issue for it that links the run's step timings. `tests/test_ci_poll_test_sharding.py` now checks that each moved step runs once, in its new job.
+
+  No job was added or renamed, no `timeout-minutes` changed, and the `CI / lint` check works as before. A failure in one of these tests now shows up under the check-run `tests-release-and-log-analysis`. Operators have nothing to do.
+
+- **CI: the `Validation self-test unit tests` step moved from `orchestrate-poll (3)` back to `static-checks` (#8472).** Group 3 took 19m30s of its 20-minute `timeout-minutes` on `main` (run 41071474282). A job that reaches its timeout is cancelled and turns CI red with no code fault. Group 3 had stayed under budget-watch's warning line until it gained this step (#8394) and `Orchestrate poll single-file module tests` (#8396) together, and this step is the slower of the two.
+
+  | Step | Old location | New location |
+  |---|---|---|
+  | `Validation self-test unit tests` | `orchestrate-poll`, group 3 | `static-checks` |
+  | `Orchestrate poll single-file module tests` | `orchestrate-poll`, group 3 | unchanged (group 3) |
+
+  This step was first moved to `tests-promote-stall-and-review`, which was cancelled at its 20-minute timeout on the pull request's own CI run (41097621008) while the step still had twelve modules to finish. Every 20-minute job already sits near budget-watch's warning line. `static-checks` is the only job with a measured bound: it took 11m17s with this step and two other test steps (run 40954844196), so with this step alone it stays under its 15-minute timeout, though it may cross budget-watch's 11m15s warning line. The step name and commands are unchanged; only the `strategy.job-index == 3` guard was dropped, because `static-checks` has no matrix. No job was added or renamed, no `timeout-minutes` changed, and `CI / lint` is unchanged. A failure in these tests now shows under `static-checks` instead of `orchestrate-poll (3)`. Operators have nothing to do.
+
+- **The Claude pool token step now retries a failed OIDC token request.** `scripts/claude_pool_token.sh` makes at most 3 attempts at the runner's OIDC endpoint, sleeping 2s and then 5s, with the same 30s limit per attempt. It retries only when there was no response (`000`), on `429`, or on a `5xx`; `401`, `403` and every other code still fail at once. Each retry logs `CLAUDE_POOL oidc_retry attempt=<n> code=<code>` with no token and no URL. The final reason stays `oidc_request_failed_<code>`, and the broker request is still made once. Set `CLAUDE_POOL_OIDC_RETRY_ENABLED=false` to keep the single attempt; unset, empty or `true` keeps the retry on, and any other value turns it off and logs a warning. `CLAUDE_POOL_OIDC_RETRY_SLEEPS` (default `2 5`) sets the two sleeps. The engine-fallback heal scope now includes `scripts/claude_pool_token.sh`. Refs #8481.
 
 ### For contributors
 
@@ -3942,6 +3989,8 @@ When standalone stall recovery asked the stall judge and the judge chose `close_
 | Extra GitHub API calls | 0 (labels come from the source-issue read each path already makes) |
 
 What this means for consumer repos: after the next `@stable` sync, a stalled CI-triage issue that gets re-issued routes to the failing PR's head branch like the original did, and the triage filer's dedup still sees it, so no duplicate triage issue is filed for the same failure. A standalone issue re-issued through the stall judge stays standalone. Wave items and other project issues, such as security-pass fix issues, keep `ai:orchestrator-managed` as before. Issues already re-issued with the wrong labels, such as `btc_sweeper#223`, still need their labels fixed by hand or need to be closed.
+
+- **The review sweep now forwards the `CI_ACTION_RESOLUTION_RERUN_ENABLED` off switch to the CI re-run helper.** The `Re-run cancelled CI failed jobs once` step in `.github/workflows/review_autofix_sweep.yml` passes the repository variable `CI_ACTION_RESOLUTION_RERUN_ENABLED` (default `true`) to `scripts/ci_cancelled_rerun.py`, so setting it to `false` turns off `action_resolution` re-runs without a code change. Behaviour while the variable is unset is unchanged. Refs #8480, Refs #8471.
 
 ### For contributors
 
