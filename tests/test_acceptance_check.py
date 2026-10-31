@@ -367,7 +367,8 @@ def test_implement_pr_body_is_switch_gated():
 	text = IMPLEMENT_WF.read_text(encoding="utf-8")
 	start = text.index("# Done-check (issue #8427, P2): the trailer marker")
 	block = text[start:text.index("printf '%s\\n\\n' \"${PR_TITLE}\"", start)]
-	assert 'if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = true ] && [ -s "${PLAN_FILE:-}" ]; then' in block
+	# P3 (repair loop) widens the switch; with both switches off the section is skipped.
+	assert 'if { [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = true ] || [ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ]; } && [ -s "${PLAN_FILE:-}" ]; then' in block
 	assert "parse --plan-comment-file" in block and "render --in" in block
 	assert text.index('cat "${GATE_SUMMARY}"') < start < text.index("lint_pr_body_auto_close.py\" \\\n            --pr-body-file")
 
@@ -401,3 +402,114 @@ def test_post_comment_is_byte_identical_with_the_switch_off(tmp_path, switch):
 		expected += "<!-- AI_ACCEPTANCE_V1 {} -->\n"
 	expected += "<!-- ai:plan-proposal:v1 -->\n"
 	assert comment.read_text(encoding="utf-8") == expected
+
+
+# --- Repair loop (issue #8427, P3) -------------------------------------------
+
+P3_DONE_CHECK = {
+	"schema": "acceptance.v1", "state": "valid", "source": "plan", "errors": [],
+	"tests": [
+		{"path": "tests/test_a.py", "name": "test_x", "red_on_base": False},
+		{"path": "tests/test_b.py", "name": "", "red_on_base": True},
+		{"path": "tests/test_c.py", "name": "", "red_on_base": True},
+		{"path": "tests/test_d.py", "name": "", "red_on_base": True},
+		{"path": "tests/test_e.py", "name": "", "red_on_base": False},
+	],
+	"checks": [{"name": "CI"}], "post_merge": None, "post_merge_none": "library change only",
+}
+
+
+def test_gate_files_lists_every_test_and_the_red_on_base_ones(tmp_path):
+	src = tmp_path / "acceptance.json"
+	src.write_text(json.dumps(P3_DONE_CHECK), encoding="utf-8")
+	tests, base = tmp_path / "tests.txt", tmp_path / "base.txt"
+	proc = subprocess.run([sys.executable, str(SCRIPT), "gate-files", "--in", str(src), "--tests-out", str(tests), "--baseline-out", str(base)],
+		capture_output=True, text=True, check=True)
+	assert proc.stdout.strip() == "5"
+	assert tests.read_text(encoding="utf-8").splitlines() == ["tests/test_a.py::test_x", "tests/test_b.py", "tests/test_c.py", "tests/test_d.py", "tests/test_e.py"]
+	assert base.read_text(encoding="utf-8").splitlines() == ["tests/test_b.py", "tests/test_c.py", "tests/test_d.py"]
+	src.write_text(json.dumps(dict(P3_DONE_CHECK, state="invalid")), encoding="utf-8")
+	proc = subprocess.run([sys.executable, str(SCRIPT), "gate-files", "--in", str(src), "--tests-out", str(tests), "--baseline-out", str(base)],
+		capture_output=True, text=True, check=True)
+	assert proc.stdout.strip() == "0" and tests.read_text(encoding="utf-8") == "" and base.read_text(encoding="utf-8") == ""
+
+
+def test_gate_result_status_table_and_extra_unmet():
+	gate = {
+		"failures": [{"test": "tests/test_a.py", "file": "tests/test_a.py"}],
+		"acceptance": {
+			"tests/test_a.py::test_x": {"head": "fail", "base": "not_run"},
+			"tests/test_b.py": {"head": "pass", "base": "fail"},
+			"tests/test_c.py": {"head": "pass", "base": "pass"},
+			"tests/test_d.py": {"head": "pass", "base": "not_run", "base_reason": "absent_on_base"},
+			"tests/test_e.py": {"head": "unverified", "base": "not_run"},
+		},
+	}
+	scored = ac.gate_result(P3_DONE_CHECK, gate)
+	statuses = {(i["kind"], i["target"]): i["status"] for i in scored["acceptance"]["items"]}
+	assert statuses == {
+		("test", "tests/test_a.py::test_x"): "unmet",
+		("test", "tests/test_b.py"): "met",
+		("test", "tests/test_c.py"): "unmet (passes on base)",
+		("test", "tests/test_d.py"): "met",
+		("test", "tests/test_e.py"): "not run",
+		("check", "CI"): "not run",
+	}
+	# test_a's file is already a failure this change caused; only test_c adds.
+	assert scored["state"] == "unmet" and scored["unmet_count"] == 2 and scored["extra_unmet"] == 1
+	assert ac.gate_result(P3_DONE_CHECK, {})["state"] == "not_run"
+	assert ac.gate_result(dict(P3_DONE_CHECK, state="invalid"), gate)["state"] == "none"
+	met = {"acceptance": {t: {"head": "pass", "base": "fail"} for t in ("tests/test_a.py::test_x", "tests/test_b.py", "tests/test_c.py", "tests/test_d.py", "tests/test_e.py")}}
+	assert ac.gate_result(P3_DONE_CHECK, met)["state"] == "met"
+
+
+def test_gate_result_cli_feeds_render(tmp_path):
+	src, gate, out = tmp_path / "a.json", tmp_path / "result.json", tmp_path / "acceptance_result.json"
+	src.write_text(json.dumps(P3_DONE_CHECK), encoding="utf-8")
+	gate.write_text(json.dumps({"acceptance": {"tests/test_c.py": {"head": "pass", "base": "pass"}}}), encoding="utf-8")
+	proc = subprocess.run([sys.executable, str(SCRIPT), "gate-result", "--in", str(src), "--gate-result", str(gate), "--out", str(out)],
+		capture_output=True, text=True, check=True)
+	assert proc.stdout.strip() == "unmet 1"
+	assert json.loads(out.read_text(encoding="utf-8"))["schema"] == "acceptance_result.v1"
+	section = subprocess.run([sys.executable, str(SCRIPT), "render", "--in", str(src), "--gate-result", str(out)],
+		capture_output=True, text=True, check=True).stdout
+	assert "| test (red-on-base) | tests/test_c.py | unmet (passes on base) |" in section
+	assert "| test | tests/test_a.py::test_x | not run |" in section
+
+
+def _plan_comment(login: str, created: str, path: str) -> dict:
+	obj = dict(P3_DONE_CHECK, tests=[{"path": path, "name": "", "red_on_base": False}])
+	return {"user": {"login": login}, "created_at": created, "body": "Plan\n" + ac.marker_line(obj) + "\n" + ac.PROPOSAL_TRAILER}
+
+
+def test_fetch_plan_takes_the_newest_trusted_plan_comment(tmp_path):
+	comments = tmp_path / "comments.json"
+	comments.write_text(json.dumps([
+		_plan_comment("pipeline-bot", "2026-10-01T00:00:00Z", "tests/old.py"),
+		_plan_comment("pipeline-bot[bot]", "2026-10-02T00:00:00Z", "tests/new.py"),
+		_plan_comment("mallory", "2026-10-03T00:00:00Z", "tests/forged.py"),
+	]), encoding="utf-8")
+	out = tmp_path / "acceptance.json"
+	args = [sys.executable, str(SCRIPT), "fetch-plan", "--repo", "o/r", "--pr", "12", "--issue", "7",
+		"--comments-file", str(comments), "--out", str(out)]
+	proc = subprocess.run([*args, "--trusted-login", "pipeline-bot"], capture_output=True, text=True, check=True)
+	assert json.loads(out.read_text(encoding="utf-8"))["tests"][0]["path"] == "tests/new.py"
+	assert "PERSIST acceptance outcome=valid reason=ok" in proc.stderr
+	proc = subprocess.run([*args, "--trusted-login", "someone-else"], capture_output=True, text=True, check=True)
+	assert json.loads(out.read_text(encoding="utf-8"))["state"] == "none"
+	assert "reason=plan_absent" in proc.stderr
+
+
+def test_fetch_plan_without_identity_or_linked_issue_is_none(tmp_path, monkeypatch):
+	import attempt_journal
+	calls = []
+	monkeypatch.setattr(attempt_journal, "resolve_login", lambda explicit: calls.append(explicit) or "")
+	monkeypatch.setattr(attempt_journal, "load_comments", lambda *a: calls.append(a) or [])
+	monkeypatch.delenv("LINKED_ISSUES_JSON", raising=False)
+	monkeypatch.delenv("LINKED_ISSUE_FALLBACK_NUMBERS_JSON", raising=False)
+	obj, reason = ac.fetch_plan("o/r", "12", "feature/x", None, None, None)
+	assert obj["state"] == "none" and reason == "plan_absent"
+	obj, reason = ac.fetch_plan("o/r", "12", "ai/issue-7", None, str(tmp_path / "missing.json"), None)
+	assert obj["state"] == "none" and reason == "identity_unavailable"
+	# No comments read without a trusted identity.
+	assert calls == [None]

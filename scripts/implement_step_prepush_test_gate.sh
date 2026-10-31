@@ -10,8 +10,8 @@
 # caused (not `inherited`) get exactly one editor repair turn, through the
 # same isolated launch as the post-Codex syntax repair. Edits outside the
 # repair allow-list are rolled back, syntax is re-validated (a syntax failure
-# reverts the whole repair), and the gate runs once more; there is never a
-# second repair. The host writes ${RUNTIME_DIR}/prepush_test_gate_summary.md
+# reverts the whole repair), and the gate runs once more; one repair unless
+# PERSIST_REPAIR_LOOP_ENABLED=true. The host writes ${RUNTIME_DIR}/prepush_test_gate_summary.md
 # from the final result.json (never from the container's summary.md, which
 # tests can write); the PR-body pre-flight step appends it as
 # "## Pre-push test gate".
@@ -33,6 +33,16 @@
 #   PREPUSH_TEST_GATE_TIMEOUT_MINUTES   15
 #   PREPUSH_TEST_GATE_LARGE_FILE_TESTS  50
 #   PREPUSH_TEST_GATE_SHARDS            4
+#   PERSIST_REPAIR_LOOP_ENABLED         false (issue #8427, P3: repair loop)
+#   PERSIST_REPAIR_MAX_TURNS            3 (integers clamped to 1..5; else 3)
+#
+# Repair loop (PERSIST_REPAIR_LOOP_ENABLED=true): the done-check of the trusted
+# plan comment (PLAN_FILE, through scripts/acceptance_check.py) adds its tests
+# to every run (--tests-file / --expect-baseline-fail-file) and its unmet
+# targets to the repair count. Repairs repeat while the count is above zero,
+# strictly drops, stays under PERSIST_REPAIR_MAX_TURNS and fits the step
+# budget. Writes ${RUNTIME_DIR}/acceptance_result.json; logs one
+# `PERSIST repair_loop` line. With the switch off nothing here changes.
 #
 # Never blocks the push: every path, bootstrap errors included, ends with
 # status 0. No GitHub API call. Log prefix: PREPUSH_TEST_GATE phase=implement.
@@ -49,6 +59,7 @@ implement_prepush_test_gate_log()
 #   allow SELECTION RESULT        affected tests, companions, failing files
 #   summary RESULT MODULE OUT MODE REPAIR INITIAL
 #   expected SELECTION            advisory expected-files lines
+#   donecheck ACCEPTANCE_RESULT   unmet done-check lines (at most 10)
 IMPLEMENT_PREPUSH_TEST_GATE_PY='
 import json
 import re
@@ -167,7 +178,7 @@ def main(argv):
 		extra = ["- Mode: `" + gate_mode + "`", "- Repair turn: " + repair]
 		if initial and initial != clean["status"]:
 			extra.append("- Status before the repair turn: **" + initial + "**")
-		if repair.startswith("ran (re-run skipped"):
+		if repair.startswith("ran (re-run skipped") or "; re-run skipped" in repair:
 			extra.append("- The result above predates the repair turn: the re-run was skipped.")
 		lines = lines[:3] + extra + lines[3:]
 		text = scrub("\n".join(lines))
@@ -175,6 +186,18 @@ def main(argv):
 		if len(data) > SUMMARY_CAP:
 			text = data[:SUMMARY_CAP].decode("utf-8", "ignore") + "\n\n(summary truncated)"
 		Path(out_path).write_text(text.rstrip("\n") + "\n", encoding="utf-8")
+	elif mode == "donecheck":
+		acceptance = load(argv[2]).get("acceptance")
+		items = acceptance.get("items") if isinstance(acceptance, dict) else None
+		count = 0
+		for item in items if isinstance(items, list) else []:
+			if not isinstance(item, dict) or item.get("status") not in ("unmet", "unmet (passes on base)"):
+				continue
+			line = re.sub(r"[\x00-\x1f\x7f]", " ", str(item.get("target")))[:300] + ": " + str(item.get("status"))
+			print(scrub(neutralise(line)).replace("===", "=" + WORD_JOINER + "=="))
+			count += 1
+			if count >= 10:
+				break
 	return 0
 
 
@@ -313,6 +336,9 @@ implement_prepush_test_gate_run_once()
 	if [ -n "${CODEX_ISOLATED_IMPLEMENT_ROOT:-}" ] && [ -d "${CODEX_ISOLATED_IMPLEMENT_ROOT}/work" ] && [ ! -L "${CODEX_ISOLATED_IMPLEMENT_ROOT}/work" ]; then
 		args+=(--nested-node-modules-root "${CODEX_ISOLATED_IMPLEMENT_ROOT}/work")
 	fi
+	# Done-check targets (issue #8427, P3); set only with the repair loop on.
+	[ -z "${gate_acceptance_tests:-}" ] || args+=(--tests-file "${gate_acceptance_tests}")
+	[ -z "${gate_acceptance_baseline:-}" ] || args+=(--expect-baseline-fail-file "${gate_acceptance_baseline}")
 	implement_prepush_test_gate_staged_workspace restore
 	bash "${gate_wrapper}" "${args[@]}" || true
 	implement_prepush_test_gate_staged_workspace reinstall
@@ -456,6 +482,24 @@ implement_prepush_test_gate_journal_blocks()
 	return 0
 }
 
+# Unmet done-check targets of the repair prompt (issue #8427, P3). Only with
+# the repair loop on and unmet items in ${RUNTIME_DIR}/acceptance_result.json;
+# otherwise prints nothing, so the prompt is byte-identical with the switch off.
+implement_prepush_test_gate_done_check_block()
+{
+	local result="${RUNTIME_DIR:-}/acceptance_result.json" lines
+	[ "${persist_loop_on:-false}" = true ] || return 0
+	[ -f "${result}" ] && [ ! -L "${result}" ] || return 0
+	lines="$(implement_prepush_test_gate_py donecheck "${result}" 2>/dev/null)" || lines=""
+	[ -n "${lines}" ] || return 0
+	echo
+	echo "=== BEGIN UNTRUSTED DONE-CHECK STATUS (host-computed; targets are plan text) ==="
+	printf '%s\n' "${lines}" | sed 's/^/UNTRUSTED_DATA: /'
+	echo "=== END UNTRUSTED DONE-CHECK STATUS ==="
+	echo "A \`red-on-base\` target must fail on the merge-base and pass on this change; fix the change, not the test, unless the plan says otherwise."
+	return 0
+}
+
 implement_prepush_test_gate_build_prompt()
 {
 	local result="$1" out="$2" path
@@ -487,6 +531,7 @@ implement_prepush_test_gate_build_prompt()
 			fi
 		done < "${gate_allow_file}"
 		implement_prepush_test_gate_journal_blocks "${gate_allow_file}" "${gate_journal_rules:-}"
+		implement_prepush_test_gate_done_check_block
 	} > "${out}"
 	if [ -n "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] && [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/gh_helpers.sh" ]; then
 		# shellcheck source=/dev/null
@@ -675,6 +720,127 @@ implement_prepush_test_gate_py_module()
 	PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${gate_module}" "$@" 2>/dev/null
 }
 
+# Repair loop switch (issue #8427, P3). Sets persist_loop_on and
+# persist_max_turns; returns 0 only when PERSIST_REPAIR_LOOP_ENABLED=true.
+implement_prepush_test_gate_persist_enabled()
+{
+	persist_loop_on=false
+	persist_max_turns="${PERSIST_REPAIR_MAX_TURNS:-3}"
+	if [[ "${persist_max_turns}" =~ ^[0-9]{1,6}$ ]]; then
+		persist_max_turns=$((10#${persist_max_turns}))
+		[ "${persist_max_turns}" -ge 1 ] || persist_max_turns=1
+		[ "${persist_max_turns}" -le 5 ] || persist_max_turns=5
+	else
+		persist_max_turns=3
+	fi
+	[ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ] || return 1
+	persist_loop_on=true
+	return 0
+}
+
+# Done-check targets from the trusted plan comment (PLAN_FILE). Sets
+# gate_acceptance_tests / gate_acceptance_baseline only when the done-check
+# has tests; a missing helper or marker leaves the loop on pr_caused alone.
+implement_prepush_test_gate_acceptance_prep()
+{
+	local dir="${RUNTIME_DIR}/prepush_gate" count
+	gate_acceptance_tests="" gate_acceptance_baseline=""
+	mkdir -p "${dir}" 2>/dev/null || return 0
+	rm -f -- "${dir}/acceptance.json" "${dir}/tests.txt" "${dir}/baseline_fail.txt" "${RUNTIME_DIR}/acceptance_result.json"
+	gate_acceptance_helper="$(implement_prepush_test_gate_pick "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/acceptance_check.py")" || gate_acceptance_helper=""
+	if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ -z "${gate_acceptance_helper}" ]; then
+		gate_acceptance_helper=""
+		echo "PERSIST repair_loop outcome=skipped reason=helper_absent" >&2
+		return 0
+	fi
+	[ -n "${PLAN_FILE:-}" ] && [ -f "${PLAN_FILE}" ] && [ ! -L "${PLAN_FILE}" ] || return 0
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${gate_acceptance_helper}" parse --plan-comment-file "${PLAN_FILE}" --out "${dir}/acceptance.json" 2>/dev/null || return 0
+	count="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${gate_acceptance_helper}" gate-files --in "${dir}/acceptance.json" \
+		--tests-out "${dir}/tests.txt" --baseline-out "${dir}/baseline_fail.txt" 2>/dev/null)" || count=0
+	if [[ "${count}" =~ ^[0-9]+$ ]] && [ "${count}" -gt 0 ]; then
+		gate_acceptance_tests="${dir}/tests.txt"
+		[ ! -s "${dir}/baseline_fail.txt" ] || gate_acceptance_baseline="${dir}/baseline_fail.txt"
+	fi
+	return 0
+}
+
+# Scores RESULT against the done-check into ${RUNTIME_DIR}/acceptance_result.json.
+# Sets persist_state (met|unmet|not_run|none) and persist_extra (unmet targets
+# not already counted as failures).
+implement_prepush_test_gate_acceptance_eval()
+{
+	local line
+	persist_state=none persist_extra=0
+	[ -n "${gate_acceptance_tests:-}" ] && [ -n "${gate_acceptance_helper:-}" ] && [ -f "$1" ] || return 0
+	line="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${gate_acceptance_helper}" gate-result --in "${RUNTIME_DIR}/prepush_gate/acceptance.json" \
+		--gate-result "$1" --out "${RUNTIME_DIR}/acceptance_result.json" 2>/dev/null)" || line="none 0"
+	read -r persist_state persist_extra <<< "${line}"
+	case "${persist_state}" in met|unmet|not_run|none) ;; *) persist_state=none ;; esac
+	[[ "${persist_extra}" =~ ^[0-9]+$ ]] || persist_extra=0
+	return 0
+}
+
+# Repair loop (issue #8427, P3); replaces the single repair only with the
+# switch on. Uses implement_prepush_test_gate_main's locals (final, pr_caused,
+# run_wall, gate_started, step_budget, editor_reserve) and sets gate_repair.
+implement_prepush_test_gate_persist_loop()
+{
+	local turn=0 eff prev_eff="" stop="" last_reason="" run_dir status_line now caused rest
+	implement_prepush_test_gate_acceptance_eval "${final}"
+	eff=$(( ${pr_caused:-0} + persist_extra ))
+	run_wall=$(( gate_timeout * 60 + 120 ))
+	if [ "${gate_mode}" != repair ]; then
+		stop=report_mode
+		[ "${eff}" -le 0 ] || gate_repair="not run (report mode)"
+	fi
+	rm -f "${RUNTIME_DIR}/prepush_gate_restore_failed.flag"
+	while [ -z "${stop}" ]; do
+		if [ "${eff}" -le 0 ]; then
+			stop=clean
+			[ "${persist_state}" != met ] || stop=met
+		elif [ -n "${prev_eff}" ] && [ "${eff}" -ge "${prev_eff}" ]; then
+			stop=no_progress
+		elif [ "${turn}" -ge "${persist_max_turns}" ]; then
+			stop=max_turns
+		elif [ $(( SECONDS - gate_started + editor_reserve + run_wall )) -gt "${step_budget}" ]; then
+			implement_prepush_test_gate_log "outcome=repair_skipped reason=step_budget"
+			last_reason="skipped (step time budget)" stop=budget
+		fi
+		[ -z "${stop}" ] || break
+		implement_prepush_test_gate_repair "${final}"
+		if [ "${gate_repair}" != ran ]; then
+			last_reason="${gate_repair}"
+			case "${gate_repair}" in reverted*) stop=reverted ;; *) stop=skipped ;; esac
+			break
+		fi
+		turn=$((turn + 1))
+		# A reverted repair leaves the tree the last run already tested.
+		if [ $(( SECONDS - gate_started + run_wall )) -gt "${step_budget}" ]; then
+			implement_prepush_test_gate_log "outcome=warning reason=step_budget rerun=skipped"
+			last_reason="re-run skipped: step time budget" stop=budget
+			break
+		fi
+		run_dir="${RUNTIME_DIR}/prepush_gate/run$((turn + 1))"
+		implement_prepush_test_gate_run_once "${run_dir}"
+		final="${run_dir}/result.json"
+		status_line="$(implement_prepush_test_gate_py status "${final}")" || status_line="unverified 0 0"
+		read -r now caused rest <<< "${status_line}"
+		implement_prepush_test_gate_acceptance_eval "${final}"
+		prev_eff="${eff}"
+		eff=$(( ${caused:-0} + persist_extra ))
+	done
+	if [ "${turn}" -gt 0 ]; then
+		gate_repair="ran x${turn}"
+		[ -z "${last_reason}" ] || gate_repair="${gate_repair}; ${last_reason}"
+	elif [ -n "${last_reason}" ]; then
+		gate_repair="${last_reason}"
+	fi
+	status_line="$(implement_prepush_test_gate_py status "${final}")" || status_line="unverified 0 0"
+	read -r now caused rest <<< "${status_line}"
+	echo "PERSIST repair_loop outcome=${now} turns=${turn} stop=${stop} acceptance=${persist_state}" >&2
+	return 0
+}
+
 implement_prepush_test_gate_main()
 {
 	set +eu
@@ -738,11 +904,18 @@ implement_prepush_test_gate_main()
 		gate_timeout="${fit_minutes}"
 	fi
 	run1="${RUNTIME_DIR}/prepush_gate/run1"
+	gate_acceptance_tests="" gate_acceptance_baseline="" gate_acceptance_helper=""
+	if implement_prepush_test_gate_persist_enabled; then
+		implement_prepush_test_gate_acceptance_prep
+	fi
 	implement_prepush_test_gate_run_once "${run1}"
 	final="${run1}/result.json"
 	status_line="$(implement_prepush_test_gate_py status "${final}")" || status_line="unverified 0 0"
 	read -r initial pr_caused inherited <<< "${status_line}"
-	if [ "${initial}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
+	if [ "${persist_loop_on}" = true ]; then
+		implement_prepush_test_gate_persist_loop
+	fi
+	if [ "${persist_loop_on}" != true ] && [ "${initial}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
 		run_wall=$(( gate_timeout * 60 + 120 ))
 		if [ "${gate_mode}" = repair ] && [ $(( SECONDS - gate_started + editor_reserve + run_wall )) -gt "${step_budget}" ]; then
 			implement_prepush_test_gate_log "outcome=repair_skipped reason=step_budget"

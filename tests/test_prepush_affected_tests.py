@@ -1080,3 +1080,93 @@ def test_wrapper_mounts_node_modules_read_only_on_both_trees(tmp_path):
 	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
 	assert f"src={node_modules.resolve()},dst=/source/node_modules,readonly" in run_line
 	assert f"src={node_modules.resolve()},dst=/baseline/node_modules,readonly" in run_line
+
+
+# --- Explicit done-check targets (issue #8427, P3) ----------------------------
+
+
+def _plain_tree(root: Path, files: dict[str, str]) -> Path:
+	for rel, text in files.items():
+		path = root / rel
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text(text, encoding="utf-8")
+	return root
+
+
+def test_explicit_targets_are_validated_and_capped(tmp_path):
+	repo = _plain_tree(tmp_path / "repo", {"tests/a.py": "", "outside.py": ""})
+	(repo / "tests" / "link.py").symlink_to(repo / "outside.py")
+	lines = ["# comment", "", "tests/a.py", "tests/a.py", "tests/a.py::test_x", "../etc/passwd", "/abs.py",
+		"tests/./a.py", "tests/a.py::bad name", "tests/nope.py", "tests/link.py"]
+	targets, unverified = gate._parse_targets(lines, repo, "tests_file")
+	assert [t[0] for t in targets] == ["tests/a.py", "tests/a.py::test_x"]
+	reasons = {u["item"]: u["reason"] for u in unverified}
+	assert reasons == {
+		"../etc/passwd": "tests_file_invalid", "/abs.py": "tests_file_invalid", "tests/./a.py": "tests_file_invalid",
+		"tests/a.py::bad name": "tests_file_invalid", "tests/nope.py": "tests_file_missing", "tests/link.py": "tests_file_invalid",
+	}
+	many = [f"tests/a.py::test_{n}" for n in range(60)]
+	targets, unverified = gate._parse_targets(many, repo, "tests_file")
+	assert len(targets) == gate.MAX_EXPLICIT_TARGETS
+	assert unverified == [{"item": "tests_file", "reason": "too_many_targets"}]
+
+
+def test_explicit_targets_merge_with_path_selection():
+	selection = {"affected_tests": [{"path": "tests/a.py", "reasons": ["naming"], "functions": ["test_1"]}, {"path": "tests/c.py", "reasons": ["naming"]}]}
+	gate._merge_explicit_tests(selection, [("tests/a.py::test_2", "tests/a.py", "test_2"), ("tests/b.py", "tests/b.py", ""),
+		("tests/c.py::test_9", "tests/c.py", "test_9")])
+	by_path = {e["path"]: e for e in selection["affected_tests"]}
+	assert by_path["tests/a.py"]["functions"] == ["test_1", "test_2"]
+	assert "functions" not in by_path["tests/b.py"] and by_path["tests/b.py"]["reasons"] == ["explicit"]
+	assert "functions" not in by_path["tests/c.py"]
+	gate._merge_explicit_tests(selection, [("tests/a.py", "tests/a.py", "")])
+	assert "functions" not in by_path["tests/a.py"]
+
+
+def test_explicit_targets_run_on_head_and_red_on_base_targets_on_the_baseline(tmp_path):
+	head = _plain_tree(tmp_path / "head", {
+		"tests/red_case.py": "import sys\nsys.exit(0)\n",
+		"tests/green_case.py": "import sys\nsys.exit(0)\n",
+		"tests/new_case.py": "import sys\nsys.exit(0)\n",
+		"tests/broken_case.py": "import sys\nsys.exit(3)\n",
+	})
+	base = _plain_tree(tmp_path / "base", {
+		"tests/red_case.py": "import sys\nsys.exit(1)\n",
+		"tests/green_case.py": "import sys\nsys.exit(0)\n",
+		"tests/broken_case.py": "import sys\nsys.exit(0)\n",
+	})
+	result = gate.run_gate(head, {"affected_tests": [], "changed_files": []}, base, 2, 2,
+		explicit_tests=["tests/red_case.py", "tests/green_case.py", "tests/new_case.py", "tests/broken_case.py"],
+		expect_baseline_fail=["tests/red_case.py", "tests/green_case.py", "tests/new_case.py"])
+	assert result["acceptance"] == {
+		"tests/red_case.py": {"head": "pass", "base": "fail"},
+		"tests/green_case.py": {"head": "pass", "base": "pass"},
+		"tests/new_case.py": {"head": "pass", "base": "not_run", "base_reason": "absent_on_base"},
+		"tests/broken_case.py": {"head": "fail", "base": "not_run"},
+	}
+	assert result["selected"] == 0
+	assert [f["test"] for f in result["failures"]] == ["tests/broken_case.py"]
+	assert result["status"] == "fail" and result["schema"] == gate.RESULT_SCHEMA
+
+
+def test_run_without_target_options_has_no_acceptance_key(tmp_path):
+	head = _plain_tree(tmp_path / "head", {"tests/red_case.py": "import sys\nsys.exit(0)\n"})
+	result = gate.run_gate(head, {"affected_tests": [{"path": "tests/red_case.py", "reasons": ["changed_test"]}], "changed_files": []}, None, 2, 2)
+	assert "acceptance" not in result and result["status"] == "pass" and result["selected"] == 1
+
+
+def test_run_cli_reads_the_target_files(tmp_path):
+	head = _plain_tree(tmp_path / "head", {"tests/red_case.py": "import sys\nsys.exit(0)\n"})
+	base = _plain_tree(tmp_path / "base", {"tests/red_case.py": "import sys\nsys.exit(1)\n"})
+	changed, targets, out = tmp_path / "changed.txt", tmp_path / "tests.txt", tmp_path / "result.json"
+	changed.write_text("", encoding="utf-8")
+	targets.write_text("tests/red_case.py\n", encoding="utf-8")
+	assert gate.main(["run", "--repo-root", str(head), "--changed-files-file", str(changed), "--baseline-tree", str(base),
+		"--tests-file", str(targets), "--expect-baseline-fail-file", str(targets), "--out", str(out)]) == 0
+	data = json.loads(out.read_text(encoding="utf-8"))
+	assert data["acceptance"] == {"tests/red_case.py": {"head": "pass", "base": "fail"}}
+	assert gate.main(["run", "--repo-root", str(head), "--changed-files-file", str(changed),
+		"--tests-file", str(tmp_path / "missing.txt"), "--out", str(out)]) == 0
+	data = json.loads(out.read_text(encoding="utf-8"))
+	assert data["acceptance"] == {} and {"item": "tests_file", "reason": "tests_file_unreadable"} in data["unverified"]
+	assert data["status"] == "unverified"

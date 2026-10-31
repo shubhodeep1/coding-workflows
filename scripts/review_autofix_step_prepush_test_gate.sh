@@ -14,7 +14,8 @@
 # `review_apply_fixes.sh --repair-turn` (the editor's own sandbox launch and
 # validated transfer). Edits outside the repair allow-list are rolled back,
 # syntax is re-validated (a syntax failure reverts the whole repair), and the
-# gate runs once more; there is never a second repair. The host writes the
+# gate runs once more; one repair unless PERSIST_REPAIR_LOOP_ENABLED=true.
+# The host writes the
 # summary from the final result.json (never from the container's summary.md)
 # and appends it to EDITOR_SUMMARY_FILE as "## Pre-push test gate" when that
 # file is already non-empty, so "Post editor summary comment" posts it.
@@ -23,6 +24,8 @@
 #   gate --worktree DIR --base SHA --image IMG --out DIR [--venv DIR] [--phase P]
 #        [--image-reason R] [--node-modules DIR] runs the wrapper once; writes DIR/result.json (synthetic when the run
 #        wrote none) and prints "<status> <pr_caused> <inherited>".
+#        [--tests-file F] [--expect-baseline-fail-file F] pass done-check
+#        targets through to the wrapper (issue #8427, P3; no caller yet).
 #   repair-prompt RESULT OUT [ALLOW_FILE]
 #        trusted template + "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" block.
 #   allow-list WORKTREE CHANGED_FILE RESULT OUT
@@ -43,6 +46,20 @@
 #   PREPUSH_TEST_GATE_TIMEOUT_MINUTES   15 (clamped to 53)
 #   PREPUSH_TEST_GATE_LARGE_FILE_TESTS  50
 #   PREPUSH_TEST_GATE_SHARDS            4
+#   PERSIST_REPAIR_LOOP_ENABLED         false (issue #8427, P3: repair loop)
+#   PERSIST_REPAIR_MAX_TURNS            3 (integers clamped to 1..5; else 3)
+#
+# Repair loop (PERSIST_REPAIR_LOOP_ENABLED=true), review only: the done-check
+# that the "Prepare done-check (repair loop)" step fetched into
+# ${RUNTIME_DIR}/prepush_gate/acceptance.json adds its tests to every run and
+# its unmet targets to the repair count; repairs repeat while the count is
+# above zero, strictly drops, stays under the turn cap and fits the budget.
+# Writes ${RUNTIME_DIR}/acceptance_result.json and one `PERSIST repair_loop`
+# log line. Two more sourced modes (PREPUSH_TEST_GATE_STEP_MODE), both no-ops
+# with the switch off: acceptance_fetch (scripts/acceptance_check.py
+# fetch-plan; one comments read plus one cached identity read) and
+# acceptance_label (adds or removes ai:acceptance-unmet after a commit; at
+# most one write). Only these two modes call the GitHub API.
 #
 # Never blocks the push: the sourced step ends with status 0 on every path.
 # Log prefix: PREPUSH_TEST_GATE phase=review|resolver|heal|integration.
@@ -63,7 +80,8 @@ review_prepush_test_gate_log()
 
 # Embedded host-side helper (trusted, stdlib only; same contract as P3's).
 # Modes: status RESULT | synthetic RESULT REASON | failures RESULT |
-#   allow SELECTION RESULT | summary RESULT MODULE OUT MODE REPAIR INITIAL
+#   allow SELECTION RESULT | summary RESULT MODULE OUT MODE REPAIR INITIAL |
+#   donecheck ACCEPTANCE_RESULT (unmet done-check lines, at most 10)
 REVIEW_PREPUSH_TEST_GATE_PY='
 import json
 import re
@@ -177,7 +195,7 @@ def main(argv):
 		extra = ["- Mode: `" + gate_mode + "`", "- Repair turn: " + repair]
 		if initial and initial != clean["status"]:
 			extra.append("- Status before the repair turn: **" + initial + "**")
-		if repair.startswith("ran (re-run skipped"):
+		if repair.startswith("ran (re-run skipped") or "; re-run skipped" in repair:
 			extra.append("- The result above predates the repair turn: the re-run was skipped.")
 		lines = lines[:3] + extra + lines[3:]
 		text = scrub("\n".join(lines))
@@ -185,6 +203,18 @@ def main(argv):
 		if len(data) > SUMMARY_CAP:
 			text = data[:SUMMARY_CAP].decode("utf-8", "ignore") + "\n\n(summary truncated)"
 		Path(out_path).write_text(text.rstrip("\n") + "\n", encoding="utf-8")
+	elif mode == "donecheck":
+		acceptance = load(argv[2]).get("acceptance")
+		items = acceptance.get("items") if isinstance(acceptance, dict) else None
+		count = 0
+		for item in items if isinstance(items, list) else []:
+			if not isinstance(item, dict) or item.get("status") not in ("unmet", "unmet (passes on base)"):
+				continue
+			line = re.sub(r"[\x00-\x1f\x7f]", " ", str(item.get("target")))[:300] + ": " + str(item.get("status"))
+			print(scrub(neutralise(line)).replace("===", "=" + WORD_JOINER + "=="))
+			count += 1
+			if count >= 10:
+				break
 	return 0
 
 
@@ -341,6 +371,10 @@ review_prepush_test_gate_run_once()
 	if [ -n "${rpg_node_modules:-}" ] && [ -d "${rpg_node_modules}" ] && [ ! -L "${rpg_node_modules}" ]; then
 		args+=(--node-modules "${rpg_node_modules}")
 	fi
+	# Done-check targets (issue #8427, P3); set only with the repair loop on
+	# or by the gate subcommand's pass-through options.
+	[ -z "${rpg_acceptance_tests:-}" ] || args+=(--tests-file "${rpg_acceptance_tests}")
+	[ -z "${rpg_acceptance_baseline:-}" ] || args+=(--expect-baseline-fail-file "${rpg_acceptance_baseline}")
 	bash "${rpg_wrapper}" "${args[@]}" || true
 	[ -f "${out}/result.json" ] || review_prepush_test_gate_py synthetic "${out}/result.json" wrapper_no_result
 }
@@ -414,6 +448,24 @@ review_prepush_test_gate_journal_blocks()
 	return 0
 }
 
+# Unmet done-check targets of the repair prompt (issue #8427, P3). Only with
+# the repair loop on and unmet items in ${RUNTIME_DIR}/acceptance_result.json;
+# otherwise prints nothing, so the prompt is byte-identical with the switch off.
+review_prepush_test_gate_done_check_block()
+{
+	local result="${RUNTIME_DIR:-}/acceptance_result.json" lines
+	[ "${rpg_persist_on:-false}" = true ] || return 0
+	[ -f "${result}" ] && [ ! -L "${result}" ] || return 0
+	lines="$(review_prepush_test_gate_py donecheck "${result}" 2>/dev/null)" || lines=""
+	[ -n "${lines}" ] || return 0
+	echo
+	echo "=== BEGIN UNTRUSTED DONE-CHECK STATUS (host-computed; targets are plan text) ==="
+	printf '%s\n' "${lines}" | sed 's/^/UNTRUSTED_DATA: /'
+	echo "=== END UNTRUSTED DONE-CHECK STATUS ==="
+	echo "A \`red-on-base\` target must fail on the merge-base and pass on this change; fix the change, not the test, unless the plan says otherwise."
+	return 0
+}
+
 review_prepush_test_gate_build_prompt()
 {
 	local result="$1" out="$2" allow="${3:-}" changed="${4:-}" path
@@ -452,6 +504,7 @@ review_prepush_test_gate_build_prompt()
 			fi
 		fi
 		review_prepush_test_gate_journal_blocks "${allow}" "${rpg_journal_rules:-}"
+		review_prepush_test_gate_done_check_block
 	} > "${out}"
 }
 
@@ -632,6 +685,205 @@ review_prepush_test_gate_append_summary()
 	} >> "${target}" 2>/dev/null || review_prepush_test_gate_log "outcome=warning reason=summary_append_failed"
 }
 
+# Repair loop switch (issue #8427, P3). Sets rpg_persist_on and
+# rpg_max_turns; returns 0 only when PERSIST_REPAIR_LOOP_ENABLED=true.
+review_prepush_test_gate_persist_enabled()
+{
+	rpg_persist_on=false
+	rpg_max_turns="${PERSIST_REPAIR_MAX_TURNS:-3}"
+	if [[ "${rpg_max_turns}" =~ ^[0-9]{1,6}$ ]]; then
+		rpg_max_turns=$((10#${rpg_max_turns}))
+		[ "${rpg_max_turns}" -ge 1 ] || rpg_max_turns=1
+		[ "${rpg_max_turns}" -le 5 ] || rpg_max_turns=5
+	else
+		rpg_max_turns=3
+	fi
+	[ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ] || return 1
+	rpg_persist_on=true
+	return 0
+}
+
+# acceptance_check.py from the trusted support directories only.
+review_prepush_test_gate_acceptance_helper()
+{
+	local sd
+	sd="$(review_prepush_test_gate_abs "${SUPPORT_SCRIPTS_DIR:-}")"
+	review_prepush_test_gate_pick "${sd:+${sd}/acceptance_check.py}" "${rpg_script_dir:+${rpg_script_dir}/acceptance_check.py}"
+}
+
+# Done-check targets from ${RUNTIME_DIR}/prepush_gate/acceptance.json (written
+# by the "Prepare done-check (repair loop)" step). Sets rpg_acceptance_tests /
+# rpg_acceptance_baseline only when the done-check has tests.
+review_prepush_test_gate_acceptance_prep()
+{
+	local dir="${RUNTIME_DIR}/prepush_gate" count
+	rpg_acceptance_tests="" rpg_acceptance_baseline=""
+	rm -f -- "${dir}/tests.txt" "${dir}/baseline_fail.txt" "${RUNTIME_DIR}/acceptance_result.json"
+	rpg_acceptance_helper="$(review_prepush_test_gate_acceptance_helper)" || rpg_acceptance_helper=""
+	if [ -z "${rpg_acceptance_helper}" ]; then
+		echo "PERSIST repair_loop outcome=skipped reason=helper_absent" >&2
+		return 0
+	fi
+	[ -f "${dir}/acceptance.json" ] && [ ! -L "${dir}/acceptance.json" ] || return 0
+	count="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${rpg_acceptance_helper}" gate-files --in "${dir}/acceptance.json" \
+		--tests-out "${dir}/tests.txt" --baseline-out "${dir}/baseline_fail.txt" 2>/dev/null)" || count=0
+	if [[ "${count}" =~ ^[0-9]+$ ]] && [ "${count}" -gt 0 ]; then
+		rpg_acceptance_tests="${dir}/tests.txt"
+		[ ! -s "${dir}/baseline_fail.txt" ] || rpg_acceptance_baseline="${dir}/baseline_fail.txt"
+	fi
+	return 0
+}
+
+# Scores RESULT into ${RUNTIME_DIR}/acceptance_result.json; sets
+# rpg_persist_state and rpg_persist_extra.
+review_prepush_test_gate_acceptance_eval()
+{
+	local line
+	rpg_persist_state=none rpg_persist_extra=0
+	[ -n "${rpg_acceptance_tests:-}" ] && [ -n "${rpg_acceptance_helper:-}" ] && [ -f "$1" ] || return 0
+	line="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${rpg_acceptance_helper}" gate-result --in "${RUNTIME_DIR}/prepush_gate/acceptance.json" \
+		--gate-result "$1" --out "${RUNTIME_DIR}/acceptance_result.json" 2>/dev/null)" || line="none 0"
+	read -r rpg_persist_state rpg_persist_extra <<< "${line}"
+	case "${rpg_persist_state}" in met|unmet|not_run|none) ;; *) rpg_persist_state=none ;; esac
+	[[ "${rpg_persist_extra}" =~ ^[0-9]+$ ]] || rpg_persist_extra=0
+	return 0
+}
+
+# Repair loop (issue #8427, P3); replaces the single repair only with the
+# switch on. Uses review_prepush_test_gate_main's locals (final, pr_caused,
+# rpg_run_wall, rpg_started, rpg_step_budget, rpg_editor_reserve).
+review_prepush_test_gate_persist_loop()
+{
+	local turn=0 eff prev_eff="" stop="" last_reason="" run_dir status_line now caused rest
+	review_prepush_test_gate_acceptance_eval "${final}"
+	eff=$(( ${pr_caused:-0} + rpg_persist_extra ))
+	rpg_run_wall=$(( rpg_timeout * 60 + 120 ))
+	if [ "${rpg_mode}" != repair ]; then
+		stop=report_mode
+		[ "${eff}" -le 0 ] || rpg_repair="not run (report mode)"
+	fi
+	rm -f "${RUNTIME_DIR}/prepush_gate_restore_failed.flag"
+	while [ -z "${stop}" ]; do
+		if [ "${eff}" -le 0 ]; then
+			stop=clean
+			[ "${rpg_persist_state}" != met ] || stop=met
+		elif [ -n "${prev_eff}" ] && [ "${eff}" -ge "${prev_eff}" ]; then
+			stop=no_progress
+		elif [ "${turn}" -ge "${rpg_max_turns}" ]; then
+			stop=max_turns
+		elif [ $(( SECONDS - rpg_started + rpg_editor_reserve + rpg_run_wall )) -gt "${rpg_step_budget}" ]; then
+			review_prepush_test_gate_log "outcome=repair_skipped reason=step_budget"
+			last_reason="skipped (step time budget)" stop=budget
+		fi
+		[ -z "${stop}" ] || break
+		review_prepush_test_gate_repair "${final}"
+		if [ "${rpg_repair}" != ran ]; then
+			last_reason="${rpg_repair}"
+			case "${rpg_repair}" in reverted*) stop=reverted ;; *) stop=skipped ;; esac
+			break
+		fi
+		turn=$((turn + 1))
+		if [ $(( SECONDS - rpg_started + rpg_run_wall )) -gt "${rpg_step_budget}" ]; then
+			review_prepush_test_gate_log "outcome=warning reason=step_budget rerun=skipped"
+			last_reason="re-run skipped: step time budget" stop=budget
+			break
+		fi
+		run_dir="${RUNTIME_DIR}/prepush_gate/run$((turn + 1))"
+		review_prepush_test_gate_run_once "${run_dir}"
+		final="${run_dir}/result.json"
+		status_line="$(review_prepush_test_gate_py status "${final}")" || status_line="unverified 0 0"
+		read -r now caused rest <<< "${status_line}"
+		review_prepush_test_gate_acceptance_eval "${final}"
+		prev_eff="${eff}"
+		eff=$(( ${caused:-0} + rpg_persist_extra ))
+	done
+	if [ "${turn}" -gt 0 ]; then
+		rpg_repair="ran x${turn}"
+		[ -z "${last_reason}" ] || rpg_repair="${rpg_repair}; ${last_reason}"
+	elif [ -n "${last_reason}" ]; then
+		rpg_repair="${last_reason}"
+	fi
+	status_line="$(review_prepush_test_gate_py status "${final}")" || status_line="unverified 0 0"
+	read -r now caused rest <<< "${status_line}"
+	echo "PERSIST repair_loop outcome=${now} turns=${turn} stop=${stop} acceptance=${rpg_persist_state}" >&2
+	return 0
+}
+
+# PREPUSH_TEST_GATE_STEP_MODE=acceptance_fetch ("Prepare done-check (repair
+# loop)" step, which has GH_TOKEN): the done-check of the PR's linked issue's
+# newest pipeline-authored plan comment into ${RUNTIME_DIR}/prepush_gate/
+# acceptance.json. Fail-open; with the switch off no API call, no file.
+review_prepush_test_gate_acceptance_fetch_main()
+{
+	set +eu
+	set +o pipefail
+	local dir out helper
+	rpg_phase=review
+	if [ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" != true ]; then
+		echo "PERSIST repair_loop outcome=skipped reason=switch_off" >&2
+		return 0
+	fi
+	[ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] || return 0
+	dir="${RUNTIME_DIR}/prepush_gate" out="${RUNTIME_DIR}/prepush_gate/acceptance.json"
+	mkdir -p "${dir}" 2>/dev/null || return 0
+	rm -f -- "${out}"
+	helper="$(review_prepush_test_gate_acceptance_helper)" || helper=""
+	if [ -z "${helper}" ]; then
+		echo "PERSIST acceptance outcome=none reason=helper_absent" >&2
+		return 0
+	fi
+	GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${helper}" fetch-plan \
+		--repo "${GITHUB_REPOSITORY:-}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-}}}" \
+		--out "${out}" || true
+	return 0
+}
+
+# PREPUSH_TEST_GATE_STEP_MODE=acceptance_label ("Sync done-check label" step,
+# after a commit): ai:acceptance-unmet follows acceptance_result.json's state.
+# Only met and unmet act; never deletes when the PR's labels are unknown; at
+# most one write.
+review_prepush_test_gate_acceptance_label_main()
+{
+	set +eu
+	set +o pipefail
+	local result state labels has=unknown outcome=unchanged reason=no_change sd
+	rpg_phase=review
+	[ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ] || return 0
+	result="${RUNTIME_DIR:-}/acceptance_result.json"
+	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -f "${result}" ] || [ -L "${result}" ]; then
+		echo "PERSIST acceptance_label outcome=skipped reason=no_result" >&2
+		return 0
+	fi
+	state="$(jq -r '.state // empty' "${result}" 2>/dev/null)" || state=""
+	case "${state}" in
+		met|unmet) ;;
+		*) echo "PERSIST acceptance_label outcome=skipped reason=state_not_scored" >&2; return 0 ;;
+	esac
+	if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] || ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+		echo "PERSIST acceptance_label outcome=skipped reason=invalid_target" >&2
+		return 0
+	fi
+	if [ -n "${PR_META_FILE:-}" ] && [ -f "${PR_META_FILE}" ] && [ ! -L "${PR_META_FILE}" ] \
+		&& labels="$(jq -c '[.labels[]?.name]' "${PR_META_FILE}" 2>/dev/null)" && [ -n "${labels}" ]; then
+		if jq -e 'index("ai:acceptance-unmet") != null' <<< "${labels}" >/dev/null 2>&1; then has=yes; else has=no; fi
+	fi
+	sd="$(review_prepush_test_gate_abs "${SUPPORT_SCRIPTS_DIR:-}")"
+	if [ -n "${sd}" ] && [ -f "${sd}/gh_helpers.sh" ]; then
+		# shellcheck source=/dev/null
+		source "${sd}/gh_helpers.sh" 2>/dev/null || true
+	fi
+	type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+	if [ "${state}" = met ] && [ "${has}" = yes ]; then
+		reason=met
+		if gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels/ai%3Aacceptance-unmet" >/dev/null 2>&1; then outcome=removed; else outcome=error; fi
+	elif [ "${state}" = unmet ] && [ "${has}" != yes ]; then
+		reason="unmet_labels_${has}"
+		if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:acceptance-unmet' >/dev/null 2>&1; then outcome=added; else outcome=error; fi
+	fi
+	echo "PERSIST acceptance_label outcome=${outcome} reason=${reason}" >&2
+	return 0
+}
+
 review_prepush_test_gate_main()
 {
 	set +eu
@@ -698,11 +950,18 @@ review_prepush_test_gate_main()
 		rpg_timeout="${fit_minutes}"
 	fi
 	run1="${RUNTIME_DIR}/prepush_gate/run1"
+	rpg_acceptance_tests="" rpg_acceptance_baseline="" rpg_acceptance_helper=""
+	if review_prepush_test_gate_persist_enabled; then
+		review_prepush_test_gate_acceptance_prep
+	fi
 	review_prepush_test_gate_run_once "${run1}"
 	final="${run1}/result.json"
 	status_line="$(review_prepush_test_gate_py status "${final}")" || status_line="unverified 0 0"
 	read -r initial pr_caused inherited <<< "${status_line}"
-	if [ "${initial}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
+	if [ "${rpg_persist_on}" = true ]; then
+		review_prepush_test_gate_persist_loop
+	fi
+	if [ "${rpg_persist_on}" != true ] && [ "${initial}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
 		rpg_run_wall=$(( rpg_timeout * 60 + 120 ))
 		if [ "${rpg_mode}" = repair ] && [ $(( SECONDS - rpg_started + rpg_editor_reserve + rpg_run_wall )) -gt "${rpg_step_budget}" ]; then
 			review_prepush_test_gate_log "outcome=repair_skipped reason=step_budget"
@@ -865,6 +1124,7 @@ review_prepush_test_gate_cmd_gate()
 	set +e
 	local out=""
 	rpg_worktree="" rpg_base="" rpg_image="" rpg_venv="" rpg_node_modules="" rpg_image_reason="image_unavailable"
+	rpg_acceptance_tests="" rpg_acceptance_baseline=""
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 			--worktree) rpg_worktree="${2:-}"; shift 2 ;;
@@ -874,6 +1134,8 @@ review_prepush_test_gate_cmd_gate()
 			--out) out="${2:-}"; shift 2 ;;
 			--venv) rpg_venv="${2:-}"; shift 2 ;;
 			--node-modules) rpg_node_modules="${2:-}"; shift 2 ;;
+			--tests-file) rpg_acceptance_tests="${2:-}"; shift 2 ;;
+			--expect-baseline-fail-file) rpg_acceptance_baseline="${2:-}"; shift 2 ;;
 			--phase)
 				case "${2:-}" in resolver|heal|review|integration) rpg_phase="$2" ;; esac
 				shift 2
@@ -907,6 +1169,10 @@ rpg_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
 	if [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "integration" ]; then
 		( review_prepush_test_gate_integration_main ) || true
+	elif [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "acceptance_fetch" ]; then
+		( review_prepush_test_gate_acceptance_fetch_main ) || true
+	elif [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "acceptance_label" ]; then
+		( review_prepush_test_gate_acceptance_label_main ) || true
 	else
 		( review_prepush_test_gate_main ) || true
 	fi
