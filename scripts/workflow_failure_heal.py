@@ -525,6 +525,8 @@ _FAILURE_MARKER_TRAILING_RE = re.compile(
 	r"(?:\A|\n)<!--[ \t]*" + re.escape(FAILURE_MARKER_TAG) + r"[ \t]+(?P<fields>[^>\n]*?)[ \t]*-->\s*\Z"
 )
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+# Optional sixth heal issue header line (cause grouping, P5 / D3); matched with fullmatch.
+_HEAL_CAUSE_MARKER_LINE_RE = re.compile(r"<!-- " + re.escape(MARKER_PREFIX) + r"cause=[0-9a-f]{64} -->")
 # Authorship facts on ai:scope-blocked reports (Q81): the automation-path
 # guard grants by author, so the diagnosis needs the issue author, its
 # association and the pipeline login. Invalid values are dropped, never fatal.
@@ -685,7 +687,12 @@ def neutralize_untrusted_routing(text: str) -> tuple[str, int]:
 def validate_heal_issue_body_routing(body: str, *, target_branch: str | None, integration_branch: str | None) -> str:
 	"""Reject any metadata outside the intake-generated headers."""
 	lines = body.split("\n")
-	if len(lines) < 5 or any(not line.startswith(f"<!-- {MARKER_PREFIX}") or not line.endswith(" -->") for line in lines[:5]) or "<!--" in "\n".join(lines[5:]):
+	if len(lines) < 5 or any(not line.startswith(f"<!-- {MARKER_PREFIX}") or not line.endswith(" -->") for line in lines[:5]):
+		return "marker"
+	# Cause grouping (P5 / D3): an optional sixth header line, the exact
+	# `cause=<64 lowercase hex>` marker, is allowed; any other `<!--` is not.
+	header_length = 6 if len(lines) > 5 and _HEAL_CAUSE_MARKER_LINE_RE.fullmatch(lines[5]) else 5
+	if "<!--" in "\n".join(lines[header_length:]):
 		return "marker"
 	if re.search(r"Re-issued from\s*#|review-blocked-reissue", body, re.IGNORECASE):
 		return "reissue"
@@ -3666,6 +3673,20 @@ def fingerprint(workflow_name: str, failing_step: str, signature: str) -> str:
 	return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def cause_key(workflow: str, failing_step: str, shape: str) -> str:
+	"""Secondary root-cause key over (workflow name, failing step, error class).
+
+	Cause grouping (P5 / D3): two reports whose error signatures differ by an
+	extra line still share this key when they fail at the same step with the
+	same classify_failure_shape() class. The `[cycle:<id>]` suffix is stripped
+	exactly as in fingerprint(); an unknown shape counts as ``other``. Pure.
+	"""
+	shape_token = shape if shape in FAILURE_SHAPES else "other"
+	stable_workflow_name = _CYCLE_RUN_NAME_SUFFIX_RE.sub("", single_line(workflow, 200))
+	material = "|".join([stable_workflow_name.lower(), single_line(failing_step, 200).lower(), shape_token])
+	return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Identical-failure fingerprint cap (review_autofix.yml)
 # ---------------------------------------------------------------------------
@@ -5680,6 +5701,8 @@ def budget_decision(
 	source_issue: str | None = None,
 	trusted_author: str | None = None,
 	reissues: Iterable[dict[str, Any]] | None = None,
+	cause: str | None = None,
+	cause_window_days: int = 3,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
@@ -5709,9 +5732,21 @@ def budget_decision(
 	duplicate (``match: reissue``), so the report becomes an occurrence on it
 	instead of a new generation (Q147). See ``resolve_reissue_roots`` for the
 	author rule.
+
+	``cause`` (optional, cause grouping P5 / D3, see :func:`cause_key`): when
+	no fingerprint, source or re-issue duplicate exists and the lineage cap
+	does not escalate, an open heal issue whose ``cause=`` marker equals it and
+	that was created within ``cause_window_days`` is the duplicate
+	(``match: cause``), ahead of the budget caps. A missing or unparseable
+	``created_at`` never matches. ``None`` (or anything but 64 lowercase hex)
+	leaves the decision unchanged.
 	"""
 	now = now or _utc_now()
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+	if not (isinstance(cause, str) and _FP_HEX_RE.fullmatch(cause)):
+		cause = None
+	cause_window_start = now - timedelta(days=cause_window_days if isinstance(cause_window_days, int) and 1 <= cause_window_days <= 30 else 3)
+	cause_duplicate: dict[str, Any] | None = None
 	open_issues: list[dict[str, Any]] = []
 	created_today = 0
 	prior_same_fp: list[tuple[int, int, str, str]] = []
@@ -5772,6 +5807,8 @@ def budget_decision(
 				source_duplicate = _preferred_duplicate(source_duplicate, issue)
 			elif is_linked_heal_issue:
 				prior_source_lineage.append((_positive_int(markers.get("gen")) or 1, number, markers.get("root") or fp, issue_repository))
+			elif cause is not None and markers.get("cause") == cause and created is not None and created >= cause_window_start:
+				cause_duplicate = _preferred_duplicate(cause_duplicate, issue)
 		elif markers.get("fp") == fp:
 			gen = _positive_int(markers.get("gen")) or 1
 			prior_same_fp.append((gen, number, markers.get("root") or fp, issue_repository))
@@ -5879,6 +5916,25 @@ def budget_decision(
 			"prior_repo": prior_repo,
 			"open_count": len(open_issues),
 			"today_count": created_today,
+			**lineage_metadata,
+		}
+	if cause_duplicate is not None:
+		cause_markers = parse_heal_markers(cause_duplicate.get("body"))
+		# gen / root are the matched heal's own, for display only; the
+		# report's lineage is neither inherited nor altered.
+		return {
+			"action": "duplicate",
+			"match": "cause",
+			"cause": cause,
+			"existing_issue": _positive_int(cause_duplicate.get("number")),
+			"existing_url": sanitize_text(cause_duplicate.get("html_url"), 300),
+			"existing_repo": cause_duplicate.get("repository") if is_valid_repo_slug(cause_duplicate.get("repository")) else "",
+			"gen": _positive_int(cause_markers.get("gen")) or 1,
+			"root": cause_markers.get("root") or fp,
+			"open_count": len(open_issues),
+			"today_count": created_today,
+			# The report's own lineage source, so the intake's re-issue lookup
+			# (which outranks a cause match) runs exactly as with the switch off.
 			**lineage_metadata,
 		}
 	if len(open_issues) >= max_open:
@@ -7083,6 +7139,7 @@ def compose_issue_body(
 	reproduction: str | None = None,
 	trend: str | None = None,
 	suspect_commits_section: str | None = None,
+	cause: str | None = None,
 ) -> str:
 	"""Compose the heal issue body (upstream or consumer-side).
 
@@ -7109,6 +7166,10 @@ def compose_issue_body(
 	:func:`render_suspect_commits_section`) follows the trend, before the
 	diagnosis, and is neutralized and checked the same way. ``None`` or empty
 	adds nothing.
+
+	``cause`` (optional, :func:`cause_key`, 64 lowercase hex) adds the sixth
+	header line ``cause=<hex>`` (cause grouping P5 / D3); ``None``, empty or
+	invalid adds nothing, so a switch-off body is byte-identical.
 	"""
 	parts = [
 		f"<!-- {MARKER_PREFIX}fp={fp} -->",
@@ -7116,8 +7177,10 @@ def compose_issue_body(
 		f"<!-- {MARKER_PREFIX}root={root} -->",
 		f"<!-- {MARKER_PREFIX}source={payload['source_repo']}#{payload.get('issue_number') or 'run'} -->",
 		f"<!-- {MARKER_PREFIX}classification={classification} -->",
-		"",
 	]
+	if isinstance(cause, str) and _FP_HEX_RE.fullmatch(cause):
+		parts.append(f"<!-- {MARKER_PREFIX}cause={cause} -->")
+	parts.append("")
 	if target_branch:
 		parts.append(f"- **Target branch:** `{target_branch}`")
 	tracking_issue = orchestrator_tracking_issue(integration_branch)
@@ -7252,12 +7315,37 @@ def compose_issue_body(
 	return body
 
 
-def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str) -> str:
+def compose_occurrence_comment(
+	payload: dict[str, Any],
+	*,
+	intake_run_url: str,
+	signature: str | None = None,
+	evidence_pack: str | None = None,
+	cause_shape: str | None = None,
+) -> str:
+	"""Occurrence comment for a duplicate report.
+
+	``signature``, ``evidence_pack`` and ``cause_shape`` are passed only for a
+	cause match (P5 / D3); they add a ``Matched by`` line, the neutralised
+	error signature and the ``## Evidence pack`` section. All ``None`` keeps
+	the comment byte-identical.
+	"""
 	lines = [f"<!-- {MARKER_PREFIX}occurrence -->", "Another occurrence of this failure was reported:", ""]
 	lines.extend(_context_lines(payload, run_summaries=[]))
 	for ref in payload.get("run_refs") or []:
 		lines.append(f"- **Failed run:** {ref['url']}")
 	lines.append(f"- **Heal intake run:** {intake_run_url}")
+	if cause_shape is not None:
+		shape_token = cause_shape if cause_shape in FAILURE_SHAPES else "other"
+		lines.append(f"- **Matched by:** same workflow, failing step and error class (`{shape_token}`)")
+	if signature is not None:
+		signature_text = neutralize_untrusted_routing(single_line(signature, SIGNATURE_CHAR_LIMIT))[0].replace("`", "")
+		lines.append(f"- **Error signature (normalised, untrusted):** {signature_text}")
+	if evidence_pack:
+		pack_text = neutralize_untrusted_routing(sanitize_text(evidence_pack))[0].strip()
+		if pack_text:
+			lines.append("")
+			lines.append(pack_text)
 	return "\n".join(lines) + "\n"
 
 
@@ -9530,6 +9618,17 @@ def _cmd_fingerprint(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_cause_key(args: argparse.Namespace) -> int:
+	"""Print {"cause", "shape"} for a report (cause grouping P5 / D3). Pure, no API call."""
+	signature = Path(args.signature_file).read_text(encoding="utf-8", errors="replace") if args.signature_file else ""
+	failing_tests = _trend_load_json(args.failing_tests_json) if args.failing_tests_json else None
+	names = failing_tests.get("names") if isinstance(failing_tests, dict) else None
+	files = failing_tests.get("files") if isinstance(failing_tests, dict) else None
+	shape = classify_failure_shape(signature, job_conclusion=args.job_conclusion or None, failing_tests_found=bool(names) or bool(files))
+	_write_json({"cause": cause_key(args.workflow_name, args.failing_step, shape), "shape": shape})
+	return 0
+
+
 def _cmd_budget(args: argparse.Namespace) -> int:
 	issues = _load_json_file(args.issues_json)
 	decision = budget_decision(
@@ -9546,6 +9645,8 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		source_issue=args.source_issue or None,
 		trusted_author=args.trusted_author or None,
 		reissues=_load_reissues(args.reissues_json) if args.reissues_json else None,
+		cause=args.cause or None,
+		cause_window_days=args.cause_window_days if 1 <= args.cause_window_days <= 30 else 3,
 	)
 	_write_json(decision)
 	return 0
@@ -9780,6 +9881,7 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		reproduction=reproduction or None,
 		trend=trend or None,
 		suspect_commits_section=suspect_commits_text or None,
+		cause=getattr(args, "cause", "") or None,
 	)
 	reason = validate_heal_issue_body_routing(body, target_branch=args.target_branch or None, integration_branch=args.integration_branch or None)
 	if reason:
@@ -9814,7 +9916,28 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 
 def _cmd_compose_occurrence(args: argparse.Namespace) -> int:
 	payload = validate_payload(_load_json_file(args.payload_json))
-	sys.stdout.write(compose_occurrence_comment(payload, intake_run_url=args.intake_run_url))
+	# Cause match (P5 / D3) only: each extra input fails open when unreadable.
+	signature: str | None = None
+	if getattr(args, "signature_file", ""):
+		try:
+			signature = Path(args.signature_file).read_text(encoding="utf-8", errors="replace")
+		except OSError:
+			signature = None
+	evidence_pack: str | None = None
+	if getattr(args, "evidence_pack_file", ""):
+		try:
+			evidence_pack = Path(args.evidence_pack_file).read_text(encoding="utf-8", errors="replace")
+		except OSError:
+			print("WORKFLOW_HEAL warn evidence_pack_unreadable", file=sys.stderr)
+			evidence_pack = None
+	cause_shape = getattr(args, "cause_shape", "") or None
+	sys.stdout.write(compose_occurrence_comment(
+		payload,
+		intake_run_url=args.intake_run_url,
+		signature=signature,
+		evidence_pack=evidence_pack or None,
+		cause_shape=cause_shape,
+	))
 	return 0
 
 
@@ -10338,6 +10461,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--signature", required=True)
 	p.set_defaults(func=_cmd_fingerprint)
 
+	p = sub.add_parser("cause-key", help="Cause grouping key (workflow, failing step, error class) as JSON; pure, no API call")
+	p.add_argument("--workflow-name", required=True)
+	p.add_argument("--failing-step", default="")
+	p.add_argument("--signature-file", default="")
+	p.add_argument("--job-conclusion", default="failure")
+	p.add_argument("--failing-tests-json", default="")
+	p.set_defaults(func=_cmd_cause_key)
+
 	p = sub.add_parser("budget", help="Dedup / lineage / budget decision")
 	p.add_argument("--issues-json", required=True)
 	p.add_argument("--fingerprint", required=True)
@@ -10352,6 +10483,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--source-key", default="", help="owner/repo#N of the reported pull request (review/autofix reports)")
 	p.add_argument("--source-head-branch", default="", help="head branch of that pull request; ai/issue-<N> links heal issue N")
 	p.add_argument("--reissues-json", default="", help="issues opening with the unblock judge's re-issue line (Q147)")
+	p.add_argument("--cause", default="", help="cause grouping key (P5 / D3); empty disables the cause match")
+	p.add_argument("--cause-window-days", type=int, default=3, help="cause match window in days (1..30, else 3)")
 	p.set_defaults(func=_cmd_budget)
 
 	p = sub.add_parser("heal-already-fixed", help="Closed siblings whose fix merged, for a blocked heal issue (Q148)")
@@ -10390,6 +10523,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--reproduction-tests-file", default="")
 	p.add_argument("--trend-file", default="")
 	p.add_argument("--suspect-commits-file", default="")
+	p.add_argument("--cause", default="", help="cause grouping key for the sixth header line (P5 / D3)")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
 	p.add_argument("--title-out", required=True)
@@ -10444,6 +10578,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("compose-occurrence", help="Print the occurrence comment for a duplicate report")
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--intake-run-url", required=True)
+	p.add_argument("--signature-file", default="")
+	p.add_argument("--evidence-pack-file", default="")
+	p.add_argument("--cause-shape", default="")
 	p.set_defaults(func=_cmd_compose_occurrence)
 
 	p = sub.add_parser("branch-progress", help="Summarise a compare response (failing SHA ... branch) as JSON")

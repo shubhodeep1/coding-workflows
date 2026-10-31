@@ -145,6 +145,11 @@
 #                                         green run, their pipeline files, first-slow-day commits)
 #   WORKFLOW_HEAL_TREND_REGRESSION_RATIO  latest-day median / earlier median that counts as a
 #                                         regression (default 1.5; outside 1.0 < r <= 10 gives 1.5)
+#   WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED  default "false": only "true" adds the `cause=` header line
+#                                         (workflow, failing step, error class) to new heal issues and
+#                                         records a report with no fingerprint match but a cause match
+#                                         on a recent open heal issue as an occurrence there (P5 / D3)
+#   WORKFLOW_HEAL_CAUSE_GROUPING_DAYS     cause match window in days (default 3; the helper clamps 1-30)
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
@@ -342,6 +347,11 @@ REPRO_STATUS=""
 TREND_ENABLED="${WORKFLOW_HEAL_TREND_ENABLED:-false}"
 TREND_RATIO="${WORKFLOW_HEAL_TREND_REGRESSION_RATIO:-1.5}"
 TREND_FILE=""
+# Cause grouping (P5 / D3): only the literal 'true' turns it on.
+CAUSE_GROUPING_ENABLED="${WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED:-false}"
+CAUSE_GROUPING_DAYS="$(_positive_or_default "${WORKFLOW_HEAL_CAUSE_GROUPING_DAYS:-}" 3)"
+CAUSE_KEY=""
+CAUSE_SHAPE=""
 # Suspect commits (P3 steps 4 and 5): same switch. The compare files JSON is
 # the handoff for the later suspect-scope phase; the last-green cache lets the
 # suspect step reuse the reproduction step's lookup instead of a second call.
@@ -1940,6 +1950,63 @@ if [ "${REPORT_AUTH}" = "reconstructed" ] && [ "${FP}" != "${RECOVERY_SCAN_EXPEC
 	exit 0
 fi
 
+# --- Cause grouping (P5 / D3) -----------------------------------------------
+# Behind WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED (only the literal 'true'): a
+# secondary key over (workflow name, failing step, error class) so a report
+# whose signature differs by one error line joins a recent open heal issue of
+# the same cause (#8376 / #8391). Only workflow_run and phase_failure reports
+# whose signature came from real error lines are eligible. All inputs are
+# local files already saved (signature, the current run's jobs JSON, the job
+# logs): no API call. A helper failure leaves grouping off for this report.
+_heal_cause_key()
+{
+	[ "${CAUSE_GROUPING_ENABLED}" = true ] || return 0
+	local cause_dir="${RUNTIME_DIR}/cause" cause_json="" cause_conclusion="failure" cause_run_id="" cause_tests=""
+	if [ "${SOURCE_KIND}" != "workflow_run" ] && [ "${SOURCE_KIND}" != "phase_failure" ]; then
+		log "cause outcome=skipped reason=ineligible_kind"
+		return 0
+	fi
+	if [ "${REPORT_AUTH}" = "reconstructed" ]; then
+		log "cause outcome=skipped reason=reconstructed"
+		return 0
+	fi
+	if [ -z "${FIRST_FAILING_STEP:-}" ]; then
+		log "cause outcome=skipped reason=no_step"
+		return 0
+	fi
+	case "${SIGNATURE:-}" in
+		""|no-error-lines|phase:*|label:*)
+			log "cause outcome=skipped reason=no_signature"
+			return 0
+			;;
+	esac
+	rm -rf "${cause_dir}"
+	mkdir -p "${cause_dir}" || return 1
+	printf '%s' "${SIGNATURE}" > "${cause_dir}/signature.txt" || return 1
+	# Same conclusion rule as the run-time trend: the current run (run_refs[0]) only.
+	cause_run_id="$(jq -r '.run_refs[0].run_id // "" | tostring' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+	if [[ "${cause_run_id}" =~ ^[0-9]+$ ]] && [ -s "${LOG_DIR}/run-${cause_run_id}-jobs.json" ] \
+		&& jq -e '[(if type == "object" then (.jobs // []) else . end)[]? | objects | .conclusion?] | any(. == "timed_out")' \
+			"${LOG_DIR}/run-${cause_run_id}-jobs.json" >/dev/null 2>&1; then
+		cause_conclusion="timed_out"
+	fi
+	# Same local extraction as FAILING_TESTS_JSON below (reads job logs only).
+	cause_tests="$(python3 "${HEAL_PY}" heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt 2>/dev/null || echo '{"names":[],"files":[]}')"
+	printf '%s' "${cause_tests}" > "${cause_dir}/failing_tests.json" || return 1
+	if ! cause_json="$(python3 "${HEAL_PY}" cause-key --workflow-name "${FIRST_WORKFLOW_NAME}" --failing-step "${FIRST_FAILING_STEP}" \
+		--signature-file "${cause_dir}/signature.txt" --job-conclusion "${cause_conclusion}" \
+		--failing-tests-json "${cause_dir}/failing_tests.json" 2>/dev/null)" \
+		|| ! jq -e '(.cause | type == "string" and test("^[0-9a-f]{64}$")) and (.shape | type == "string" and test("^[a-z_]{1,20}$"))' <<< "${cause_json}" >/dev/null 2>&1; then
+		log "cause outcome=skipped reason=helper_failed"
+		return 0
+	fi
+	CAUSE_KEY="$(jq -r '.cause' <<< "${cause_json}")"
+	CAUSE_SHAPE="$(jq -r '.shape' <<< "${cause_json}")"
+	log "cause outcome=ok shape=${CAUSE_SHAPE} cause=${CAUSE_KEY}"
+	return 0
+}
+_heal_cause_key || { CAUSE_KEY=""; CAUSE_SHAPE=""; log "cause outcome=skipped reason=helper_failed"; }
+
 # --- Dedup / lineage / budget ----------------------------------------------
 
 # A deferred non-retryable report (#7333) whose heal-issue list cannot be read
@@ -2010,6 +2077,10 @@ fi
 if { [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "phase_failure" ]; } && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-key "${SOURCE_REPO}#${ISSUE_NUMBER}" --source-head-branch "${HEAD_BRANCH}")
 fi
+# Cause grouping (P5 / D3): set only with the switch on and an eligible report.
+if [ -n "${CAUSE_KEY}" ]; then
+	BUDGET_ARGS+=(--cause "${CAUSE_KEY}" --cause-window-days "${CAUSE_GROUPING_DAYS}")
+fi
 DECISION_FILE="${RUNTIME_DIR}/decision.json"
 python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"
 
@@ -2031,7 +2102,9 @@ _heal_reissue_lookup()
 	if [ "${REPORT_AUTH}" = "reconstructed" ]; then
 		return 0
 	fi
-	[ "$(jq -r '.action // ""' "${DECISION_FILE}")" != "duplicate" ] || return 0
+	# A cause match (P5 / D3) ranks below a re-issue of this lineage, so the
+	# lookup still runs for it, exactly when it would run with the switch off.
+	[ "$(jq -r '.action // ""' "${DECISION_FILE}")" != "duplicate" ] || [ "$(jq -r '.match // ""' "${DECISION_FILE}")" = "cause" ] || return 0
 	[ "$(jq -r '.lineage_source // "none"' "${DECISION_FILE}")" != "none" ] || return 0
 	local reissues_file="${RUNTIME_DIR}/heal_reissues.json" reissue_decision="${RUNTIME_DIR}/decision_reissue.json"
 	local reissue_repo reissue_part reissue_index=0 reissue_repos=("${SELF_REPO}")
@@ -2114,6 +2187,9 @@ _heal_scope_recovery_evaluate()
 	[ "${ACTION}" = "duplicate" ] || return 0
 	# A re-issue is not a heal issue; it has no scope marker to recover (Q147).
 	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "reissue" ] || return 0
+	# A cause match (P5 / D3) is another fingerprint's heal issue; this report
+	# never replaces or recovers it.
+	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "cause" ] || return 0
 	local recovery_issue recovery_repo recovery_url recovery_login
 	local recovery_record="${RUNTIME_DIR}/heal_scope_recovery_issue.json"
 	local recovery_comments="${RUNTIME_DIR}/heal_scope_recovery_comments.json"
@@ -2259,6 +2335,47 @@ if [ "${REPORT_AUTH}" = "reconstructed" ] && { [ "${HEAL_SCOPE_RECOVERY_ACTIVE}"
 	exit 0
 fi
 
+# Cause-match occurrence inputs (P5 / D3): the signature, the error class and,
+# with the evidence pack on, a pack rendered from the failed-run JSON already
+# saved (--failed-run only: no linked runs, no _heal_fetch_evidence_pack_api,
+# no API call). Fills CAUSE_OCCURRENCE_ARGS; a failed render adds no pack.
+_heal_cause_occurrence_args()
+{
+	local cause_dir="${RUNTIME_DIR}/cause" cause_pack="${RUNTIME_DIR}/cause/evidence_pack.md" cause_run_id="" cause_seen_ids=" "
+	local -a cause_pack_args=() cause_parent_logs=()
+	CAUSE_OCCURRENCE_ARGS=()
+	mkdir -p "${cause_dir}" || return 1
+	printf '%s' "${SIGNATURE:-}" > "${cause_dir}/occurrence_signature.txt" || return 1
+	CAUSE_OCCURRENCE_ARGS=(--signature-file "${cause_dir}/occurrence_signature.txt" --cause-shape "${CAUSE_SHAPE}")
+	[ "${EVIDENCE_PACK_ENABLED}" = true ] || return 0
+	: > "${cause_pack}"
+	if [ -s "${SUMMARIES_FILE:-}" ]; then
+		while IFS= read -r cause_run_id; do
+			[[ "${cause_run_id}" =~ ^[0-9]+$ ]] || continue
+			case "${cause_seen_ids}" in *" ${cause_run_id} "*) continue ;; esac
+			cause_seen_ids="${cause_seen_ids}${cause_run_id} "
+			if [ -s "${LOG_DIR}/run-${cause_run_id}-info.json" ] && [ -s "${LOG_DIR}/run-${cause_run_id}-jobs.json" ]; then
+				cause_pack_args+=(--failed-run "${LOG_DIR}/run-${cause_run_id}-info.json" "${LOG_DIR}/run-${cause_run_id}-jobs.json")
+			fi
+		done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+		mapfile -t cause_parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+	fi
+	if [ "${#cause_pack_args[@]}" -eq 0 ]; then
+		log "evidence_pack outcome=skipped bytes=0 reason=no_data"
+		return 0
+	fi
+	if ! python3 "${HEAL_PY}" evidence-pack "${cause_pack_args[@]}" --repo "${SOURCE_REPO}" \
+		--max-bytes "${EVIDENCE_PACK_MAX_BYTES}" --out "${cause_pack}" --stall-hint-files "${cause_parent_logs[@]}" >/dev/null 2>&1; then
+		: > "${cause_pack}"
+		log "evidence_pack outcome=partial bytes=0 reason=helper_failed"
+		return 0
+	fi
+	if [ -s "${cause_pack}" ]; then
+		CAUSE_OCCURRENCE_ARGS+=(--evidence-pack-file "${cause_pack}")
+	fi
+	return 0
+}
+
 case "${ACTION}" in
 	duplicate)
 		EXISTING="$(jq -r '.existing_issue' "${DECISION_FILE}")"
@@ -2267,10 +2384,18 @@ case "${ACTION}" in
 		[ -n "${EXISTING_REPO}" ] || EXISTING_REPO="${SELF_REPO}"
 		DUPLICATE_MATCH="$(jq -r '.match // "fingerprint"' "${DECISION_FILE}")"
 		OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence.md"
-		python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" > "${OCCURRENCE_FILE}"
+		CAUSE_OCCURRENCE_ARGS=()
+		if [ "${DUPLICATE_MATCH}" = "cause" ]; then
+			_heal_cause_occurrence_args || CAUSE_OCCURRENCE_ARGS=()
+		fi
+		python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" "${CAUSE_OCCURRENCE_ARGS[@]}" > "${OCCURRENCE_FILE}"
 		if gh_retry gh api "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F body=@"${OCCURRENCE_FILE}" >/dev/null 2>&1; then
 			DUPLICATE_OCCURRENCE_STATE="posted"
-			log "duplicate existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} source=${SOURCE_LABEL} match=${DUPLICATE_MATCH}"
+			if [ "${DUPLICATE_MATCH}" = "cause" ]; then
+				log "duplicate reason=cause_match existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} cause=${CAUSE_KEY} shape=${CAUSE_SHAPE} source=${SOURCE_LABEL}"
+			else
+				log "duplicate existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} source=${SOURCE_LABEL} match=${DUPLICATE_MATCH}"
+			fi
 		else
 			DUPLICATE_OCCURRENCE_STATE="failed"
 			log "warn duplicate_comment_failed existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
@@ -3898,6 +4023,12 @@ _open_issue()
 	if [ "${TREND_ENABLED}" = true ] && [ -s "${SUSPECT_COMMITS_FILE:-}" ]; then
 		suspect_commits_args=(--suspect-commits-file "${SUSPECT_COMMITS_FILE}")
 	fi
+	# Cause grouping (P5 / D3): the sixth header line, only with the switch on
+	# and a computed key, so a switch-off body is byte-identical.
+	local -a cause_args=()
+	if [ "${CAUSE_GROUPING_ENABLED}" = true ] && [ -n "${CAUSE_KEY}" ]; then
+		cause_args=(--cause "${CAUSE_KEY}")
+	fi
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${compose_payload_file}" \
 		--diagnosis-file "${DIAG_FILE}" \
@@ -3912,7 +4043,7 @@ _open_issue()
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
-		--body-out "${body_file}" "${evidence_pack_args[@]}" "${reproduction_args[@]}" "${trend_args[@]}" "${suspect_commits_args[@]}"; then
+		--body-out "${body_file}" "${cause_args[@]}" "${evidence_pack_args[@]}" "${reproduction_args[@]}" "${trend_args[@]}" "${suspect_commits_args[@]}"; then
 		log "error issue_compose_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
 		tg_send_msg "Workflow failure heal FAILED to compose a safe issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		return 1
