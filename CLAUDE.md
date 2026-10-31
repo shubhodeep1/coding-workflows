@@ -889,14 +889,15 @@ the branch be rewritten (a ruleset or branch protection that bans
 force-pushes, e.g. `GH013`, `Cannot force-push to this branch`,
 `protected branch hook declined`), do **not** stop to ask. Without asking:
 
-1. In its own command, create `<branch>-resend` from the current `HEAD`:
-   `git checkout -b <branch>-resend`. If `git ls-remote --heads origin
-   <branch>-resend` or `git rev-parse --verify --quiet
-   refs/heads/<branch>-resend` shows that name is taken, use the first free
-   one of `<branch>-resend-2`, `<branch>-resend-3`, and so on.
-2. Push it as a plain command: `git push -u origin <branch>-resend`. With
+1. Pick the name first: use `<branch>-resend` unless `git ls-remote --heads
+   origin <name>` prints a line or `git rev-parse --verify --quiet
+   refs/heads/<name>` succeeds; then take the first free one of
+   `<branch>-resend-2`, `<branch>-resend-3`, and so on.
+2. Then, in its own command, create it from the current `HEAD`:
+   `git checkout -b <branch>-resend` (with the suffix picked in step 1).
+3. Push it as a plain command: `git push -u origin <branch>-resend`. With
    the GitHub API unreachable the guard asks (§21.C); that is expected.
-3. Open the new PR from that branch, keep working on it for the rest of the
+4. Open the new PR from that branch, keep working on it for the rest of the
    session, and say in the reply that the work moved there and why.
 
 This is standing permission to push to a branch other than the session's
