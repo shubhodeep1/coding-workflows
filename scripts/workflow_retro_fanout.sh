@@ -169,6 +169,9 @@ run_consumer_retro() {
 	local candidates_json="${FANOUT_RUNTIME_DIR}/${safe_slug}-candidates.json"
 	local selection_env="${FANOUT_RUNTIME_DIR}/${safe_slug}-selection.env"
 	local comments_json="${FANOUT_RUNTIME_DIR}/${safe_slug}-comments.json"
+	local comment_reconfirm_json="${FANOUT_RUNTIME_DIR}/${safe_slug}-comment-reconfirm.json"
+	local comment_reconfirm_err="${FANOUT_RUNTIME_DIR}/${safe_slug}-comment-reconfirm.err"
+	local comment_reconfirm_body=""
 
 	python3 "${SCRIPT_DIR}/workflow_retro.py" \
 		--report "${WORKFLOW_LOG_REPORT_FILE}" \
@@ -365,7 +368,30 @@ PY
 			echo "WORKFLOW_RETRO_FANOUT_V1: repo=${target_repo} week=${week_label} status=refreshed tracker=#${FANOUT_TRACKER_NUMBER}"
 			return 0
 		fi
-		echo "::warning::retro-fanout: failed to refresh retro comment #${existing_comment_id} on ${target_repo}; posting a new comment."
+		# Reconfirm GET: runs only on this PATCH-failure path (BUG-005). GitHub
+		# may apply a PATCH and lose the response, so POSTing blindly would
+		# leave a duplicate marker comment. Reads audited per §14: the
+		# week-scoped --paginate issues/<n>/comments?since=${window_since} list
+		# read above runs before the PATCH, so it cannot show whether the PATCH
+		# landed, and the tracker `gh issue list` read returns no comment
+		# bodies. At most one extra bounded GET per consumer per week.
+		if gh_retry gh api "repos/${target_repo}/issues/comments/${existing_comment_id}" > "${comment_reconfirm_json}" 2> "${comment_reconfirm_err}"; then
+			if ! comment_reconfirm_body="$(jq -r '.body // ""' "${comment_reconfirm_json}" 2>/dev/null)"; then
+				echo "::warning::retro-fanout: failed to refresh retro comment #${existing_comment_id} on ${target_repo} and could not reconfirm it; not posting a duplicate."
+				return 1
+			fi
+			if [ "${comment_reconfirm_body}" = "$(cat "${comment_file}")" ]; then
+				echo "WORKFLOW_RETRO_FANOUT_V1: repo=${target_repo} week=${week_label} status=refreshed tracker=#${FANOUT_TRACKER_NUMBER}"
+				return 0
+			fi
+			echo "::warning::retro-fanout: retro comment #${existing_comment_id} exists on ${target_repo} but was not refreshed; not posting a duplicate."
+			return 1
+		elif grep -qE 'HTTP 404' "${comment_reconfirm_err}"; then
+			echo "::warning::retro-fanout: failed to refresh retro comment #${existing_comment_id} on ${target_repo}; reconfirm shows it is gone (HTTP 404), posting a new comment."
+		else
+			echo "::warning::retro-fanout: failed to refresh retro comment #${existing_comment_id} on ${target_repo} and could not reconfirm it; not posting a duplicate."
+			return 1
+		fi
 	fi
 
 	gh_retry gh api -X POST "repos/${target_repo}/issues/${FANOUT_TRACKER_NUMBER}/comments" --input "${comment_payload}" >/dev/null || return 1

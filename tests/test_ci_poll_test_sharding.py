@@ -986,6 +986,7 @@ MERGE_TRAIN_SMALL_MODULES = (
 	"tests/test_gh_retry_permanent_auth_failures.py",
 	"tests/test_gh_api_retry.py",
 	"tests/test_gh_api_retry_py.py",
+	"tests/test_gh_retry_final_stderr_redaction.py",
 )
 MERGE_TRAIN_AWK_RE = re.compile(
 	r"""awk -v n="\$\{mt_shard\}" -v total="\$\{mt_shards\}" '(?P<expr>[^']+)'"""
@@ -1469,6 +1470,7 @@ WIRING_PART1_MODULES = (
 	"tests/test_verify_integration_fingerprints_partial_removal.py",
 	"tests/test_verify_integration_fingerprints_post_capture_reintroduction.py",
 	"tests/test_workflow_retro_fanout.py",
+	"tests/test_retro_comment_patch_reconfirm.py",
 	"tests/test_workflow_support_ref_follows_pin.py",
 )
 WIRING_PART1_AWK_RE = re.compile(
@@ -1531,7 +1533,7 @@ def run_wiring_part1_filter(
 
 
 class WiringGuardPartOneShardingContractTest(unittest.TestCase):
-	"""The wiring guard part 1 step runs its 41 modules in local shards (#8246).
+	"""The wiring guard part 1 step runs its 42 modules in local shards (#8246).
 
 	`tests-heal-plan-and-validation` took 15m06s of its 20 minutes (run
 	40626853481). The step stays in its job, by name and without a guard,
@@ -1564,8 +1566,8 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 		array = re.search(r"wg1_modules=\((?P<mods>[^)]*)\)", self.run)
 		self.assertIsNotNone(array)
 		self.assertEqual(tuple(array.group("mods").split()), WIRING_PART1_MODULES)
-		self.assertEqual(len(WIRING_PART1_MODULES), 41)
-		self.assertEqual(len(set(WIRING_PART1_MODULES)), 41)
+		self.assertEqual(len(WIRING_PART1_MODULES), 42)
+		self.assertEqual(len(set(WIRING_PART1_MODULES)), 42)
 		for module in WIRING_PART1_MODULES:
 			with self.subTest(module=module):
 				self.assertTrue((REPO_ROOT / module).is_file(), module)
