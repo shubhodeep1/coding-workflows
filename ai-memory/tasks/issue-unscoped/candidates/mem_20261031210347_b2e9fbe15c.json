@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:6810-6897 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In `render_suspect_commits_section`, the check `shown = f\", newest {len(commits)} shown\" if total > len(commits) and len(commits) >= SUSPECT_COMMITS_MAX else \"\"` uses the length of the list after the cap was applied to guess whether the cap cut anything. When `parse_suspect_compare` drops a malformed entry and exactly 15 valid commits are left (for example total_commits=16, 16 raw commits, one malformed SHA), the caption says \"16 commits, newest 15 shown\" even though the cap hid nothing. If the malformed entry was the newest one, the 15 commits listed are not the newest.\n  WHY: The pre-cap length is lost at `parsed[-SUSPECT_COMMITS_MAX:]`, so the renderer cannot tell cap truncation apart from validation drops. `commits_page_truncated` does not apply because GitHub returned every entry. The only test covers total_commits=4, so this boundary is untested. All four reviewers rated it SEVERITY: NIT (shown here as low). The suggested fix is to record `len(parsed) > SUSPECT_COMMITS_MAX` as a flag in the result, use that flag for the caption, and add a test with total=16 and one malformed entry.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal.py:line 6897, render_suspect_commits_section: shown = f\", newest {len(commits)} shown\" if total > len(commits) and len(commits) >= SUSPECT_COMMITS_MAX else \"\" | severity=NIT | confidence=4\n  PROBLEM: `len(commits) >= SUSPECT_COMMITS_MAX` is used to mean \"the cap cut something\", but doc[\"commits\"] has already been cut to 15 (parsed[-SUSPECT_COMMITS_MAX:] in parse_suspect_compare). The renderer therefore cannot tell a real cap cut apart from validation dropping malformed entries until exactly 15 were left.\n  WHY: With total_commits=16, 16 commits listed and one malformed SHA, commits_page_truncated=False and 15 commits pass validation, so the caption says \"16 commits, newest 15 shown\" although the cap hid nothing. The new test only covers total_commits=4. The suggested hardening is to set result[\"commits_capped\"] = len(parsed) > SUSPECT_COMMITS_MAX, have the render step check doc.get(\"commits_capped\") is True, and add a test with total=16 and one malformed SHA (about 4 lines; HARDENING_RISK_SCORE: 1). The reviewer also checked that the expectations in test_intake_suspect_commits_reuses_the_reproduction_last_green (calls=2, slow_day_commits=2, no sha=) hold against the harness (lines 1816-1828, 2046-2073, 1261-1265).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:~line 6895, the `shown = f\", newest {len(commits)} shown\" if total > len(commits) and len(commits) >= SUSPECT_COMMITS_MAX else \"\"` line in `render_suspect_commits_section` | severity=NIT | confidence=3\n  PROBLEM: The condition `len(commits) >= SUSPECT_COMMITS_MAX` also fires when total=16, raw_commits=16 and parsed=15 (one malformed SHA dropped by `_suspect_commit_entry`). The caption then reads \"newest 15 shown\" although the cap truncated nothing.\n  WHY: Operators reading a stall or timeout heal issue would think the cap hid a valid newer commit. `test_parse_suspect_compare_fixture_lists_8192_and_pipeline_files` covers only total=4 and parsed=3. The suggested hardening is to set `result[\"cap_truncated\"] = len(parsed) > SUSPECT_COMMITS_MAX`, check `doc.get(\"cap_truncated\") is True` in the renderer, and add a test with total_commits=16 and one malformed SHA (HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py:parse_suspect_compare, lines 6810\u20136817 and 6822\u20136823; render_suspect_commits_section, line 6897 | severity=NIT | confidence=4\n  PROBLEM: The caption can say \"newest 15 shown\" when the parser did not keep the newest 15 valid commits. With 16 entries and an invalid SHA on the newest one, 15 older valid commits remain, total stays 16, and the caption condition passes.\n  WHY: The caption misidentifies which commits are shown and may hide the newest valid suspect commit. The `commits_page_truncated` override does not apply because GitHub returned all 16 entries. The suggested hardening is to record whether the parsed list exceeded the cap before slicing, use that flag for the caption, and add a test with 16 raw entries and an invalid newest SHA (3\u20135 lines; HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal.py:render_suspect_commits_section, line 6897: `shown = f\", newest {len(commits)} shown\" if total > len(commits) and len(commits) >= SUSPECT_COMMITS_MAX else \"\"` | severity=NIT | confidence=3\n  PROBLEM: `len(commits) >= SUSPECT_COMMITS_MAX` stands in for \"the cap removed commits\", but it is also true when validation dropped entries until exactly 15 remained (total_commits=16, 16 raw, one malformed SHA dropped by `_suspect_commit_entry`). `parse_suspect_compare` discards the pre-cap length at the `result[\"commits\"]` assignment.\n  WHY: The caption tells the heal-issue reader that newer commits were hidden when none were, which misdirects the suspicion window. The last-run test covers only total_commits=4. The suggested hardening is to set `result[\"commits_capped\"] = len(parsed) > SUSPECT_COMMITS_MAX` before the slice, check `doc.get(\"commits_capped\") is True` in the renderer, and add a test with total_commits=16 and one malformed entry (HARDENING_RISK_SCORE: 2). The reviewer also confirmed that every linked-issue deliverable is present (no task gaps).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "99ab630abd6cf38d1b83927ff39a04dc0e48f1ecebb68093cc79b49abd8ec88f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8560,
+    "run_id": "41240210306",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41240210306",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031210347_b2e9fbe15c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8560,
+    "run_id": "41240210306"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T21:03:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
