@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the pipeline should this issue change?\nChoices:\nA. Clarify / plan / implement phases (the issue \u2192 PR pipeline)\nB. Review & Autofix (`review_autofix.yml` and its helper scripts)\nC. Orchestrator (tracking issues, poller, waves, stall recovery)\nD. Validate (harness generation and Docker smoke validation)\nE. AI memory subsystem, or the workflow updater for consumer repos\nF. Something else. Name the workflow, script or file in your `/answer`. (RECOMMENDED: there is not enough information to pick A\u2013E, so please name the exact target)\nQ2: What kind of improvement do you mean?\nChoices:\nA. Fix a bug or failure you have seen. Please include the run ID, a log excerpt or the PR/issue number. (RECOMMENDED)\nB. Performance or cost (fewer tool calls, fewer tokens, shorter runtime, fewer GitHub API calls)\nC. Reliability or robustness (retries, fail-open behaviour, stall handling)\nD. A new feature or capability. Describe the behaviour you want.\nE. Documentation or readability only, with no change in behaviour\nQ3: How will we know the change worked?\nChoices:\nA. A specific failing scenario or run, named in your `/answer`, stops failing; a regression contract test is added (RECOMMENDED)\nB. A metric you can measure improves (for example token use, runtime or API call count) by a target you state\nC. A described new behaviour is present and covered by contract tests\nD. A docs-only change, reviewed by eye\nQ4: How large should the change be?\nChoices:\nA. Surgical: the smallest change to existing code, plus paired contract tests and README updates (RECOMMENDED)\nB. Moderate: refactor within one subsystem\nC. Broad: work across several subsystems, which would be split into an orchestrator tracking issue with sub-issues\n   **Note:** C does not fit with Q2:E (docs only). Picking both will need another round of clarification.",
+  "fingerprint": "e408fb26c7c31d98c44de8ddcde3b4af681dd740c2d420a5f977e552670b6b04",
+  "lineage": {
+    "issue_number": 8492,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41150205583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41150205583",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261031003019_fc3c581cf6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8492,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41150205583"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #8492 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-31T00:30:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
