@@ -4712,7 +4712,11 @@ jobs:
               --jq "[.[] | select(.pull_request | not) | select(.body // \"\" | contains(\"Tracking issue: #${TRACKING_NUMBER}\")) | .number]" \
               2>"${CHILDREN_ERR_FILE}" || echo "[]")
             CHILDREN=$(echo "${CHILDREN_JSON}" | jq -r 'sort | unique | join(",")' 2>/dev/null || echo "")
-            CHILD_COUNT=$(echo "${CHILDREN}" | tr ',' '\n' | grep -c .)
+            # Count from the fetched JSON: `grep -c .` exited 1 on an empty
+            # poll and set -e ended the step before the 90s loop and its
+            # diagnostics ran (BUG-001, analysis 2026-09-26-3).
+            CHILD_COUNT=$(echo "${CHILDREN_JSON}" | jq -r 'if type == "array" then (unique | length) else 0 end' 2>/dev/null || echo 0)
+            case "${CHILD_COUNT}" in ''|*[!0-9]*) CHILD_COUNT=0 ;; esac
             [ "${CHILD_COUNT}" -ge 2 ] && break
             sleep 5
           done
