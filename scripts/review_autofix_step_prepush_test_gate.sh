@@ -32,6 +32,14 @@
 #        changed files + affected tests + companions + failing files.
 #   summary RESULT OUT MODE REPAIR INITIAL
 #   mode  prints the normalised mode.
+#   persist-config  prints "<on> <max_turns>" (repair-loop switch and the
+#        clamped turn cap; e.g. "false 3"). Used by the conflict resolver.
+#   acceptance-files IN OUTDIR
+#        acceptance_check.py gate-files: OUTDIR/tests.txt and
+#        OUTDIR/baseline_fail.txt from a stored done-check; prints the count.
+#   acceptance-score IN RESULT
+#        acceptance_check.py gate-result into ${RUNTIME_DIR}/acceptance_result.json;
+#        prints "<met|unmet|not_run|none> <extra_unmet>".
 # Subcommands return non-zero only for missing inputs; callers ignore it.
 #
 # Trust: the gate module, the wrapper and the repair prompt come only from the
@@ -48,6 +56,10 @@
 #   PREPUSH_TEST_GATE_SHARDS            4
 #   PERSIST_REPAIR_LOOP_ENABLED         false (issue #8427, P3: repair loop)
 #   PERSIST_REPAIR_MAX_TURNS            3 (integers clamped to 1..5; else 3)
+#   PREPUSH_TEST_GATE_PROMPT_DONE_CHECK false; read only by repair-prompt:
+#                                       with true and the repair loop on, the
+#                                       unmet done-check block joins the prompt
+#                                       (the conflict resolver's loop sets it)
 #
 # Repair loop (PERSIST_REPAIR_LOOP_ENABLED=true), review only: the done-check
 # that the "Prepare done-check (repair loop)" step fetched into
@@ -1213,6 +1225,9 @@ case "${rpg_cmd}" in
 			[ -f "$4" ] && [ ! -L "$4" ] || exit 2
 			rpg_template="$4"
 		fi
+		# Explicit opt-in (default false): other callers never pick up a stale
+		# acceptance_result.json from the same RUNTIME_DIR.
+		[ "${PREPUSH_TEST_GATE_PROMPT_DONE_CHECK:-false}" = true ] && review_prepush_test_gate_persist_enabled || true
 		review_prepush_test_gate_build_prompt "$1" "$2" "${3:-}" "${5:-}" || exit 1
 		exit 0
 		;;
@@ -1229,5 +1244,41 @@ case "${rpg_cmd}" in
 		exit $?
 		;;
 	mode) review_prepush_test_gate_mode; echo "${rpg_mode}"; exit 0 ;;
+	persist-config)
+		review_prepush_test_gate_persist_enabled || true
+		echo "${rpg_persist_on} ${rpg_max_turns}"
+		exit 0
+		;;
+	acceptance-files)
+		[ -f "${1:-}" ] && [ ! -L "${1:-}" ] && [ -d "${2:-}" ] || exit 2
+		rpg_acceptance_helper="$(review_prepush_test_gate_acceptance_helper)" || rpg_acceptance_helper=""
+		if [ -z "${rpg_acceptance_helper}" ]; then
+			echo "PERSIST repair_loop outcome=skipped reason=helper_absent" >&2
+			echo 0
+			exit 0
+		fi
+		rpg_cli_count="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${rpg_acceptance_helper}" gate-files --in "$1" \
+			--tests-out "$2/tests.txt" --baseline-out "$2/baseline_fail.txt" 2>/dev/null)" || rpg_cli_count=0
+		[[ "${rpg_cli_count}" =~ ^[0-9]+$ ]] || rpg_cli_count=0
+		echo "${rpg_cli_count}"
+		exit 0
+		;;
+	acceptance-score)
+		if ! { [ -f "${1:-}" ] && [ ! -L "${1:-}" ] && [ -f "${2:-}" ] && [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; }; then
+			echo "none 0"
+			exit 2
+		fi
+		rpg_acceptance_helper="$(review_prepush_test_gate_acceptance_helper)" || rpg_acceptance_helper=""
+		rpg_cli_line="none 0"
+		if [ -n "${rpg_acceptance_helper}" ]; then
+			rpg_cli_line="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${rpg_acceptance_helper}" gate-result --in "$1" \
+				--gate-result "$2" --out "${RUNTIME_DIR}/acceptance_result.json" 2>/dev/null)" || rpg_cli_line="none 0"
+		fi
+		read -r rpg_cli_state rpg_cli_extra _ <<< "${rpg_cli_line:-none 0}" || true
+		case "${rpg_cli_state:-}" in met|unmet|not_run|none) ;; *) rpg_cli_state=none ;; esac
+		[[ "${rpg_cli_extra:-}" =~ ^[0-9]+$ ]] || rpg_cli_extra=0
+		echo "${rpg_cli_state} ${rpg_cli_extra}"
+		exit 0
+		;;
 	*) review_prepush_test_gate_log "outcome=error reason=unknown_subcommand"; exit 2 ;;
 esac

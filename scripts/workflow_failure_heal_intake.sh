@@ -199,6 +199,23 @@ log()
 	echo "WORKFLOW_HEAL $*"
 }
 
+# _heal_issue_create_detail <stderr_file> <title> <body_file>: the log fields
+# for a failed `gh issue create`, so the reason GitHub gave is visible (run
+# 41071146143 logged only issue_create_failed). Prints
+# `detail=<last 300 bytes of stderr, one line> title_bytes=<n> body_bytes=<n>`.
+# gh_retry writes its own notices first and gh's error last, hence the tail.
+# The sizes (bytes, never fewer than characters) show whether a title or body
+# could be over GitHub's limits without logging either.
+_heal_issue_create_detail()
+{
+	local err_file="$1" title="$2" body_file="$3" detail="" body_bytes="unknown"
+	if [ -s "${err_file}" ]; then
+		detail="$(tail -c 300 "${err_file}" | tr -d '\r' | tr '\n\t' '  ' | tr -cd '[:print:]' | sed -E -e 's/::[a-z]+:://g' -e 's/^ +//' -e 's/ +$//' -e 's/ +/ /g')"
+	fi
+	[ -f "${body_file}" ] && body_bytes="$(wc -c < "${body_file}" 2>/dev/null | tr -d '[:space:]')"
+	printf 'detail=%s title_bytes=%s body_bytes=%s' "${detail:-none}" "$(printf '%s' "${title}" | wc -c | tr -d '[:space:]')" "${body_bytes:-unknown}"
+}
+
 # --- Helpers (fail open if unavailable) ------------------------------------
 
 source scripts/gh_helpers.sh 2>/dev/null || true
@@ -957,10 +974,10 @@ _synced_security_finding_intake()
 					ss_failed=1
 					continue
 				fi
-				ss_url="$(gh_retry gh issue create --repo "${SELF_REPO}" --title "$(head -1 "${ss_title}")" --body-file "${ss_body}" --label "${HEAL_LABEL}" 2>/dev/null || echo '')"
+				ss_url="$(gh_retry gh issue create --repo "${SELF_REPO}" --title "$(head -1 "${ss_title}")" --body-file "${ss_body}" --label "${HEAL_LABEL}" 2>"${RUNTIME_DIR}/issue_create_error.txt" || echo '')"
 				ss_url="${ss_url%%[[:space:]]*}"
 				if [ -z "${ss_url}" ]; then
-					log "error issue_create_failed fp=${FP} source=${SOURCE_REPO}"
+					log "error issue_create_failed fp=${FP} source=${SOURCE_REPO} $(_heal_issue_create_detail "${RUNTIME_DIR}/issue_create_error.txt" "$(head -1 "${ss_title}")" "${ss_body}")"
 					ss_skipped=$((ss_skipped + 1))
 					ss_failed=1
 					continue
@@ -1143,10 +1160,10 @@ _synced_check_failure_intake()
 					if ! _heal_intake_scope_guard_permits_create "${SELF_REPO}" "${sc_body}" "${HEAL_LABEL}" ""; then
 						exit 1
 					fi
-					sc_url="$(gh_retry gh issue create --repo "${SELF_REPO}" --title "$(head -1 "${sc_title}")" --body-file "${sc_body}" --label "${HEAL_LABEL}" 2>/dev/null || echo '')"
+					sc_url="$(gh_retry gh issue create --repo "${SELF_REPO}" --title "$(head -1 "${sc_title}")" --body-file "${sc_body}" --label "${HEAL_LABEL}" 2>"${RUNTIME_DIR}/issue_create_error.txt" || echo '')"
 					sc_url="${sc_url%%[[:space:]]*}"
 					if [ -z "${sc_url}" ]; then
-						log "error issue_create_failed fp=${FP} source=${SOURCE_REPO}"
+						log "error issue_create_failed fp=${FP} source=${SOURCE_REPO} $(_heal_issue_create_detail "${RUNTIME_DIR}/issue_create_error.txt" "$(head -1 "${sc_title}")" "${sc_body}")"
 						exit 1
 					fi
 					log "opened issue=${sc_url} fp=${FP} gen=${sc_gen} source=${SOURCE_REPO}"
@@ -3269,10 +3286,10 @@ _open_issue()
 	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
 		ensure_label_exists "ai:orchestrator-managed" "${repo}" || true
 	fi
-	local issue_url
-	issue_url="$(gh_retry gh issue create --repo "${repo}" --title "${title}" --body-file "${body_file}" "${label_args[@]}" 2>/dev/null || echo '')"
+	local issue_url issue_create_err="${RUNTIME_DIR}/issue_create_error.txt"
+	issue_url="$(gh_retry gh issue create --repo "${repo}" --title "${title}" --body-file "${body_file}" "${label_args[@]}" 2>"${issue_create_err}" || echo '')"
 	if [ -z "${issue_url}" ]; then
-		log "error issue_create_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
+		log "error issue_create_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL} $(_heal_issue_create_detail "${issue_create_err}" "${title}" "${body_file}")"
 		tg_send_msg "Workflow failure heal FAILED to open an issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		return 1
 	fi

@@ -13998,8 +13998,15 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   fi
 
   if [ -n "${merge_err}" ]; then
+    # Store gh_retry's escaped "::warning::  stderr:" line decoded (#8505),
+    # as the refusal path below does; merge_err itself stays raw for it.
+    # Decode before the 5000-byte cap so the cut cannot split a %XX token.
+    local merge_err_for_state=""
+    merge_err_for_state="$(printf '%s\n' "${merge_err}" \
+      | awk '{ line = $0; if (sub(/^::warning::[ \t]*stderr: /, "", line)) { gsub(/%0[AD]/, "\n", line); gsub(/%25/, "%", line) } print line }' \
+      | head -c 5000)"
     merge_err="$(printf '%s' "${merge_err}" | head -c 5000)"
-    jq --arg err "${merge_err}" '.final_merge_error = $err' \
+    jq --arg err "${merge_err_for_state}" '.final_merge_error = $err' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
 
@@ -14035,8 +14042,11 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   # is a ruleset or required-status block (for example a failing required
   # commit status, which the check-runs gate above never reads), and only the
   # merge error names it. gh_retry ends a failed call with its
-  # "::error::gh command failed after" line followed by gh's raw stderr, so
-  # only that raw text is kept when present. Flattened to one line,
+  # "::error::gh command failed after" line followed by one
+  # "::warning::  stderr: <text>" line whose text is escaped with
+  # _gh_actions_escape and capped (#8505), so only that text is kept when
+  # present: the "stderr: " prefix is dropped and %0A / %0D / %25 are decoded
+  # (%25 last, so an escaped literal "%0A" stays literal). Flattened to one line,
   # workflow-command prefixes and backticks dropped, capped so it fits the
   # tracking comment.
   local final_pr_mergeable_state=""
@@ -14044,7 +14054,7 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   final_pr_mergeable_state="$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')"
   if [ -n "${merge_err}" ]; then
     merge_refusal_detail="$(printf '%s\n' "${merge_err}" \
-      | awk '/^::error::gh command failed after / { buf = ""; next } { buf = buf $0 "\n" } END { printf "%s", buf }')"
+      | awk '/^::error::gh command failed after / { buf = ""; next } { line = $0; if (sub(/^::warning::[ \t]*stderr: /, "", line)) { gsub(/%0[AD]/, "\n", line); gsub(/%25/, "%", line) } buf = buf line "\n" } END { printf "%s", buf }')"
     [ -n "${merge_refusal_detail//[[:space:]]/}" ] || merge_refusal_detail="${merge_err}"
     merge_refusal_detail="$(printf '%s\n' "${merge_refusal_detail}" \
       | sed -E 's/^::(warning|error|notice)::[[:space:]]*//' \
