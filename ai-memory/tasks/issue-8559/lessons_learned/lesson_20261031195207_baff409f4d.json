@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-10-31T19:52:07Z",
+  "issue_number": 8559,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=tests/test_workflow_checkout_integration_ref_audit.py:74-88; cited_path=.github/workflows/*.yml; files_touched=agents.d/heal-suspect-commits.md, changelog.d/heal-suspect-commits.md, scripts/workflow_failure_heal.py, scripts/workflow_failure_heal_intake.sh, tests/fixtures/heal/p3_compare_last_green_failing.json, tests/test_workflow_failure_heal.py.",
+  "phase": "review_autofix",
+  "pr_number": 8560,
+  "record_id": "lesson_20261031195207_baff409f4d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/*.yml",
+    "tests/test_workflow_checkout_integration_ref_audit.py",
+    "agents.d/heal-suspect-commits.md",
+    "changelog.d/heal-suspect-commits.md",
+    "scripts/workflow_failure_heal.py",
+    "scripts/workflow_failure_heal_intake.sh",
+    "tests/fixtures/heal/p3_compare_last_green_failing.json",
+    "tests/test_workflow_failure_heal.py"
+  ]
+}
