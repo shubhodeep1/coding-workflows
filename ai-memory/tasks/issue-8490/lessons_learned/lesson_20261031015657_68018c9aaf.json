@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-10-31T01:56:57Z",
+  "issue_number": 8490,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=prompts/mode-plan-heal-counterfactual.txt:1-1; cited_path=prompts/mode-plan-heal-counterfactual.txt, scripts/partial_delivery.py; files_touched=.github/workflows/workflow-failure-heal-intake.yml, agents.d/heal-intake-reproduction.md, changelog.d/heal-intake-reproduction.md, scripts/workflow_failure_heal.py, scripts/workflow_failure_heal_intake.sh, tests/test_claude_engine_utility_roles.py, tests/test_workflow_failure_heal.py, tests/test_workflow_failure_heal_queue.py.",
+  "phase": "review_autofix",
+  "pr_number": 8500,
+  "record_id": "lesson_20261031015657_68018c9aaf",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "prompts/mode-plan-heal-counterfactual.txt, scripts/partial_delivery.py",
+    "prompts/mode-plan-heal-counterfactual.txt",
+    ".github/workflows/workflow-failure-heal-intake.yml",
+    "agents.d/heal-intake-reproduction.md",
+    "changelog.d/heal-intake-reproduction.md",
+    "scripts/workflow_failure_heal.py",
+    "scripts/workflow_failure_heal_intake.sh",
+    "tests/test_claude_engine_utility_roles.py",
+    "tests/test_workflow_failure_heal.py",
+    "tests/test_workflow_failure_heal_queue.py"
+  ]
+}
