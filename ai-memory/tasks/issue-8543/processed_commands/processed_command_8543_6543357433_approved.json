@@ -5,13 +5,31 @@
   "entry_id": "processed_command_8543_6543357433_approved",
   "issue_number": 8543,
   "metadata": {
+    "branch": "ai/issue-8543",
+    "changed_files": [
+      ".github/workflows/plan.yml",
+      "agents.d/heal-regression-plan-gate.md",
+      "changelog.d/heal-regression-plan-gate.md",
+      "prompts/_templates/mode-plan-heal-counterfactual.txt",
+      "prompts/_templates/mode-workflow-failure-heal.txt",
+      "prompts/mode-plan-heal-counterfactual.txt",
+      "prompts/mode-workflow-failure-heal.txt",
+      "scripts/partial_delivery.py",
+      "tests/test_partial_delivery.py",
+      "tests/test_plan_heal_counterfactual_gate.py"
+    ],
+    "issue_number": 8543,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8543",
+    "pr_number": 8545,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8545",
+    "run_attempt": "1",
+    "run_id": "41201231369",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41201231369"
   },
   "run_attempt": 1,
   "run_id": "41201231369",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-31T12:31:48Z",
+  "status": "completed",
+  "timestamp": "2026-10-31T13:16:20Z",
   "workflow": "implement"
 }
