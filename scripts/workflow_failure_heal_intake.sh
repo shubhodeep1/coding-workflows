@@ -3156,8 +3156,8 @@ _heal_run_reproduction || { REPRODUCTION_FILE=""; REPRO_STATUS=""; log "reproduc
 #   marker, the fingerprint or the diagnosis prompt. With the switch off it
 #   returns at once: no file, no call and no log line, so the run is
 #   byte-identical to one without the step.
-#   Inputs (all already saved, no call): SIGNATURE, the reported runs' jobs
-#   conclusions (`timed_out` when any job timed out), FAILING_TESTS_JSON, the
+#   Inputs (all already saved, no call): SIGNATURE, the current run's (run_refs[0])
+#   jobs conclusions (`timed_out` when any of its jobs timed out), FAILING_TESTS_JSON, the
 #   reported runs' ${LOG_DIR}/run-<id>-info.json, the linked runs'
 #   ${RUNTIME_DIR}/linked_runs/run-<id>.json and, when the evidence pack ran,
 #   ${RUNTIME_DIR}/evidence_pack_api/issue-<n>.json + runs-page-<n>.json.
@@ -3181,8 +3181,12 @@ _heal_build_run_time_trend()
 	local trend_json="" trend_outcome="" trend_reason="" trend_shape="" trend_workflows="" trend_pages="" trend_regression="" trend_history=""
 	local trend_run_id="" trend_seen_ids=" " trend_conclusion="failure" trend_api_file="" trend_issue_number=""
 	local -a trend_args=()
+	local trend_current_run_id=""
 	TREND_FILE=""
 	[ "${TREND_ENABLED}" = true ] || return 0
+	# The shape follows the current failing run only (run_refs[0]); earlier
+	# streak runs are context and must not turn a test failure into a timeout.
+	trend_current_run_id="$(jq -r '.run_refs[0].run_id // "" | tostring' "${PAYLOAD_FILE}" 2>/dev/null || true)"
 	rm -rf "${trend_dir}"
 	mkdir -p "${trend_dir}" || return 1
 	printf '%s' "${SIGNATURE:-}" > "${trend_dir}/signature.txt" || return 1
@@ -3195,7 +3199,7 @@ _heal_build_run_time_trend()
 			if [ -s "${LOG_DIR}/run-${trend_run_id}-info.json" ]; then
 				trend_args+=(--failed-run "${LOG_DIR}/run-${trend_run_id}-info.json")
 			fi
-			if [ -s "${LOG_DIR}/run-${trend_run_id}-jobs.json" ] \
+			if [ "${trend_run_id}" = "${trend_current_run_id}" ] && [ -s "${LOG_DIR}/run-${trend_run_id}-jobs.json" ] \
 				&& jq -e '[(if type == "object" then (.jobs // []) else . end)[]? | objects | .conclusion?] | any(. == "timed_out")' \
 					"${LOG_DIR}/run-${trend_run_id}-jobs.json" >/dev/null 2>&1; then
 				trend_conclusion="timed_out"

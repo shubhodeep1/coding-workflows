@@ -3999,8 +3999,8 @@ def classify_failure_shape(
 	``exit code 13[4-9]`` and ``HTTP [45][0-9][0-9]`` alternatives are also
 	checked against it; every other alternative reads the signature only.
 
-	Pure: no I/O, no logging, no API calls. Nothing calls it yet (P3 step 1 /
-	D3); later phases wire it into the heal intake.
+	Pure: no I/O, no logging, no API calls. Called by run_time_trend (P3
+	run-time trend), which reads the trend only for stall / timeout shapes.
 	"""
 	sig = signature if isinstance(signature, str) else ""
 	conclusion = str(job_conclusion or "").strip().lower()
@@ -6499,7 +6499,7 @@ def _trend_single_table(repo: str, target: dict[str, str], *, now: datetime, rat
 			created = _parse_iso(run.get("created_at"))
 			if created is not None and (oldest is None or created < oldest):
 				oldest = created
-		more = len(page_runs) >= TREND_PER_PAGE or (total is not None and total > read)
+		more = (total > read) if total is not None else len(page_runs) >= TREND_PER_PAGE
 		covers_window = oldest is not None and oldest <= window_start
 		if not more or covers_window:
 			break

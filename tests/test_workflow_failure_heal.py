@@ -10835,7 +10835,7 @@ def test_classify_failure_shape_robust_inputs() -> None:
 		assert heal.classify_failure_shape(signature) in heal.FAILURE_SHAPES  # type: ignore[arg-type]
 
 
-def test_classify_failure_shape_has_no_caller_yet() -> None:
+def test_classify_failure_shape_only_called_by_run_time_trend() -> None:
 	# The run-time trend (P3 steps 2, 3 and 5) is the first planned caller: the
 	# only call sits in run_time_trend, which gates the trend on the shape.
 	tree = ast.parse(LIB_PATH.read_text(encoding="utf-8"))
@@ -11159,3 +11159,17 @@ def test_trend_switch_defaults_and_workflow_wiring() -> None:
 		assert workflow.count(line) == 2, line
 		assert intake_job.split("\n  intake:\n", 1)[1].count(line) == 1, line
 		assert scan_job.count(line) == 1, line
+
+
+def test_trend_exact_two_full_pages_is_complete_history() -> None:
+	# total_count equals the runs read: a full second page is not truncation.
+	now = P3_TREND_NOW
+	runs = [_p3_run(now - timedelta(minutes=10 * index + 5), 1380, run_id=index + 1) for index in range(200)]
+	pages = [{"total_count": 200, "workflow_runs": runs[:100]}, {"total_count": 200, "workflow_runs": runs[100:]}]
+	calls: list[list[str]] = []
+	result = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, calls))
+	assert len(calls) == 2 and result["history"] == "complete" and result["reason"] == "ok"
+	# Exactly one full page with total_count 100 reads no second page.
+	calls.clear()
+	single = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner([{"total_count": 100, "workflow_runs": runs[:100]}], calls))
+	assert len(calls) == 1 and single["history"] == "complete"
