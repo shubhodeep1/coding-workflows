@@ -987,8 +987,8 @@ def _baseline_target_statuses(
 		base_selection = _merge_explicit_tests({"affected_tests": []}, present)
 		units, _unverified = plan_units(repo, base_selection)
 		units = [unit for unit in units if unit.get("kind") == "test"]
-		# Plain deadline: classify_baseline already takes the one BASELINE_MIN_SECS
-		# floor the wrapper allows; past it these targets are "unverified".
+		# The caller passes the floored deadline it gave classify_baseline (one
+		# BASELINE_MIN_SECS window); past it these targets are "unverified".
 		reran = run_units(units, baseline, deadline, shards) if units else []
 		for target, path, name in present:
 			out[target] = {"base": _target_status(reran, path, name)}
@@ -1034,7 +1034,10 @@ def run_gate(
 	# The baseline re-run gets at least BASELINE_MIN_SECS even when the main
 	# run used the whole budget, so a late failure can still be confirmed as
 	# inherited (the container wrapper allows 120 s past the budget).
-	pr_caused, inherited = classify_baseline(failed, baseline, max(deadline, time.monotonic() + BASELINE_MIN_SECS), shards, repo)
+	# One floored deadline shared with the done-check re-run below, so both
+	# baseline re-runs stay inside one BASELINE_MIN_SECS window.
+	baseline_deadline = max(deadline, time.monotonic() + BASELINE_MIN_SECS)
+	pr_caused, inherited = classify_baseline(failed, baseline, baseline_deadline, shards, repo)
 	# A failure whose baseline re-run did not finish is unverified, not caused
 	# by the change: a slow test that fails on both trees would otherwise
 	# trigger a repair turn and a second full gate run (release v1.40.3).
@@ -1047,7 +1050,7 @@ def run_gate(
 	changed_assertions = assertion_diff(repo, baseline, selection.get("changed_files", [])) if baseline is not None and baseline.is_dir() else []
 	acceptance: dict[str, dict] = {}
 	if acceptance_requested:
-		base_statuses = _baseline_target_statuses(repo, baseline, base_targets, deadline, shards) if base_targets else {}
+		base_statuses = _baseline_target_statuses(repo, baseline, base_targets, baseline_deadline, shards) if base_targets else {}
 		for target, path, name in head_targets:
 			entry = {"head": _target_status(results, path, name), "base": "not_run"}
 			entry.update(base_statuses.get(target, {}))

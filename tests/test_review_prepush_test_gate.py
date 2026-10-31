@@ -904,3 +904,15 @@ def test_acceptance_label_reads_labels_from_the_full_pr_payload(tmp_path):
 	env.pop("PR_PAYLOAD_FILE")
 	proc = _run_step(tmp_path, repo, env)
 	assert _gh_calls(log) == [] and "outcome=unchanged" in proc.stderr
+
+
+def test_acceptance_label_posts_once_with_label_helpers_staged(tmp_path):
+	# Production stages label_helpers.sh; a successful POST must stay one write.
+	repo, env = _setup(tmp_path, [PASS])
+	log = _label_env(tmp_path, env, "unmet", [])
+	helpers = tmp_path / "support" / "scripts" / "label_helpers.sh"
+	helpers.write_text('ensure_label_exists() { printf "label create %s\\n" "$1" >> "' + str(log) + '"; }\n', encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	calls = _gh_calls(log)
+	assert len(calls) == 1 and "-X POST" in calls[0], proc.stderr
+	assert "PERSIST acceptance_label outcome=added" in proc.stderr

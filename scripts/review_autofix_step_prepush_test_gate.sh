@@ -888,8 +888,15 @@ review_prepush_test_gate_acceptance_label_main()
 			# shellcheck source=/dev/null
 			source "${sd}/label_helpers.sh" 2>/dev/null || true
 		fi
-		if type ensure_label_exists >/dev/null 2>&1; then ensure_label_exists "ai:acceptance-unmet" "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || true; fi
-		if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:acceptance-unmet' >/dev/null 2>&1; then outcome=added; else outcome=error; fi
+		# POST first (one write); create the catalog label and retry only on failure.
+		if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:acceptance-unmet' >/dev/null 2>&1; then
+			outcome=added
+		elif type ensure_label_exists >/dev/null 2>&1 && ensure_label_exists "ai:acceptance-unmet" "${GITHUB_REPOSITORY}" >/dev/null 2>&1 \
+			&& gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:acceptance-unmet' >/dev/null 2>&1; then
+			outcome=added
+		else
+			outcome=error
+		fi
 	fi
 	echo "PERSIST acceptance_label outcome=${outcome} reason=${reason}" >&2
 	return 0

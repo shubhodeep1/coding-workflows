@@ -1170,3 +1170,26 @@ def test_run_cli_reads_the_target_files(tmp_path):
 	data = json.loads(out.read_text(encoding="utf-8"))
 	assert data["acceptance"] == {} and {"item": "tests_file", "reason": "tests_file_unreadable"} in data["unverified"]
 	assert data["status"] == "unverified"
+
+
+def test_done_check_baseline_rerun_gets_the_floored_deadline(tmp_path, monkeypatch):
+	# Head run uses the whole budget: the red-on-base re-run still gets the
+	# same floored deadline classify_baseline got (one BASELINE_MIN_SECS window).
+	head = _plain_tree(tmp_path / "head", {"tests/red_case.py": "import sys\nsys.exit(0)\n"})
+	base = _plain_tree(tmp_path / "base", {"tests/red_case.py": "import sys\nsys.exit(1)\n"})
+	seen = []
+	real = gate.run_units
+
+	def fake_run_units(units, cwd, deadline, shards):
+		seen.append((Path(cwd).resolve(), deadline))
+		if Path(cwd).resolve() == head.resolve():
+			return [{**u, "status": "pass", "rc": 0, "tail": ""} for u in units]
+		return real(units, cwd, deadline, shards)
+
+	monkeypatch.setattr(gate, "run_units", fake_run_units)
+	t0 = time.monotonic()
+	result = gate.run_gate(head, {"affected_tests": [], "changed_files": []}, base, 1, 2,
+		explicit_tests=["tests/red_case.py"], expect_baseline_fail=["tests/red_case.py"])
+	base_calls = [d for cwd, d in seen if cwd == base.resolve()]
+	assert base_calls and all(d >= t0 + gate.BASELINE_MIN_SECS for d in base_calls)
+	assert result["acceptance"]["tests/red_case.py"]["base"] != "unverified"
