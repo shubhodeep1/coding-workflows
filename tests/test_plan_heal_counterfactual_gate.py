@@ -800,13 +800,37 @@ def test_regression_budget_only_reads_paths_not_knobs_in_files_bullets() -> None
 	assert (placeholder["reason"], placeholder["detail"]) == ("regression_line_missing", "empty"), placeholder
 
 
-def test_regression_named_test_file_is_not_a_companion() -> None:
-	# A test file the HEAL_REGRESSION line names is the regressing file, not a companion.
+def test_regression_named_test_file_does_not_lift_the_budget_hold() -> None:
+	# Review finding: naming a companion test file must not let a timeout-only plan escape.
 	files = _BUDGET_FILES + ["tests/test_slow.py"]
 	named = _rg(_rg_plan("HEAL_REGRESSION: tests/test_slow.py", files=files, body=_BUDGET_BODY))
-	assert (named["decision"], named["reason"]) == ("approve", "regression_named"), named
+	assert (named["decision"], named["reason"]) == ("hold", "budget_only_plan"), named
 	unnamed = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=files, body=_BUDGET_BODY))
 	assert unnamed["reason"] == "budget_only_plan", unnamed
+	# A named test fix that names what it changes is not budget-only.
+	fixed = _rg(_rg_plan("HEAL_REGRESSION: tests/test_slow.py", files=files, body=_BUDGET_BODY + " Drop `SLOW_FIXTURE_ROUNDS`."))
+	assert fixed["reason"] == "regression_named", fixed
+
+
+def test_regression_budget_only_files_bullets_without_paths_are_plan_text() -> None:
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	workflow_bullet = "- `.github/workflows/ci.yml`"
+	# A knob-only top-level bullet is not a file and its knob counts.
+	knob_only = _rg_plan(line, files=_BUDGET_FILES, body="Make the job slower-tolerant.").replace(
+		workflow_bullet, workflow_bullet + "\n- raise `timeout-minutes` to 120")
+	assert _rg(knob_only)["reason"] == "budget_only_plan"
+	# A sub-bullet naming another identifier is another change.
+	sub = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + "\n  - set `CACHE_KEY_PREFIX` per job")
+	assert _rg(sub)["reason"] == "not_a_regression"
+
+
+def test_regression_unchanged_clause_is_a_mention_only() -> None:
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	same_line = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Set `CACHE_ENABLED` back to true; leave `PHASE_TIMEOUT` unchanged."))
+	assert same_line["reason"] == "not_a_regression", same_line
+	only_unchanged = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Leave `timeout-minutes` unchanged. Cache the setup."))
+	assert only_unchanged["reason"] == "not_a_regression", only_unchanged
 
 
 # Step plans name src/app.py so the automation-path gate does not defer them.
