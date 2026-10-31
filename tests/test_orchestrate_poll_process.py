@@ -29400,7 +29400,8 @@ def test_persist_budget_skips_and_defers_without_writes():
 def test_persist_budget_continue_and_errors_write_nothing():
 	for decision, expected in (
 		(_pb_decision("continue", "within_budget"), "continue reason=within_budget"),
-		(_pb_decision("ignore", "journal_absent"), "ignore reason=journal_absent"),
+		(_pb_decision("ignore", "journal_absent"), "skipped reason=journal_absent"),
+		(_pb_decision("ignore", "already_decided"), "ignore reason=already_decided"),
 		(None, "error reason=decide_failed"),
 		({"action": "rm -rf /"}, "error reason=decide_failed"),
 	):
@@ -29409,6 +29410,14 @@ def test_persist_budget_continue_and_errors_write_nothing():
 			assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout, proc.stderr
 			assert f"PERSIST governor outcome={expected} issue=12" in proc.stderr
 			assert "gh issue edit" not in log and "/comments -f body=" not in log and "JOURNAL" not in log
+
+
+def test_persist_budget_escalation_after_stored_replan_basis_still_acts():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, log = _run_persist_budget(Path(tmp), _pb_decision("escalate", "max_hours"), prior="implement|77|1")
+		assert proc.returncode == 0, proc.stderr
+		assert "RESULT action=escalate" in proc.stdout
+		assert log.count("--add-label ai:needs-human") == 1
 
 
 def test_persist_budget_failed_answer_post_is_retried_next_tick():
@@ -29451,6 +29460,7 @@ def test_persist_budget_hooks_are_switch_gated_and_placed():
 	assert "merged|closed|skipped|not_created) continue ;;" in managed_block
 	assert "_current_wave_details_json" in managed_block and "gh " not in managed_block.replace("# ", "")
 	assert '[ "${PERSIST_BUDGET_STATE_CHANGED:-false}" = "true" ]' in script[stall:]
+	assert '--labels-json "${PERSIST_BUDGET_STALL_LABELS_JSON:-${LABELS_JSON}}"' in script[stall:stall + 400]
 	assert script.index('[ "${PERSIST_BUDGET_STATE_CHANGED:-false}" = "true" ] ||', stall) < script.index("post_state_comment || true", stall)
 	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert " persist_postmerge_verify.py acceptance_check.py persist_budget.py " in workflow
@@ -29468,6 +29478,7 @@ def test_persist_budget_managed_hook_records_basis_on_replan():
 			{"id": "a", "github_issue": 12, "status": "pending"},
 			{"id": "b", "github_issue": 13, "status": "merged"},
 			{"id": "c", "github_issue": 14, "status": "pending", "persist_budget_basis": "old"},
+			{"id": "e", "github_issue": 15, "status": "pending"},
 			{"id": "d", "github_issue": None, "status": "not_created"},
 		]}]}), encoding="utf-8")
 		calls = tmp_path / "calls.log"
@@ -29475,7 +29486,7 @@ def test_persist_budget_managed_hook_records_basis_on_replan():
 			"set -euo pipefail\n"
 			"PERSIST_BUDGET_ENABLED=true\nWAVE_IDX=0\n"
 			f"STATE_FILE='{state}'\n"
-			"LABELS_JSON='{\"12\":[\"ai:done\"],\"14\":[\"ai:review-blocked\"]}'\n"
+			"LABELS_JSON='{\"12\":[\"ai:done\"],\"14\":[\"ai:review-blocked\"],\"15\":[\"ai:validating\"]}'\n"
 			"_current_wave_details_json='{\"12\":{\"comments_available\":true,\"comments\":[{\"id\":1}]}}'\n"
 			"_is_truthy() { case \"$1\" in true) return 0 ;; *) return 1 ;; esac; }\n"
 			f"_load_actions_runs_cached() {{ echo RUNS >> '{calls}'; }}\n"
@@ -29488,6 +29499,7 @@ def test_persist_budget_managed_hook_records_basis_on_replan():
 			"mkdir -p scripts && touch scripts/persist_budget.py\n"
 			+ block
 			+ "echo \"CHANGED=${PERSIST_BUDGET_STATE_CHANGED}\"\n"
+			+ "echo \"STALL_LABELS=${PERSIST_BUDGET_STALL_LABELS_JSON}\"\n"
 		)
 		proc = subprocess.run(["bash", "-c", harness], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False)
 		assert proc.returncode == 0, proc.stderr
@@ -29495,7 +29507,11 @@ def test_persist_budget_managed_hook_records_basis_on_replan():
 		log = calls.read_text(encoding="utf-8")
 		assert 'GOV 12 [{"id":1}] ["ai:done"] prior= scope=managed active=99' in log
 		assert 'GOV 14 [] ["ai:review-blocked"] prior=old scope=managed' in log
-		assert "GOV 13" not in log and log.count("RUNS") == 1
+		assert "GOV 13" not in log and "GOV 15" not in log and log.count("RUNS") == 1
+		assert "PERSIST governor outcome=skipped reason=dedicated_phase issue=15" in proc.stderr
+		stall_labels = json.loads(proc.stdout.split("STALL_LABELS=", 1)[1].strip())
+		# The acted (re-planned) issue is hidden from this tick's stall check; the others are unchanged.
+		assert stall_labels == {"12": ["ai:done", "ai:needs-human"], "14": ["ai:review-blocked"], "15": ["ai:validating"]}
 		issues = json.loads(state.read_text(encoding="utf-8"))["waves"][0]["issues"]
 		assert issues[0]["persist_budget_basis"] == "review|12|1"
 		assert issues[2]["persist_budget_basis"] == "old"

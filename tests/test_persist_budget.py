@@ -115,14 +115,21 @@ CASES = [
 	("progress_via_failure_key", [_plan(), *_fails(2, keys=KEYS[:2])], [], CAPS, "continue", "within_budget"),
 	(
 		"replan_at_max_rounds_below_cap",
-		[_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(5)]],
+		[_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(4)], _entry("review", "fail", minutes_ago=200, failure_key=KEYS[0])],
 		[], CAPS, "replan", "max_rounds",
 	),
 	(
+		"max_rounds_with_passing_newest_round_continues",
+		[_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(5)]],
+		["ai:ready-to-merge"], CAPS, "continue", "within_budget",
+	),
+	(
 		"escalate_at_max_rounds_at_cap",
-		[_plan(1, 900), _plan(2, 800), _plan(3, 700), *[_entry("review", "ok", 3, 300 - i) for i in range(5)]],
+		[_plan(1, 900), _plan(2, 800), _plan(3, 700), *[_entry("review", "ok", 3, 300 - i) for i in range(4)], _entry("review", "fail", 3, 200, failure_key=KEYS[0])],
 		[], CAPS, "escalate", "max_approaches:max_rounds",
 	),
+	("open_pr_escalates_instead_of_replan", [_plan(), *_fails(2)], ["ai:done"], CAPS, "escalate", "open_pr:no_progress"),
+	("review_blocked_escalates_instead_of_replan", [_plan(), *_fails(3, keys=KEYS[:3], stage="review")], ["ai:review-blocked"], CAPS, "escalate", "open_pr:failed_rounds"),
 	(
 		"escalate_at_failed_rounds_at_cap",
 		[_plan(1, 900), _plan(2, 800), _plan(3, 700), *_fails(3, keys=KEYS[:3], approach=3)],
@@ -146,6 +153,16 @@ CASES = [
 		[], CAPS, "continue", "within_budget",
 	),
 	("already_decided", [_plan(), *_fails(3, keys=KEYS[:3]), _entry("governor", "ok", minutes_ago=5)], [], CAPS, "ignore", "already_decided"),
+	(
+		"stranded_replan_escalates_at_max_hours",
+		[_entry("plan", "ok", 1, 49 * 60), *_fails(3, keys=KEYS[:3]), _entry("governor", "ok", minutes_ago=5)],
+		[], CAPS, "escalate", "max_hours",
+	),
+	(
+		"governor_escalation_is_final_past_max_hours",
+		[_entry("plan", "ok", 1, 49 * 60), *_fails(3, keys=KEYS[:3]), _entry("governor", "blocked", minutes_ago=5)],
+		[], CAPS, "ignore", "already_decided",
+	),
 	("security_pass_failed", [_plan(), *_fails(3, keys=KEYS[:3])], ["ai:security-pass-failed"], CAPS, "ignore", "security_label"),
 	("any_security_label", [_plan(), *_fails(3, keys=KEYS[:3])], [{"name": "Security-Review"}], CAPS, "ignore", "security_label"),
 	("needs_human", [_plan(), *_fails(3, keys=KEYS[:3])], ["ai:needs-human"], CAPS, "ignore", "needs_human"),
@@ -234,7 +251,7 @@ def test_cli_decides_from_trusted_comments() -> None:
 		comments.write_text(json.dumps(_journal_comments([_plan(), *_fails(2)], "pipeline-bot[bot]")), encoding="utf-8")
 		proc, out = _run_cli(tmp_path, [
 			"--comments-file", str(comments), "--trusted-login", "pipeline-bot",
-			"--labels", '["ai:done"]', "--now", NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
+			"--labels", '["ai:implementing"]', "--now", NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
 		])
 		assert proc.returncode == 0, proc.stderr
 		decision = json.loads(out.read_text(encoding="utf-8"))
@@ -256,7 +273,7 @@ def test_cli_journal_json_and_caps_override() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		journal = tmp_path / "journal.json"
-		journal.write_text(json.dumps({"entries": [_plan(), _entry("implement", "ok", minutes_ago=100)]}), encoding="utf-8")
+		journal.write_text(json.dumps({"entries": [_plan(), _entry("implement", "fail", minutes_ago=100, failure_key=KEYS[0])]}), encoding="utf-8")
 		proc, out = _run_cli(tmp_path, [
 			"--journal-json", str(journal), "--labels", "[]", "--caps-json", '{"max_rounds": 1}',
 			"--now", NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),
