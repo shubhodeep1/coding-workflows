@@ -10856,7 +10856,8 @@ _POST_SYNC_REPAIR_SKIP_CLAUSE = "env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'"
 def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 	raw = WORKFLOW.read_text(encoding="utf-8")
 	pre_review = [line for line in raw.splitlines() if "env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'" in line]
-	assert len(pre_review) == 17, len(pre_review)
+	# 19 since #8427 P3: the switch-gated done-check prepare and label steps.
+	assert len(pre_review) == 19, len(pre_review)
 	for line in pre_review:
 		assert line.lstrip().startswith("if: "), line
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in line, line
@@ -10878,7 +10879,7 @@ def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 		"Telegram success",
 	):
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
-	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 26
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 28
 
 
 def test_post_sync_test_repair_commit_is_pushed() -> None:

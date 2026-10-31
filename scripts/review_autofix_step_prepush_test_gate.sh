@@ -58,8 +58,9 @@
 # log line. Two more sourced modes (PREPUSH_TEST_GATE_STEP_MODE), both no-ops
 # with the switch off: acceptance_fetch (scripts/acceptance_check.py
 # fetch-plan; one comments read plus one cached identity read) and
-# acceptance_label (adds or removes ai:acceptance-unmet after a commit; at
-# most one write). Only these two modes call the GitHub API.
+# acceptance_label (adds or removes ai:acceptance-unmet after a commit; one
+# write, plus one label create and one retry POST only after a failed POST).
+# Only these two modes call the GitHub API.
 #
 # Never blocks the push: the sourced step ends with status 0 on every path.
 # Log prefix: PREPUSH_TEST_GATE phase=review|resolver|heal|integration.

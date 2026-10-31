@@ -3834,7 +3834,7 @@ jobs:
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
 
       # Repair loop (issue #8427, P3): ai:acceptance-unmet follows the committed
-      # head's done-check (at most one label write). Fail-open.
+      # head's done-check (one label write; a failed POST adds a create and a retry). Fail-open.
       - name: Sync done-check label
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && vars.PREPUSH_TEST_GATE_MODE != 'off' && steps.commit_changes.outputs.did_commit == 'true' && env.PERSIST_REPAIR_LOOP_ENABLED == 'true'
         continue-on-error: true
