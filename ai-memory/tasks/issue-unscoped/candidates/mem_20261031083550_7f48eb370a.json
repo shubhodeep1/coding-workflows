@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:14001-14006 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `head -c 5000` truncates `merge_err` before the awk escape-decode, so the cut can land inside a `%25`, `%0A` or `%0D` token and leave a stray fragment such as `%0` in the stored `final_merge_error`.\n  WHY: The escaped stderr excerpt can exceed 5000 bytes, so the split is reachable. The effect is cosmetic because the value goes through `jq --arg` and there is no injection path. All four reviewers rated it NIT, which is mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:~14001-14006 | severity=NIT | confidence=2\n  PROBLEM: The 5000-byte `head -c` cut runs before the awk decode that builds `merge_err_for_state`, and can split a `%25`, `%0A` or `%0D` token, leaving a stray fragment such as `%0`.\n  WHY: The stderr line is capped at 2048 bytes before escaping, and a hostile line can reach about 6 KB once escaped, so the cut is reachable. The effect is cosmetic, with no injection path via `jq --arg`. The cut is not part of the last run diff.\n- Hardening: build `merge_err_for_state` from the full `merge_err` and apply `head -c 5000` after the decode (about 3 lines).\n- Hardening: the test's `MERGE_ERR_FOR_STATE_AWK_RE` regex is coupled to the script's exact formatting; no fix needed because it fails loudly.\n- HARDENING_RISK_SCORE: 1\n- The reviewer checked the new test against the script and found no correctness issue. The other checklist categories reported NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:14001 | severity=NIT | confidence=2\n  PROBLEM: `head -c 5000` truncates the raw stderr before the escape-decoding logic, which can split an escape sequence (for example `%25` becoming `%2`).\n  WHY: `final_merge_error` would contain an incomplete escape fragment. This is cosmetic, and the downstream `jq` use stays safe from injection.\n- Hardening: perform the truncation after the awk decode (1-2 lines).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:14001, 14005-14006 | severity=NIT | confidence=3\n  PROBLEM: `merge_err` is truncated to 5000 bytes by `head -c 5000` before the awk decode. A cut inside a `%25`, `%0A` or `%0D` token leaves a stray fragment such as `%0` or `%2` in the stored `final_merge_error`.\n  WHY: With the default `max_attempts=5`, `merge_err` can reach roughly 8600 bytes, so the cut is reachable. The effect is cosmetic, with no injection path via `jq --arg`. The reviewer notes the issue is pre-existing, and that the new test pins the decode behaviour but does not fix the truncation order.\n- The reviewer judged the new test well designed and its assertion correct. The other checklist categories reported NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:14001, 14005-14006 | severity=NIT | confidence=3\n  PROBLEM: `merge_err` is truncated by `head -c 5000` (line 14001) before the awk escape-decode (lines 14005-14006). The cut can land inside an escape token and leave a stray fragment such as `%0` in the stored `.final_merge_error`, and the tail of the stderr text is lost.\n  WHY: `_gh_final_stderr_excerpt` (scripts/gh_helpers.sh:184-195) caps the excerpt at 2048 bytes, and `_gh_actions_escape` can expand it about 3x to roughly 6.1 KB, so the cut is reachable. The effect is cosmetic, with no injection path via `jq --arg`.\n- The last-run change only adds the test at tests/test_gh_retry_final_stderr_redaction.py:276-312. The reviewer verified that the regex matches the script and that the expected decode output is correct, so the test is sound.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c53e69ab797963db1d51c88809b9ccd195ca70c77aa4cd3f747b2bc43d2bf9d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8513,
+    "run_id": "41184065480",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41184065480",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031083550_7f48eb370a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8513,
+    "run_id": "41184065480"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T08:35:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
