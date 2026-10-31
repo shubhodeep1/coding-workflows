@@ -850,6 +850,7 @@ jobs:
               tests/test_gh_helpers_parse_reset_header.py \
               tests/test_gh_retry_stdout_isolation.py \
               tests/test_gh_retry_permanent_auth_failures.py \
+              tests/test_gh_retry_final_stderr_redaction.py \
               tests/test_gh_api_retry.py \
               tests/test_gh_api_retry_py.py \
               tests/test_gh_pr_comments_argv_limit.py > /tmp/merge_train_rest.log 2>&1
