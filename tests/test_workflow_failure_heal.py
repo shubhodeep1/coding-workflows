@@ -2890,6 +2890,23 @@ def test_intake_scope_comes_from_support_ref_not_diagnosis_files_touched() -> No
 	assert "scripts/evil.py" not in body
 
 
+def test_intake_issue_create_failure_logs_github_reason_and_sizes() -> None:
+	# Run 41071146143 logged only `issue_create_failed`: the create's stderr went
+	# to /dev/null. The failure line now carries gh's reason and the sizes.
+	payload = _self_repo_autofix_payload() | {"script_ref": "stable", "crash_file": "scripts/safe.py", "changed_files": ["scripts/safe.py"]}
+	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]) | {"issue_create_fail": True}
+	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_prepare_scope_support, scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 1, result.stdout
+	assert len(state_after["issues_created"]) == 1  # one attempt only: the create is not idempotent
+	line = next(entry for entry in result.stdout.splitlines() if "error issue_create_failed" in entry)
+	match = re.search(r" detail=(.*) title_bytes=([0-9]+) body_bytes=([0-9]+)$", line)
+	assert match, line
+	assert "HTTP 500" in match.group(1)
+	assert "::" not in match.group(1)
+	assert int(match.group(2)) == len(state_after["issues_created"][0]["title"].encode("utf-8"))
+	assert int(match.group(3)) == len(state_after["issues_created"][0]["body"].encode("utf-8"))
+
+
 def test_intake_scope_guard_off_files_no_issue() -> None:
 	# #6871: with HEAL_INTAKE_SCOPE_GUARD_ENABLED switched off (any value other
 	# than unset, empty or "true"; _stage sets "false"), the intake composes the
