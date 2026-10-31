@@ -77,7 +77,7 @@ class FakeGh:
 def fake(monkeypatch):
 	for name in ("PERSIST_POSTMERGE_VERIFY_ENABLED", "PERSIST_POSTMERGE_WINDOW_HOURS", "PERSIST_POSTMERGE_MAX_PER_TICK",
 			"PERSIST_MAX_APPROACHES", "PERSIST_BUDGET_ENABLED", "WORKFLOW_HEAL_VERIFY_ENABLED", "PERSIST_JOURNAL_ENABLED",
-			"RUNTIME_DIR"):
+			"RUNTIME_DIR", "GITHUB_RUN_NUMBER"):
 		monkeypatch.delenv(name, raising=False)
 	monkeypatch.setenv("PERSIST_POSTMERGE_VERIFY_ENABLED", "true")
 	gh = FakeGh()
@@ -112,12 +112,13 @@ def test_arm_posts_fixture_marker_and_label(fake):
 	assert _arm() == 0
 	writes = fake.writes()
 	assert len(writes) == 2
-	comment = writes[0]
+	# Label first: a marker without the label would never be graded.
+	assert writes[0] == [f"repos/{REPO}/issues/12/labels", "-X", "POST", "-f", "labels[]=ai:verify-pending"]
+	comment = writes[1]
 	assert comment[0] == f"repos/{REPO}/issues/12/comments" and comment[2] == "POST"
 	body = comment[comment.index("-f") + 1][len("body="):]
 	assert body.startswith(ppv.HEADER_PENDING + "\n")
 	assert ppv.marker_line(MARKER) in body.split("\n")
-	assert writes[1] == [f"repos/{REPO}/issues/12/labels", "-X", "POST", "-f", "labels[]=ai:verify-pending"]
 	assert len(fake.calls) <= 5
 
 
@@ -131,6 +132,22 @@ def test_arm_writes_journal_entry_when_journal_on(fake, monkeypatch, tmp_path):
 	assert len(journal_calls) == 1 and journal_calls[0][0] == f"repos/{REPO}/issues/12/comments"
 	assert len(fake.calls) + len(journal_calls) <= 5
 	assert list(tmp_path.iterdir()) == []
+
+
+def test_arm_label_failure_retries_once_and_posts_no_marker(fake, capsys):
+	fake.comments[12] = [_plan_comment({"workflow": MARKER["workflow"], "job": MARKER["job"]})]
+	fake.fail = ("/labels",)
+	assert _arm() == 0
+	assert [w[0] for w in fake.writes()] == [f"repos/{REPO}/issues/12/labels"] * 2
+	assert "outcome=error reason=label_write issue=12" in capsys.readouterr().err
+
+
+def test_arm_pending_comment_uses_configured_window(fake, monkeypatch):
+	monkeypatch.setenv("PERSIST_POSTMERGE_WINDOW_HOURS", "72")
+	fake.comments[12] = [_plan_comment({"workflow": MARKER["workflow"], "job": MARKER["job"]})]
+	assert _arm() == 0
+	body = fake.writes()[1][fake.writes()[1].index("-f") + 1]
+	assert "for up to 72 h" in body
 
 
 def test_arm_post_merge_none_records_ok_without_label(fake, capsys):
@@ -314,7 +331,44 @@ def test_check_recurred_from_failed_job_reopens_in_planning(fake, monkeypatch, t
 	assert len(fake.calls) == 7 and len(fake.calls) <= 1 + 8 * 3
 	queries = [e for e in fake.endpoints() if "/actions/workflows/" in e]
 	assert queries == [f"repos/{REPO}/actions/workflows/release-gate.yml/runs?branch=main&status=completed"
-		f"&created=%3E%3D2026-10-20T10%3A00%3A00Z&per_page=20"]
+		f"&created=%3E%3D2026-10-20T10%3A00%3A00Z&per_page=100"]
+
+
+def test_check_cached_later_run_rereads_the_workflow_runs(fake, monkeypatch, tmp_path):
+	# The poller cache keeps only the 20 newest runs repo-wide: a later green run
+	# there must not hide an evicted failing run on the merge commit.
+	_armed(fake, marker=dict(MARKER, job=None))
+	fake.workflow_runs = {"workflow_runs": [_run(510, "success", head_sha="5" * 40, created="2026-10-20T12:00:00Z"),
+		_run(509, "failure")]}
+	out = _check(fake, monkeypatch, tmp_path, runs_cache={"workflow_runs": [
+		_run(510, "success", head_sha="5" * 40, created="2026-10-20T12:00:00Z")]})
+	assert out["replan"] == [12]
+	assert any("/actions/workflows/" in e for e in fake.endpoints())
+	assert not any("/compare/" in e for e in fake.endpoints())
+
+
+def test_check_failed_recurred_comment_does_not_replan(fake, monkeypatch, tmp_path, capsys):
+	_armed(fake, marker=dict(MARKER, job=None))
+
+	def patched(args):
+		if args[0].endswith("/comments") and "POST" in args:
+			fake.calls.append(list(args))
+			return None
+		return FakeGh.__call__(fake, args)
+
+	monkeypatch.setattr(ppv, "_gh", patched)
+	out = _check(fake, monkeypatch, tmp_path, runs_cache={"workflow_runs": [_run(511, "failure")]})
+	assert out["replan"] == []
+	assert "outcome=error reason=comment_write issue=12" in capsys.readouterr().err
+
+
+def test_rotate_window_spreads_the_cap_across_ticks():
+	items = [{"number": n} for n in (1, 2, 3, 4, 5)]
+	assert [i["number"] for i in ppv.rotate_window(items, 2, "")] == [1, 2]
+	assert [i["number"] for i in ppv.rotate_window(items, 2, "1")] == [3, 4]
+	assert [i["number"] for i in ppv.rotate_window(items, 2, "2")] == [5, 1]
+	assert [i["number"] for i in ppv.rotate_window(items, 2, "x")] == [1, 2]
+	assert ppv.rotate_window([], 3, "7") == []
 
 
 def test_check_recurred_from_failed_run_without_job(fake, monkeypatch, tmp_path):
@@ -391,6 +445,16 @@ def test_check_budget_owner_with_stub_budget_script(fake, monkeypatch, tmp_path,
 	assert out["replan"] == []
 	assert fake.writes()[0][2] == "PATCH"
 	assert "reason=budget_owner" in capsys.readouterr().err
+
+
+def test_check_budget_on_without_script_uses_fallback_cap(fake, monkeypatch, tmp_path, capsys):
+	monkeypatch.setenv("PERSIST_BUDGET_ENABLED", "true")
+	monkeypatch.setattr(ppv, "__file__", str(tmp_path / "persist_postmerge_verify.py"))
+	_armed(fake, marker=dict(MARKER, job=None))
+	out = _check(fake, monkeypatch, tmp_path, runs_cache={"workflow_runs": [_run(512, "failure")]})
+	assert out["replan"] == [12]
+	err = capsys.readouterr().err
+	assert "outcome=deferred reason=budget_absent issue=12" in err and err.count("outcome=recurred") == 1
 
 
 def test_check_disabled_cleans_only_expired_labels(fake, monkeypatch, tmp_path, capsys):
