@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -227,6 +228,11 @@ class Wiring(unittest.TestCase):
 		self.assertEqual(len(sites), 2)
 		for site in sites:
 			self.assertIn("_pr_base_fresh_for_merge", site[-1200:])
+		# Each call to the retry helper follows its site's gate.
+		retry_calls = list(re.finditer(r"\|\| rb_judge_merge_retry_transient (?:auto|direct) (?:merge|terminal|sync); then", case_text))
+		self.assertEqual(len(retry_calls), 3)
+		for call in retry_calls:
+			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 3000):call.start()])
 		# merge_with_followup's synchronous merge is gated too.
 		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then', text)
 
