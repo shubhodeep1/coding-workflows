@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Changes to workflow-failure healing scripts are commonly paired with tests in tests/test_workflow_failure_heal.py, and trend-oriented behavior may also use fixtures under tests/fixtures/heal. When changing healing decisions or failure-shape handling, extend those tests and fixtures to cover the relevant cases.",
+  "fingerprint": "a6a2e5302b0aecba7385c7a901a4012c208ccb4e322050a1a20352d20e2f85a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41208122962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41208122962",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8518",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8526",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8532",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8525",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8529",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8535",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8542"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261031140600_47bab2c519",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Healing logic is tested with focused fixtures and dedicated unit tests.",
+  "timestamps": {
+    "created_at": "2026-10-31T14:06:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
