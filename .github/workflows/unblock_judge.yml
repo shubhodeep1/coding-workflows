@@ -173,6 +173,8 @@ jobs:
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           # Q148: close a heal issue whose failure a sibling already fixed.
           UNBLOCK_HEAL_ALREADY_FIXED_ENABLED: ${{ vars.UNBLOCK_HEAL_ALREADY_FIXED_ENABLED || 'true' }}
+          # #8470: close a standalone nothing-to-implement issue after its fix-up instead of resuming it.
+          UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED: ${{ vars.UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED || 'true' }}
           UNBLOCK_PROTECTED_HANDOFF_ENABLED: ${{ vars.UNBLOCK_PROTECTED_HANDOFF_ENABLED || 'false' }}
           # Harness routing: a harness-owned verdict sends a heal report instead of a fix-up.
           UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED: ${{ vars.UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED || 'true' }}
