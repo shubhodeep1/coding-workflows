@@ -19551,7 +19551,12 @@ run_persist_postmerge_verify() {
   [ -d "${ppv_base}" ] || ppv_base="/tmp"
   ppv_runs="${ppv_base}/persist_postmerge_runs.json"
   ppv_out="${ppv_base}/persist_postmerge_out.json"
-  _load_actions_runs_cached > "${ppv_runs}" 2>/dev/null || printf '%s' '{"workflow_runs":[]}' > "${ppv_runs}"
+  # Switch off, the helper only cleans up expired labels and never reads runs.
+  if _is_truthy "${PERSIST_POSTMERGE_VERIFY_ENABLED:-false}"; then
+    _load_actions_runs_cached > "${ppv_runs}" 2>/dev/null || printf '%s' '{"workflow_runs":[]}' > "${ppv_runs}"
+  else
+    printf '%s' '{"workflow_runs":[]}' > "${ppv_runs}"
+  fi
   : > "${ppv_out}"
   PYTHONDONTWRITEBYTECODE=1 python3 -B "${ppv_helper}" check --repo "${GITHUB_REPOSITORY:-}" \
     --runs-file "${ppv_runs}" --out "${ppv_out}" || true
@@ -25332,6 +25337,14 @@ fi
 # complementary has_work gates keep it exclusive with the post-loop scan.
 if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
   run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
+  # Check after merge (#8427 P5) on idle ticks. This step runs on every idle
+  # tick, unlike the standalone-recovery sweep, which
+  # ENABLE_STANDALONE_STALL_RECOVERY=false skips. Prime the phase caps for the
+  # re-plan dispatches only when the switch is on.
+  if _is_truthy "${PERSIST_POSTMERGE_VERIFY_ENABLED:-false}"; then
+    prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+  fi
+  run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
   exit 0
 fi
 
@@ -25344,7 +25357,6 @@ fi
 if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
   run_standalone_stall_recovery
-  run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
   exit 0
 fi
 

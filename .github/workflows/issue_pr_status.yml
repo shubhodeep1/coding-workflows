@@ -819,6 +819,7 @@ jobs:
           PR_MERGED_AT: ${{ github.event.pull_request.merged_at || '' }}
           PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PERSIST_POSTMERGE_VERIFY_ENABLED: ${{ vars.PERSIST_POSTMERGE_VERIFY_ENABLED || 'false' }}
+          PERSIST_POSTMERGE_WINDOW_HOURS: ${{ vars.PERSIST_POSTMERGE_WINDOW_HOURS || '24' }}
           PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
           WORKFLOW_HEAL_VERIFY_ENABLED: ${{ vars.WORKFLOW_HEAL_VERIFY_ENABLED || 'false' }}
           PYTHONDONTWRITEBYTECODE: "1"

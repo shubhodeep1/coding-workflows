@@ -12,8 +12,8 @@ and grades it:
 
 	held        the run (or the named job) succeeded: label removed
 	recurred    it failed: the issue is reopened in ai:planning (or
-	            ai:needs-human past PERSIST_MAX_APPROACHES re-plans) and the
-	            poller posts the existing retrigger_plan `/answer` comment
+			ai:needs-human past PERSIST_MAX_APPROACHES re-plans) and the
+			poller posts the existing retrigger_plan `/answer` comment
 	unverified  no such run within PERSIST_POSTMERGE_WINDOW_HOURS: label removed
 	wait        nothing to grade yet
 
@@ -30,13 +30,13 @@ removed and nothing is reopened.
 
 Switches (each defaulted here, unattended instructions section 8):
 	PERSIST_POSTMERGE_VERIFY_ENABLED  default false. Off: `arm` makes no call;
-	                                  `check` only removes leftover labels whose
-	                                  window has passed (one list read per tick).
+			`check` only removes leftover labels whose
+			window has passed (one list read per tick).
 	PERSIST_POSTMERGE_WINDOW_HOURS    default 24, clamped to 1..168
 	PERSIST_POSTMERGE_MAX_PER_TICK    default 3, clamped to 1..10
 	PERSIST_MAX_APPROACHES            default 3, clamped to 1..20 (fallback cap)
 	PERSIST_BUDGET_ENABLED            default false (P6 owns the re-plan when on
-	                                  and scripts/persist_budget.py exists)
+			and scripts/persist_budget.py exists)
 	WORKFLOW_HEAL_VERIFY_ENABLED      default false (#8409 P7 owns heal issues)
 
 CLI (always exits 0):
@@ -526,11 +526,15 @@ def cmd_arm(args: argparse.Namespace) -> None:
 		return
 	existing = active_marker(parse_markers(comments, login))
 	already = existing is not None and existing["pr"] == pr and existing["merge_sha"] == marker["merge_sha"]
-	if not already and not _post_comment(args.repo, issue, pending_comment(marker, window_hours())):
-		log("error", "comment_write", issue)
-		return
-	if _gh([f"repos/{args.repo}/issues/{issue}/labels", "-X", "POST", "-f", f"labels[]={LABEL}"]) is None:
+	# Label first: `check` finds candidates by label, so a marker without the
+	# label would never be graded. The add is idempotent, so retry it once.
+	label_args = [f"repos/{args.repo}/issues/{issue}/labels", "-X", "POST", "-f", f"labels[]={LABEL}"]
+	if _gh(label_args) is None and _gh(label_args) is None:
 		log("error", "label_write", issue)
+		return
+	if not already and not _post_comment(args.repo, issue, pending_comment(marker, window_hours())):
+		# A label without a trusted marker is removed by the next `check`.
+		log("error", "comment_write", issue)
 		return
 	if not already:
 		_journal(args.repo, issue, "ok", comments, login, f"check after merge armed: {marker['workflow']}")
@@ -599,7 +603,7 @@ def _budget_owner(number: int) -> bool:
 		return False
 	if (Path(__file__).resolve().parent / "persist_budget.py").is_file():
 		return True
-	log("recurred", "budget_absent", number)
+	log("deferred", "budget_absent", number)
 	return False
 
 
@@ -633,15 +637,18 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 			log("error", "label_write", number)
 		return False
 	run = select_run(runs_cache, marker)
-	if run is None:
+	# The per-tick cache keeps only the 20 newest completed runs repo-wide, so
+	# a cached run on a later commit may hide an evicted run on the merge
+	# commit: read the workflow's own runs unless the cache hit is that run.
+	if run is None or run["head_sha"] != marker["merge_sha"]:
 		basename = marker["workflow"].rsplit("/", 1)[-1]
 		data = _gh_json([
 			f"repos/{repo}/actions/workflows/{basename}/runs?branch={quote(marker['branch'], safe='')}"
-			f"&status=completed&created={quote('>=' + marker['merged_at'], safe='')}&per_page=20"])
+			f"&status=completed&created={quote('>=' + marker['merged_at'], safe='')}&per_page=100"])
 		if not isinstance(data, dict):
 			log("error", "gh_read", number)
 			return False
-		run = select_run(data, marker)
+		run = select_run(data, marker) or run
 	contained = False
 	if run is not None:
 		if run["head_sha"] == marker["merge_sha"]:
@@ -698,7 +705,11 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 	else:
 		next_step = f"the issue is reopened in `{PLANNING_LABEL}` and the plan is re-generated."
 	if not _post_comment(repo, number, failed_comment(marker, run, failing_job, next_step)):
+		# replan_count() counts trusted recurred markers; re-planning without one
+		# would let the PERSIST_MAX_APPROACHES cap be exceeded. The issue is open
+		# in its target phase, where standalone stall recovery picks it up.
 		log("error", "comment_write", number)
+		return False
 	step = failing_job or marker.get("job") or "run"
 	text = f"::error::post-merge {marker['workflow']} {step} concluded {_token(run.get('conclusion'))}\n"
 	_journal(repo, number, "fail", comments, login, f"check after merge failed: run {run['id']}",
@@ -711,6 +722,19 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 		return False
 	log("recurred", "replan", number)
 	return True
+
+
+def rotate_window(candidates: list[dict], cap: int, run_number: Any) -> list[dict]:
+	"""At most `cap` candidates, starting at (run_number * cap) mod len, so a
+	waiting candidate (which writes nothing and keeps its updated_at) cannot
+	hold every slot: each candidate is graded at least once every
+	ceil(len / cap) ticks."""
+	if not candidates or cap <= 0:
+		return []
+	text = str(run_number or "")
+	start = (int(text) * cap) % len(candidates) if text.isdigit() else 0
+	ordered = candidates[start:] + candidates[:start]
+	return ordered[:cap]
 
 
 def cmd_check(args: argparse.Namespace) -> None:
@@ -737,7 +761,7 @@ def cmd_check(args: argparse.Namespace) -> None:
 		log("error", "identity_unavailable")
 		return
 	runs_cache = _load_runs_file(args.runs_file)
-	for item in candidates[:cap]:
+	for item in rotate_window(candidates, cap, os.environ.get("GITHUB_RUN_NUMBER", "")):
 		out["processed"] += 1
 		try:
 			if check_one(args.repo, item, login, runs_cache, now, window_h):
