@@ -234,10 +234,14 @@ writes, so it is now the default and the session takes it without asking:
    `git rev-parse --verify --quiet refs/heads/<name>` succeeds (locally),
    for example after an earlier fallback in a long session. Use
    `<branch>-resend` if both checks find it free, otherwise the first free
-   one of `<branch>-resend-2`, `<branch>-resend-3`, and so on.
+   one of `<branch>-resend-2`, `<branch>-resend-3`, and so on. A
+   `git ls-remote` that exits non-zero proves nothing about the name; retry
+   it before picking one.
 2. Then, in its own command, create that branch from the current `HEAD`:
    `git checkout -b <branch>-resend` (with the suffix picked in step 1).
-3. Push it as a plain command (§21.E): `git push -u origin <branch>-resend`.
+3. Push it as a plain command (§21.E): `git push -u origin <branch>-resend`,
+   with the same suffix picked in step 1 (for example
+   `git push -u origin <branch>-resend-2`).
 4. Open the new PR from that branch and keep working on it for the rest of
    the session. Say in the reply that the work moved there and why.
 
