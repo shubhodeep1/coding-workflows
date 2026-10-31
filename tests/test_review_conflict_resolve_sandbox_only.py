@@ -1330,7 +1330,7 @@ def _loop_env(**extra: str) -> dict:
 
 def _normalised_docker_argv(tmp_path: Path, work: Path) -> list[str]:
 	lines = _docker_run_lines(work)
-	lines = [re.sub(r"prepush-gate-local-[0-9]+", "prepush-gate-local-<PID>", line.replace(str(tmp_path), "<TMP>")) for line in lines]
+	lines = [re.sub(r"prepush-gate-[A-Za-z0-9_]+-[0-9]+", "prepush-gate-<RUN>-<PID>", line.replace(str(tmp_path), "<TMP>")) for line in lines]
 	return [re.sub(r"[0-9a-f]{40}", "<SHA>", re.sub(r"\.[A-Za-z0-9]{6,}(?=[/,\s]|$)", ".<RND>", line)) for line in lines]
 
 
