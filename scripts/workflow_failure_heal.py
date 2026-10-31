@@ -6892,7 +6892,9 @@ def render_suspect_commits_section(
 	total = doc.get("total_commits") if isinstance(doc.get("total_commits"), int) and not isinstance(doc.get("total_commits"), bool) else len(commits)
 	green = green_sha[:7] if isinstance(green_sha, str) and _SUSPECT_SHA_RE.fullmatch(green_sha) else "unknown"
 	failing = failing_sha[:7] if isinstance(failing_sha, str) and _SUSPECT_SHA_RE.fullmatch(failing_sha) else "unknown"
-	shown = f", newest {len(commits)} shown" if total > len(commits) else ""
+	# Only the SUSPECT_COMMITS_MAX cap leaves newer commits out; a malformed entry dropped
+	# by validation does not.
+	shown = f", newest {len(commits)} shown" if total > len(commits) and len(commits) >= SUSPECT_COMMITS_MAX else ""
 	returned = doc.get("commits_returned")
 	if doc.get("commits_page_truncated") is True and isinstance(returned, int) and not isinstance(returned, bool):
 		shown = f", GitHub listed only the oldest {max(0, returned)}; the last {len(commits)} of those shown, the newest are not listed"
