@@ -11173,3 +11173,20 @@ def test_trend_exact_two_full_pages_is_complete_history() -> None:
 	calls.clear()
 	single = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner([{"total_count": 100, "workflow_runs": runs[:100]}], calls))
 	assert len(calls) == 1 and single["history"] == "complete"
+
+
+def test_trend_shifted_pages_are_truncated_history() -> None:
+	# A run created between the two page reads repeats one page-1 run on page 2
+	# while total_count still equals the runs read: the read is incomplete.
+	now = P3_TREND_NOW
+	runs = [_p3_run(now - timedelta(minutes=10 * index + 5), 3200 if index < 60 else 1380, run_id=index + 1) for index in range(200)]
+	shifted_page2 = [runs[99]] + runs[100:199]
+	pages = [{"total_count": 200, "workflow_runs": runs[:100]}, {"total_count": 200, "workflow_runs": shifted_page2}]
+	calls: list[list[str]] = []
+	result = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, calls))
+	assert len(calls) == 2 and result["history"] == "truncated" and result["regression"] is False
+	assert result["tables"][0]["reason"] == "history_truncated"
+	# A total_count that changes between pages is truncated as well.
+	pages = [{"total_count": 200, "workflow_runs": runs[:100]}, {"total_count": 201, "workflow_runs": runs[100:]}]
+	changed = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, []))
+	assert changed["history"] == "truncated" and changed["regression"] is False

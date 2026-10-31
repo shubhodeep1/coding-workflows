@@ -6464,6 +6464,10 @@ def _trend_single_table(repo: str, target: dict[str, str], *, now: datetime, rat
 	oldest: datetime | None = None
 	total: int | None = None
 	read = 0
+	# A run created between page requests shifts offset pagination (a repeated id,
+	# or a changed total_count): such a read is never complete history.
+	seen_ids: set[int] = set()
+	shifted = False
 	for page in range(1, max_pages + 1):
 		argv = [
 			"gh", "api", "--method", "GET", f"repos/{repo}/actions/workflows/{target['workflow']}/runs",
@@ -6489,12 +6493,19 @@ def _trend_single_table(repo: str, target: dict[str, str], *, now: datetime, rat
 			table["reason"] = "malformed"
 			break
 		count = doc.get("total_count")
-		if total is None and isinstance(count, int) and not isinstance(count, bool):
+		if isinstance(count, int) and not isinstance(count, bool):
+			shifted = shifted or (total is not None and count != total)
 			total = count
 		read += len(page_runs)
 		for run in page_runs:
 			if not isinstance(run, dict):
 				continue
+			run_id = run.get("id")
+			if isinstance(run_id, int) and not isinstance(run_id, bool):
+				if run_id in seen_ids:
+					shifted = True
+					continue
+				seen_ids.add(run_id)
 			runs.append(run)
 			created = _parse_iso(run.get("created_at"))
 			if created is not None and (oldest is None or created < oldest):
@@ -6506,6 +6517,8 @@ def _trend_single_table(repo: str, target: dict[str, str], *, now: datetime, rat
 		if page >= max_pages or len(page_runs) < TREND_PER_PAGE:
 			table["reason"] = "history_truncated"
 			break
+	if shifted and table["reason"] == "ok":
+		table["reason"] = "history_truncated"
 	if table["reason"] != "ok":
 		table["history"] = "truncated"
 	by_day: dict[str, list[float]] = {}
