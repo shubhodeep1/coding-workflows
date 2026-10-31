@@ -891,9 +891,11 @@ force-pushes, e.g. `GH013`, `Cannot force-push to this branch`,
 
 1. In its own command, create `<branch>-resend` from the current `HEAD`:
    `git checkout -b <branch>-resend`. If `git ls-remote --heads origin
-   <branch>-resend` shows that name is taken, use the first free one of
-   `<branch>-resend-2`, `<branch>-resend-3`, and so on.
-2. Push it as a plain command: `git push -u origin <branch>-resend`.
+   <branch>-resend` or `git rev-parse --verify --quiet
+   refs/heads/<branch>-resend` shows that name is taken, use the first free
+   one of `<branch>-resend-2`, `<branch>-resend-3`, and so on.
+2. Push it as a plain command: `git push -u origin <branch>-resend`. With
+   the GitHub API unreachable the guard asks (§21.C); that is expected.
 3. Open the new PR from that branch, keep working on it for the rest of the
    session, and say in the reply that the work moved there and why.
 

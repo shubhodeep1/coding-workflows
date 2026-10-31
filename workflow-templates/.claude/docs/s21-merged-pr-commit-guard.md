@@ -230,17 +230,21 @@ first is cheap to undo and needs nothing outside the repository's normal
 writes, so it is now the default and the session takes it without asking:
 
 1. In its own command, create `<branch>-resend` from the current `HEAD`:
-   `git checkout -b <branch>-resend`. Check the name is free with
-   `git ls-remote --heads origin <branch>-resend`; if it is taken (an
-   earlier fallback in a long session), use the first free one of
-   `<branch>-resend-2`, `<branch>-resend-3`, and so on.
+   `git checkout -b <branch>-resend`. Check the name is free on the remote
+   with `git ls-remote --heads origin <branch>-resend` and locally with
+   `git rev-parse --verify --quiet refs/heads/<branch>-resend`; if either
+   finds it (an earlier fallback in a long session), use the first free one
+   of `<branch>-resend-2`, `<branch>-resend-3`, and so on.
 2. Push it as a plain command (§21.E): `git push -u origin <branch>-resend`.
 3. Open the new PR from that branch and keep working on it for the rest of
    the session. Say in the reply that the work moved there and why.
 
-The guard (§21.B) allows this push: no PR has `<branch>-resend` as its
-head, so there is no merged PR to match. The old remote branch and its
-merged PR are left as they are.
+When the GitHub API answers, the guard (§21.B) allows this push: no PR has
+`<branch>-resend` as its head, so there is no merged PR to match. When the
+API is unreachable, the §21.C history fallback is inconclusive for the new
+branch and the guard asks for confirmation; that prompt is expected and is
+not a reason to push in another form. The old remote branch and its merged
+PR are left as they are.
 
 This section is standing permission to push to a branch other than the
 session's designated one, for this case only. It does not cover deleting
