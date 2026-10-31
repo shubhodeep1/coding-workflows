@@ -334,7 +334,11 @@ def test_heal_intake_routes_through_the_selector_from_its_own_directory() -> Non
 	):
 		assert needle in text
 	assert "source scripts/ai_engine.sh" not in text
-	assert text.count("env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID") == 2
+	# Exactly the two model launches (claude_run_selected and the codex fallback).
+	model_scrub = "env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \\\n"
+	assert text.count(model_scrub) == 2
+	# The reproduction runner scrubs the model key as well.
+	assert "env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \\\n" in text
 
 
 def test_activation_verify_routes_through_the_trusted_selector() -> None:
