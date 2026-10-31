@@ -1214,6 +1214,7 @@ jobs:
             tests/test_verify_integration_fingerprints_partial_removal.py
             tests/test_verify_integration_fingerprints_post_capture_reintroduction.py
             tests/test_workflow_retro_fanout.py
+            tests/test_retro_comment_patch_reconfirm.py
             tests/test_workflow_support_ref_follows_pin.py
           )
           rm -f /tmp/wiring_part1_collect.log /tmp/wiring_part1_modules.txt /tmp/wiring_part1_tests.txt \
