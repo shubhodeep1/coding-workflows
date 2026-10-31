@@ -11186,7 +11186,9 @@ def test_trend_shifted_pages_are_truncated_history() -> None:
 	result = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, calls))
 	assert len(calls) == 2 and result["history"] == "truncated" and result["regression"] is False
 	assert result["tables"][0]["reason"] == "history_truncated"
-	# A total_count that changes between pages is truncated as well.
-	pages = [{"total_count": 200, "workflow_runs": runs[:100]}, {"total_count": 201, "workflow_runs": runs[100:]}]
+	# A total_count that changes between pages is truncated as well. Page 2's
+	# total equals the runs read, so only the changed-total guard can truncate.
+	pages = [{"total_count": 201, "workflow_runs": runs[:100]}, {"total_count": 200, "workflow_runs": runs[100:]}]
 	changed = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, []))
 	assert changed["history"] == "truncated" and changed["regression"] is False
+	assert changed["tables"][0]["reason"] == "history_truncated"
