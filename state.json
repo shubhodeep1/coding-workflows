@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-31T07:48:45Z",
+  "tick_at": "2026-10-31T08:00:43Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -118,28 +118,7 @@
     },
     {
       "current_wave": 7,
-      "integration_ahead_by": "26",
-      "issue_counts": {
-        "closed": 0,
-        "done": 1,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8434,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)",
-      "total_waves": 15,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 2,
-      "integration_ahead_by": "8",
+      "integration_ahead_by": "27",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -151,12 +130,32 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 8504,
+      "number": 8434,
       "project_complete": false,
       "status": "waiting",
-      "title": "[Orchestrator] Apply validated recommendations from analysis/workflow-optimization-2026-09-26-2.md",
-      "total_waves": 2,
+      "title": "[Orchestrator] Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)",
+      "total_waves": 15,
       "wave_complete": true
+    },
+    {
+      "current_wave": 0,
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8504,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply validated recommendations from analysis/workflow-optimization-2026-09-26-2.md",
+      "total_waves": 0,
+      "wave_complete": false
     }
   ]
 }
