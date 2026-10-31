@@ -11287,6 +11287,11 @@ def test_parse_suspect_compare_fixture_lists_8192_and_pipeline_files() -> None:
 	assert dropped["commits_page_truncated"] is False and dropped["commits_returned"] == 4 and len(dropped["commits"]) == 3
 	dropped_section = heal.render_suspect_commits_section(dropped, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
 	assert "GitHub listed only" not in dropped_section and "newest" not in dropped_section
+	# Exactly SUSPECT_COMMITS_MAX valid commits left after one malformed entry is dropped: the cap cut nothing.
+	boundary = heal.parse_suspect_compare({"status": "ahead", "total_commits": 16, "commits": many["commits"][:15] + [{"sha": "nothex"}]})
+	assert len(boundary["commits"]) == 15 and boundary["commits_capped"] is False and boundary["commits_page_truncated"] is False
+	assert "newest" not in heal.render_suspect_commits_section(boundary, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
+	assert capped["commits_capped"] is True
 	# Hostile or malformed input never raises.
 	for bad in (None, [], "x", {"commits": []}, {"status": 1}):
 		assert heal.parse_suspect_compare(bad)["reason"] == "malformed"
