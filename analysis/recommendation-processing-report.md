@@ -1636,3 +1636,36 @@ Source commit: `19a95097a14b558e52d1de31a1374f23daba2b74`
 - SHELL-001: applied — `CDPATH=''` on the script-dir resolution in `scripts/review_enable_auto_merge.sh`.
 - SHELL-002: already-implemented — `test-and-mark-stable.yml` reads the consumer list line by line (`while IFS= read -r REPO`), validates each entry against a strict `owner/repo` regex, rejects `.`/`..` segments, and logs only the position of a rejected entry.
 - DEBT-001: already-implemented — `tests/test_workflow_file_size_limit.py` enforces the 480,000-byte guard; nothing else is needed until the next large addition.
+
+### `analysis/workflow-optimization-2026-09-26-3.md`
+Source doc: `analysis/workflow-optimization-2026-09-26-3.md`
+Processed: 2026-10-31
+Source commit: `d588d53b1e524dc6ca669b01e6375ee3306dd6a7`
+- BUG-001 (child-issue count aborts under pipefail): applied — `CHILD_COUNT` in `test-and-mark-stable.yml` is now counted with `jq` (`unique | length`, numeric-guarded) instead of a bare `grep -c .` (`changelog.d/wfopt-2026-09-26-3-smoke-child-count.md`).
+- Metrics appendix / Exec summary 2 / per-repo action 2 (timestamp-tolerant parent/step telemetry dedup): applied — `_structured_cost_telemetry_line_key` in `scripts/collect_workflow_logs.py` strips the anchored leading timestamp (`_STRUCTURED_COST_TELEMETRY_KEY_TIMESTAMP_RE`) before comparing parent/step copies (`changelog.d/wfopt-2026-09-26-3-collector-timestamp-dedup.md`).
+- Exec 1 / Speed 1 / Reliability 1 (inventory parity early, regenerate docs): already-implemented — `Inventory parity` runs in `ci.yml`, and `tests/test_ci_inventory_parity_order_contract.py` pins its position. The `CI_CHECK_RESULT` summary is rejected because nothing consumes it. The Fixes-to-Refs sub-point is already-implemented by `scripts/lint_pr_body_auto_close.py`.
+- Exec 3 / Reliability 2 (resolver scope ValueError diagnostics): already-implemented / rejected — following the 2026-09-26-2 precedent, the resolver private model index addresses the root cause, and the fail-closed message is pinned by tests.
+- Exec 4 / Cost 1 / Orchestrator health (editor_changes_lost outcome signal, per-attempt results): already-implemented — `EDITOR_ATTEMPT_RESULT`, the editor-changes-lost detector, `AUTOFIX_FAILURE_REASON` and the fingerprint caps cover it; a new outcome signal would have no consumer.
+- Exec 5 / Speed 3 / GH API audit (404 endpoint counters, `GH_API_SUMMARY`, negative cache): rejected — measurement-only; `GH_API_RETRY` already logs retried calls, and changing Phase 3b polling is unattributed.
+- Speed 2 (reviewer stall per-slot logging): already-implemented in part — `REVIEWER_ATTEMPT_RESULT`. Short-circuiting the retry is rejected because the doc itself says it is not demonstrated.
+- Speed 4 (Semble latency): rejected — the doc says not to optimize it.
+- Cost 2 / Prompt cache section (prefix hashes, component sizes): rejected — diagnostics only, with no consumer.
+- Cost 3 (MCP value measurement): rejected — diagnostics only.
+- Cost 4 (model downgrades): rejected — the doc defers it and there is no spend baseline.
+- Reliability 3 (validation `Prompt file not found:` with an empty path): rejected — the empty path cannot be traced to a caller: every `render_prompt.sh` call in `scripts/validate_process.sh` passes a literal path or is guarded by `-n`, the logs are not re-fetchable, and the fail-closed validation outcome is preserved.
+- Reliability 4 (canary dispatch receipts): rejected — measurement-only; the canary gate stays strict.
+- Reliability 5 (event origin / stable event ID): rejected — a broad new log contract; the collector dedup applied above addresses duplicate copies.
+- AI Memory Health (claim policy / failure stage, selected-vs-used): already-implemented in part — `AI_MEMORY_TELEMETRY` with `stderr_category`, `fail_open` and `records_selected`. The rest is rejected as measurement-only.
+- Orchestrator health / Pipeline flow (transition records, queue timestamps): rejected — `POLL_PROGRESS` and `AI_PHASE_GATE_V1` already record progression and skip reasons.
+- BUG-002: already-implemented — the `active_snapshot_incomplete` gate in `review_autofix_sweep.yml`.
+- BUG-003 and CONSIST-001: rejected — obsolete; `scripts/claude_issue_route.py`, `scripts/claude_issue_intake.sh` and `scripts/claude_issue_queue_watchdog.sh` no longer exist.
+- BUG-004: already-implemented — sweep dedup checks the `pr:<N>` key alongside `head_ref`.
+- BUG-005: rejected — tagged NEEDS VERIFICATION by the doc; no run has been shown to have more than 100 jobs, and a missed failed job leads to a `provenance_rejected` skip, not an unsafe action.
+- SEC-001 and SEC-002: already-implemented — issue #8095 made `gh_api_json_to_file` log bytes/sha256/category only, and command logging goes through `_gh_cmd_log_summary`.
+- BATCH-001: rejected — tagged NEEDS_VERIFICATION by the doc.
+- BATCH-002, BATCH-003, API-001, API-002: rejected — tagged RISKY_SKIP by the doc's own cross-references.
+- DUP-001, DUP-002, DUP-003: rejected — refactor-only, across trusted support-staging boundaries.
+- EXPR-001: already-implemented — the "Stage workflow support files" run body in `implement.yml` passes values through env and contains no `${{ }}`.
+- DEAD-001: rejected — naming immutability; earlier `read_standalone_state_json` precedent.
+- SHELL-001 (`local now_epoch="$(date +%s)"` SC2155 in `scripts/orchestrate_poll_process.sh`): rejected — style-level, in the poller hot file, with no realistic failure.
+- MERGE-001, REUSE-001, REUSE-002: rejected — tagged RISKY_SKIP by the doc.
