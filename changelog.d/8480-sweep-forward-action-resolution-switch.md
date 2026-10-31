@@ -1,2 +1,0 @@
-<!-- changelog: fixed -->
-- **The review sweep now forwards the `CI_ACTION_RESOLUTION_RERUN_ENABLED` off switch to the CI re-run helper.** The `Re-run cancelled CI failed jobs once` step in `.github/workflows/review_autofix_sweep.yml` passes the repository variable `CI_ACTION_RESOLUTION_RERUN_ENABLED` (default `true`) to `scripts/ci_cancelled_rerun.py`, so setting it to `false` turns off `action_resolution` re-runs without a code change. Behaviour while the variable is unset is unchanged. Refs #8480, Refs #8471.
