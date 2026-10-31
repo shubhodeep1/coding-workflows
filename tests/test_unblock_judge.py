@@ -5077,7 +5077,7 @@ FIXUP_DELIVERED_HEAL_ITEM = {
 	"labels": [{"name": "ai:workflow-heal"}, {"name": "ai:blocked"}],
 }
 FIXUP_DELIVERED_PR = {
-	"number": 60, "merged_at": "2026-10-04T11:30:00Z", "head": {"ref": "ai/issue-50"},
+	"number": 60, "merged_at": "2026-10-04T11:30:00Z", "head": {"ref": "ai/issue-50", "repo": {"full_name": "o/r"}},
 	"base": {"ref": "main", "repo": {"default_branch": "main"}}, "merge_commit_sha": "c" * 40,
 }
 FIXUP_DELIVERED_MARKER = "<!-- ai:unblock-fixup-delivered:v1 item=7 fixup=50 pr=60 -->"
@@ -5130,6 +5130,7 @@ def test_merged_fixup_that_delivered_a_heal_fix_closes_the_issue_instead_of_resu
 	("files_not_covered", "files_not_covered"),
 	("no_merged_pr", "no_merged_pr"),
 	("pr_not_on_default", "pr_not_on_default"),
+	("pr_other_head_repo", "no_merged_pr"),
 	("noop_fixup", "not_applicable"),
 	("tracking_issue", "not_applicable"),
 	("pr_files_unavailable", "pr_files_unavailable"),
@@ -5163,6 +5164,8 @@ def test_fixup_delivered_close_keeps_the_resume_otherwise(tmp_path: Path, case: 
 		env.pop("FAKE_GH_MERGED_PULLS")
 	elif case == "pr_not_on_default":
 		env = _fixup_delivered_env(pr=dict(FIXUP_DELIVERED_PR, base={"ref": "release", "repo": {"default_branch": "main"}}))
+	elif case == "pr_other_head_repo":
+		env = _fixup_delivered_env(pr=dict(FIXUP_DELIVERED_PR, head={"ref": "ai/issue-50", "repo": {"full_name": "o/other"}}))
 	elif case == "noop_fixup":
 		issues = NOOP_CLOSED_FIXUP
 		env["FAKE_GH_FIXUP_COMMENTS"] = json.dumps([_comment("Already implemented.\n\n" + NOOP_MARKER, BOT)])
@@ -5235,6 +5238,8 @@ def test_fixup_delivered_body_parses_a_trusted_heal_issue() -> None:
 	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`../etc/passwd`")}, "affected_files_unparsed"),
 	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`/abs/path.sh`")}, "affected_files_unparsed"),
 	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`scripts//x.sh`")}, "affected_files_unparsed"),
+	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`scripts/claude_pool_token.sh` and `scripts/other.sh`")}, "affected_files_unparsed"),
+	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`scripts/claude_pool_token.sh` (also other/repo: `x.yml`)")}, "affected_files_unparsed"),
 	({"body": FIXUP_DELIVERED_BODY.replace("## Fixed by", "### More\n## Fixed by")}, "affected_files_unparsed"),
 	({"body": FIXUP_DELIVERED_BODY.replace("- o/r: `tests/", "- o/other: `tests/")}, "other_repo_files"),
 ])

@@ -546,10 +546,12 @@ unblock_fixup_delivered_close()
 	# Read 1: the fix-up's own merged branch, as in unblock_heal_already_fixed.
 	owner="${REPOSITORY%%/*}"
 	pr_json="$(gh api -X GET "repos/${REPOSITORY}/pulls" -f state=closed -f head="${owner}:ai/issue-${fixup}" -f per_page=10 \
-		--jq '[.[] | select(.merged_at != null and .head.ref == "ai/issue-'"${fixup}"'")] | sort_by(.merged_at) | last // empty' 2>/dev/null || true)"
+		--jq '[.[] | select(.merged_at != null and .head.ref == "ai/issue-'"${fixup}"'" and ((.head.repo.full_name // "") | ascii_downcase) == ("'"${REPOSITORY}"'" | ascii_downcase))] | sort_by(.merged_at) | last // empty' 2>/dev/null || true)"
 	pr_number="$(jq -r '.number // ""' <<< "${pr_json}" 2>/dev/null | tr -cd '0-9' | cut -c1-20)"
+	# The head must be this repository's own ai/issue-<fixup> branch.
 	if [ -z "${pr_json}" ] || [[ ! "${pr_number}" =~ ^[1-9][0-9]*$ ]] \
-		|| ! jq -e '.merged_at != null and .head.ref == "ai/issue-'"${fixup}"'"' <<< "${pr_json}" >/dev/null 2>&1; then
+		|| ! jq -e --arg ref "ai/issue-${fixup}" --arg repo "${REPOSITORY}" \
+			'.merged_at != null and .head.ref == $ref and ((.head.repo.full_name // "") | ascii_downcase) == ($repo | ascii_downcase)' <<< "${pr_json}" >/dev/null 2>&1; then
 		unblock_log "${log_head} outcome=resume reason=no_merged_pr"
 		return 1
 	fi
@@ -1835,7 +1837,8 @@ unblock_main()
 					if [ "${UNBLOCK_FIXUP_DELIVERED_RESULT:-}" = "closed" ]; then
 						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; it already carried this item's fix, so the unblock judge closed this item as completed instead of posting a resume command.
 
-<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" \
+							|| unblock_log "item=${ITEM} fixup=${wait_fixup} op=fixup_delivered outcome=warn reason=wait_update_failed"
 					fi
 					return 0
 				fi

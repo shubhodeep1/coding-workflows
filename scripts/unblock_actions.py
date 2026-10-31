@@ -208,10 +208,11 @@ CI_OWNER_STATES = ("superseded", "open", "verified", "unverified")
 CI_OWNER_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 # A fix-up that already delivered a heal issue's fix (#8530): the issue's
 # `## Affected files` entries, `- owner/repo: `path`` (the repository part may
-# be backticked, a note may follow the path) or `- `owner/repo:path``.
+# be backticked, a note without backticks may follow the path) or
+# `- `owner/repo:path``. A second backticked token on the line does not parse.
 FIXUP_DELIVERED_HEAL_LABEL = "ai:workflow-heal"
 FIXUP_DELIVERED_AFFECTED_ENTRY_RE = re.compile(
-	r"^\s*[-*]\s+(?:`?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`?:\s+`([^`\n]+)`|`([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+):([^`\n]+)`)(?:\s.*)?$"
+	r"^\s*[-*]\s+(?:`?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`?:\s+`([^`\n]+)`|`([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+):([^`\n]+)`)(?:\s[^`]*)?$"
 )
 FIXUP_DELIVERED_PATH_RE = re.compile(r"^[A-Za-z0-9._@+-][A-Za-z0-9._/@+-]{0,199}$")
 FIXUP_DELIVERED_MAX_PATHS = 50
