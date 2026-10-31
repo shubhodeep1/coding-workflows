@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:6788-6803 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The \"Returns\" key list in the `parse_suspect_compare` docstring does not include `commits_capped`, which the last run added, or `commits_returned`, yet `render_suspect_commits_section` (`doc.get(\"commits_capped\") is True`, line 6899) now picks its \"newest N shown\" caption from `commits_capped`.\n  WHY: Both reviewers say nothing fails at runtime, but the documented return shape no longer matches what the function returns, so a later caller or refactor could regress the caption; both rated it NIT (mapped to low), with confidence 4 and 3.\n- tests/test_workflow_checkout_integration_ref_audit.py:N/A | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push gate lists this test as a failure caused by this change.\n  WHY: The CI check-run shows the test failing and the gate is blocked (rated BLOCKER, mapped to critical); anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this attribution because the test only reads `.github/workflows/*.yml`, which this PR does not touch.\n- tests/test_review_autofix_provider_outage_contract.py:test_label_contract_and_reporter_skip | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push gate lists this test as a failure caused by this change.\n  WHY: The CI check-run shows the test failing (rated BLOCKER, mapped to critical); anthropic_claude-sonnet-5_5 rejected this attribution because the PR's intake lines start at line 141 and cannot reverse the order of `skip reason=provider_unavailable` before `# --- Fingerprint`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal.py:`parse_suspect_compare` docstring, the \"Returns ``{\"commits\", \"files\", \"pipeline_files\", \"total_commits\", \"commits_truncated\", \"pipeline_files_truncated\", \"reason\"}``\" sentence (about lines 6788-6803) | severity=NIT | confidence=4\n  PROBLEM: The documented return keys leave out `commits_capped`, which the last run added, and `commits_returned`; `render_suspect_commits_section` now picks its caption from `commits_capped`.\n  WHY: Nothing fails at runtime, but the documented output no longer matches what the function returns, so a later caller (the suspect-scope phase reuses this output) cannot tell from the docstring which flag drives the \"newest N shown\" caption.\n- HARDENING_SUGGESTION: scripts/workflow_failure_heal.py `parse_suspect_compare` docstring, the Returns sentence: add `commits_capped` and `commits_returned` to the Returns list, plus one sentence explaining `commits_capped` (estimated 2 lines; HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_checkout_integration_ref_audit.py:N/A | severity=BLOCKER | confidence=4\n  PROBLEM: The pre-push gate lists this test as a failure caused by this change.\n  WHY: The CI check-run shows this test failing; other reviewers suggested it might be unrelated, but the gate lists it as caused by this change and the gate is blocked.\n- tests/test_review_autofix_provider_outage_contract.py:test_label_contract_and_reporter_skip | severity=BLOCKER | confidence=4\n  PROBLEM: The pre-push gate lists this test as a failure caused by this change.\n  WHY: The CI check-run shows this test failing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:parse_suspect_compare docstring at ~6790-6803, alongside the new `result[\"commits_capped\"] = len(parsed) > SUSPECT_COMMITS_MAX` line added by the last run | severity=NIT | confidence=3\n  PROBLEM: The docstring's \"Returns\" list leaves out `commits_capped`, which the caption branch in `render_suspect_commits_section` (`doc.get(\"commits_capped\") is True`, line 6899) relies on; only a one-line code comment documents it, and the agents fragment also leaves it out.\n  WHY: Nothing fails today, but a future caller or refactor that trusts the \"Returns\" list alone could bring back the old `len(commits) >= SUSPECT_COMMITS_MAX` caption bug.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/workflow_failure_heal.py `parse_suspect_compare` docstring, lines 6790-6802: add `\"commits_capped\"` (and `commits_returned`) to the Returns key list, plus one sentence saying `commits_capped` is True only when the SUSPECT_COMMITS_MAX cap removed valid commits (estimated 2 lines; HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0e57b0f8ecca23f28d999ba85796a0b6bd2699e0b217c823c5d12c82c2cadfad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8560,
+    "run_id": "41242930960",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41242930960",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031213805_ca54a6f4ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8560,
+    "run_id": "41242930960"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T21:38:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
