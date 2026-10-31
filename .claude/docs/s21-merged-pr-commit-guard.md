@@ -211,3 +211,40 @@ session's working directory rather than the earlier `cd`, so `../../x` from
 permission mode, and no allow rule or hook can approve it. Files under the
 session scratchpad need no cleanup at all: the scratchpad goes away with the
 container.
+
+### F) Rejected Reset Push: Fall Back to a `-resend` Branch
+
+The force-push after a §21.A reset can be refused by the remote itself: a
+ruleset or branch protection that bans force-pushes on the branch pattern
+(for example `ccr-*`). Typical rejections:
+
+- `remote: error: GH013: Repository rule violations found for refs/heads/<branch>`
+- `Cannot force-push to this branch`
+- `protected branch hook declined`
+
+A network error is not one of these; retry that as §21.E says.
+
+Sessions used to stop here and ask the user to choose between a new
+branch, deleting the old remote branch, or loosening the rule. Only the
+first is cheap to undo and needs nothing outside the repository's normal
+writes, so it is now the default and the session takes it without asking:
+
+1. In its own command, create `<branch>-resend` from the current `HEAD`:
+   `git checkout -b <branch>-resend`. Check the name is free with
+   `git ls-remote --heads origin <branch>-resend`; if it is taken (an
+   earlier fallback in a long session), use the first free one of
+   `<branch>-resend-2`, `<branch>-resend-3`, and so on.
+2. Push it as a plain command (§21.E): `git push -u origin <branch>-resend`.
+3. Open the new PR from that branch and keep working on it for the rest of
+   the session. Say in the reply that the work moved there and why.
+
+The guard (§21.B) allows this push: no PR has `<branch>-resend` as its
+head, so there is no merged PR to match. The old remote branch and its
+merged PR are left as they are.
+
+This section is standing permission to push to a branch other than the
+session's designated one, for this case only. It does not cover deleting
+the old branch, changing repository rules or settings, or retrying the
+force-push in another form (`--force`, a `+` refspec, the MCP push tools);
+those stay ask-first under §23.C. If the `-resend` push is refused too,
+report the error and ask.

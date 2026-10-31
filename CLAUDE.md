@@ -882,6 +882,27 @@ commits only; a push always uses a live lookup.
 - Delete files with their absolute path, in a call of their own, never
   chained after a `cd`. Scratchpad files need no cleanup.
 
+### F) Rejected Reset Push: Fall Back to a `-resend` Branch
+
+If the push after a §21.A reset is refused because the remote will not let
+the branch be rewritten (a ruleset or branch protection that bans
+force-pushes, e.g. `GH013`, `Cannot force-push to this branch`,
+`protected branch hook declined`), do **not** stop to ask. Without asking:
+
+1. In its own command, create `<branch>-resend` from the current `HEAD`:
+   `git checkout -b <branch>-resend`. If `git ls-remote --heads origin
+   <branch>-resend` shows that name is taken, use the first free one of
+   `<branch>-resend-2`, `<branch>-resend-3`, and so on.
+2. Push it as a plain command: `git push -u origin <branch>-resend`.
+3. Open the new PR from that branch, keep working on it for the rest of the
+   session, and say in the reply that the work moved there and why.
+
+This is standing permission to push to a branch other than the session's
+designated one, for this case only. It does not cover deleting the old
+branch, changing repository rules, or retrying the force-push in another
+form; those stay ask-first (§23.C). If the `-resend` push is refused too,
+report the error and ask.
+
 ---
 
 ## §22. DigitalOcean Access (MANDATORY)
