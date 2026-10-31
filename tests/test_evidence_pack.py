@@ -389,3 +389,74 @@ def test_default_branch_from_event_payload(tmp_path, monkeypatch):
 	assert ep.resolve_default_branch("") == "main"
 	for bad in ("-x", "a..b", "x.lock", "a b", "$(x)"):
 		assert ep.resolve_default_branch(bad) == ""
+
+
+def _plan_evidence_block() -> str:
+	text = (REPO_ROOT / "scripts" / "run_plan_codex.sh").read_text(encoding="utf-8")
+	start = text.index("# Evidence pack (issue #8427, P4)")
+	return text[start:text.index("\n# Update progress comment", start)]
+
+
+def _run_plan_block(tmp_path, comments_text):
+	root = tmp_path / "root"
+	(root / "scripts").mkdir(parents=True)
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	argv_log = tmp_path / "argv.json"
+	(root / "scripts" / "evidence_pack.py").write_text(
+		"import json, sys\nargs = sys.argv[1:]\nrec = {'args': args}\n"
+		"if '--plan-file' in args:\n\trec['plan'] = open(args[args.index('--plan-file') + 1]).read()\n"
+		f"json.dump(rec, open({str(argv_log)!r}, 'w'))\n", encoding="utf-8")
+	comments = tmp_path / "comments.json"
+	if comments_text is not None:
+		comments.write_text(comments_text, encoding="utf-8")
+	prompt = runtime / "prompt.txt"
+	prompt.write_text("P\n", encoding="utf-8")
+	env = _clean_env()
+	env.update({"PERSIST_EVIDENCE_PACK_ENABLED": "true", "RUNTIME_DIR": str(runtime), "CODEX_PROMPT_FILE": str(prompt),
+		"PLANNING_CONTEXT_FILE": str(tmp_path / "ctx.txt"), "ISSUE_COMMENTS_FILE": str(comments), "PYTHONDONTWRITEBYTECODE": "1"})
+	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + _plan_evidence_block()], cwd=root, env=env,
+		capture_output=True, text=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	return json.loads(argv_log.read_text(encoding="utf-8"))
+
+
+def test_replan_passes_newest_trusted_previous_plan_as_plan_file(tmp_path):
+	marker = "<!-- ai:plan-proposal:v1 -->"
+	page1 = [
+		{"user": {"login": "pipeline"}, "author_association": "OWNER", "created_at": "2026-10-01T00:00:00Z",
+			"body": "old plan\n" + marker},
+		{"user": {"login": "pipeline"}, "author_association": "OWNER", "created_at": "2026-10-02T00:00:00Z",
+			"body": "## Files likely to change\n- `scripts/new.py`\n" + marker + "\n"},
+	]
+	page2 = [
+		{"user": {"login": "outsider"}, "author_association": "NONE", "created_at": "2026-10-03T00:00:00Z",
+			"body": "forged\n" + marker},
+		{"user": {"login": "pipeline"}, "author_association": "OWNER", "created_at": "2026-10-04T00:00:00Z",
+			"body": "mentions " + marker + " mid-text only\nnot a plan"},
+	]
+	rec = _run_plan_block(tmp_path, json.dumps(page1) + "\n" + json.dumps(page2))
+	assert "--plan-file" in rec["args"] and rec["plan"].startswith("## Files likely to change\n- `scripts/new.py`")
+	assert "--text-file" in rec["args"]
+
+
+def test_replan_without_previous_plan_passes_no_plan_file(tmp_path):
+	for index, comments in enumerate((None, "[]", "not json")):
+		case = tmp_path / f"case{index}"
+		case.mkdir()
+		rec = _run_plan_block(case, comments)
+		assert "--plan-file" not in rec["args"] and "--text-file" in rec["args"]
+
+
+def test_sigterm_still_deletes_the_history_ref(monkeypatch):
+	import signal as _signal  # noqa: PLC0415
+	monkeypatch.setattr(ep, "enabled", lambda: False)
+	before = _signal.getsignal(_signal.SIGTERM)
+	try:
+		assert ep.main(["build", "--repo", REPO, "--out", os.devnull]) == 0
+		handler = _signal.getsignal(_signal.SIGTERM)
+		with pytest.raises(SystemExit) as exc:
+			handler(_signal.SIGTERM, None)
+		assert exc.value.code == 143
+	finally:
+		_signal.signal(_signal.SIGTERM, before)

@@ -58,6 +58,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -92,8 +93,9 @@ PR_PAGE = 50
 GRAPHQL_BATCH = 25
 GRAPHQL_MAX_QUERIES = 2
 RUNS_PAGE = 10
-# Advisory reads: one attempt each, so a build sends at most 4 requests and a
-# retry backoff or rate-limit wait never stalls the stage before the model runs.
+# Advisory reads: one attempt each, so a build makes at most 4 reads (plus
+# gh_api_retry's one free `rate_limit` lookup when a read is rate-limited
+# without a reset header) and never sleeps on a retry or rate limit.
 GH_MAX_ATTEMPTS = 1
 FREE_TEXT_CANDIDATES_MAX = 200
 FETCH_TIMEOUT_SECS = 60
@@ -528,6 +530,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
+	# A timeout's SIGTERM raises SystemExit, so the finally in Builder.history
+	# still deletes refs/persist/history.
+	signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
 	if not enabled():
 		log("skipped", 0, 0, "switch_off")
 		return 0

@@ -356,7 +356,49 @@ fi
 # context. Off, missing helper or empty pack: the prompt is unchanged.
 if [ "${PERSIST_EVIDENCE_PACK_ENABLED:-false}" = "true" ]; then
 	if [ -f scripts/evidence_pack.py ] && [ ! -L scripts/evidence_pack.py ]; then
+		# Re-planning: the newest earlier plan comment (last line
+		# <!-- ai:plan-proposal:v1 -->) by github-actions[bot] or an
+		# OWNER/MEMBER/COLLABORATOR, read from the comments plan.yml already
+		# fetched (no API call), goes in as the trusted --plan-file so files it
+		# plans to create reach the open-PR overlap check. None found: no flag.
+		evidence_plan_args=()
+		evidence_prev_plan="${RUNTIME_DIR}/evidence_previous_plan.md"
+		rm -f -- "${evidence_prev_plan}"
+		if [ -f "${ISSUE_COMMENTS_FILE:-}" ] && [ ! -L "${ISSUE_COMMENTS_FILE:-}" ] \
+			&& python3 -I -B -c '
+import json, sys
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+decoder, pos, comments = json.JSONDecoder(), 0, []
+while True:
+	while pos < len(text) and text[pos].isspace():
+		pos += 1
+	if pos >= len(text):
+		break
+	page, pos = decoder.raw_decode(text, pos)
+	comments.extend(page if isinstance(page, list) else [])
+marker = "<!-- ai:plan-proposal:v1 -->"
+best = None
+for c in comments:
+	if not isinstance(c, dict):
+		continue
+	user = c.get("user") if isinstance(c.get("user"), dict) else {}
+	if user.get("login") != "github-actions[bot]" and c.get("author_association") not in ("OWNER", "MEMBER", "COLLABORATOR"):
+		continue
+	body = c.get("body") if isinstance(c.get("body"), str) else ""
+	lines = [line.strip() for line in body.splitlines() if line.strip()]
+	if not lines or lines[-1] != marker:
+		continue
+	key = str(c.get("created_at") or "")
+	if best is None or key >= best[0]:
+		best = (key, body)
+if best is None:
+	sys.exit(1)
+open(sys.argv[2], "w", encoding="utf-8").write(best[1])
+' "${ISSUE_COMMENTS_FILE}" "${evidence_prev_plan}" 2>/dev/null && [ -s "${evidence_prev_plan}" ]; then
+			evidence_plan_args=(--plan-file "${evidence_prev_plan}")
+		fi
 		PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -B scripts/evidence_pack.py build --repo "${GITHUB_REPOSITORY:-}" \
+			${evidence_plan_args[@]+"${evidence_plan_args[@]}"} \
 			--text-file "${PLANNING_CONTEXT_FILE}" --repo-root . --out "${RUNTIME_DIR}/evidence_pack.txt" || true
 		if [ -s "${RUNTIME_DIR}/evidence_pack.txt" ]; then
 			{ echo; cat "${RUNTIME_DIR}/evidence_pack.txt"; } >> "${CODEX_PROMPT_FILE}"
