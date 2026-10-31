@@ -598,6 +598,249 @@ def test_no_merge_command_discards_stderr() -> None:
 	assert reports == ["merge", "terminal", "sync"]
 
 
+# --- transient GitHub errors on the judge merge are retried ----------------
+
+
+TRANSIENT_GRAPHQL = (
+	"GraphQL: Something went wrong while executing your query on 2026-10-30T14:23:23Z. "
+	"Please include `6C49:158A23:18926:1ADD0:6AE4A859` when reporting this issue."
+)
+
+
+def _run_merge_site_scripted(
+	path: str,
+	responses: list[dict],
+	*,
+	tmpdir_exists: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]], list[str]]:
+	"""Run one merge site with a gh shim that answers call N with responses[N].
+
+	Each response is ``{"code": int, "stderr": str, "stdout": str}``; the last
+	one repeats. A ``sleep`` shim records its argument instead of sleeping.
+	"""
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_merge_retry_") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		gh_log = tmp / "gh_calls.jsonl"
+		sleep_log = tmp / "sleep_calls.txt"
+		responses_file = tmp / "responses.json"
+		responses_file.write_text(json.dumps(responses), encoding="utf-8")
+		gh_shim = bin_dir / "gh"
+		gh_shim.write_text(
+			"#!/usr/bin/env python3\n"
+			"import json, os, sys\n"
+			"log = os.environ['GH_CALL_LOG']\n"
+			"n = sum(1 for _ in open(log, encoding='utf-8')) if os.path.exists(log) else 0\n"
+			"with open(log, 'a', encoding='utf-8') as fh:\n"
+			"\tfh.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+			"rs = json.load(open(os.environ['GH_STUB_RESPONSES'], encoding='utf-8'))\n"
+			"r = rs[n] if n < len(rs) else rs[-1]\n"
+			"sys.stdout.write(r.get('stdout', ''))\n"
+			"sys.stderr.write(r.get('stderr', ''))\n"
+			"sys.exit(r.get('code', 0))\n",
+			encoding="utf-8",
+		)
+		gh_shim.chmod(0o755)
+		sleep_shim = bin_dir / "sleep"
+		sleep_shim.write_text(f'#!/usr/bin/env bash\necho "$1" >> "{sleep_log}"\n', encoding="utf-8")
+		sleep_shim.chmod(0o755)
+		scratch = tmp / "scratch"
+		if tmpdir_exists:
+			scratch.mkdir()
+		github_output = tmp / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		harness = tmp / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"review_head_gate_post_status() { :; }\n"
+			+ _merge_err_helpers()
+			+ "\n"
+			+ _merge_site_snippet(path)
+			+ '\necho "RB_MERGE_STATUS=${RB_MERGE_STATUS:-}"\n'
+			+ 'echo "MERGE_CONFIRMED=${MERGE_CONFIRMED:-}"\n',
+			encoding="utf-8",
+		)
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"GH_CALL_LOG": str(gh_log),
+			"GH_STUB_RESPONSES": str(responses_file),
+			"GITHUB_OUTPUT": str(github_output),
+			"TMPDIR": str(scratch),
+			"PR_NUMBER": "42",
+			"REPOSITORY": "o/r",
+			"RB_JUDGED_HEAD_SHA": JUDGED,
+		}
+		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
+		calls: list[list[str]] = []
+		if gh_log.exists():
+			calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+		sleeps = sleep_log.read_text(encoding="utf-8").split() if sleep_log.exists() else []
+		leftovers = sorted(p.name for p in scratch.iterdir()) if scratch.exists() else []
+		assert leftovers == [], f"temp files left behind: {leftovers}"
+		return proc, github_output.read_text(encoding="utf-8"), calls, sleeps
+
+
+def _fail(stderr: str = TRANSIENT_GRAPHQL) -> dict:
+	return {"code": 1, "stderr": stderr}
+
+
+def _ok() -> dict:
+	return {"code": 0}
+
+
+def _pr_state(state: str = "open", merged: str = "false", auto: str = "false", head: str = JUDGED) -> dict:
+	return {"code": 0, "stdout": f"{state}\t{merged}\t{auto}\t{head}\n"}
+
+
+def _first_failure(path: str, stderr: str = TRANSIENT_GRAPHQL) -> list[dict]:
+	return [_fail(stderr)] if path == "sync" else [_fail(stderr), _fail(stderr)]
+
+
+def _retry_lines(stdout: str) -> list[str]:
+	return [line for line in stdout.splitlines() if line.startswith("RB_JUDGE_MERGE_RETRY ")]
+
+
+def _assert_merge_succeeded(path: str, output: str, stdout: str) -> None:
+	assert _error_lines(stdout) == []
+	assert not any(line.startswith("::warning::") for line in stdout.splitlines())
+	if path == "sync":
+		assert "MERGE_CONFIRMED=true" in stdout.splitlines()
+		assert "sync_merge_failed" not in output
+	else:
+		assert "RB_MERGE_STATUS=merge_requested" in stdout.splitlines()
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_transient_merge_error_is_retried_and_succeeds(path: str) -> None:
+	responses = _first_failure(path) + [_pr_state(), _ok()]
+	proc, output, calls, sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == ["10"]
+	expected = _expected_calls(path)
+	assert calls[: len(expected)] == expected
+	assert calls[len(expected)] == ["api", "repos/o/r/pulls/42", "--jq", "[.state, (.merged // false), (.auto_merge != null), .head.sha] | @tsv"]
+	assert calls[len(expected) + 1 :] == expected[:1]
+	retry = _retry_lines(proc.stdout)
+	assert retry == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt=1/3 delay_s=10 reason=transient"]
+	_assert_merge_succeeded(path, output, proc.stdout)
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_persistent_transient_error_gives_up_after_three_retries(path: str) -> None:
+	attempts = _first_failure(path)
+	responses = attempts + ([_pr_state()] + attempts) * 3
+	proc, output, calls, sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == ["10", "20", "40"]
+	assert len(calls) == len(responses)
+	assert len(_retry_lines(proc.stdout)) == 3
+	lines = _error_lines(proc.stdout)
+	assert len(lines) == 1 and "Something went wrong" in lines[0]
+	warnings = [line for line in proc.stdout.splitlines() if line.startswith("::warning::")]
+	assert len(warnings) == 1 and warnings[0].startswith(OLD_WARNINGS[path])
+	if path == "sync":
+		assert "judge_skip_reason=sync_merge_failed" in output.splitlines()
+	else:
+		assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+@pytest.mark.parametrize(
+	"stderr",
+	[
+		DRAFT_MESSAGE,
+		"GraphQL: Pull Request is not mergeable (mergePullRequest)",
+		"HTTP 422: Head branch was modified. Review and try the merge again.",
+		"HTTP 403: Resource not accessible by integration",
+		"HTTP 405: Required status check \"ci\" is expected.",
+	],
+)
+def test_non_transient_merge_error_is_not_retried(path: str, stderr: str) -> None:
+	responses = _first_failure(path, stderr)
+	proc, _output, calls, sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == []
+	assert calls == _expected_calls(path)
+	assert _retry_lines(proc.stdout) == []
+	assert len(_error_lines(proc.stdout)) == 1
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+@pytest.mark.parametrize("stderr", ["gh: HTTP 500", "HTTP 502: 502 Bad Gateway", "Post \"https://api.github.com/graphql\": read tcp: connection reset by peer", "HTTP 503: 503 Service Unavailable"])
+def test_other_server_errors_are_transient(path: str, stderr: str) -> None:
+	responses = _first_failure(path, stderr) + [_pr_state(), _ok()]
+	proc, output, _calls, sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == ["10"]
+	_assert_merge_succeeded(path, output, proc.stdout)
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_merge_that_landed_despite_the_error_is_not_retried(path: str) -> None:
+	responses = _first_failure(path) + [_pr_state(state="closed", merged="true")]
+	proc, output, calls, _sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert len(calls) == len(_expected_calls(path)) + 1
+	assert calls[-1][0] == "api"
+	assert _retry_lines(proc.stdout)[-1].endswith("outcome=already_merged")
+	_assert_merge_succeeded(path, output, proc.stdout)
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_auto_merge_enabled_on_judged_head_counts_as_success(path: str) -> None:
+	responses = _first_failure(path) + [_pr_state(auto="true")]
+	proc, output, calls, _sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert len(calls) == 3 and calls[-1][0] == "api"
+	assert _retry_lines(proc.stdout)[-1].endswith("outcome=auto_merge_enabled")
+	_assert_merge_succeeded(path, output, proc.stdout)
+
+
+def test_auto_merge_enabled_does_not_confirm_a_sync_merge() -> None:
+	responses = _first_failure("sync") + [_pr_state(auto="true"), _ok()]
+	proc, output, calls, _sleeps = _run_merge_site_scripted("sync", responses)
+	assert proc.returncode == 0, proc.stderr
+	assert calls[-1] == _expected_calls("sync")[0]
+	_assert_merge_succeeded("sync", output, proc.stdout)
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+@pytest.mark.parametrize(("state", "outcome"), [(_pr_state(head=OTHER), "head_moved"), (_pr_state(state="closed"), "not_open")])
+def test_moved_head_or_closed_pr_stops_the_retry(path: str, state: dict, outcome: str) -> None:
+	responses = _first_failure(path) + [state]
+	proc, _output, calls, _sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert len(calls) == len(_expected_calls(path)) + 1
+	assert _retry_lines(proc.stdout)[-1].endswith(f"outcome={outcome}")
+	assert len(_error_lines(proc.stdout)) == 1
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_unreadable_pr_state_still_retries_head_bound_merge(path: str) -> None:
+	responses = _first_failure(path) + [{"code": 1, "stderr": "HTTP 500"}, _ok()]
+	proc, output, calls, _sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert calls[-1] == _expected_calls(path)[0]
+	assert "--match-head-commit" in calls[-1] and JUDGED in calls[-1]
+	_assert_merge_succeeded(path, output, proc.stdout)
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_transient_error_without_captured_stderr_is_not_retried(path: str) -> None:
+	proc, _output, calls, sleeps = _run_merge_site_scripted(path, _first_failure(path), tmpdir_exists=False)
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == []
+	assert calls == _expected_calls(path)
+	assert [line for line in proc.stdout.splitlines() if line.startswith("::warning::")] == [OLD_WARNINGS[path]]
+
+
+def test_every_merge_site_falls_back_to_the_transient_retry() -> None:
+	text = _script_text()
+	sites = re.findall(r"\|\| rb_judge_merge_retry_transient (auto|direct) (\S+); then$", text, re.MULTILINE)
+	assert sites == [("auto", "merge"), ("auto", "terminal"), ("direct", "sync")]
+
+
 # --- forward-merge fallback PRs merge with a merge commit ------------------
 
 
