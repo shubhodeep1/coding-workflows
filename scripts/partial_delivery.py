@@ -596,9 +596,13 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 	first, then words) and the rest of that bullet is read as plan text; a
 	bullet without one is a file only when it is a single non-knob token
 	(an extensionless name such as Makefile), otherwise it is read as plan
-	text. Within a line, a clause that says something stays unchanged is a
-	mention: its identifiers do not count, and its knobs count only when the
-	same clause also raises something (raise, increase, bump, set, ...).
+	text (a companion bullet's description as context). A bullet counts as
+	a single token by its word count, so "- Give the `build` job more time"
+	is plan text. Within a line, a clause that says something stays
+	unchanged is a mention: its identifiers do not count, and its knobs
+	count only when the same clause also raises something (raise, increase,
+	bump, set, ...); then the identifiers before the "unchanged" phrase
+	still count.
 	"""
 	files: list[str] = []
 	other: list[tuple[str, bool]] = []
@@ -632,14 +636,16 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 				pathlike = [token for token in spans + words if "/" in token or HEAL_RG_EXT_RE.search(token)]
 				if pathlike:
 					files.append(pathlike[0])
-					# The rest of the bullet (a knob raised on the same line) is plan text.
-					other.append((bullet.group(1).replace(pathlike[0], " "), False))
+					# The rest of the bullet (a knob raised on the same line) is plan text;
+					# a companion bullet's description is context (its knobs still count).
+					other.append((bullet.group(1).replace(pathlike[0], " "),
+						HEAL_RG_COMPANION_PATH_RE.match(pathlike[0]) is not None))
 					continue
 				tokens = spans or words
 				first = (tokens or [""])[0]
 				# Only a single-token bullet ("- Makefile") is an extensionless file;
 				# a prose bullet ("- Raise PHASE_TIMEOUT to 90") is plan text.
-				if (line[:1] not in (" ", "\t") and len(tokens) == 1 and first
+				if (line[:1] not in (" ", "\t") and len(words) == 1 and first
 					and HEAL_RG_KNOB_RE.fullmatch(first) is None):
 					files.append(first)
 					continue
@@ -666,10 +672,15 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 		if line.strip().startswith(HEAL_RG_SKIP_PREFIXES):
 			continue
 		for clause in HEAL_RG_CLAUSE_SPLIT_RE.split(line):
-			if HEAL_RG_UNCHANGED_RE.search(clause):
-				if HEAL_RG_RAISE_RE.search(clause) and HEAL_RG_KNOB_RE.search(clause):
+			unchanged = HEAL_RG_UNCHANGED_RE.search(clause)
+			if unchanged:
+				if not HEAL_RG_RAISE_RE.search(clause):
+					continue
+				if HEAL_RG_KNOB_RE.search(clause):
 					knob_seen = True
-				continue
+				# With a change verb, only the text before the "unchanged" phrase
+				# describes a change: its identifiers still count.
+				clause = clause[:unchanged.start()]
 			if HEAL_RG_KNOB_RE.search(clause):
 				knob_seen = True
 			if in_context:

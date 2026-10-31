@@ -856,6 +856,25 @@ def test_regression_budget_only_review_round_four_shapes() -> None:
 	assert makefile["reason"] == "not_a_regression", makefile
 
 
+def test_regression_budget_only_review_round_five_shapes() -> None:
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	workflow_bullet = "- `.github/workflows/ci.yml`"
+	# A change verb for another identifier in an "unchanged" clause is another change.
+	other = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Set `CACHE_KEY_PREFIX` to v2 with no change to `PHASE_TIMEOUT`."))
+	assert other["reason"] == "not_a_regression", other
+	# An identifier after the "unchanged" phrase is still only a mention.
+	mention = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Raise `PHASE_TIMEOUT` to 90 with no change to `CACHE_KEY_PREFIX`."))
+	assert mention["reason"] == "budget_only_plan", mention
+	# A prose Files bullet with one backticked span is plan text, not a file.
+	prose = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + "\n- Give the `build` job more time")
+	assert _rg(prose)["reason"] == "budget_only_plan"
+	# A companion bullet's description is context: its identifiers do not lift the hold.
+	companion = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + "\n- `tests/test_ci_workflow.py`: assert the job exports `PYTEST_ADDOPTS`")
+	assert _rg(companion)["reason"] == "budget_only_plan"
+
+
 # Step plans name src/app.py so the automation-path gate does not defer them.
 _STEP_FILES = ["src/app.py"]
 _STEP_BODY = "Fix the slow loop in `src/app.py`."
