@@ -230,6 +230,31 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 	yaml.safe_load(wf)
 
 
+def test_persist_budget_env_defaults_are_declared() -> None:
+	"""Refs #8427 P6: the governor switch and caps default in the workflow env."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for line in (
+		"PERSIST_BUDGET_ENABLED: ${{ vars.PERSIST_BUDGET_ENABLED || 'false' }}",
+		"PERSIST_MAX_APPROACHES: ${{ vars.PERSIST_MAX_APPROACHES || '3' }}",
+		"PERSIST_MAX_ROUNDS: ${{ vars.PERSIST_MAX_ROUNDS || '5' }}",
+		"PERSIST_MAX_HOURS: ${{ vars.PERSIST_MAX_HOURS || '48' }}",
+		"PERSIST_REPLAN_AFTER_FAILED_ROUNDS: ${{ vars.PERSIST_REPLAN_AFTER_FAILED_ROUNDS || '3' }}",
+	):
+		assert wf.count(line) == 1, line
+	env = yaml.safe_load(wf)["env"]
+	assert env["PERSIST_MAX_ROUNDS"] == "${{ vars.PERSIST_MAX_ROUNDS || '5' }}"
+	assert " acceptance_check.py persist_budget.py " in wf
+	helper = (REPO_ROOT / "scripts" / "persist_budget.py").read_text(encoding="utf-8")
+	for name, default in (
+		("PERSIST_MAX_APPROACHES", 3),
+		("PERSIST_MAX_ROUNDS", 5),
+		("PERSIST_MAX_HOURS", 48),
+		("PERSIST_REPLAN_AFTER_FAILED_ROUNDS", 3),
+	):
+		assert f'("{name}", {default},' in helper, name
+	assert '_flag("PERSIST_BUDGET_ENABLED")' in helper
+
+
 WIDENED_GATE = (
 	"(steps.find_tracking.outputs.has_work == 'true' || "
 	"steps.find_tracking.outputs.standalone_recovery == 'true')"
@@ -591,6 +616,7 @@ def test_standalone_stall_probe_log_prefix_is_registered() -> None:
 
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
+	test_persist_budget_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()

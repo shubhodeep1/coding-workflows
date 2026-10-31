@@ -19585,6 +19585,161 @@ PERSIST_POSTMERGE_EOF
   return 0
 }
 
+# persist_budget_govern_issue ISSUE COMMENTS_JSON LABELS_JSON PRIOR_BASIS SCOPE
+# (issue #8427, P6; callers check PERSIST_BUDGET_ENABLED and that
+# scripts/persist_budget.py exists). SCOPE is `standalone` or `managed`.
+# Runs scripts/persist_budget.py decide over the issue's attempt journal and
+# acts on the decision:
+#   replan    move the issue to ai:planning when it carries none of
+#             ai:planning / ai:clarification / ai:blocked (plan.yml skips
+#             `/answer` otherwise), then post the bare retrigger_plan
+#             `/answer` comment, honouring phase_cap_can_dispatch
+#   escalate  add ai:needs-human and post one `## Persistence budget reached`
+#             comment (the unblock scan picks the label up)
+# then journals `stage=governor` (P1 gates it on PERSIST_JOURNAL_ENABLED).
+# Sets PERSIST_BUDGET_LAST_ACTION (replan / escalate only when the write
+# landed) and PERSIST_BUDGET_LAST_BASIS; the caller stores the basis so one
+# journal state is decided once. At most PERSIST_BUDGET_TICK_CAP (5) acting
+# decisions per tick. API budget (section 14): comments come from the
+# caller's cache (one paginated read only when it is empty or may be cut off
+# at 100); the pipeline login is the tick's shared PERSIST_JOURNAL_LOGIN_CACHE
+# (one identity read per tick, shared with persist_journal_stall_context);
+# writes: replan 1 label edit (only when needed) + 1 comment, escalate 1
+# label edit + 1 comment, plus the journal append. Always returns 0.
+PERSIST_BUDGET_TICK_DECISIONS="${PERSIST_BUDGET_TICK_DECISIONS:-0}"
+PERSIST_BUDGET_TICK_CAP=5
+PERSIST_BUDGET_LAST_ACTION=""
+PERSIST_BUDGET_LAST_BASIS=""
+persist_budget_govern_issue() {
+  local pbg_issue="$1" pbg_comments="${2:-}" pbg_labels="${3:-[]}" pbg_prior="${4:-}" pbg_scope="${5:-standalone}"
+  local pbg_base pbg_comments_file pbg_out pbg_note pbg_action pbg_reason pbg_basis pbg_summary pbg_body
+  local pbg_rc pbg_journal_outcome pbg_lead pbg_label pbg_edit_args
+  PERSIST_BUDGET_LAST_ACTION=""
+  PERSIST_BUDGET_LAST_BASIS=""
+  [[ "${pbg_issue}" =~ ^[1-9][0-9]*$ ]] || return 0
+  [[ "${PERSIST_BUDGET_TICK_DECISIONS}" =~ ^[0-9]+$ ]] || PERSIST_BUDGET_TICK_DECISIONS=0
+  if [ "${PERSIST_BUDGET_TICK_DECISIONS}" -ge "${PERSIST_BUDGET_TICK_CAP}" ]; then
+    echo "PERSIST governor outcome=deferred reason=tick_cap issue=${pbg_issue}" >&2
+    return 0
+  fi
+  if issue_has_active_workflow "${pbg_issue}"; then
+    echo "PERSIST governor outcome=skipped reason=active_workflow issue=${pbg_issue}" >&2
+    return 0
+  fi
+  { [ -n "${pbg_labels}" ] && printf '%s' "${pbg_labels}" | jq -e 'type == "array"' >/dev/null 2>&1; } || pbg_labels='[]'
+  # The poller's GraphQL caches hold the newest 100 comments; the journal
+  # comment is created early and edited in place, so a full window may hide it.
+  if [ -z "${pbg_comments}" ] || ! printf '%s' "${pbg_comments}" | jq -e 'type == "array" and length > 0 and length < 100' >/dev/null 2>&1; then
+    if ! pbg_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${pbg_issue}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" \
+      || [ -z "${pbg_comments}" ] || ! printf '%s' "${pbg_comments}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      echo "PERSIST governor outcome=skipped reason=comments_unavailable issue=${pbg_issue}" >&2
+      return 0
+    fi
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+    PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+    [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ]; then
+    echo "PERSIST governor outcome=skipped reason=identity_unavailable issue=${pbg_issue}" >&2
+    return 0
+  fi
+  pbg_base="${RUNTIME_DIR:-/tmp}"
+  [ -d "${pbg_base}" ] || pbg_base="/tmp"
+  pbg_comments_file="${pbg_base}/persist_budget_comments.${pbg_issue}.json"
+  pbg_out="${pbg_base}/persist_budget_decision.${pbg_issue}.json"
+  pbg_note="${pbg_base}/persist_budget_note.${pbg_issue}.txt"
+  printf '%s' "${pbg_comments}" > "${pbg_comments_file}" 2>/dev/null || {
+    echo "PERSIST governor outcome=error reason=scratch_unwritable issue=${pbg_issue}" >&2
+    return 0
+  }
+  : > "${pbg_out}" 2>/dev/null || true
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_budget.py decide --comments-file "${pbg_comments_file}" \
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --labels "${pbg_labels}" --out "${pbg_out}" || true
+  pbg_action="$(jq -r '.action // ""' "${pbg_out}" 2>/dev/null || true)"
+  pbg_reason="$(jq -j '.reason // ""' "${pbg_out}" 2>/dev/null | tr -c 'A-Za-z0-9_.:-' '_' | cut -c1-60 || true)"
+  pbg_basis="$(jq -r '.basis // ""' "${pbg_out}" 2>/dev/null | tr -d '\n' || true)"
+  pbg_summary="$(jq -r '.summary // ""' "${pbg_out}" 2>/dev/null | tr -d '<>@#\r' | tr '\n' ' ' | cut -c1-1500 || true)"
+  rm -f "${pbg_out}"
+  case "${pbg_action}" in
+    continue|ignore|replan|escalate) ;;
+    *)
+      echo "PERSIST governor outcome=error reason=decide_failed issue=${pbg_issue}" >&2
+      rm -f "${pbg_comments_file}"
+      return 0
+      ;;
+  esac
+  PERSIST_BUDGET_LAST_BASIS="${pbg_basis}"
+  if [ "${pbg_action}" = "continue" ] || [ "${pbg_action}" = "ignore" ]; then
+    echo "PERSIST governor outcome=${pbg_action} reason=${pbg_reason} issue=${pbg_issue}" >&2
+    rm -f "${pbg_comments_file}"
+    return 0
+  fi
+  # State flag (plan P6 "state flag"): this journal state was already acted on.
+  if [ -n "${pbg_basis}" ] && [ "${pbg_basis}" = "${pbg_prior}" ]; then
+    echo "PERSIST governor outcome=skipped reason=already_decided issue=${pbg_issue}" >&2
+    rm -f "${pbg_comments_file}"
+    return 0
+  fi
+  pbg_lead="Persistence budget"
+  [ "${pbg_scope}" = "managed" ] && pbg_lead="Orchestrator persistence budget"
+  pbg_rc=0
+  if [ "${pbg_action}" = "replan" ]; then
+    if ! phase_cap_can_dispatch "ai:planning" retrigger_plan "${pbg_issue}"; then
+      echo "PERSIST governor outcome=deferred reason=phase_capped issue=${pbg_issue}" >&2
+      rm -f "${pbg_comments_file}"
+      return 0
+    fi
+    # plan.yml handles `/answer` only in ai:planning, ai:clarification or
+    # ai:blocked, so a later-phase issue is moved back to ai:planning first.
+    if ! printf '%s' "${pbg_labels}" | jq -e 'any(.[]; (if type == "object" then .name else . end) | IN("ai:planning", "ai:clarification", "ai:blocked"))' >/dev/null 2>&1; then
+      pbg_edit_args=(--add-label "ai:planning")
+      while IFS= read -r pbg_label; do
+        [ -n "${pbg_label}" ] && pbg_edit_args+=(--remove-label "${pbg_label}")
+      done < <(printf '%s' "${pbg_labels}" | jq -r '.[] | (if type == "object" then .name else . end) | strings | select(IN("ai:awaiting-approval", "ai:implementing", "ai:done", "ai:ready-to-merge", "ai:review-blocked"))' 2>/dev/null || true)
+      gh_retry gh issue edit "${pbg_issue}" --repo "${GITHUB_REPOSITORY}" "${pbg_edit_args[@]}" >/dev/null 2>&1 || pbg_rc=$?
+      if [ "${pbg_rc}" -ne 0 ]; then
+        echo "PERSIST governor outcome=error reason=planning_label_failed issue=${pbg_issue}" >&2
+        rm -f "${pbg_comments_file}"
+        return 0
+      fi
+    fi
+    pbg_body="$(printf '/answer\n\n_%s: %s. Re-triggering plan generation._\n\n%s\n' "${pbg_lead}" "${pbg_reason}" "${pbg_summary}")"
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pbg_issue}/comments" -f body="${pbg_body}" >/dev/null 2>&1 || pbg_rc=$?
+    if [ "${pbg_rc}" -ne 0 ]; then
+      echo "PERSIST governor outcome=error reason=answer_post_failed issue=${pbg_issue}" >&2
+      rm -f "${pbg_comments_file}"
+      return 0
+    fi
+    phase_cap_note_dispatch "ai:planning"
+    tg_notify_issue "${pbg_issue}" "${pbg_lead}: ${pbg_reason}; re-triggered planning." "DEBUG"
+    pbg_journal_outcome="ok"
+  else
+    gh_retry gh issue edit "${pbg_issue}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || pbg_rc=$?
+    if [ "${pbg_rc}" -ne 0 ]; then
+      echo "PERSIST governor outcome=error reason=label_failed issue=${pbg_issue}" >&2
+      rm -f "${pbg_comments_file}"
+      return 0
+    fi
+    pbg_body="$(printf '## Persistence budget reached\n\n%s: %s. The issue is labelled `ai:needs-human`; unattended work stops until a person decides.\n\n%s\n' "${pbg_lead}" "${pbg_reason}" "${pbg_summary}")"
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pbg_issue}/comments" -f body="${pbg_body}" >/dev/null 2>&1 \
+      || echo "PERSIST governor outcome=error reason=comment_post_failed issue=${pbg_issue}" >&2
+    pbg_journal_outcome="blocked"
+  fi
+  PERSIST_BUDGET_TICK_DECISIONS=$((PERSIST_BUDGET_TICK_DECISIONS + 1))
+  PERSIST_BUDGET_LAST_ACTION="${pbg_action}"
+  if [ -f scripts/attempt_journal.py ]; then
+    printf 'governor %s reason=%s' "${pbg_action}" "${pbg_reason}" > "${pbg_note}" 2>/dev/null || true
+    PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py append --repo "${GITHUB_REPOSITORY}" \
+      --issue "${pbg_issue}" --stage governor --outcome "${pbg_journal_outcome}" --approach inherit \
+      --comments-file "${pbg_comments_file}" --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" \
+      --note-file "${pbg_note}" || true
+  fi
+  rm -f "${pbg_comments_file}" "${pbg_note}"
+  echo "PERSIST governor outcome=${pbg_action} reason=${pbg_reason} issue=${pbg_issue}" >&2
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -22939,6 +23094,25 @@ PY
         write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
       continue
+    fi
+
+    # Persistence budget (issue #8427, P6): after the per-issue skips and
+    # before the stall action is resolved. A landed re-plan stores the
+    # journal basis in this issue's state (one decision per journal state)
+    # and skips the stall action this tick; an escalation skips it too.
+    if _is_truthy "${PERSIST_BUDGET_ENABLED:-false}" && [ -f scripts/persist_budget.py ]; then
+      persist_budget_govern_issue "${issue_num}" "${comments_json}" "${labels_json}" \
+        "$(printf '%s' "${updated_state}" | jq -r '.persist_budget_basis // ""' 2>/dev/null || true)" standalone
+      case "${PERSIST_BUDGET_LAST_ACTION}" in
+        replan)
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --arg basis "${PERSIST_BUDGET_LAST_BASIS}" '.persist_budget_basis = $basis' 2>/dev/null || echo "${updated_state}")"
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          continue
+          ;;
+        escalate)
+          continue
+          ;;
+      esac
     fi
 
     status_since="$(echo "${updated_state}" | jq -r '.status_since_ts // 0')"
@@ -30519,6 +30693,40 @@ fi
     fi
 
     if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+    # Persistence budget (issue #8427, P6) for the current wave's open
+    # issues, before stall detection. Labels and comments come from this
+    # cycle's LABELS_JSON / _current_wave_details_json caches; the active-run
+    # set is built from the per-tick runs cache. A landed re-plan stores the
+    # journal basis on the wave issue entry and the state comment is posted
+    # with the stall changes below.
+    PERSIST_BUDGET_STATE_CHANGED=false
+    if _is_truthy "${PERSIST_BUDGET_ENABLED:-false}" && [ -f scripts/persist_budget.py ]; then
+      _load_actions_runs_cached >/dev/null 2>&1 || true
+      ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set 2>/dev/null || true)"
+      while IFS=$'\t' read -r _pb_issue _pb_status _pb_prior; do
+        [[ "${_pb_issue}" =~ ^[1-9][0-9]*$ ]] || continue
+        case "${_pb_status}" in
+          merged|closed|skipped|not_created) continue ;;
+        esac
+        _pb_labels="$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${_pb_issue}" '.[$n] // []' 2>/dev/null || echo '[]')"
+        _pb_comments="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${_pb_issue}" \
+          'if (.[$n].comments_available == true) and ((.[$n].comments | type) == "array") then .[$n].comments else [] end' 2>/dev/null || echo '[]')"
+        persist_budget_govern_issue "${_pb_issue}" "${_pb_comments}" "${_pb_labels}" "${_pb_prior}" managed < /dev/null
+        if [ "${PERSIST_BUDGET_LAST_ACTION}" = "replan" ] && [ -n "${PERSIST_BUDGET_LAST_BASIS}" ]; then
+          if jq --argjson wi "${WAVE_IDX}" --arg n "${_pb_issue}" --arg basis "${PERSIST_BUDGET_LAST_BASIS}" \
+            '(.waves[$wi].issues[] | select((.github_issue | tostring) == $n)).persist_budget_basis = $basis' \
+            "${STATE_FILE}" > "${STATE_FILE}.persist_budget.tmp" 2>/dev/null \
+            && mv "${STATE_FILE}.persist_budget.tmp" "${STATE_FILE}"; then
+            PERSIST_BUDGET_STATE_CHANGED=true
+          else
+            rm -f "${STATE_FILE}.persist_budget.tmp"
+            echo "PERSIST governor outcome=error reason=state_write_failed issue=${_pb_issue}" >&2
+          fi
+        fi
+      done < <(jq -r --argjson wi "${WAVE_IDX}" '.waves[$wi].issues[]? | select(.github_issue != null)
+        | [(.github_issue | tostring), (.status // "pending" | tostring), (.persist_budget_basis // "" | tostring)] | @tsv' "${STATE_FILE}" 2>/dev/null || true)
+    fi
+
     # ---------------------------------------------------------------
     # Stall detection and self-healing
     # ---------------------------------------------------------------
@@ -30774,7 +30982,7 @@ with open('${STATE_FILE}', 'w') as f:
       fi
     fi
 
-    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${TRACKING_BODY_SYNC_STATE_CHANGED:-false}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${PERSIST_BUDGET_STATE_CHANGED:-false}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${TRACKING_BODY_SYNC_STATE_CHANGED:-false}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
       post_state_comment || true
     fi
     if [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ]; then
