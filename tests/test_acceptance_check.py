@@ -455,8 +455,10 @@ def test_gate_result_status_table_and_extra_unmet():
 		("test", "tests/test_e.py"): "not run",
 		("check", "CI"): "not run",
 	}
-	# test_a's file is already a failure this change caused; only test_c adds.
-	assert scored["state"] == "unmet" and scored["unmet_count"] == 2 and scored["extra_unmet"] == 1
+	# test_a's file is already a failure this change caused, and test_c's
+	# "passes on base" comes from the merge-base, which no repair can change.
+	assert scored["state"] == "unmet" and scored["unmet_count"] == 2 and scored["extra_unmet"] == 0
+	assert ac.gate_result(P3_DONE_CHECK, dict(gate, failures=[]))["extra_unmet"] == 1
 	assert ac.gate_result(P3_DONE_CHECK, {})["state"] == "not_run"
 	assert ac.gate_result(dict(P3_DONE_CHECK, state="invalid"), gate)["state"] == "none"
 	met = {"acceptance": {t: {"head": "pass", "base": "fail"} for t in ("tests/test_a.py::test_x", "tests/test_b.py", "tests/test_c.py", "tests/test_d.py", "tests/test_e.py")}}
@@ -469,7 +471,7 @@ def test_gate_result_cli_feeds_render(tmp_path):
 	gate.write_text(json.dumps({"acceptance": {"tests/test_c.py": {"head": "pass", "base": "pass"}}}), encoding="utf-8")
 	proc = subprocess.run([sys.executable, str(SCRIPT), "gate-result", "--in", str(src), "--gate-result", str(gate), "--out", str(out)],
 		capture_output=True, text=True, check=True)
-	assert proc.stdout.strip() == "unmet 1"
+	assert proc.stdout.strip() == "unmet 0"
 	assert json.loads(out.read_text(encoding="utf-8"))["schema"] == "acceptance_result.v1"
 	section = subprocess.run([sys.executable, str(SCRIPT), "render", "--in", str(src), "--gate-result", str(out)],
 		capture_output=True, text=True, check=True).stdout

@@ -863,10 +863,16 @@ review_prepush_test_gate_acceptance_label_main()
 		echo "PERSIST acceptance_label outcome=skipped reason=invalid_target" >&2
 		return 0
 	fi
-	if [ -n "${PR_META_FILE:-}" ] && [ -f "${PR_META_FILE}" ] && [ ! -L "${PR_META_FILE}" ] \
-		&& labels="$(jq -c '[.labels[]?.name]' "${PR_META_FILE}" 2>/dev/null)" && [ -n "${labels}" ]; then
-		if jq -e 'index("ai:acceptance-unmet") != null' <<< "${labels}" >/dev/null 2>&1; then has=yes; else has=no; fi
-	fi
+	# PR_PAYLOAD_FILE is the full PR payload (it carries .labels); PR_META_FILE
+	# is a projection without labels. A file without a labels key is unknown.
+	local labels_src
+	for labels_src in "${PR_PAYLOAD_FILE:-}" "${PR_META_FILE:-}"; do
+		if [ -n "${labels_src}" ] && [ -f "${labels_src}" ] && [ ! -L "${labels_src}" ] \
+			&& labels="$(jq -c 'if type == "object" and has("labels") then [.labels[]?.name] else empty end' "${labels_src}" 2>/dev/null)" && [ -n "${labels}" ]; then
+			if jq -e 'index("ai:acceptance-unmet") != null' <<< "${labels}" >/dev/null 2>&1; then has=yes; else has=no; fi
+			break
+		fi
+	done
 	sd="$(review_prepush_test_gate_abs "${SUPPORT_SCRIPTS_DIR:-}")"
 	if [ -n "${sd}" ] && [ -f "${sd}/gh_helpers.sh" ]; then
 		# shellcheck source=/dev/null
@@ -878,6 +884,11 @@ review_prepush_test_gate_acceptance_label_main()
 		if gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels/ai%3Aacceptance-unmet" >/dev/null 2>&1; then outcome=removed; else outcome=error; fi
 	elif [ "${state}" = unmet ] && [ "${has}" != yes ]; then
 		reason="unmet_labels_${has}"
+		if [ -n "${sd}" ] && [ -f "${sd}/label_helpers.sh" ]; then
+			# shellcheck source=/dev/null
+			source "${sd}/label_helpers.sh" 2>/dev/null || true
+		fi
+		if type ensure_label_exists >/dev/null 2>&1; then ensure_label_exists "ai:acceptance-unmet" "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || true; fi
 		if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:acceptance-unmet' >/dev/null 2>&1; then outcome=added; else outcome=error; fi
 	fi
 	echo "PERSIST acceptance_label outcome=${outcome} reason=${reason}" >&2

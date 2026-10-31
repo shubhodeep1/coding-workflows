@@ -884,3 +884,23 @@ def test_review_workflow_wires_the_switch_gated_steps():
 		assert step["continue-on-error"] is True and step["timeout-minutes"] == 5
 		assert step["env"]["PREPUSH_TEST_GATE_STEP_MODE"] == mode
 	assert "GH_TOKEN" not in (by_name[STEP_NAME].get("env") or {})
+
+
+def test_acceptance_label_reads_labels_from_the_full_pr_payload(tmp_path):
+	# Production shape: PR_META_FILE is a projection without labels; the full
+	# PR payload carries them, so a met done-check removes the label.
+	repo, env = _setup(tmp_path, [PASS])
+	log = _label_env(tmp_path, env, "met", None)
+	meta = tmp_path / "runtime" / "pr_meta.json"
+	meta.write_text(json.dumps({"title": "t", "body": "", "headRefName": "ai/issue-7"}), encoding="utf-8")
+	payload = tmp_path / "runtime" / "pr_payload.json"
+	payload.write_text(json.dumps({"labels": [{"name": "ai:acceptance-unmet"}]}), encoding="utf-8")
+	env.update({"PR_META_FILE": str(meta), "PR_PAYLOAD_FILE": str(payload)})
+	proc = _run_step(tmp_path, repo, env)
+	calls = _gh_calls(log)
+	assert len(calls) == 1 and "-X DELETE" in calls[0], proc.stderr
+	# A projection without a labels key alone means unknown: never delete.
+	log.unlink()
+	env.pop("PR_PAYLOAD_FILE")
+	proc = _run_step(tmp_path, repo, env)
+	assert _gh_calls(log) == [] and "outcome=unchanged" in proc.stderr

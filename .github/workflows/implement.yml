@@ -6234,9 +6234,13 @@ jobs:
           if [ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ] && [ -f "${ACCEPTANCE_RESULT_FILE}" ] && [ ! -L "${ACCEPTANCE_RESULT_FILE}" ] \
             && [ "$(jq -r '.state // empty' "${ACCEPTANCE_RESULT_FILE}" 2>/dev/null || true)" = unmet ]; then
             source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh" 2>/dev/null || true
-            if type ensure_label_exists >/dev/null 2>&1; then ensure_label_exists "ai:acceptance-unmet" "${{ github.repository }}" || true; fi
-            ACCEPTANCE_UNMET_LABEL="ai:acceptance-unmet"
-            PR_CREATE_ARGS+=(--label "${ACCEPTANCE_UNMET_LABEL}")
+            # Only an existing label may go to gh pr create; a missing one would fail it.
+            if type ensure_label_exists >/dev/null 2>&1 && ensure_label_exists "ai:acceptance-unmet" "${{ github.repository }}"; then
+              ACCEPTANCE_UNMET_LABEL="ai:acceptance-unmet"
+              PR_CREATE_ARGS+=(--label "${ACCEPTANCE_UNMET_LABEL}")
+            else
+              echo "::warning::Could not confirm label ai:acceptance-unmet; opening the PR without it."
+            fi
           fi
 
           # A transient GitHub error on `gh pr create` (GraphQL "Something

@@ -567,7 +567,9 @@ def gate_result(obj: Any, gate: Any) -> dict:
 			out["unmet_count"] += 1
 			# A target whose file is already a failure caused by this change
 			# is counted there; only the others add to the repair count.
-			if test["path"] not in failure_files:
+			# "unmet (passes on base)" comes from the merge-base tree, which
+			# no repair on head can change, so it never drives a repair turn.
+			if status == "unmet" and test["path"] not in failure_files:
 				out["extra_unmet"] += 1
 	for check in obj["checks"]:
 		items.append({"kind": "check", "target": check["name"], "status": "not run"})

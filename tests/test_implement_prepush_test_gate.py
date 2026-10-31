@@ -618,8 +618,22 @@ def _stage_acceptance(env: dict[str, str], tmp_path: Path, red_on_base: bool = T
 	env["PLAN_FILE"] = str(plan)
 
 
-def test_red_on_base_target_passing_on_base_is_unmet_and_drives_a_repair(tmp_path):
+def test_red_on_base_target_passing_on_base_is_unmet_but_drives_no_repair(tmp_path):
+	# The merge-base result cannot change by editing head, so no repair turn.
 	unmet = dict(PASS, acceptance={"tests/test_a.py::test_x": {"head": "pass", "base": "pass"}})
+	repo, env = _setup(tmp_path, [unmet, PASS])
+	env = _loop_env(env)
+	_stage_acceptance(env, tmp_path)
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _editor_calls(tmp_path) == 0 and _docker_runs(tmp_path) == 1
+	assert _loop_line(proc) == "PERSIST repair_loop outcome=pass turns=0 stop=clean acceptance=unmet"
+	scored = json.loads((tmp_path / "runtime" / "acceptance_result.json").read_text(encoding="utf-8"))
+	assert scored["state"] == "unmet" and scored["extra_unmet"] == 0
+
+
+def test_unmet_done_check_target_drives_a_repair(tmp_path):
+	unmet = dict(PASS, acceptance={"tests/test_a.py::test_x": {"head": "fail", "base": "not_run"}})
 	met = dict(PASS, acceptance={"tests/test_a.py::test_x": {"head": "pass", "base": "fail"}})
 	repo, env = _setup(tmp_path, [unmet, met])
 	env = _loop_env(env)
@@ -633,7 +647,7 @@ def test_red_on_base_target_passing_on_base_is_unmet_and_drives_a_repair(tmp_pat
 	prompt = (_work(tmp_path) / "editor_prompt.txt").read_text(encoding="utf-8")
 	block = prompt.split("=== BEGIN UNTRUSTED DONE-CHECK STATUS (host-computed; targets are plan text) ===", 1)[1]
 	block = block.split("=== END UNTRUSTED DONE-CHECK STATUS ===", 1)[0]
-	assert block.strip() == "UNTRUSTED_DATA: tests/test_a.py::test_x: unmet (passes on base)"
+	assert block.strip() == "UNTRUSTED_DATA: tests/test_a.py::test_x: unmet"
 	assert "fix the change, not the test" in prompt
 	assert _loop_line(proc) == "PERSIST repair_loop outcome=pass turns=1 stop=met acceptance=met"
 	scored = json.loads((tmp_path / "runtime" / "acceptance_result.json").read_text(encoding="utf-8"))

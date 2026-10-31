@@ -987,7 +987,9 @@ def _baseline_target_statuses(
 		base_selection = _merge_explicit_tests({"affected_tests": []}, present)
 		units, _unverified = plan_units(repo, base_selection)
 		units = [unit for unit in units if unit.get("kind") == "test"]
-		reran = run_units(units, baseline, max(deadline, time.monotonic() + BASELINE_MIN_SECS), shards) if units else []
+		# Plain deadline: classify_baseline already takes the one BASELINE_MIN_SECS
+		# floor the wrapper allows; past it these targets are "unverified".
+		reran = run_units(units, baseline, deadline, shards) if units else []
 		for target, path, name in present:
 			out[target] = {"base": _target_status(reran, path, name)}
 	return out
