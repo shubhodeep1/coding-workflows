@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_orchestrate_child_count.py:89 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The extracted block starts at `CHILDREN=\"\"` yet `test_unchanged_poll_contract` asserts it contains `+ 90 ))`, and (per openai_gpt-6-luna, lines 61-67 and 114-122) the block also omits the `CHILDREN_ERR_FILE` and `CHILDREN_DEADLINE` initializations.\n  WHY: The reviewers claim the assertion and the behavior tests fail on every run. Severity is BLOCKER from google_gemini-3_1-flash-lite and MAJOR from openai_gpt-6-luna, so the highest is used. minimax_minimax-m3 and z-ai_glm-5_3-flash dispute this: they say the deadline is at workflow line 4708, after `CHILDREN=\"\"` at 4705, so the assertion passes.\n- changelog.d/wfopt-2026-09-26-3-smoke-child-count.md:N/A | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fragment filename lacks the issue number required by the `changelog.d/<issue-or-pr>-<slug>.md` convention.\n  WHY: The reviewer claims this likely causes the `tests/test_changelog_fragment_contract.py` failure. Severity is MAJOR in the source. minimax_minimax-m3 and z-ai_glm-5_3-flash dispute it: the linked issue mandates this exact filename, and other fragments have no numeric prefix.\n- .github/workflows/test-and-mark-stable.yml:4715-4719 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate classifies 9 test files as failing because of this change, but static checks cannot tie those failures to any hunk in the diff.\n  WHY: The reviewer reports that no code defect is demonstrable at the cited sites and the failures look inherited or environmental. It rates this a NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_orchestrate_child_count.py:89 | severity=BLOCKER | confidence=5\n  PROBLEM: `test_unchanged_poll_contract` asserts the extracted block (starting at `CHILDREN=\"\"`) contains `+ 90 ))`, but the deadline calculation in `.github/workflows/test-and-mark-stable.yml` occurs before the `CHILDREN=\"\"` line.\n  WHY: The assertion fails on every run because the deadline string is not in the extracted block.\n- changelog.d/wfopt-2026-09-26-3-smoke-child-count.md:N/A | severity=MAJOR | confidence=4\n  PROBLEM: The fragment filename lacks the issue number (8532), violating the `changelog.d/<issue-or-pr>-<slug>.md` convention.\n  WHY: This likely causes the `tests/test_changelog_fragment_contract.py` failure, as the assembly script cannot correctly process the fragment without the issue number.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_test_and_mark_stable_orchestrate_child_count.py:89 | severity=NIT | confidence=5\n  PROBLEM: The reviewer examined the pass-1 claim that `+ 90 ))` lies outside the extracted block and found it incorrect. The deadline is at workflow line 4708, after `CHILDREN=\"\"` at line 4705, so it is inside the extracted lines 4705-4723.\n  WHY: The assertion will pass. This is reported only as an explicit disposition, and no fix is needed.\n- changelog.d/wfopt-2026-09-26-3-smoke-child-count.md:filename | severity=NIT | confidence=5\n  PROBLEM: The reviewer examined the pass-1 claim about the missing issue number and found it incorrect. Existing fragments have no issue numbers, and issue #8532 specifies this exact filename.\n  WHY: Nothing fails at runtime. This is reported only as an explicit disposition, and no fix is needed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_orchestrate_child_count.py:`_child_poll_block()` lines 61-67; `test_unchanged_poll_contract()` line 89; behavior-test prelude lines 114-122 | severity=MAJOR | confidence=5\n  PROBLEM: The extracted block starts at `CHILDREN=\"\"`, omitting the preceding `CHILDREN_ERR_FILE` and `CHILDREN_DEADLINE` initializations in the workflow. The assertion that the block contains `+ 90 ))` also checks a line outside the block.\n  WHY: Under `set -u`, the behavior tests abort when the block expands `${CHILDREN_ERR_FILE}` before a `gh` call. The static contract test also fails because `+ 90 ))` is absent from the extracted block.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:4715-4719 (cross-check tests/test_test_and_mark_stable_orchestrate_child_count.py:86-96) | severity=NIT | confidence=3\n  PROBLEM: The pre-push gate classifies 9 test files as failing because of this change, but static verification contradicts that for the spot-checked items. The deadline line at workflow line 4708 is inside the extracted block, and the changelog contract tests assert on surfaces this diff never touches. The failing-test cluster maps to no hunk in the 4-file diff.\n  WHY: No code defect is demonstrable at the cited sites. The reviewer reports this so the editor investigates the gate-failure classification rather than \"fixing\" correct code. It also lists the pass-1 `+ 90 ))` and changelog-filename claims as refuted.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0fa128abbd8478aca6be00a79c73a9ea2485e6ca4bbd57328606076c92a91261",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8536,
+    "run_id": "41192697828",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41192697828",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031104813_252631ebfe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8536,
+    "run_id": "41192697828"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T10:48:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
