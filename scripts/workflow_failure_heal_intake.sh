@@ -3333,7 +3333,12 @@ _heal_build_suspect_commits()
 	fi
 	[[ "${suspect_workflow_id}" =~ ^[1-9][0-9]{0,19}$ ]] || suspect_workflow_id=""
 	[[ "${suspect_before}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || suspect_before=""
-	suspect_branch="$(printf '%s' "${HEAD_BRANCH:-}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+	# Reject a branch name outside the accepted set instead of stripping it, so a
+	# changed name never selects another branch's last green run.
+	suspect_branch=""
+	if [[ "${HEAD_BRANCH:-}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]]; then
+		suspect_branch="${HEAD_BRANCH}"
+	fi
 	# PROVENANCE_DEFAULT_BRANCH is this repository's default branch: pass it only
 	# when SOURCE_REPO is this repository (as the reproduction and divergence
 	# steps do); otherwise the helper leaves out `sha`, so GitHub lists the

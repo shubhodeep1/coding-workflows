@@ -6788,7 +6788,11 @@ def parse_suspect_compare(compare: Any) -> dict[str, Any]:
 	"""Parse a REST compare response into suspect commits and files; pure, never raises.
 
 	Returns ``{"commits", "files", "pipeline_files", "total_commits",
-	"commits_truncated", "pipeline_files_truncated", "reason"}``. ``commits``
+	"commits_truncated", "commits_capped", "commits_page_truncated",
+	"pipeline_files_truncated", "reason"}``, plus ``commits_returned`` only when
+	``reason`` is ``ok``. ``commits_capped`` is True only when the
+	SUSPECT_COMMITS_MAX cap itself removed valid commits; the renderer's
+	"newest N shown" caption depends on it. ``commits``
 	keeps the newest SUSPECT_COMMITS_MAX commits (the API lists oldest first,
 	so the tail, in API order). ``files`` is the whole parsed ``files[]`` as
 	``{"filename", "status", "changes"}`` (exposed for the later suspect-scope
