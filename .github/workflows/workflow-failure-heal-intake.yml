@@ -142,6 +142,11 @@ jobs:
       # the last green run and adds `## Reproduction`; off by default.
       WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
       WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
+      # Run-time trend (P3): 'true' adds `## Run-time trend` (7 days of successful
+      # run durations per UTC day, at most 6 GETs) to stall / timeout heal issues;
+      # off by default. The ratio is the latest-day median that counts as a regression.
+      WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}
+      WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}
       # Non-retryable review/autofix failures (#6756): 'false' skips the PR
       # diagnosis; host-only stops then keep #6745's skip, others are healed.
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
@@ -424,6 +429,11 @@ jobs:
       # the last green run and adds `## Reproduction`; off by default.
       WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
       WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
+      # Run-time trend (P3): 'true' adds `## Run-time trend` (7 days of successful
+      # run durations per UTC day, at most 6 GETs) to stall / timeout heal issues;
+      # off by default. The ratio is the latest-day median that counts as a regression.
+      WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}
+      WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
       # Synced-file security findings (project #7604); kept in step with the
       # intake job's env (test_heal_scope_recovery_scan_workflow_wiring).

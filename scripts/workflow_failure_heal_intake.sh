@@ -138,6 +138,11 @@
 #                                         the workflow's last green SHA and adds `## Reproduction`
 #   WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES reproduction wall time (default 10; the intake clamps 1-20)
 #   WORKFLOW_HEAL_REPRODUCE_SCRIPT        reproduction helper (default: heal_reproduce.sh next to this script; tests)
+#   WORKFLOW_HEAL_TREND_ENABLED           default "false": only "true" adds `## Run-time trend` (per-UTC-day
+#                                         n / median / p90 of the last 7 days of successful runs) to
+#                                         stall / timeout heal issues
+#   WORKFLOW_HEAL_TREND_REGRESSION_RATIO  latest-day median / earlier median that counts as a
+#                                         regression (default 1.5; outside 1.0 < r <= 10 gives 1.5)
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
@@ -331,6 +336,10 @@ REPRODUCE_ENABLED="${WORKFLOW_HEAL_REPRODUCE_ENABLED:-false}"
 REPRODUCE_TIMEOUT_MINUTES="$(_positive_or_default "${WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES:-}" 10)"
 REPRODUCTION_FILE=""
 REPRO_STATUS=""
+# Run-time trend (P3): only the literal 'true' turns it on.
+TREND_ENABLED="${WORKFLOW_HEAL_TREND_ENABLED:-false}"
+TREND_RATIO="${WORKFLOW_HEAL_TREND_REGRESSION_RATIO:-1.5}"
+TREND_FILE=""
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
@@ -3136,6 +3145,114 @@ _heal_run_reproduction()
 }
 _heal_run_reproduction || { REPRODUCTION_FILE=""; REPRO_STATUS=""; log "reproduction outcome=skipped reason=helper_failed tests=0"; }
 
+# --- Run-time trend (P3 steps 2, 3 and 5, evidence only) ---------------------
+
+# _heal_build_run_time_trend
+#   Behind WORKFLOW_HEAL_TREND_ENABLED (only the literal 'true'), renders the
+#   `## Run-time trend` section into TREND_FILE through
+#   `workflow_failure_heal.py run-time-trend`, which classifies the failure
+#   shape first (classify_failure_shape) and trends stall / timeout shapes
+#   only. Runs after the scope freeze; nothing here feeds the scope, the
+#   marker, the fingerprint or the diagnosis prompt. With the switch off it
+#   returns at once: no file, no call and no log line, so the run is
+#   byte-identical to one without the step.
+#   Inputs (all already saved, no call): SIGNATURE, the reported runs' jobs
+#   conclusions (`timed_out` when any job timed out), FAILING_TESTS_JSON, the
+#   reported runs' ${LOG_DIR}/run-<id>-info.json, the linked runs'
+#   ${RUNTIME_DIR}/linked_runs/run-<id>.json and, when the evidence pack ran,
+#   ${RUNTIME_DIR}/evidence_pack_api/issue-<n>.json + runs-page-<n>.json.
+#   Batching contract (CLAUDE.md §14): at most 6 single-attempt GitHub REST GETs
+#   per report, 2 pages for each of at most 3 workflows,
+#   repos/<repo>/actions/workflows/<file|id>/runs?status=success&branch=<b>&event=<e>&created=>=<now-7d>&per_page=100&page=<n>,
+#   counted in GH_PAT_BUDGET; none with the switch off or for other shapes.
+#   No existing intake read lists a workflow's successful runs over 7 days
+#   (last-green-run reads one run; the evidence-pack runs pages cover only the
+#   failed job's window).
+#   Fails open: one log line
+#   `trend outcome=<ok|partial|skipped> reason=<token> shape=<shape> workflows=<n> pages=<n> regression=<true|false> history=<complete|truncated>`;
+#   a helper failure logs `trend outcome=partial reason=helper_failed` and the
+#   issue is composed without the section.
+_heal_build_run_time_trend()
+{
+	local trend_dir="${RUNTIME_DIR}/trend"
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
+	local trend_api_dir="${RUNTIME_DIR}/evidence_pack_api"
+	local trend_json="" trend_outcome="" trend_reason="" trend_shape="" trend_workflows="" trend_pages="" trend_regression="" trend_history=""
+	local trend_run_id="" trend_seen_ids=" " trend_conclusion="failure" trend_api_file="" trend_issue_number=""
+	local -a trend_args=()
+	TREND_FILE=""
+	[ "${TREND_ENABLED}" = true ] || return 0
+	rm -rf "${trend_dir}"
+	mkdir -p "${trend_dir}" || return 1
+	printf '%s' "${SIGNATURE:-}" > "${trend_dir}/signature.txt" || return 1
+	printf '%s' "${FAILING_TESTS_JSON:-}" > "${trend_dir}/failing_tests.json" || return 1
+	if [ -s "${SUMMARIES_FILE:-}" ]; then
+		while IFS= read -r trend_run_id; do
+			[[ "${trend_run_id}" =~ ^[0-9]+$ ]] || continue
+			case "${trend_seen_ids}" in *" ${trend_run_id} "*) continue ;; esac
+			trend_seen_ids="${trend_seen_ids}${trend_run_id} "
+			if [ -s "${LOG_DIR}/run-${trend_run_id}-info.json" ]; then
+				trend_args+=(--failed-run "${LOG_DIR}/run-${trend_run_id}-info.json")
+			fi
+			if [ -s "${LOG_DIR}/run-${trend_run_id}-jobs.json" ] \
+				&& jq -e '[(if type == "object" then (.jobs // []) else . end)[]? | objects | .conclusion?] | any(. == "timed_out")' \
+					"${LOG_DIR}/run-${trend_run_id}-jobs.json" >/dev/null 2>&1; then
+				trend_conclusion="timed_out"
+			fi
+		done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+	fi
+	if [ -s "${fetched_ids_file}" ]; then
+		while IFS= read -r trend_run_id; do
+			[[ "${trend_run_id}" =~ ^[0-9]+$ ]] || continue
+			if [ -s "${linked_dir}/run-${trend_run_id}.json" ]; then
+				trend_args+=(--linked-run "${linked_dir}/run-${trend_run_id}.json")
+			fi
+		done < "${fetched_ids_file}"
+	fi
+	# Issue-linked runs exist only when this run's evidence pack fetched them.
+	if [ "${EVIDENCE_PACK_ENABLED:-false}" = true ] && [ -d "${trend_api_dir}" ]; then
+		for trend_api_file in "${trend_api_dir}"/issue-*.json; do
+			[ -s "${trend_api_file}" ] || continue
+			trend_issue_number="${trend_api_file##*/issue-}"
+			trend_issue_number="${trend_issue_number%.json}"
+			[[ "${trend_issue_number}" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+			trend_args+=(--issue-runs "${trend_issue_number}" "${trend_api_file}")
+		done
+		for trend_api_file in "${trend_api_dir}/runs-page-1.json" "${trend_api_dir}/runs-page-2.json"; do
+			[ -s "${trend_api_file}" ] || continue
+			trend_args+=(--issue-runs-page "${trend_api_file}")
+		done
+	fi
+	if ! trend_json="$(GH_RETRY_MAX_ATTEMPTS=1 python3 "${HEAL_PY}" run-time-trend --repo "${SOURCE_REPO}" \
+		--signature-file "${trend_dir}/signature.txt" --job-conclusion "${trend_conclusion}" \
+		--failing-tests-json "${trend_dir}/failing_tests.json" --ratio "${TREND_RATIO}" \
+		--out "${trend_dir}/trend.md" "${trend_args[@]}" 2>/dev/null)" \
+		|| ! jq -e 'type == "object" and (.outcome | type == "string")' <<< "${trend_json}" >/dev/null 2>&1; then
+		log "trend outcome=partial reason=helper_failed"
+		return 0
+	fi
+	trend_outcome="$(jq -r '.outcome' <<< "${trend_json}" | tr -cd 'a-z_' | head -c 20)"
+	case "${trend_outcome}" in ok|partial|skipped) ;; *) trend_outcome="partial" ;; esac
+	trend_reason="$(jq -r '.reason // ""' <<< "${trend_json}" | tr -cd 'a-z_' | head -c 40)"
+	[ -n "${trend_reason}" ] || trend_reason="malformed"
+	trend_shape="$(jq -r '.shape // ""' <<< "${trend_json}" | tr -cd 'a-z_' | head -c 20)"
+	trend_workflows="$(jq -r '(.workflows // 0) | tostring' <<< "${trend_json}" 2>/dev/null || true)"
+	[[ "${trend_workflows}" =~ ^[0-9]{1,3}$ ]] || trend_workflows=0
+	trend_pages="$(jq -r '(.pages // 0) | tostring' <<< "${trend_json}" 2>/dev/null || true)"
+	[[ "${trend_pages}" =~ ^[0-9]{1,3}$ ]] || trend_pages=0
+	trend_regression="false"
+	[ "$(jq -r '.regression == true' <<< "${trend_json}" 2>/dev/null)" != true ] || trend_regression="true"
+	trend_history="complete"
+	[ "$(jq -r '.history == "truncated"' <<< "${trend_json}" 2>/dev/null)" != true ] || trend_history="truncated"
+	log "trend outcome=${trend_outcome} reason=${trend_reason} shape=${trend_shape:-unknown} workflows=${trend_workflows} pages=${trend_pages} regression=${trend_regression} history=${trend_history}"
+	if [ "${trend_outcome}" != skipped ] && [ -s "${trend_dir}/trend.md" ]; then
+		TREND_FILE="${trend_dir}/trend.md"
+	fi
+	return 0
+}
+_heal_build_run_time_trend || { TREND_FILE=""; log "trend outcome=partial reason=helper_failed"; }
+
 # --- Run the diagnosis model -----------------------------------------------
 
 PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
@@ -3632,6 +3749,11 @@ _open_issue()
 	if [ "${REPRODUCE_ENABLED}" = true ] && [ -s "${REPRODUCTION_FILE:-}" ]; then
 		reproduction_args=(--reproduction-file "${REPRODUCTION_FILE}" --reproduction-tests-file "${RUNTIME_DIR}/reproduction/tests.txt")
 	fi
+	# Run-time trend (P3): same rule, so a switch-off body is byte-identical.
+	local -a trend_args=()
+	if [ "${TREND_ENABLED}" = true ] && [ -s "${TREND_FILE:-}" ]; then
+		trend_args=(--trend-file "${TREND_FILE}")
+	fi
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${compose_payload_file}" \
 		--diagnosis-file "${DIAG_FILE}" \
@@ -3646,7 +3768,7 @@ _open_issue()
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
-		--body-out "${body_file}" "${evidence_pack_args[@]}" "${reproduction_args[@]}"; then
+		--body-out "${body_file}" "${evidence_pack_args[@]}" "${reproduction_args[@]}" "${trend_args[@]}"; then
 		log "error issue_compose_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
 		tg_send_msg "Workflow failure heal FAILED to compose a safe issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		return 1
