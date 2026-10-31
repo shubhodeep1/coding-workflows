@@ -692,7 +692,9 @@ PY
       fi
     done
     _review_journal_gate=""
-    for _review_journal_candidate in "${RUNTIME_DIR:-}/prepush_gate/run2/result.json" "${RUNTIME_DIR:-}/prepush_gate/run1/result.json"; do
+    # The newest run wins: the repair loop (issue #8427, P3) can leave its
+    # final result in run3..run6 (same order as implement.yml's journal step).
+    for _review_journal_candidate in "${RUNTIME_DIR:-}"/prepush_gate/run{6,5,4,3,2,1}/result.json; do
       if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${_review_journal_candidate}" ]; then
         _review_journal_gate="${_review_journal_candidate}"
         break
