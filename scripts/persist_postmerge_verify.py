@@ -661,11 +661,16 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 		total = data.get("total_count")
 		# One page only: when it is cut off and holds no merge-commit run, the
 		# first run containing the merge may be missing, so never grade a later
-		# run in its place (the window then ends in unverified).
+		# run in its place. total_count only grows, so once the window has
+		# passed grade nothing and let decide() end the check in unverified.
 		if (fresh is None or fresh["head_sha"] != marker["merge_sha"]) and isinstance(page, list) \
 				and isinstance(total, int) and not isinstance(total, bool) and total > len(page):
-			log("pending", "runs_truncated", number)
-			return False
+			merged = parse_ts(marker.get("merged_at"))
+			if merged is not None and now < merged + timedelta(hours=window_h):
+				log("pending", "runs_truncated", number)
+				return False
+			fresh = None
+			run = None
 		run = fresh or run
 	contained = False
 	if run is not None:

@@ -389,6 +389,21 @@ def test_check_truncated_runs_page_waits_instead_of_grading_a_later_run(fake, mo
 	assert "outcome=pending reason=runs_truncated issue=12" in capsys.readouterr().err
 
 
+def test_check_truncated_runs_page_after_window_ends_unverified(fake, monkeypatch, tmp_path, capsys):
+	_armed(fake, marker=dict(MARKER, job=None))
+	fake.workflow_runs = {"total_count": 150, "workflow_runs": [
+		_run(515, "success", head_sha="5" * 40, created="2026-10-20T12:00:00Z")]}
+	out = _check(fake, monkeypatch, tmp_path, now_hours=25, runs_cache={"workflow_runs": []})
+	assert out["replan"] == []
+	assert not any("/compare/" in e for e in fake.endpoints())
+	writes = fake.writes()
+	assert writes[0] == [f"repos/{REPO}/issues/12/labels/ai%3Averify-pending", "-X", "DELETE"]
+	body = writes[1][writes[1].index("-f") + 1][len("body="):]
+	assert body.startswith(ppv.HEADER_UNVERIFIED)
+	err = capsys.readouterr().err
+	assert "outcome=unverified reason=window_passed issue=12" in err and "runs_truncated" not in err
+
+
 def test_check_freshly_labelled_issue_without_marker_is_left_alone(fake, monkeypatch, tmp_path, capsys):
 	fake.issues = [_candidate(updated_at="2026-10-20T10:55:00Z")]
 	fake.comments[12] = []
