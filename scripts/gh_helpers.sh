@@ -1240,7 +1240,7 @@ gh_retry()
 		if _is_gh_permanent_failure "${stderr_content}"; then
 			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $(_gh_cmd_log_summary "$@")" >&2
 			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
+				echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${stderr_file}")")" >&2
 			fi
 			rm -f "${stderr_file}" "${stdout_file}"
 			return 1
@@ -1257,7 +1257,7 @@ gh_retry()
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
 			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
+				echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${stderr_file}")")" >&2
 			fi
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
 				sleep "${wait_secs}"
@@ -1325,7 +1325,7 @@ gh_retry_to_file()
 		if _is_gh_permanent_failure "${stderr_content}"; then
 			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $(_gh_cmd_log_summary "$@")" >&2
 			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
+				echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${stderr_file}")")" >&2
 			fi
 			rm -f "${stderr_file}" "${attempt_file}"
 			: > "${outfile}" 2>/dev/null || true
@@ -1343,7 +1343,7 @@ gh_retry_to_file()
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
 			if [ -n "${stderr_content}" ]; then
-				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
+				echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${stderr_file}")")" >&2
 			fi
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
 				sleep "${wait_secs}"
@@ -1465,7 +1465,7 @@ gh_api_json_to_file()
 				local wait_secs=$(( 2 ** (attempt - 1) ))
 				echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
 				if [ -n "${stderr_content}" ]; then
-					echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
+					echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${stderr_file}")")" >&2
 				fi
 				if [ "${attempt}" -lt "${max_attempts}" ]; then
 					sleep "${wait_secs}"
