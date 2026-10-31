@@ -273,7 +273,10 @@ def collect_paths(paths_file: str | None, text_file: str | None, plan_file: str 
 	if text and len(found) < MAX_PATHS:
 		# Untrusted issue text: every candidate must also be a tracked file.
 		ordered: list[str] = []
-		local_seen: set[str] = set()
+		# Deferred previous-plan paths are skipped here: on a re-plan the planning
+		# context ends with the previous plan comment, so its last Files section
+		# would otherwise refill the slots kept for the current issue's paths.
+		local_seen: set[str] = set(deferred)
 		raw_candidates = list(_tfc.extract_paths_from_plan(_likely_section(text)))
 		for token in _tfc.PATH_IN_BACKTICKS_RE.findall(text):
 			normalised = _tfc.normalize_path(token)
@@ -420,7 +423,10 @@ class Builder:
 				for entry in entries[:LOG_PER_PATH]:
 					lines.append("  " + _one_line(entry, 20 + SUBJECT_MAX))
 		finally:
-			_git(root, ["update-ref", "-d", HISTORY_REF])
+			cleanup = _git(root, ["update-ref", "-d", HISTORY_REF])
+			if cleanup is None or cleanup.returncode != 0:
+				self.partial = True
+				self.reason = self.reason or "history_ref_cleanup_failed"
 		return lines
 
 	def branch_health(self, repo: str, branch: str) -> list[str] | None:

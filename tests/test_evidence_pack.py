@@ -492,3 +492,43 @@ def test_sigterm_during_history_deletes_the_private_ref(world, monkeypatch, stag
 	with pytest.raises(SystemExit):
 		ep.Builder().history(world["work"], "main", ["a.py"])
 	assert _git(world["work"], "for-each-ref", "--format=%(refname)", "refs/persist") == ""
+
+
+def test_replan_context_with_previous_plan_section_keeps_issue_paths(tmp_path):
+	"""plan.yml appends all comments, so the text's last Files section is the previous plan."""
+	env = _clean_env()
+	env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com", "GIT_CONFIG_NOSYSTEM": "1", "HOME": str(tmp_path)})
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q", "-b", "main", env=env)
+	names = [f"p{n}.py" for n in range(12)] + ["issue_a.py", "issue_b.py"]
+	for name in names:
+		(repo / name).write_text("x\n", encoding="utf-8")
+	_git(repo, "add", *names, env=env)
+	_git(repo, "commit", "-q", "-m", "seed", env=env)
+	section = "## Files likely to change\n" + "".join(f"- `p{n}.py`\n" for n in range(12))
+	plan = tmp_path / "prev_plan.txt"
+	plan.write_text(section, encoding="utf-8")
+	text = tmp_path / "ctx.txt"
+	text.write_text("ISSUE DESCRIPTION\nTouch `issue_a.py` and `issue_b.py`.\n\nALL COMMENTS\n" + section, encoding="utf-8")
+	paths = ep.collect_paths(None, str(text), str(plan), repo)
+	assert len(paths) == ep.MAX_PATHS
+	assert paths[:5] == [f"p{n}.py" for n in range(5)]
+	assert paths[5:7] == ["issue_a.py", "issue_b.py"]
+	assert paths[7:] == [f"p{n}.py" for n in range(5, 8)]
+
+
+def test_failed_history_ref_cleanup_marks_partial(world, monkeypatch):
+	real_git = ep._git
+
+	def failing_cleanup(root, args, timeout=ep.FETCH_TIMEOUT_SECS):
+		if args and args[0] == "update-ref":
+			return None
+		return real_git(root, args, timeout)
+
+	monkeypatch.setattr(ep, "_git", failing_cleanup)
+	monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+	builder = ep.Builder()
+	builder.history(world["work"], "main", ["a.py"])
+	assert builder.partial and builder.reason == "history_ref_cleanup_failed"
