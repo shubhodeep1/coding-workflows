@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4718-4719 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `case \"${CHILD_COUNT}\" in ''|*[!0-9]*) CHILD_COUNT=0 ;; esac` guard is redundant because the `jq` expression plus the `2>/dev/null || echo 0` fallback always yield a numeric value.\n  WHY: Source rated it NIT (mapped to low). It is dead defensive code that does not fail at runtime. The z-ai_glm-5_3-flash reviewer disputed this and called the guard load-bearing for empty `jq` output.\n- scripts/collect_workflow_logs.py:_apply_cost_telemetry_from_full_logs | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The normalized key from `_structured_cost_telemetry_line_key` is not used by the consumer `_apply_cost_telemetry_from_full_logs` when applying telemetry.\n  WHY: Source rated it MAJOR (mapped to medium). Deduplication may be ineffective and telemetry totals inaccurate. Three other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) refuted it, because the consumer reaches the key through `_dedupe_structured_cost_telemetry_full_logs`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Dedup parent/child telemetry copies using a normalized key in scripts/collect_workflow_logs.py.\n  expected_change_site: scripts/collect_workflow_logs.py (_apply_cost_telemetry_from_full_logs)\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The diff adds _STRUCTURED_COST_TELEMETRY_KEY_TIMESTAMP_RE and updates _structured_cost_telemetry_line_key, but _apply_cost_telemetry_from_full_logs is not shown to be updated to use the new normalization. (Refuted by anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash, which traced the call chain through _dedupe_structured_cost_telemetry_full_logs at lines 1605 and 1622.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/collect_workflow_logs.py:_apply_cost_telemetry_from_full_logs | severity=MAJOR | confidence=3\n  PROBLEM: The normalized key for telemetry deduplication is calculated in _structured_cost_telemetry_line_key, but the consumer function _apply_cost_telemetry_from_full_logs is not updated to use it.\n  WHY: Telemetry deduplication may remain ineffective or inconsistent if the application path keeps processing raw telemetry lines, leading to inaccurate telemetry totals.\n- TASK_GAP:\n  Requirement: Dedup parent/child telemetry copies using a normalized key in scripts/collect_workflow_logs.py.\n  Expected change site: scripts/collect_workflow_logs.py (_apply_cost_telemetry_from_full_logs)\n  Evidence of absence: The diff introduces _STRUCTURED_COST_TELEMETRY_KEY_TIMESTAMP_RE and updates _structured_cost_telemetry_line_key to use it, but _apply_cost_telemetry_from_full_logs is not shown to be updated to use the new deduplication/normalization logic.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:4718-4719 | severity=NIT | confidence=4\n  PROBLEM: The `case \"${CHILD_COUNT}\" in ''|*[!0-9]*) CHILD_COUNT=0 ;; esac` guard is redundant, because the `jq` expression and the `2>/dev/null || echo 0` fallback already guarantee a numeric value.\n  WHY: It does not fail at runtime. It is dead defensive code, a no-op for every reachable value of `CHILD_COUNT`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8496a3d43e514ffa445183bce114bdc6c0c8baf673f7386717ca16db3965b12d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8539,
+    "run_id": "41205867810",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41205867810",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031134752_007ad3ecbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8539,
+    "run_id": "41205867810"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-31T13:47:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
