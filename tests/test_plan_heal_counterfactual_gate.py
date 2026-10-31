@@ -448,7 +448,7 @@ def _jq_available() -> bool:
 
 
 def _run_step(issue: dict, plan_text: str, *, flag: str | None = None, comments: list | None = None,
-	heal_route: str = "false", copy_parser: bool = True, reproduce: str | None = None) -> dict:
+	heal_route: str = "false", copy_parser: bool = True, reproduce: str | None = None, trend: str | None = None) -> dict:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "scripts").mkdir()
@@ -461,7 +461,7 @@ def _run_step(issue: dict, plan_text: str, *, flag: str | None = None, comments:
 		env = {name: value for name, value in os.environ.items()
 			if name not in ("BASH_ENV", "ENV", "HEAL_COUNTERFACTUAL_GATE_ENABLED", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
 				"HEAL_ROUTE", "PLAN_COMMENT_ID", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED",
-				"WORKFLOW_HEAL_REPRODUCE_ENABLED")}
+				"WORKFLOW_HEAL_REPRODUCE_ENABLED", "WORKFLOW_HEAL_TREND_ENABLED")}
 		env.update({"GITHUB_OUTPUT": str(root / "output"), "PLAN_STEP_REPO": "owner/repo", "ISSUE_NUMBER": "123",
 			"ISSUE_RESPONSE": json.dumps(issue), "COMMENTS_RESPONSE": json.dumps(comments or []),
 			"POST_LOG": str(root / "posts"), "AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true", "CODEX_OUTPUT_FILE": str(root / "plan.txt"),
@@ -470,6 +470,8 @@ def _run_step(issue: dict, plan_text: str, *, flag: str | None = None, comments:
 			env["HEAL_COUNTERFACTUAL_GATE_ENABLED"] = flag
 		if reproduce is not None:
 			env["WORKFLOW_HEAL_REPRODUCE_ENABLED"] = reproduce
+		if trend is not None:
+			env["WORKFLOW_HEAL_TREND_ENABLED"] = trend
 		proc = subprocess.run(["bash", "-c", _step_run("Auto-approve clear plan")], cwd=root, env=env, text=True,
 			capture_output=True, check=False)
 		assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -638,6 +640,320 @@ def test_plan_step_reproducible_holds_with_the_switch_off() -> None:
 		assert len(run["holds"]) == 1
 		assert "reproduction_disabled" in run["holds"][0] and "result=REPRODUCIBLE" in run["holds"][0]
 		assert "`WORKFLOW_HEAL_REPRODUCE_ENABLED` is not `true`" in run["holds"][0]
+
+
+# --- heal regression gate (Refs #8434, P3 steps 6-8) ------------------------
+
+
+def _trend_body(regression: str = "true", workflow: str = "ci.yml") -> str:
+	return ("Heal this failure.\n\n## Run-time trend\n\nUntrusted data.\n\n"
+		f"- regression={regression} first_slow_day={'2026-10-20' if regression == 'true' else 'none'} history=complete\n\n"
+		f"Workflow `{workflow}` on `main` (`push`), complete history, regressed\n\n| day (UTC) | n | median | p90 |\n"
+		"\n## Suggested fix\n\nx\n")
+
+
+def _rg_plan(line: str | None, *, files: list[str] | None = None, body: str = "Fix the slow loop in `scripts/a.sh`.") -> str:
+	parts = ["Implementation Plan", "", "## Files likely to change"]
+	parts += [f"- `{path}`" for path in (files or ["scripts/a.sh"])]
+	parts += ["", "## Functions or modules to implement", body, "", "## Counterfactual check", "",
+		"HEAL_COUNTERFACTUAL: PASS"]
+	if line is not None:
+		parts.append(line)
+	parts += ["", "STATUS: CLEAR", "PLAN_SELF_CHECK: PASS", ""]
+	return "\n".join(parts)
+
+
+_BUDGET_FILES = [".github/workflows/ci.yml"]
+_BUDGET_BODY = "Raise `PHASE_TIMEOUT` from 40 to 90 and `timeout-minutes` to 120 in the failing job."
+
+
+def _rg(plan: str, body: str | None = None, flag: str | None = "true") -> dict:
+	return PD.parse_heal_regression(plan, _trend_body() if body is None else body, flag)
+
+
+def test_regression_without_line_holds() -> None:
+	result = _rg(_rg_plan(None))
+	assert (result["decision"], result["result"], result["reason"], result["detail"]) == (
+		"hold", "REGRESSION", "regression_line_missing", "no_line"), result
+	assert set(result) == {"gate", "regression", "applies", "decision", "result", "reason", "detail", "line", "unmatched_jobs"}
+	assert result["unmatched_jobs"] == []
+
+
+def test_regression_named_file_or_commit_approves() -> None:
+	for line in ("HEAL_REGRESSION: scripts/a.sh", "HEAL_REGRESSION: `scripts/a.sh`",
+		"HEAL_REGRESSION: commit 1a2b3c4d5e6f", "HEAL_REGRESSION: the loop in scripts/a.sh, added by abc1234"):
+		result = _rg(_rg_plan(line))
+		assert (result["decision"], result["reason"], result["detail"]) == ("approve", "regression_named", "named"), (line, result)
+
+
+def test_regression_not_a_regression_line_approves_unless_budget_only() -> None:
+	result = _rg(_rg_plan("HEAL_REGRESSION: not a regression: the runner pool shrank"))
+	assert (result["decision"], result["reason"]) == ("approve", "not_a_regression"), result
+	held = _rg(_rg_plan("HEAL_REGRESSION: not a regression: load grew", files=_BUDGET_FILES, body=_BUDGET_BODY))
+	assert (held["decision"], held["reason"], held["detail"]) == ("hold", "budget_only_plan", "not_regression"), held
+
+
+def test_regression_budget_only_plan_holds() -> None:
+	# The incident shape: the plan only raises PHASE_TIMEOUT in the failing workflow.
+	for line in ("HEAL_REGRESSION: .github/workflows/ci.yml", "HEAL_REGRESSION: abc1234"):
+		result = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Raise `PHASE_TIMEOUT` to 90 minutes."))
+		assert (result["decision"], result["reason"]) == ("hold", "budget_only_plan"), (line, result)
+	# A workflow-templates copy of the failing workflow is still the failing workflow.
+	both = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=_BUDGET_FILES + ["workflow-templates/ci.yml"], body=_BUDGET_BODY))
+	assert both["reason"] == "budget_only_plan", both
+
+
+def test_regression_not_budget_only_shapes() -> None:
+	line = "HEAL_REGRESSION: not a regression: x"
+	# Another file, another workflow, or a non-knob identifier is not budget-only.
+	for files, body in ((_BUDGET_FILES + ["scripts/a.sh"], _BUDGET_BODY),
+		([".github/workflows/other.yml"], _BUDGET_BODY),
+		(_BUDGET_FILES, _BUDGET_BODY + " Also set `CACHE_KEY_PREFIX` per job."),
+		(_BUDGET_FILES, "Cache the dependencies in the failing job.")):
+		result = _rg(_rg_plan(line, files=files, body=body))
+		assert (result["decision"], result["reason"]) == ("approve", "not_a_regression"), (files, body, result)
+
+
+def test_regression_numeric_workflow_caption_falls_back_to_one_basename() -> None:
+	body = _trend_body(workflow="12345")
+	result = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=_BUDGET_FILES, body=_BUDGET_BODY), body)
+	assert result["reason"] == "budget_only_plan", result
+	two = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=_BUDGET_FILES + [".github/workflows/b.yml"], body=_BUDGET_BODY), body)
+	assert two["reason"] == "regression_named", two
+
+
+def test_regression_switch_off_or_no_regression_is_unchanged() -> None:
+	for flag in (None, "", "false", "yes", "1"):
+		result = _rg(_rg_plan(None), flag=flag)
+		assert (result["gate"], result["decision"], result["reason"], result["result"]) == (
+			"off", "approve", "gate_disabled", "none"), (flag, result)
+	for body in (_trend_body("false"), "No trend here.\n", "```\n" + _trend_body() + "```\n"):
+		result = _rg(_rg_plan(None, files=_BUDGET_FILES, body=_BUDGET_BODY), body)
+		assert (result["gate"], result["decision"], result["reason"]) == ("on", "approve", "no_regression"), (body, result)
+	# The new gate does not touch the counterfactual decision.
+	plan = _rg_plan(None, files=_BUDGET_FILES, body=_BUDGET_BODY)
+	assert _check(plan)["decision"] == "approve"
+
+
+def test_regression_invalid_lines_are_missing() -> None:
+	cases = {
+		"HEAL_REGRESSION: a.sh\nHEAL_REGRESSION: b.sh": "duplicate_line",
+		"HEAL_REGRESSION:": "empty",
+		"HEAL_REGRESSION: not a regression:": "empty",
+		"HEAL_REGRESSION: unknown": "invalid_target",
+		"HEAL_REGRESSION: <file or commit> | not a regression: <reason>": "invalid_target",
+		"HEAL_REGRESSION: /etc/passwd": "invalid_target",
+		"HEAL_REGRESSION: ../x.sh": "invalid_target",
+		"```\nHEAL_REGRESSION: scripts/a.sh\n```": "no_line",
+		"    HEAL_REGRESSION: scripts/a.sh": "no_line",
+	}
+	for line, detail in cases.items():
+		result = _rg(_rg_plan(line))
+		assert (result["decision"], result["reason"], result["detail"]) == ("hold", "regression_line_missing", detail), (line, result)
+	shown = _rg(_rg_plan("HEAL_REGRESSION: see #12 @user <!-- x -->"))["line"]
+	assert "<!--" not in shown and "#12" not in shown and "@user" not in shown
+
+
+def test_regression_budget_only_ignores_companion_files_and_context_sections() -> None:
+	# Review findings: the always-granted tests/changelog/agents companions and a
+	# routine security note naming GITHUB_TOKEN must not lift the budget-only hold.
+	files = _BUDGET_FILES + ["changelog.d/x.md", "tests/test_ci_timeout.py", "agents.d/x.md"]
+	plan = _rg_plan("HEAL_REGRESSION: not a regression: load grew", files=files, body=_BUDGET_BODY)
+	plan = plan.replace("## Counterfactual check", "## Decisions\n\n### D1 — keep GH_PAT\n- Chosen: x\n\n"
+		"## Security considerations\n- `GITHUB_TOKEN` permissions unchanged.\n\n## Risks and edge cases\n- GITHUB_OUTPUT unchanged.\n\n"
+		"## Counterfactual check")
+	result = _rg(plan)
+	assert (result["decision"], result["reason"]) == ("hold", "budget_only_plan"), result
+	# Companions alone (no failing workflow) are not budget-only.
+	alone = _rg(_rg_plan("HEAL_REGRESSION: not a regression: x", files=["changelog.d/x.md"], body=_BUDGET_BODY))
+	assert alone["reason"] == "not_a_regression", alone
+	# An identifier in a change-describing section still counts as another change.
+	other = _rg(_rg_plan("HEAL_REGRESSION: not a regression: x", files=files, body=_BUDGET_BODY + " Set `CACHE_KEY_PREFIX`."))
+	assert other["reason"] == "not_a_regression", other
+	# A Files bullet without backticks is read by its path-like word.
+	prose = _rg_plan("HEAL_REGRESSION: abc1234", files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		"- `.github/workflows/ci.yml`", "- edit .github/workflows/ci.yml for the timeout")
+	assert _rg(prose)["reason"] == "budget_only_plan"
+
+
+def test_regression_line_rejects_directories_prose_numbers_and_placeholders() -> None:
+	for line in ("HEAL_REGRESSION: scripts/", "HEAL_REGRESSION: runs are 2.5x slower since v1.2",
+		"HEAL_REGRESSION: 0.1"):
+		result = _rg(_rg_plan(line))
+		assert (result["reason"], result["detail"]) == ("regression_line_missing", "invalid_target"), (line, result)
+	placeholder = _rg(_rg_plan("HEAL_REGRESSION: not a regression: <reason>"))
+	assert (placeholder["reason"], placeholder["detail"]) == ("regression_line_missing", "empty"), placeholder
+	assert _rg(_rg_plan("HEAL_REGRESSION: scripts/a.sh"))["reason"] == "regression_named"
+
+
+def test_regression_budget_only_reads_paths_not_knobs_in_files_bullets() -> None:
+	# Review findings: a knob-first backticked bullet, an indented sub-bullet and a
+	# "leave X unchanged" mention must not lift the budget-only hold.
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	knob_first = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		"- `.github/workflows/ci.yml`", "- Raise `PHASE_TIMEOUT` in `.github/workflows/ci.yml`\n  - raise `timeout-minutes` to 120")
+	assert _rg(knob_first)["reason"] == "budget_only_plan"
+	unchanged = _rg(_rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY + "\nLeave `CACHE_KEY_PREFIX` unchanged."))
+	assert unchanged["reason"] == "budget_only_plan", unchanged
+	# A backticked placeholder is no reason.
+	placeholder = _rg(_rg_plan("HEAL_REGRESSION: not a regression: `<reason>`"))
+	assert (placeholder["reason"], placeholder["detail"]) == ("regression_line_missing", "empty"), placeholder
+
+
+def test_regression_named_test_file_does_not_lift_the_budget_hold() -> None:
+	# Review finding: naming a companion test file must not let a timeout-only plan escape.
+	files = _BUDGET_FILES + ["tests/test_slow.py"]
+	named = _rg(_rg_plan("HEAL_REGRESSION: tests/test_slow.py", files=files, body=_BUDGET_BODY))
+	assert (named["decision"], named["reason"]) == ("hold", "budget_only_plan"), named
+	unnamed = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=files, body=_BUDGET_BODY))
+	assert unnamed["reason"] == "budget_only_plan", unnamed
+	# A named test fix that names what it changes is not budget-only.
+	fixed = _rg(_rg_plan("HEAL_REGRESSION: tests/test_slow.py", files=files, body=_BUDGET_BODY + " Drop `SLOW_FIXTURE_ROUNDS`."))
+	assert fixed["reason"] == "regression_named", fixed
+
+
+def test_regression_budget_only_files_bullets_without_paths_are_plan_text() -> None:
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	workflow_bullet = "- `.github/workflows/ci.yml`"
+	# A knob-only top-level bullet is not a file and its knob counts.
+	knob_only = _rg_plan(line, files=_BUDGET_FILES, body="Make the job slower-tolerant.").replace(
+		workflow_bullet, workflow_bullet + "\n- raise `timeout-minutes` to 120")
+	assert _rg(knob_only)["reason"] == "budget_only_plan"
+	# A sub-bullet naming another identifier is another change.
+	sub = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + "\n  - set `CACHE_KEY_PREFIX` per job")
+	assert _rg(sub)["reason"] == "not_a_regression"
+
+
+def test_regression_unchanged_clause_is_a_mention_only() -> None:
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	same_line = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Set `CACHE_ENABLED` back to true; leave `PHASE_TIMEOUT` unchanged."))
+	assert same_line["reason"] == "not_a_regression", same_line
+	only_unchanged = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Leave `timeout-minutes` unchanged. Cache the setup."))
+	assert only_unchanged["reason"] == "not_a_regression", only_unchanged
+
+
+
+def test_regression_budget_only_review_round_four_shapes() -> None:
+	# Review findings: a raised knob in an "unchanged" clause, a prose Files bullet
+	# without backticks, and a knob on the workflow's own Files bullet must hold.
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	raised = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Raise `PHASE_TIMEOUT` to 90 with no change to the job steps."))
+	assert (raised["decision"], raised["reason"]) == ("hold", "budget_only_plan"), raised
+	workflow_bullet = "- `.github/workflows/ci.yml`"
+	prose = _rg_plan(line, files=_BUDGET_FILES, body="Give the job more time.").replace(
+		workflow_bullet, workflow_bullet + "\n- Raise PHASE_TIMEOUT from 40 to 90")
+	assert _rg(prose)["reason"] == "budget_only_plan"
+	same_bullet = _rg_plan(line, files=_BUDGET_FILES, body="Give the job more time.").replace(
+		workflow_bullet, workflow_bullet + ": raise `timeout-minutes` from 30 to 60")
+	assert _rg(same_bullet)["reason"] == "budget_only_plan"
+	# Another identifier on the workflow's bullet is another change.
+	other = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + ": set `CACHE_KEY_PREFIX` per job")
+	assert _rg(other)["reason"] == "not_a_regression"
+	# A single extensionless file is still a file, not plan text.
+	makefile = _rg(_rg_plan(line, files=_BUDGET_FILES + ["Makefile"], body=_BUDGET_BODY))
+	assert makefile["reason"] == "not_a_regression", makefile
+
+
+def test_regression_budget_only_review_round_five_shapes() -> None:
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	workflow_bullet = "- `.github/workflows/ci.yml`"
+	# A change verb for another identifier in an "unchanged" clause is another change.
+	other = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Set `CACHE_KEY_PREFIX` to v2 with no change to `PHASE_TIMEOUT`."))
+	assert other["reason"] == "not_a_regression", other
+	# An identifier after the "unchanged" phrase is still only a mention.
+	mention = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Raise `PHASE_TIMEOUT` to 90 with no change to `CACHE_KEY_PREFIX`."))
+	assert mention["reason"] == "budget_only_plan", mention
+	# A prose Files bullet with one backticked span is plan text, not a file.
+	prose = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + "\n- Give the `build` job more time")
+	assert _rg(prose)["reason"] == "budget_only_plan"
+	# A companion bullet's description is context: its identifiers do not lift the hold.
+	companion = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + "\n- `tests/test_ci_workflow.py`: assert the job exports `PYTEST_ADDOPTS`")
+	assert _rg(companion)["reason"] == "budget_only_plan"
+
+
+# Step plans name src/app.py so the automation-path gate does not defer them.
+_STEP_FILES = ["src/app.py"]
+_STEP_BODY = "Fix the slow loop in `src/app.py`."
+
+
+def _heal_issue_with_trend(regression: str = "true") -> dict:
+	return dict(_ORDINARY_ISSUE, body=_trend_body(regression))
+
+
+def test_plan_step_regression_without_line_holds() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_heal_issue_with_trend(), _rg_plan(None, files=_STEP_FILES, body=_STEP_BODY), heal_route="true", trend="true")
+	assert run["approvals"] == [], run["stdout"]
+	assert "gate=heal_counterfactual outcome=approve result=PASS reason=pass issue=123" in run["stdout"]
+	assert ("AI_PHASE_GATE_V1 phase=plan gate=heal_regression outcome=hold result=REGRESSION "
+		"reason=regression_line_missing issue=123") in run["stdout"]
+	assert "auto_approve_hold_reason=heal_regression_hold" in run["output"]
+	assert len(run["holds"]) == 1
+	hold = run["holds"][0]
+	assert "<!-- ai:heal-counterfactual-hold:v1 issue=123 plan_comment=555 result=REGRESSION source=plan -->" in hold
+	assert "Regression line: _(none found)_" in hold and "Reason: `regression_line_missing`" in hold
+
+
+def test_plan_step_regression_named_line_approves() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_heal_issue_with_trend(), _rg_plan("HEAL_REGRESSION: src/app.py", files=_STEP_FILES, body=_STEP_BODY), heal_route="true", trend="true")
+	assert "gate=heal_regression outcome=approve result=REGRESSION reason=regression_named issue=123" in run["stdout"]
+	assert len(run["approvals"]) == 1 and run["holds"] == [], run["stdout"]
+
+
+def test_plan_step_regression_budget_only_holds() -> None:
+	if _skip_without_jq():
+		return
+	plan = _rg_plan("HEAL_REGRESSION: not a regression: x", files=_BUDGET_FILES, body=_BUDGET_BODY)
+	run = _run_step(_heal_issue_with_trend(), plan, heal_route="true", trend="true")
+	assert run["approvals"] == [] and len(run["holds"]) == 1, run["stdout"]
+	assert "reason=budget_only_plan issue=123" in run["stdout"]
+	assert "Regression line: `HEAL_REGRESSION: not a regression: x`" in run["holds"][0]
+
+
+def test_plan_step_regression_switch_off_is_unchanged() -> None:
+	if _skip_without_jq():
+		return
+	for trend in (None, "false"):
+		run = _run_step(_heal_issue_with_trend(), _rg_plan(None, files=_STEP_FILES, body=_STEP_BODY), heal_route="true", trend=trend)
+		assert "gate=heal_regression" not in run["stdout"]
+		assert len(run["approvals"]) == 1 and run["holds"] == [], run["stdout"]
+
+
+def test_plan_step_regression_missing_parser_holds() -> None:
+	if _skip_without_jq():
+		return
+	# Gate off for the counterfactual check so the run reaches the regression check.
+	run = _run_step(_heal_issue_with_trend("false"), _rg_plan(None, files=_STEP_FILES, body=_STEP_BODY), heal_route="true", trend="true",
+		copy_parser=False, flag="false")
+	assert "gate=heal_regression outcome=hold result=REGRESSION reason=heal_regression_check_unavailable" in run["stdout"]
+	assert "auto_approve_hold_reason=heal_regression_hold" in run["output"]
+	assert run["approvals"] == []
+
+
+def test_regression_prompt_contract() -> None:
+	for path in (CF_PROMPT, HEAL_PROMPTS[0]):
+		text = path.read_text(encoding="utf-8")
+		for needle in ("HEAL_REGRESSION:", "regression=true", "not a regression", "## Run-time trend", "PHASE_TIMEOUT"):
+			assert needle in text, (path, needle)
+	assert CF_TEMPLATE.read_bytes() == CF_PROMPT.read_bytes()
+	assert HEAL_PROMPTS[1].read_bytes() == HEAL_PROMPTS[0].read_bytes()
+
+
+def test_plan_workflow_regression_wiring() -> None:
+	assert ("WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}"
+		in _step_env("Auto-approve clear plan"))
+	approve = _step_run("Auto-approve clear plan")
+	assert (approve.index("partial_delivery.py heal-counterfactual") < approve.index("partial_delivery.py heal-regression")
+		< approve.index('plan_gate_file="${CODEX_OUTPUT_FILE:-}"'))
+	assert approve.count("auto_approve_hold_reason=heal_regression_hold") == 1
+	assert '"reason":"heal_regression_check_unavailable"' in approve
 
 
 # --- wiring -----------------------------------------------------------------

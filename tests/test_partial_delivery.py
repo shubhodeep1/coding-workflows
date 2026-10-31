@@ -181,6 +181,35 @@ def test_cli_heal_counterfactual_reads_the_reproduce_switch() -> None:
 		assert flag_on["decision"] == "approve_pending_repro", flag_on
 
 
+def test_cli_heal_regression_reads_the_trend_switch() -> None:
+	"""Refs #8434: heal-regression reads WORKFLOW_HEAL_TREND_ENABLED unless --trend-flag is given."""
+	import os
+
+	plan_text = "Plan\n\n## Files likely to change\n- `scripts/a.sh`\n\n## Counterfactual check\n\nHEAL_COUNTERFACTUAL: PASS\n"
+	body_text = "## Run-time trend\n\n- regression=true first_slow_day=2026-10-20 history=complete\n"
+	base_env = {name: value for name, value in os.environ.items() if name != "WORKFLOW_HEAL_TREND_ENABLED"}
+
+	def run(env: dict, *extra: str) -> subprocess.CompletedProcess:
+		return subprocess.run([sys.executable, "-I", "-B", str(HELPER), "heal-regression", "--plan-file", str(plan),
+			"--issue-body-file", str(body), *extra], capture_output=True, text=True, check=False, env=env)
+
+	with tempfile.TemporaryDirectory() as tmp:
+		plan = Path(tmp) / "plan.md"
+		plan.write_text(plan_text, encoding="utf-8")
+		body = Path(tmp) / "body.md"
+		body.write_text(body_text, encoding="utf-8")
+		on = json.loads(run(dict(base_env, WORKFLOW_HEAL_TREND_ENABLED="true")).stdout)
+		assert (on["decision"], on["reason"]) == ("hold", "regression_line_missing"), on
+		unset = json.loads(run(base_env).stdout)
+		assert (unset["gate"], unset["decision"], unset["reason"]) == ("off", "approve", "gate_disabled"), unset
+		overridden = json.loads(run(dict(base_env, WORKFLOW_HEAL_TREND_ENABLED="true"), "--trend-flag", "false").stdout)
+		assert overridden["reason"] == "gate_disabled", overridden
+		flag_on = json.loads(run(base_env, "--trend-flag", "true").stdout)
+		assert flag_on["reason"] == "regression_line_missing", flag_on
+		body.unlink()
+		assert run(base_env, "--trend-flag", "true").returncode == 2
+
+
 def test_plan_prompt_copies_carry_the_same_deferred_scope_rule() -> None:
 	rules = []
 	for relative in ("prompts/mode-plan.txt", "prompts/_templates/mode-plan.txt", "scripts/run_plan_codex.sh"):

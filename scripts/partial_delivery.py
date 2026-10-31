@@ -20,6 +20,7 @@ usage or I/O errors):
   pr-body-status --body-file F --issue N
   remaining-comment --body-file F --issue N --pr P
   heal-counterfactual --plan-file F [--gate-flag V] [--reproduce-flag V]
+  heal-regression --plan-file F --issue-body-file B [--trend-flag V]
 
 ``heal-counterfactual`` (issue #8249) reads the single
 ``HEAL_COUNTERFACTUAL:`` line a workflow-heal plan ends its
@@ -40,6 +41,14 @@ node ids that the heal intake reproduced. With ``WORKFLOW_HEAL_REPRODUCE_ENABLED
 heal editor re-runs the tests before the PR opens. Off or unset (default),
 the plan holds with ``reproduction_disabled``. An empty or invalid id list
 holds as ``reproducible_test_list_invalid``.
+
+``heal-regression`` (P3 steps 6-8, Refs #8434) applies only with
+``WORKFLOW_HEAL_TREND_ENABLED`` (or ``--trend-flag``) exactly ``true`` and an
+issue body whose ``## Run-time trend`` line says ``regression=true``. The plan
+must then carry one ``HEAL_REGRESSION: <file or commit>`` or
+``HEAL_REGRESSION: not a regression: <reason>`` line (else
+``regression_line_missing``), and a plan that only raises a timeout or budget
+in the failing workflow holds as ``budget_only_plan``.
 
 Standard library only; run as ``python3 -I -B``.
 """
@@ -401,6 +410,322 @@ def parse_heal_counterfactual(text: str, gate_flag: str | None = "true", reprodu
 	}
 
 
+# Heal regression gate (P3 steps 6-8 of
+# docs/plans/heal-evidence-reproduction-and-trends-plan.md, Refs #8434).
+# Applies only with WORKFLOW_HEAL_TREND_ENABLED=true and regression=true in the
+# heal issue's "## Run-time trend" machine line (render_trend_section in
+# scripts/workflow_failure_heal.py writes it).
+HEAL_RG_LINE_RE = re.compile(r"^[ ]{0,3}HEAL_REGRESSION:[ \t]*(.*?)[ \t]*$")
+HEAL_RG_NOT_RE = re.compile(r"^not[ \t]+a[ \t]+regression[ \t]*:[ \t]*(.*)$", re.IGNORECASE)
+HEAL_RG_TREND_HEADING_RE = re.compile(r"^[ ]{0,3}(##)[ \t]+run-time[ \t]+trend[ \t]*$", re.IGNORECASE)
+HEAL_RG_TREND_LINE_RE = re.compile(
+	r"^- regression=(true|false) first_slow_day=(\d{4}-\d{2}-\d{2}|none) history=(complete|truncated)$")
+HEAL_RG_CAPTION_RE = re.compile(r"^Workflow `([A-Za-z0-9_.-]{1,100})` on `")
+HEAL_RG_WORKFLOW_FILE_RE = re.compile(r"^[A-Za-z0-9_.-]+\.ya?ml$")
+HEAL_RG_WORKFLOW_PATH_RE = re.compile(r"^(?:\.github/workflows|workflow-templates)/([A-Za-z0-9_.-]+\.ya?ml)$")
+# The plan prompt asks for "## Files likely to change"; deeper or numbered
+# variants ("### 1. Files likely to change") are read too.
+HEAL_RG_FILES_HEADING_RE = re.compile(
+	r"^[ ]{0,3}(#{2,6})[ \t]+(?:\d+[.)][ \t]+)?files[ \t]+likely[ \t]+to[ \t]+change[ \t]*:?[ \t]*$", re.IGNORECASE)
+HEAL_RG_KNOB_RE = re.compile(r"timeout-minutes|\b[A-Z0-9_]*_TIMEOUT[A-Z0-9_]*\b|\bPHASE_TIMEOUT\b|\b[A-Z0-9_]*_BUDGET[A-Z0-9_]*\b")
+HEAL_RG_IDENT_RE = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
+# Gate and switch tokens a plan may name without changing anything.
+HEAL_RG_CONTEXT_TOKENS = ("HEAL_COUNTERFACTUAL", "HEAL_REGRESSION", "PLAN_SELF_CHECK", "WORKFLOW_HEAL_TREND_ENABLED",
+	"WORKFLOW_HEAL_TREND_REGRESSION_RATIO", "HEAL_COUNTERFACTUAL_GATE_ENABLED", "WORKFLOW_HEAL_REPRODUCE_ENABLED")
+HEAL_RG_SKIP_PREFIXES = ("HEAL_REGRESSION:", "HEAL_COUNTERFACTUAL:", "STATUS:", "PLAN_SELF_CHECK:")
+HEAL_RG_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+HEAL_RG_PATH_RE = re.compile(r"^[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*/?$")
+# A file extension starts with a letter, so prose numbers such as 2.5x or v1.2
+# are not read as file names.
+HEAL_RG_EXT_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]*$")
+# Companion paths the heal scope always grants (tests/**, changelog.d/*.md,
+# agents.d/*.md): listing them next to the failing workflow does not make a
+# timeout-only plan any less budget-only.
+HEAL_RG_COMPANION_PATH_RE = re.compile(r"^(?:tests/\S+|changelog\.d/[^/\s]+\.md|agents\.d/[^/\s]+\.md)$")
+# Required plan sections that describe the change rather than make it
+# (prompts/mode-plan.txt items 4a, 4b, 5, 6). Identifiers named there (for
+# example GITHUB_TOKEN in a security note) do not count as another change.
+HEAL_RG_CONTEXT_HEADING_RE = re.compile(
+	r"^[ ]{0,3}(#{1,6})[ \t]+(?:\d+[a-z]?[.)][ \t]+)?(?:decisions|security[ \t]+considerations|risks\b[^\n]*|testing\b[^\n]*)[ \t]*:?[ \t]*$",
+	re.IGNORECASE)
+HEAL_RG_PLACEHOLDER_RE = re.compile(r"^<[^<>]*>$")
+# A clause that says something stays as it is mentions it without changing it,
+# so neither its identifiers nor its knobs count, unless the same clause also
+# raises something (HEAL_RG_RAISE_RE): then its knobs still count.
+HEAL_RG_UNCHANGED_RE = re.compile(
+	r"\b(?:unchanged|untouched|as[- ]is|no[ \t]+change|do(?:es)?[ \t]+not[ \t]+(?:change|modify|touch)|don't[ \t]+(?:change|modify|touch))\b",
+	re.IGNORECASE)
+# The "unchanged" rule applies per clause, so "set X; leave PHASE_TIMEOUT
+# unchanged" still counts X as another change and does not count the knob.
+HEAL_RG_CLAUSE_SPLIT_RE = re.compile(r"[;,.]|\b(?:and|but|while)\b", re.IGNORECASE)
+# A change verb in an "unchanged" clause ("Raise PHASE_TIMEOUT to 90 with no
+# change to the job steps") means its knob is still being raised.
+HEAL_RG_RAISE_RE = re.compile(r"\b(?:raise[sd]?|raising|increase[sd]?|increasing|bump(?:s|ed)?|double[sd]?|extend(?:s|ed)?|lift(?:s|ed)?|set)\b",
+	re.IGNORECASE)
+
+
+def normalize_heal_trend_flag(value: str | None) -> bool:
+	"""Return True only for WORKFLOW_HEAL_TREND_ENABLED=true (any case, trimmed)."""
+	return str(value or "").strip().lower() == "true"
+
+
+def _heal_split_lines(text: str) -> list[str]:
+	return str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
+def _heal_regression_trend(issue_body: str) -> tuple[bool, str | None]:
+	"""Return (regression, failing workflow file) from the issue's trend sections.
+
+	Only unfenced "## Run-time trend" sections count, each up to the next
+	heading of level 1 or 2. Any exact machine line reading regression=true in
+	any such section applies: an injected extra section can only add a hold,
+	and a faked regression=false only restores the behaviour without the gate.
+	The workflow is the first caption of the first section (the failing run's
+	table comes first, see trend_workflow_targets), kept only as a .yml/.yaml
+	file name; a numeric workflow id gives None.
+	"""
+	regression = False
+	workflow: str | None = None
+	caption_seen = False
+	sections_seen = 0
+	in_section = False
+	for line in _unfenced_lines(_heal_split_lines(issue_body)):
+		heading = HEAL_CF_ANY_HEADING_RE.match(line)
+		if heading:
+			if HEAL_RG_TREND_HEADING_RE.match(line):
+				in_section = True
+				sections_seen += 1
+			elif len(heading.group(1)) <= 2:
+				in_section = False
+			continue
+		if not in_section:
+			continue
+		stripped = line.rstrip()
+		match = HEAL_RG_TREND_LINE_RE.match(stripped)
+		if match and match.group(1) == "true":
+			regression = True
+			continue
+		caption = HEAL_RG_CAPTION_RE.match(stripped)
+		if caption and sections_seen == 1 and not caption_seen:
+			caption_seen = True
+			if HEAL_RG_WORKFLOW_FILE_RE.match(caption.group(1)):
+				workflow = caption.group(1)
+	return regression, workflow
+
+
+def _heal_regression_target_ok(token: str) -> bool:
+	if HEAL_RG_SHA_RE.match(token):
+		return True
+	if not HEAL_RG_PATH_RE.match(token) or token.startswith("/") or token.endswith("/") or ".." in token.split("/"):
+		return False
+	return "/" in token or HEAL_RG_EXT_RE.search(token) is not None
+
+
+def _heal_regression_line(lines: list[str]) -> dict:
+	"""Read the plan's single HEAL_REGRESSION line.
+
+	The issue writes the line as ``HEAL_REGRESSION: <file or commit> | not a
+	regression: <reason>``. The ``|`` separates two alternative forms, so the
+	plan carries either ``HEAL_REGRESSION: <file or commit>`` or
+	``HEAL_REGRESSION: not a regression: <reason>``. A value containing ``|``
+	(the template copied literally) is invalid. The named form needs at least
+	one repo-relative path or 7-40 hex commit SHA token. ``detail`` is one of
+	no_line, duplicate_line, empty, invalid_target, named, not_regression.
+	"""
+	found = [match.group(1) for match in (HEAL_RG_LINE_RE.match(line) for line in _unfenced_lines(lines)) if match]
+	outcome = {"form": "", "line": "", "detail": "no_line"}
+	if not found:
+		return outcome
+	outcome["line"] = _heal_counterfactual_display("HEAL_REGRESSION: " + found[0])
+	if len(found) > 1:
+		outcome["detail"] = "duplicate_line"
+		return outcome
+	value = found[0].strip()
+	if not value:
+		outcome["detail"] = "empty"
+		return outcome
+	not_match = HEAL_RG_NOT_RE.match(value)
+	if not_match:
+		reason = not_match.group(1).strip().strip("`").strip()
+		# The template placeholder "<reason>" copied literally (backticked or
+		# not) is no reason.
+		if not reason or HEAL_RG_PLACEHOLDER_RE.match(reason):
+			outcome["detail"] = "empty"
+			return outcome
+		outcome.update(form="not_regression", detail="not_regression")
+		return outcome
+	if "|" in value:
+		outcome["detail"] = "invalid_target"
+		return outcome
+	if value.startswith("`") and value.endswith("`") and len(value) > 2:
+		value = value[1:-1]
+	tokens = [token.strip("`") for token in re.split(r"[\s,]+", value) if token.strip("`")]
+	if not any(_heal_regression_target_ok(token) for token in tokens):
+		outcome["detail"] = "invalid_target"
+		return outcome
+	outcome.update(form="named", detail="named", targets=[token for token in tokens if _heal_regression_target_ok(token)])
+	return outcome
+
+
+def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool:
+	"""True when the plan only raises a timeout or budget in the failing workflow.
+
+	Assumption (the plan contains no code, so this is approximated from what it
+	names): the plan's first "## Files likely to change" section lists only the
+	failing workflow (.github/workflows/<name> or workflow-templates/<name>;
+	without a workflow file name from the trend caption, any one workflow YAML
+	basename), and outside that section the plan names at least one
+	timeout-minutes / *_TIMEOUT* / PHASE_TIMEOUT / *_BUDGET* knob while every
+	UPPER_SNAKE identifier it names is such a knob or a gate/switch token
+	(HEAL_RG_CONTEXT_TOKENS). Prose that describes another change without
+	naming an identifier does not count, so such a plan is held; naming any
+	other identifier makes the plan not budget-only. A human /approved still
+	releases a held plan.
+
+	Two further assumptions keep ordinary plans from escaping the hold:
+	companion bullets the heal scope always grants (tests/**, changelog.d/*.md,
+	agents.d/*.md) are ignored in the Files section, which must still name the
+	failing workflow at least once; and identifiers inside the Decisions,
+	Security considerations, Risks and Testing sections are context, not
+	another change (knobs named there still count).
+
+	A companion path is ignored even when the HEAL_REGRESSION line names it:
+	naming a test file must not let a timeout-only plan escape the hold (a
+	real fix to it names what it changes, or a human /approved releases it).
+	A Files bullet is read by its first path-like token (backticked spans
+	first, then words) and the rest of that bullet is read as plan text; a
+	bullet without one is a file only when it is a single non-knob token
+	(an extensionless name such as Makefile), otherwise it is read as plan
+	text (a companion bullet's description as context). A bullet counts as
+	a single token by its word count, so "- Give the `build` job more time"
+	is plan text. Within a line, a clause that says something stays
+	unchanged is a mention: its identifiers do not count, and its knobs
+	count only when the same clause also raises something (raise, increase,
+	bump, set, ...); then the identifiers before the "unchanged" phrase
+	still count.
+	"""
+	files: list[str] = []
+	other: list[tuple[str, bool]] = []
+	files_level = 0
+	files_done = False
+	context_level = 0
+	for line in _unfenced_lines(lines):
+		heading = HEAL_CF_ANY_HEADING_RE.match(line)
+		if heading:
+			level = len(heading.group(1))
+			files_match = HEAL_RG_FILES_HEADING_RE.match(line)
+			if files_match and not files_done and not files_level:
+				files_level = len(files_match.group(1))
+				context_level = 0
+				continue
+			if files_level and level <= files_level:
+				files_level = 0
+				files_done = True
+			if context_level and level <= context_level:
+				context_level = 0
+			context_match = HEAL_RG_CONTEXT_HEADING_RE.match(line)
+			if context_match and not context_level:
+				context_level = len(context_match.group(1))
+			other.append((line, bool(context_level)))
+			continue
+		if files_level:
+			bullet = BULLET_RE.match(line)
+			if bullet:
+				spans = [span.strip() for span in re.findall(r"`([^`]+)`", bullet.group(1)) if span.strip()]
+				words = [word.strip("`") for word in bullet.group(1).split() if word.strip("`")]
+				pathlike = [token for token in spans + words if "/" in token or HEAL_RG_EXT_RE.search(token)]
+				if pathlike:
+					files.append(pathlike[0])
+					# The rest of the bullet (a knob raised on the same line) is plan text;
+					# a companion bullet's description is context (its knobs still count).
+					other.append((bullet.group(1).replace(pathlike[0], " "),
+						HEAL_RG_COMPANION_PATH_RE.match(pathlike[0]) is not None))
+					continue
+				tokens = spans or words
+				first = (tokens or [""])[0]
+				# Only a single-token bullet ("- Makefile") is an extensionless file;
+				# a prose bullet ("- Raise PHASE_TIMEOUT to 90") is plan text.
+				if (line[:1] not in (" ", "\t") and len(words) == 1 and first
+					and HEAL_RG_KNOB_RE.fullmatch(first) is None):
+					files.append(first)
+					continue
+				# A sub-bullet or knob-only bullet describes the change: scan it.
+				other.append((line, False))
+			continue
+		other.append((line, bool(context_level)))
+	files = [path for path in files if not HEAL_RG_COMPANION_PATH_RE.match(path)]
+	if not files:
+		return False
+	names = []
+	for path in files:
+		match = HEAL_RG_WORKFLOW_PATH_RE.match(path)
+		if match is None:
+			return False
+		names.append(match.group(1))
+	if workflow is not None:
+		if any(name != workflow for name in names):
+			return False
+	elif len(set(names)) != 1:
+		return False
+	knob_seen = False
+	for line, in_context in other:
+		if line.strip().startswith(HEAL_RG_SKIP_PREFIXES):
+			continue
+		for clause in HEAL_RG_CLAUSE_SPLIT_RE.split(line):
+			unchanged = HEAL_RG_UNCHANGED_RE.search(clause)
+			if unchanged:
+				if not HEAL_RG_RAISE_RE.search(clause):
+					continue
+				if HEAL_RG_KNOB_RE.search(clause):
+					knob_seen = True
+				# With a change verb, only the text before the "unchanged" phrase
+				# describes a change: its identifiers still count.
+				clause = clause[:unchanged.start()]
+			if HEAL_RG_KNOB_RE.search(clause):
+				knob_seen = True
+			if in_context:
+				continue
+			for ident in HEAL_RG_IDENT_RE.findall(clause):
+				if ident not in HEAL_RG_CONTEXT_TOKENS and HEAL_RG_KNOB_RE.fullmatch(ident) is None:
+					return False
+	return knob_seen
+
+
+def parse_heal_regression(text: str, issue_body: str, trend_flag: str | None = None) -> dict:
+	"""Decide whether a heal plan passes the run-time regression rule.
+
+	Returns ``{gate, regression, applies, decision, result, reason, detail,
+	line, unmatched_jobs}``. With the switch off the decision is ``approve``
+	(``gate_disabled``); without regression=true it is ``approve``
+	(``no_regression``). Otherwise ``result`` is ``REGRESSION`` and a missing or
+	invalid HEAL_REGRESSION line holds with ``regression_line_missing``; a
+	budget-only plan then holds with ``budget_only_plan``. That second hold is
+	independent of the line ("also hold"): neither ``not a regression:
+	<reason>`` nor a named file or commit lifts it. Otherwise the plan passes
+	with ``regression_named`` or ``not_a_regression``.
+	"""
+	outcome = {"gate": "on", "regression": False, "applies": False, "decision": "approve", "result": "none",
+		"reason": "", "detail": "", "line": "", "unmatched_jobs": []}
+	if not normalize_heal_trend_flag(trend_flag):
+		outcome.update(gate="off", reason="gate_disabled")
+		return outcome
+	regression, workflow = _heal_regression_trend(issue_body)
+	if not regression:
+		outcome["reason"] = "no_regression"
+		return outcome
+	lines = _heal_split_lines(text)
+	line = _heal_regression_line(lines)
+	outcome.update(regression=True, applies=True, result="REGRESSION", detail=line["detail"], line=line["line"])
+	if line["form"] not in ("named", "not_regression"):
+		outcome.update(decision="hold", reason="regression_line_missing")
+		return outcome
+	if _heal_regression_budget_only(lines, workflow):
+		outcome.update(decision="hold", reason="budget_only_plan")
+		return outcome
+	outcome["reason"] = "regression_named" if line["form"] == "named" else "not_a_regression"
+	return outcome
+
+
 def pr_section(items: list[str], issue: int) -> str:
 	lines = ["", marker_line(issue), PR_SECTION_HEADING, ""]
 	lines += [f"- {sanitize_item(item)}" for item in items]
@@ -477,6 +802,11 @@ def build_parser() -> argparse.ArgumentParser:
 	# Optional: plan.yml passes WORKFLOW_HEAL_REPRODUCE_ENABLED through env so
 	# an older parser never sees an unknown argument.
 	counterfactual.add_argument("--reproduce-flag", default=None)
+	regression = sub.add_parser("heal-regression")
+	regression.add_argument("--plan-file", required=True)
+	regression.add_argument("--issue-body-file", required=True)
+	# Optional: falls back to WORKFLOW_HEAL_TREND_ENABLED (default false).
+	regression.add_argument("--trend-flag", default=None)
 	return parser
 
 
@@ -503,6 +833,10 @@ def main(argv: list[str] | None = None) -> int:
 			reproduce_flag = (args.reproduce_flag if args.reproduce_flag is not None
 				else os.environ.get("WORKFLOW_HEAL_REPRODUCE_ENABLED", "false"))
 			print(json.dumps(parse_heal_counterfactual(_read(args.plan_file), args.gate_flag, reproduce_flag)))
+		elif args.command == "heal-regression":
+			trend_flag = (args.trend_flag if args.trend_flag is not None
+				else os.environ.get("WORKFLOW_HEAL_TREND_ENABLED", "false"))
+			print(json.dumps(parse_heal_regression(_read(args.plan_file), _read(args.issue_body_file), trend_flag)))
 	except OSError as exc:
 		print(f"partial_delivery: cannot read input: {exc.__class__.__name__}", file=sys.stderr)
 		return 2
