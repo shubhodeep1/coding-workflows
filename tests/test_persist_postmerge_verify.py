@@ -37,6 +37,7 @@ class FakeGh:
 		self.issues: list = []
 		self.comments: dict[int, list] = {}
 		self.workflow_runs: dict = {"workflow_runs": []}
+		self.targeted_runs: dict | None = None
 		self.compare_status = "ahead"
 		self.jobs: dict[str, dict] = {}
 		self.issue: dict = {"labels": []}
@@ -56,6 +57,8 @@ class FakeGh:
 			number = int(endpoint.split("/issues/")[1].split("/")[0])
 			return json.dumps(self.comments.get(number, [])).encode()
 		if "/actions/workflows/" in endpoint:
+			if "&head_sha=" in endpoint and self.targeted_runs is not None:
+				return json.dumps(self.targeted_runs).encode()
 			return json.dumps(self.workflow_runs).encode()
 		if "/compare/" in endpoint:
 			return json.dumps({"status": self.compare_status}).encode()
@@ -400,8 +403,22 @@ def test_check_truncated_runs_page_after_window_ends_unverified(fake, monkeypatc
 	assert writes[0] == [f"repos/{REPO}/issues/12/labels/ai%3Averify-pending", "-X", "DELETE"]
 	body = writes[1][writes[1].index("-f") + 1][len("body="):]
 	assert body.startswith(ppv.HEADER_UNVERIFIED)
+	assert "not among the newest 100 runs read" in body and "no run of" not in body
 	err = capsys.readouterr().err
-	assert "outcome=unverified reason=window_passed issue=12" in err and "runs_truncated" not in err
+	assert "outcome=unverified reason=runs_truncated issue=12" in err and "window_passed" not in err
+
+
+def test_check_truncated_runs_page_reads_the_merge_commit_run_directly(fake, monkeypatch, tmp_path, capsys):
+	_armed(fake, marker=dict(MARKER, job=None))
+	fake.workflow_runs = {"total_count": 150, "workflow_runs": [
+		_run(516, "success", head_sha="5" * 40, created="2026-10-20T12:00:00Z")]}
+	fake.targeted_runs = {"total_count": 1, "workflow_runs": [_run(517, "failure")]}
+	out = _check(fake, monkeypatch, tmp_path, now_hours=25, runs_cache={"workflow_runs": []})
+	assert out["replan"] == [12]
+	queries = [e for e in fake.endpoints() if "/actions/workflows/" in e]
+	assert len(queries) == 2 and queries[1].endswith(f"&head_sha={MERGE_SHA}&per_page=100")
+	assert not any("/compare/" in e for e in fake.endpoints())
+	assert "outcome=recurred reason=replan issue=12" in capsys.readouterr().err
 
 
 def test_check_freshly_labelled_issue_without_marker_is_left_alone(fake, monkeypatch, tmp_path, capsys):

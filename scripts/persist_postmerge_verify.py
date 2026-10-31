@@ -54,7 +54,8 @@ writes (label with one retry, comment, journal). `check` makes 1 list read per
 tick plus, per candidate (at most MAX_PER_TICK), 1 comments read, 1
 workflow-runs read (unless the poller's per-tick runs cache, which keeps only
 the 20 newest completed runs repo-wide, holds the run on the merge commit), 1
-compare read (only when the run's
+more runs read with head_sha=<merge sha> (only when that page is cut off and
+holds no merge-commit run), 1 compare read (only when the run's
 head is not the merge commit), 1 jobs read (only for a named job) and at most
 4 writes. Audited existing calls: the poller holds no comments of closed
 issues and no per-workflow run history, so these reads are the minimum.
@@ -391,11 +392,12 @@ def failed_comment(marker: dict, run: dict, failing_job: str, next_step: str) ->
 	])
 
 
-def unverified_comment(marker: dict, window_h: int) -> str:
+def unverified_comment(marker: dict, window_h: int, truncated: bool = False) -> str:
+	why = (f"the first run of `{marker['workflow']}` containing the merge was not among the newest 100 runs read "
+		f"within {window_h} h" if truncated else f"no run of `{marker['workflow']}` within {window_h} h")
 	return "\n".join([
 		HEADER_UNVERIFIED, "",
-		f"The check after merge for PR #{marker['pr']} is unverified (no run of `{marker['workflow']}` "
-		f"within {window_h} h).", "",
+		f"The check after merge for PR #{marker['pr']} is unverified ({why}).", "",
 		marker_line(dict(marker, state="unverified")), "",
 	])
 
@@ -644,6 +646,7 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 		else:
 			log("error", "label_write", number)
 		return False
+	truncated = False
 	run = select_run(runs_cache, marker)
 	# The per-tick cache keeps only the 20 newest completed runs repo-wide, so
 	# a cached run on a later commit may hide an evicted run on the merge
@@ -663,14 +666,30 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 		# first run containing the merge may be missing, so never grade a later
 		# run in its place. total_count only grows, so once the window has
 		# passed grade nothing and let decide() end the check in unverified.
-		if (fresh is None or fresh["head_sha"] != marker["merge_sha"]) and isinstance(page, list) \
-				and isinstance(total, int) and not isinstance(total, bool) and total > len(page):
+		cut_off = (fresh is None or fresh["head_sha"] != marker["merge_sha"]) and isinstance(page, list) \
+			and isinstance(total, int) and not isinstance(total, bool) and total > len(page)
+		if cut_off:
+			# Runs come newest first, so the merge-commit run is the one most
+			# likely cut off: ask for it directly before giving up.
+			targeted = _gh_json([
+				f"repos/{repo}/actions/workflows/{basename}/runs?branch={quote(marker['branch'], safe='')}"
+				f"&status=completed&created={quote('>=' + marker['merged_at'], safe='')}"
+				f"&head_sha={marker['merge_sha']}&per_page=100"])
+			if not isinstance(targeted, dict):
+				log("error", "gh_read", number)
+				return False
+			hit = select_run(targeted, marker)
+			if hit is not None and hit["head_sha"] == marker["merge_sha"]:
+				fresh = hit
+				cut_off = False
+		if cut_off:
 			merged = parse_ts(marker.get("merged_at"))
 			if merged is not None and now < merged + timedelta(hours=window_h):
 				log("pending", "runs_truncated", number)
 				return False
 			fresh = None
 			run = None
+			truncated = True
 		run = fresh or run
 	contained = False
 	if run is not None:
@@ -705,10 +724,11 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 		if not _remove_label(repo, number):
 			log("error", "label_write", number)
 			return False
-		if not _post_comment(repo, number, unverified_comment(marker, window_h)):
+		if not _post_comment(repo, number, unverified_comment(marker, window_h, truncated)):
 			log("error", "comment_write", number)
-		_journal(repo, number, "unverified", comments, login, f"check after merge unverified after {window_h} h")
-		log("unverified", "window_passed", number)
+		note = "runs page cut off" if truncated else "no run"
+		_journal(repo, number, "unverified", comments, login, f"check after merge unverified after {window_h} h ({note})")
+		log("unverified", "runs_truncated" if truncated else "window_passed", number)
 		return False
 	# recurred
 	budget_owner = _budget_owner(number)
