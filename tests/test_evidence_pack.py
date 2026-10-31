@@ -359,7 +359,7 @@ def test_missing_retry_helper_skips_calls_and_logs_once(world, tmp_path):
 	assert "first change to a" in text
 
 
-def test_api_reads_are_bounded_to_two_attempts(monkeypatch):
+def test_api_reads_are_bounded_to_one_attempt(monkeypatch):
 	seen = []
 
 	class _Result:
@@ -371,7 +371,7 @@ def test_api_reads_are_bounded_to_two_attempts(monkeypatch):
 	monkeypatch.setattr(gh_api_retry, "call", lambda args, **kw: seen.append(kw) or _Result())
 	builder = ep.Builder()
 	assert builder.gh(["repos/o/r/pulls"]) is None
-	assert seen == [{"idempotent": False, "optional": True, "max_attempts": 2}] and builder.calls == 1
+	assert seen == [{"idempotent": False, "optional": True, "max_attempts": 1}] and builder.calls == 1
 
 
 def test_collect_paths_uses_last_files_section_of_plan(world):

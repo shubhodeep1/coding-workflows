@@ -92,9 +92,9 @@ PR_PAGE = 50
 GRAPHQL_BATCH = 25
 GRAPHQL_MAX_QUERIES = 2
 RUNS_PAGE = 10
-# Advisory reads: at most 2 attempts each, so retries and rate-limit waits
-# cannot stall the stage before the model runs.
-GH_MAX_ATTEMPTS = 2
+# Advisory reads: one attempt each, so a build sends at most 4 requests and a
+# retry backoff or rate-limit wait never stalls the stage before the model runs.
+GH_MAX_ATTEMPTS = 1
 FREE_TEXT_CANDIDATES_MAX = 200
 FETCH_TIMEOUT_SECS = 60
 HISTORY_REF = "refs/persist/history"
