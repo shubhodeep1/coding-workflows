@@ -45,15 +45,16 @@ CLI (always exits 0):
 	check --repo R --out F [--runs-file F] [--trusted-login L]
 
 Log lines (stderr, tokens only):
-	PERSIST postmerge outcome=<armed|ok|held|pending|recurred|unverified|cleaned|skipped|error> reason=<token> [issue=<n>]
+	PERSIST postmerge outcome=<armed|ok|held|pending|recurred|unverified|cleaned|skipped|deferred|error> reason=<token> [issue=<n>]
 
 API budget (section 14): `arm` makes at most 1 identity read (cached by
 attempt_journal.resolve_login), 1 issue read (only with
-WORKFLOW_HEAL_VERIFY_ENABLED=true), 1 paginated comments read and 3 writes
-(comment, label, journal). `check` makes 1 list read per tick plus, per
-candidate (at most MAX_PER_TICK), 1 comments read, 1 workflow-runs read (only
-when the poller's per-tick runs cache, which keeps only the 20 newest
-completed runs repo-wide, has no match), 1 compare read (only when the run's
+WORKFLOW_HEAL_VERIFY_ENABLED=true), 1 paginated comments read and at most 4
+writes (label with one retry, comment, journal). `check` makes 1 list read per
+tick plus, per candidate (at most MAX_PER_TICK), 1 comments read, 1
+workflow-runs read (unless the poller's per-tick runs cache, which keeps only
+the 20 newest completed runs repo-wide, holds the run on the merge commit), 1
+compare read (only when the run's
 head is not the merge commit), 1 jobs read (only for a named job) and at most
 4 writes. Audited existing calls: the poller holds no comments of closed
 issues and no per-workflow run history, so these reads are the minimum.
@@ -103,6 +104,7 @@ PHASE_LABELS = (
 IGNORED_CONCLUSIONS = ("cancelled", "skipped", "neutral", "stale", "action_required")
 FAIL_CONCLUSIONS = ("failure", "timed_out", "startup_failure")
 JOB_MAX = 100
+MARKER_SETTLE_MINUTES = 10
 
 MARKER_LINE_RE = re.compile(r"^<!-- " + MARKER + r" (\{.*\}) -->$")
 WORKFLOW_PATH_RE = re.compile(r"^\.github/workflows/[A-Za-z0-9._-]+\.ya?ml$")
@@ -631,6 +633,12 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 	markers = parse_markers(comments, login)
 	marker = active_marker(markers)
 	if marker is None:
+		# arm adds the label before it posts the marker: leave a freshly
+		# labelled issue alone so a tick between the two writes cannot drop it.
+		updated = parse_ts(item.get("updated_at"))
+		if updated is not None and now - updated < timedelta(minutes=MARKER_SETTLE_MINUTES):
+			log("pending", "marker_settling", number)
+			return False
 		if _remove_label(repo, number):
 			log("skipped", "marker_absent", number)
 		else:
@@ -648,7 +656,17 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 		if not isinstance(data, dict):
 			log("error", "gh_read", number)
 			return False
-		run = select_run(data, marker) or run
+		fresh = select_run(data, marker)
+		page = data.get("workflow_runs")
+		total = data.get("total_count")
+		# One page only: when it is cut off and holds no merge-commit run, the
+		# first run containing the merge may be missing, so never grade a later
+		# run in its place (the window then ends in unverified).
+		if (fresh is None or fresh["head_sha"] != marker["merge_sha"]) and isinstance(page, list) \
+				and isinstance(total, int) and not isinstance(total, bool) and total > len(page):
+			log("pending", "runs_truncated", number)
+			return False
+		run = fresh or run
 	contained = False
 	if run is not None:
 		if run["head_sha"] == marker["merge_sha"]:
@@ -693,7 +711,9 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 	escalate = not budget_owner and count >= max_approaches()
 	target = NEEDS_HUMAN_LABEL if escalate else PLANNING_LABEL
 	patch = [f"repos/{repo}/issues/{number}", "-X", "PATCH", "-f", "state=open"]
-	for label in labels_after_reopen(labels, target):
+	# Keep ai:verify-pending until the recurred marker is posted: if the comment
+	# fails, the next tick grades the issue again and retries it.
+	for label in labels_after_reopen(labels, target) + [LABEL]:
 		patch += ["-f", f"labels[]={label}"]
 	if _gh(patch) is None:
 		log("error", "reopen_write", number)
@@ -706,10 +726,13 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 		next_step = f"the issue is reopened in `{PLANNING_LABEL}` and the plan is re-generated."
 	if not _post_comment(repo, number, failed_comment(marker, run, failing_job, next_step)):
 		# replan_count() counts trusted recurred markers; re-planning without one
-		# would let the PERSIST_MAX_APPROACHES cap be exceeded. The issue is open
-		# in its target phase, where standalone stall recovery picks it up.
+		# would let the PERSIST_MAX_APPROACHES cap be exceeded. The label stays,
+		# so the next tick grades the issue again and retries the comment.
 		log("error", "comment_write", number)
 		return False
+	if not _remove_label(repo, number):
+		# The next tick finds the recurred marker and removes it (marker_absent).
+		log("error", "label_write", number)
 	step = failing_job or marker.get("job") or "run"
 	text = f"::error::post-merge {marker['workflow']} {step} concluded {_token(run.get('conclusion'))}\n"
 	_journal(repo, number, "fail", comments, login, f"check after merge failed: run {run['id']}",

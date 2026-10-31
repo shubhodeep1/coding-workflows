@@ -322,13 +322,14 @@ def test_check_recurred_from_failed_job_reopens_in_planning(fake, monkeypatch, t
 	patch = fake.writes()[0]
 	assert patch[:5] == [f"repos/{REPO}/issues/12", "-X", "PATCH", "-f", "state=open"]
 	labels = [a[len("labels[]="):] for a in patch if a.startswith("labels[]=")]
-	assert labels == ["bug", "ai:planning"]
+	assert labels == ["bug", "ai:planning", "ai:verify-pending"]
 	comment = fake.writes()[1]
 	body = comment[comment.index("-f") + 1][len("body="):]
 	assert body.startswith(ppv.HEADER_FAILED + "\n") and "actions/runs/502" in body and "release-gate" in body
 	assert ppv.marker_line(dict(MARKER, state="recurred")) in body.split("\n")
-	# list + comments + workflow runs + compare + jobs + 2 writes; within 1 + 8 x MAX_PER_TICK.
-	assert len(fake.calls) == 7 and len(fake.calls) <= 1 + 8 * 3
+	assert fake.writes()[2] == [f"repos/{REPO}/issues/12/labels/ai%3Averify-pending", "-X", "DELETE"]
+	# list + comments + workflow runs + compare + jobs + 3 writes; within 1 + 8 x MAX_PER_TICK.
+	assert len(fake.calls) == 8 and len(fake.calls) <= 1 + 8 * 3
 	queries = [e for e in fake.endpoints() if "/actions/workflows/" in e]
 	assert queries == [f"repos/{REPO}/actions/workflows/release-gate.yml/runs?branch=main&status=completed"
 		f"&created=%3E%3D2026-10-20T10%3A00%3A00Z&per_page=100"]
@@ -360,6 +361,40 @@ def test_check_failed_recurred_comment_does_not_replan(fake, monkeypatch, tmp_pa
 	out = _check(fake, monkeypatch, tmp_path, runs_cache={"workflow_runs": [_run(511, "failure")]})
 	assert out["replan"] == []
 	assert "outcome=error reason=comment_write issue=12" in capsys.readouterr().err
+
+
+def test_check_failed_recurred_comment_keeps_label_for_retry(fake, monkeypatch, tmp_path):
+	_armed(fake, marker=dict(MARKER, job=None))
+
+	def patched(args):
+		if args[0].endswith("/comments") and "POST" in args:
+			fake.calls.append(list(args))
+			return None
+		return FakeGh.__call__(fake, args)
+
+	monkeypatch.setattr(ppv, "_gh", patched)
+	_check(fake, monkeypatch, tmp_path, runs_cache={"workflow_runs": [_run(513, "failure")]})
+	patch = fake.writes()[0]
+	assert "labels[]=ai:verify-pending" in patch
+	assert [w[2] for w in fake.writes()] == ["PATCH", "POST"]
+
+
+def test_check_truncated_runs_page_waits_instead_of_grading_a_later_run(fake, monkeypatch, tmp_path, capsys):
+	_armed(fake, marker=dict(MARKER, job=None))
+	fake.workflow_runs = {"total_count": 150, "workflow_runs": [
+		_run(514, "success", head_sha="5" * 40, created="2026-10-20T12:00:00Z")]}
+	out = _check(fake, monkeypatch, tmp_path, runs_cache={"workflow_runs": []})
+	assert out["replan"] == [] and fake.writes() == []
+	assert not any("/compare/" in e for e in fake.endpoints())
+	assert "outcome=pending reason=runs_truncated issue=12" in capsys.readouterr().err
+
+
+def test_check_freshly_labelled_issue_without_marker_is_left_alone(fake, monkeypatch, tmp_path, capsys):
+	fake.issues = [_candidate(updated_at="2026-10-20T10:55:00Z")]
+	fake.comments[12] = []
+	_check(fake, monkeypatch, tmp_path)
+	assert fake.writes() == []
+	assert "outcome=pending reason=marker_settling issue=12" in capsys.readouterr().err
 
 
 def test_rotate_window_spreads_the_cap_across_ticks():
@@ -432,7 +467,7 @@ def test_check_cap_reached_escalates_without_replan(fake, monkeypatch, tmp_path,
 	out = _check(fake, monkeypatch, tmp_path, runs_cache={"workflow_runs": [_run(506, "failure")]})
 	assert out["replan"] == []
 	labels = [a[len("labels[]="):] for a in fake.writes()[0] if a.startswith("labels[]=")]
-	assert labels == ["bug", "ai:needs-human"]
+	assert labels == ["bug", "ai:needs-human", "ai:verify-pending"]
 	assert "outcome=recurred reason=escalated issue=12" in capsys.readouterr().err
 
 
