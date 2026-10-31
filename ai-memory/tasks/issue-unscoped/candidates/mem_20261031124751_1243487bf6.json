@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/docs/s21-merged-pr-commit-guard.md:232-242 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: \u00a721.F step 3 pushes the literal `git push -u origin <branch>-resend` even though step 1 may have picked a suffixed name such as `<branch>-resend-2`.\n  WHY: The push either fails because the unsuffixed local branch is absent, or it pushes a stale existing branch and leaves the new work unpublished. Reviewers rated it MAJOR; MAJOR is mapped to high.\n- CLAUDE.md:892-901 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The short-form \u00a721.F step 3 has the same defect: it pushes `<branch>-resend` and ignores the suffix chosen in step 1.\n  WHY: Following the steps literally pushes the wrong branch after the suffixed branch is created. Reviewers rated it MAJOR; MAJOR is mapped to high.\n- workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md:232-242 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The template copy of \u00a721.F step 3 has the same defect: it pushes the unsuffixed `<branch>-resend`.\n  WHY: Consumer repos receiving this doc inherit the same push-the-wrong-branch failure. Reviewers rated it MAJOR; MAJOR is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement a fallback to a suffixed branch when the force-push after a merged-PR reset is refused, ensuring the push uses the correct, suffixed branch name.\n  expected_change_site: CLAUDE.md, .claude/docs/s21-merged-pr-commit-guard.md, workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md (Step 3 in \u00a721.F)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The documented push command in all three files still hardcodes `<branch>-resend` instead of referencing the suffix picked in step 1.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CLAUDE.md:Step 3, \u00a721.F | severity=MAJOR | confidence=4\n  PROBLEM: The documented push command `git push -u origin <branch>-resend` hardcodes the base branch name and ignores the suffix determined in step 1.\n  WHY: Step 3 would push a nonexistent or stale branch instead of the suffixed branch holding the work.\n- .claude/docs/s21-merged-pr-commit-guard.md:Step 3, \u00a721.F | severity=MAJOR | confidence=4\n  PROBLEM: Same hardcoded `<branch>-resend` push command in step 3.\n  WHY: Same failure: the push targets the wrong branch.\n- workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md:Step 3, \u00a721.F | severity=MAJOR | confidence=4\n  PROBLEM: Same hardcoded `<branch>-resend` push command in step 3.\n  WHY: Same failure: the push targets the wrong branch.\n- TASK_GAP:\n  Requirement: Implement a fallback to a suffixed branch when the force-push after a merged-PR reset is refused, ensuring the push uses the correct, suffixed branch name.\n  Expected change site: CLAUDE.md, .claude/docs/s21-merged-pr-commit-guard.md, workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md (Step 3 in \u00a721.F)\n  Evidence of absence: The documented push command in all three files continues to hardcode the base branch name (`<branch>-resend`) instead of referencing the suffix picked in step 1.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/docs/s21-merged-pr-commit-guard.md:232-242 (specifically line 240) | severity=MAJOR | confidence=4\n  PROBLEM: Step 1 may pick a suffixed name, and step 2 carries it with the parenthetical \"(with the suffix picked in step 1)\". Step 3's push command is the literal `git push -u origin <branch>-resend`.\n  WHY: Step 2 creates `feature-x-resend-2`, but step 3 pushes `feature-x-resend`, which either fails or pushes the old base branch.\n- CLAUDE.md:892-901 (specifically line 898) | severity=MAJOR | confidence=4\n  PROBLEM: Same defect in the short-form copy.\n  WHY: A session following the short form pushes the unsuffixed branch after creating the suffixed one.\n- workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md:232-242 (specifically line 240) | severity=MAJOR | confidence=4\n  PROBLEM: Byte-identical to the long-form copy, with the same literal push command in step 3.\n  WHY: Consumer repos receiving this doc via the next `@stable` sync inherit the same mismatch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/docs/s21-merged-pr-commit-guard.md:232-240; CLAUDE.md:892-899; workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md:232-240 | severity=MAJOR | confidence=5\n  PROBLEM: The push target in step 3 does not use the branch name selected in step 1.\n  WHY: When the unsuffixed name is occupied, step 2 creates the suffixed branch but step 3 pushes the unsuffixed one. The push fails or pushes an existing branch, leaving the new work unpublished.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/docs/s21-merged-pr-commit-guard.md:240 (also workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md:240 and CLAUDE.md:898) | severity=MAJOR | confidence=4\n  PROBLEM: Step 1 allows a suffixed name (lines 236-237) and step 2 carries \"(with the suffix picked in step 1)\" (line 239), but step 3's literal push command names only `<branch>-resend`.\n  WHY: The pushed ref is the wrong branch in the fallback scenario, so the new work never reaches GitHub.\n- HARDENING_SUGGESTION: .claude/docs/s21-merged-pr-commit-guard.md (and the workflow-templates copy and the CLAUDE.md short form), \u00a721.F step 1, lines 232-237\n  issue: Step 1 treats any non-printing `git ls-remote --heads origin <name>` as \"name is free\", including a non-zero exit from a network or auth failure.\n  suggested minimal fix: Add one sentence per copy: \"If `git ls-remote` exits non-zero, the check is inconclusive \u2014 retry it or report before creating the branch.\"\n  estimated lines changed: 3\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "84d38f30645efb6442e94ba011c28dbb092124c37624ea620ec65c8b0a3e2f30",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8534,
+    "run_id": "41201885129",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41201885129",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031124751_1243487bf6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8534,
+    "run_id": "41201885129"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T12:47:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
