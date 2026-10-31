@@ -1285,6 +1285,10 @@ if method == "PATCH":
 	if os.environ.get("FAKE_GH_FAIL_CLOSE") and f.get("state") == "closed":
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	# #8530: fail only the PATCH that marks a wait comment done.
+	if os.environ.get("FAKE_GH_FAIL_WAIT_DONE") and "/issues/comments/" in endpoint and " done -->" in f.get("body", ""):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	state["patched"].append([endpoint, f])
 	done("{}")
 if method == "POST" and endpoint.endswith("/issues"):
@@ -1332,6 +1336,14 @@ if endpoint.endswith("/comments?per_page=100"):
 			if os.environ.get("FAKE_GH_ITEM_COMMENTS_RECHECK"):
 				done(os.environ["FAKE_GH_ITEM_COMMENTS_RECHECK"])
 	done(json.dumps(state["item_comments"]))
+# #8530: a merged fix-up's changed files; --jq is not applied, so the fake prints the filenames.
+if method == "GET" and endpoint.startswith("repos/o/r/pulls/") and endpoint.endswith("/files"):
+	state.setdefault("pr_file_lookups", []).append(endpoint)
+	if os.environ.get("FAKE_GH_FAIL_PR_FILES"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	files = json.loads(os.environ.get("FAKE_GH_PR_FILES", "{}")).get(endpoint.split("/")[4], [])
+	done("\n".join(files))
 owner_pr = json.loads(os.environ.get("FAKE_GH_OWNER_PR", "null"))
 if owner_pr is not None and endpoint == "repos/o/r/pulls/" + str(owner_pr.get("number")):
 	if os.environ.get("FAKE_GH_FAIL_OWNER_PR"):
@@ -5093,3 +5105,218 @@ def test_nothing_to_implement_close_failure_keeps_the_wait_and_posts_the_marker_
 	assert "fixup=50 op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
 	assert not any(comment["body"].endswith(NOTHING_TO_IMPLEMENT_MARKER) for comment in state["comments"])
 	assert _closed_completed(state)
+
+
+# #8530: a heal issue whose fix-up merged into the default branch and changed
+# every file the issue lists under Affected files is closed as completed when
+# the issue targets another branch; `/answer` would re-plan the same change on
+# a target branch that does not have the fix yet (#8481 after #8484 / #8486).
+FIXUP_DELIVERED_BODY = (
+	"## Summary\nThe OIDC token read fails on a transient error.\n\n"
+	"- **Source:** o/r run 1\n"
+	"- **Target branch:** `stable`\n\n"
+	"## Affected files\n"
+	"- o/r: `scripts/claude_pool_token.sh`\n"
+	"- o/r: `tests/test_claude_pool_token.py`\n\n"
+	"## Fixed by\nnone\n"
+)
+FIXUP_DELIVERED_HEAL_ITEM = {
+	"number": 7, "state": "open", "title": "Heal: OIDC retry", "body": FIXUP_DELIVERED_BODY, "user": {"login": BOT},
+	"labels": [{"name": "ai:workflow-heal"}, {"name": "ai:blocked"}],
+}
+FIXUP_DELIVERED_PR = {
+	"number": 60, "merged_at": "2026-10-04T11:30:00Z", "head": {"ref": "ai/issue-50", "repo": {"full_name": "o/r"}},
+	"base": {"ref": "main", "repo": {"default_branch": "main"}}, "merge_commit_sha": "c" * 40,
+}
+FIXUP_DELIVERED_MARKER = "<!-- ai:unblock-fixup-delivered:v1 item=7 fixup=50 pr=60 -->"
+FIXUP_DELIVERED_FILES = ["scripts/claude_pool_token.sh", "tests/test_claude_pool_token.py", "changelog.d/x.md"]
+
+
+def _fixup_delivered_wait(extra: list | None = None) -> list:
+	wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", BOT, "2026-10-04T11:00:00Z")
+	wait["id"] = 123
+	return [*(extra or []), wait]
+
+
+def _fixup_delivered_env(pr: dict | None = None, files: list | None = None) -> dict:
+	return {
+		"FAKE_GH_MERGED_PULLS": json.dumps({"o:ai/issue-50": pr or FIXUP_DELIVERED_PR}),
+		"FAKE_GH_PR_FILES": json.dumps({"60": FIXUP_DELIVERED_FILES if files is None else files}),
+	}
+
+
+def test_merged_fixup_that_delivered_a_heal_fix_closes_the_issue_instead_of_resuming(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, FIXUP_DELIVERED_HEAL_ITEM, comments=_fixup_delivered_wait(), issues=MERGED_FIXUP, **_fixup_delivered_env())
+	assert "fixup=50 op=fixup_delivered outcome=closed pr=60" in result.stdout, result.stdout + result.stderr
+	assert "fixup=50 outcome=followup" not in result.stdout
+	assert not any(comment["body"].startswith("/answer") for comment in state["comments"])
+	body = state["comments"][-1]["body"]
+	assert body.endswith(FIXUP_DELIVERED_MARKER)
+	assert "fix-up #50 (pull request #60, merged into `main` as `" + "c" * 40 + "`)" in body
+	assert "This issue targets `stable`" in body and "/reclarify" in body
+	assert state["labels_added"] == [["repos/o/r/issues/7/labels", "ai:closed"]]
+	assert _closed_completed(state)
+	assert state["patched"][-1][0] == "repos/o/r/issues/comments/123"
+	assert state["patched"][-1][1]["body"].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+	assert "it already carried this item's fix" in state["patched"][-1][1]["body"]
+	# Two reads: the merged fix-up PR, then its files.
+	assert state["pull_lookups"] == ["o:ai/issue-50"]
+	assert state["pr_file_lookups"] == ["repos/o/r/pulls/60/files"]
+
+
+@pytest.mark.parametrize("case,reason", [
+	("disabled", "disabled"),
+	("disabled_spaced", "disabled"),
+	("target_is_default", "target_is_default"),
+	("no_target_branch", "no_target_branch"),
+	("two_target_branches", "no_target_branch"),
+	("not_heal", "not_heal"),
+	("untrusted_body", "untrusted_body"),
+	("no_affected_files", "no_affected_files"),
+	("other_repo_files", "other_repo_files"),
+	("unparsed_line", "affected_files_unparsed"),
+	("files_not_covered", "files_not_covered"),
+	("no_merged_pr", "no_merged_pr"),
+	("pr_not_on_default", "pr_not_on_default"),
+	("pr_other_head_repo", "no_merged_pr"),
+	("noop_fixup", "not_applicable"),
+	("tracking_issue", "not_applicable"),
+	("pr_files_unavailable", "pr_files_unavailable"),
+])
+def test_fixup_delivered_close_keeps_the_resume_otherwise(tmp_path: Path, case: str, reason: str) -> None:
+	item = json.loads(json.dumps(FIXUP_DELIVERED_HEAL_ITEM))
+	issues, env = MERGED_FIXUP, _fixup_delivered_env()
+	if case == "disabled":
+		env["UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED"] = "false"
+	elif case == "disabled_spaced":
+		env["UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED"] = " FALSE "
+	elif case == "target_is_default":
+		item["body"] = FIXUP_DELIVERED_BODY.replace("`stable`", "`main`")
+	elif case == "no_target_branch":
+		item["body"] = FIXUP_DELIVERED_BODY.replace("- **Target branch:** `stable`\n", "")
+	elif case == "two_target_branches":
+		item["body"] = FIXUP_DELIVERED_BODY.replace("- **Target branch:** `stable`\n", "- **Target branch:** `stable`\n- **Target branch:** `release`\n")
+	elif case == "not_heal":
+		item["labels"] = [{"name": "ai:blocked"}]
+	elif case == "untrusted_body":
+		item["user"] = {"login": "mallory"}
+	elif case == "no_affected_files":
+		item["body"] = FIXUP_DELIVERED_BODY.replace("## Affected files\n", "## Notes\n")
+	elif case == "other_repo_files":
+		item["body"] = FIXUP_DELIVERED_BODY.replace("- o/r: `tests/", "- other/repo: `tests/")
+	elif case == "unparsed_line":
+		item["body"] = FIXUP_DELIVERED_BODY.replace("## Fixed by", "- and probably the workflow too\n\n## Fixed by")
+	elif case == "files_not_covered":
+		env = _fixup_delivered_env(files=["scripts/claude_pool_token.sh"])
+	elif case == "no_merged_pr":
+		env.pop("FAKE_GH_MERGED_PULLS")
+	elif case == "pr_not_on_default":
+		env = _fixup_delivered_env(pr=dict(FIXUP_DELIVERED_PR, base={"ref": "release", "repo": {"default_branch": "main"}}))
+	elif case == "pr_other_head_repo":
+		env = _fixup_delivered_env(pr=dict(FIXUP_DELIVERED_PR, head={"ref": "ai/issue-50", "repo": {"full_name": "o/other"}}))
+	elif case == "noop_fixup":
+		issues = NOOP_CLOSED_FIXUP
+		env["FAKE_GH_FIXUP_COMMENTS"] = json.dumps([_comment("Already implemented.\n\n" + NOOP_MARKER, BOT)])
+	elif case == "tracking_issue":
+		item["body"] = FIXUP_DELIVERED_BODY + "\n- Tracking issue: #40\n"
+		item["labels"] = item["labels"] + [{"name": "ai:orchestrator-managed"}]
+		env["FAKE_GH_PROJECT_COMMENTS"] = _project_comments_for_item(7)
+	else:
+		env["FAKE_GH_FAIL_PR_FILES"] = "1"
+	result, state = _judge(tmp_path, item, comments=_fixup_delivered_wait(), issues=issues, **env)
+	assert f"op=fixup_delivered outcome=resume reason={reason}" in result.stdout, result.stdout + result.stderr
+	assert "fixup=50 outcome=followup" in result.stdout, result.stdout + result.stderr
+	assert any(comment["body"].startswith("/answer") for comment in state["comments"]), state["comments"]
+	assert not _closed_completed(state)
+	assert not any(comment["body"].endswith(FIXUP_DELIVERED_MARKER) for comment in state["comments"])
+	# Local checks fail before any read.
+	if reason in ("disabled", "not_applicable", "not_heal", "untrusted_body", "no_target_branch",
+			"no_affected_files", "other_repo_files", "affected_files_unparsed"):
+		assert "pull_lookups" not in state
+
+
+def test_fixup_delivered_close_failure_keeps_the_wait_and_posts_the_marker_once(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, FIXUP_DELIVERED_HEAL_ITEM, comments=_fixup_delivered_wait(), issues=MERGED_FIXUP,
+		FAKE_GH_FAIL_CLOSE="1", **_fixup_delivered_env())
+	assert "fixup=50 op=fixup_delivered outcome=skip reason=close_failed pr=60" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].startswith("/answer") for comment in state["comments"])
+	assert not any("ai:unblock-wait:v1 item=7 fixup=50 done" in fields.get("body", "") for _, fields in state["patched"])
+	prior = _fixup_delivered_wait(extra=[_comment("Closing as completed.\n\n" + FIXUP_DELIVERED_MARKER, BOT, "2026-10-04T11:30:00Z")])
+	result, state = _judge(tmp_path, FIXUP_DELIVERED_HEAL_ITEM, comments=prior, issues=MERGED_FIXUP, **_fixup_delivered_env())
+	assert "fixup=50 op=fixup_delivered outcome=closed pr=60" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].endswith(FIXUP_DELIVERED_MARKER) for comment in state["comments"])
+	assert _closed_completed(state)
+
+
+def test_fixup_delivered_close_logs_a_warning_when_the_wait_update_fails(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, FIXUP_DELIVERED_HEAL_ITEM, comments=_fixup_delivered_wait(), issues=MERGED_FIXUP,
+		FAKE_GH_FAIL_WAIT_DONE="1", **_fixup_delivered_env())
+	assert "fixup=50 op=fixup_delivered outcome=closed pr=60" in result.stdout, result.stdout + result.stderr
+	assert "item=7 kind=issue stop=blocked fixup=50 op=fixup_delivered outcome=warn reason=wait_update_failed" in result.stdout, result.stdout
+	assert _closed_completed(state)
+	assert not any(comment["body"].startswith("/answer") for comment in state["comments"])
+	assert not any("ai:unblock-wait:v1 item=7 fixup=50 done" in fields.get("body", "") for _, fields in state["patched"])
+
+
+def test_nothing_to_implement_close_runs_before_fixup_delivered_close(tmp_path: Path) -> None:
+	comments = _nothing_to_implement_comments()
+	result, state = _judge(tmp_path, FIXUP_DELIVERED_HEAL_ITEM, comments=comments, issues=MERGED_FIXUP, **_fixup_delivered_env())
+	assert "fixup=50 op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
+	assert "op=fixup_delivered" not in result.stdout
+	assert not any(comment["body"].endswith(FIXUP_DELIVERED_MARKER) for comment in state["comments"])
+	assert "pull_lookups" not in state
+
+
+def _fixup_delivered_unit(body: str, **changes):
+	item = dict(FIXUP_DELIVERED_HEAL_ITEM, body=body, **changes)
+	return actions.fixup_delivered_body(item, "o/r", BOT)
+
+
+def test_fixup_delivered_body_parses_a_trusted_heal_issue() -> None:
+	assert _fixup_delivered_unit(FIXUP_DELIVERED_BODY) == {
+		"status": "ok", "reason": "ok", "target_branch": "stable",
+		"paths": ["scripts/claude_pool_token.sh", "tests/test_claude_pool_token.py"],
+	}
+	variants = FIXUP_DELIVERED_BODY.replace("- o/r: `scripts/claude_pool_token.sh`", "* `O/R`: `scripts/claude_pool_token.sh` (the retry loop)")
+	variants = variants.replace("- o/r: `tests/test_claude_pool_token.py`", "- `o/r:tests/test_claude_pool_token.py`\n- o/r: `tests/test_claude_pool_token.py`")
+	assert _fixup_delivered_unit(variants)["paths"] == ["scripts/claude_pool_token.sh", "tests/test_claude_pool_token.py"]
+	# The section ends at a horizontal rule too.
+	ruled = FIXUP_DELIVERED_BODY.replace("\n## Fixed by\n", "---\nfree text after the rule\n")
+	assert _fixup_delivered_unit(ruled)["status"] == "ok"
+
+
+@pytest.mark.parametrize("change,reason", [
+	({"pull_request": {"url": "x"}}, "not_applicable"),
+	({"labels": [{"name": "ai:blocked"}]}, "not_heal"),
+	({"user": {"login": "mallory"}}, "untrusted_body"),
+	({"user": {}}, "untrusted_body"),
+	({"body": FIXUP_DELIVERED_BODY.replace("`stable`", "`bad..ref`")}, "no_target_branch"),
+	({"body": FIXUP_DELIVERED_BODY + "\n## Affected files\n- o/r: `x.py`\n"}, "no_affected_files"),
+	({"body": FIXUP_DELIVERED_BODY.replace("- o/r: `tests/test_claude_pool_token.py`\n", "").replace("- o/r: `scripts/claude_pool_token.sh`\n", "")}, "no_affected_files"),
+	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`../etc/passwd`")}, "affected_files_unparsed"),
+	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`/abs/path.sh`")}, "affected_files_unparsed"),
+	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`scripts//x.sh`")}, "affected_files_unparsed"),
+	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`scripts/claude_pool_token.sh` and `scripts/other.sh`")}, "affected_files_unparsed"),
+	({"body": FIXUP_DELIVERED_BODY.replace("`scripts/claude_pool_token.sh`", "`scripts/claude_pool_token.sh` (also other/repo: `x.yml`)")}, "affected_files_unparsed"),
+	({"body": FIXUP_DELIVERED_BODY.replace("## Fixed by", "### More\n## Fixed by")}, "affected_files_unparsed"),
+	({"body": FIXUP_DELIVERED_BODY.replace("- o/r: `tests/", "- o/other: `tests/")}, "other_repo_files"),
+])
+def test_fixup_delivered_body_skips_every_other_shape(change: dict, reason: str) -> None:
+	result = _fixup_delivered_unit(change.pop("body", FIXUP_DELIVERED_BODY), **change)
+	assert result["status"] == "skip" and result["reason"] == reason and result["paths"] == []
+
+
+def test_fixup_delivered_body_caps_the_entry_count() -> None:
+	many = "".join(f"- o/r: `src/f{n}.py`\n" for n in range(actions.FIXUP_DELIVERED_MAX_PATHS + 1))
+	body = FIXUP_DELIVERED_BODY.replace("- o/r: `scripts/claude_pool_token.sh`\n", many)
+	assert _fixup_delivered_unit(body)["reason"] == "affected_files_unparsed"
+	assert actions.fixup_delivered_body(dict(FIXUP_DELIVERED_HEAL_ITEM), "o/r", "")["reason"] == "untrusted_body"
+
+
+def test_fixup_delivered_body_cli(tmp_path: Path) -> None:
+	item_file = tmp_path / "item.json"
+	item_file.write_text(json.dumps(FIXUP_DELIVERED_HEAL_ITEM), encoding="utf-8")
+	out = subprocess.run([sys.executable, str(ROOT / "scripts" / "unblock_actions.py"), "fixup-delivered-body", "--item-file", str(item_file),
+		"--repo", "o/r", "--pipeline-login", BOT], capture_output=True, text=True, check=False, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+	assert out.returncode == 0, out.stderr
+	assert json.loads(out.stdout)["target_branch"] == "stable"

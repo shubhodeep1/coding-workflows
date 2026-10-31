@@ -211,3 +211,50 @@ session's working directory rather than the earlier `cd`, so `../../x` from
 permission mode, and no allow rule or hook can approve it. Files under the
 session scratchpad need no cleanup at all: the scratchpad goes away with the
 container.
+
+### F) Rejected Reset Push: Fall Back to a `-resend` Branch
+
+The force-push after a §21.A reset can be refused by the remote itself: a
+ruleset or branch protection that bans force-pushes on the branch pattern
+(for example `ccr-*`). Typical rejections:
+
+- `remote: error: GH013: Repository rule violations found for refs/heads/<branch>`
+- `Cannot force-push to this branch`
+- `protected branch hook declined`
+
+A network error is not one of these; retry that as §21.E says.
+
+Sessions used to stop here and ask the user to choose between a new
+branch, deleting the old remote branch, or loosening the rule. Only the
+first is cheap to undo and needs nothing outside the repository's normal
+writes, so it is now the default and the session takes it without asking:
+
+1. Pick the name before creating anything. A name is taken when
+   `git ls-remote --heads origin <name>` prints a line (on the remote) or
+   `git rev-parse --verify --quiet refs/heads/<name>` succeeds (locally),
+   for example after an earlier fallback in a long session. Use
+   `<branch>-resend` if both checks find it free, otherwise the first free
+   one of `<branch>-resend-2`, `<branch>-resend-3`, and so on. A
+   `git ls-remote` that exits non-zero proves nothing about the name; retry
+   it before picking one.
+2. Then, in its own command, create that branch from the current `HEAD`:
+   `git checkout -b <branch>-resend` (with the suffix picked in step 1).
+3. Push it as a plain command (§21.E): `git push -u origin <branch>-resend`,
+   with the same suffix picked in step 1 (for example
+   `git push -u origin <branch>-resend-2`).
+4. Open the new PR from that branch and keep working on it for the rest of
+   the session. Say in the reply that the work moved there and why.
+
+When the GitHub API answers, the guard (§21.B) allows this push: no PR has
+`<branch>-resend` as its head, so there is no merged PR to match. When the
+API is unreachable, the §21.C history fallback is inconclusive for the new
+branch and the guard asks for confirmation; that prompt is expected and is
+not a reason to push in another form. The old remote branch and its merged
+PR are left as they are.
+
+This section is standing permission to push to a branch other than the
+session's designated one, for this case only. It does not cover deleting
+the old branch, changing repository rules or settings, or retrying the
+force-push in another form (`--force`, a `+` refspec, the MCP push tools);
+those stay ask-first under §23.C. If the `-resend` push is refused too,
+report the error and ask.
