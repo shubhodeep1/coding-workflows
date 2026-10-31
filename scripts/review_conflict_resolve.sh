@@ -1064,7 +1064,7 @@ _resolver_prepush_test_gate()
       && [ $(( gate_budget_end - SECONDS )) -ge $(( gate_wall + 630 + 120 )) ]; then
       rm -f -- "${gate_dir}/acceptance.json"
       GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 timeout --kill-after=10s 120 python3 -I -B "${gate_support}/acceptance_check.py" fetch-plan \
-        --repo "${GITHUB_REPOSITORY:-}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-}}}" \
+        --repo "${GITHUB_REPOSITORY:-}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-${GITHUB_HEAD_REF:-}}}}" \
         --out "${gate_dir}/acceptance.json" >/dev/null || true
       if [ -f "${gate_dir}/acceptance.json" ] && [ ! -L "${gate_dir}/acceptance.json" ]; then
         gate_acc_in="${gate_dir}/acceptance.json"
