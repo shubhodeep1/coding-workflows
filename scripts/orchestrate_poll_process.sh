@@ -19531,6 +19531,55 @@ persist_journal_stall_context() {
   return 0
 }
 
+# run_persist_postmerge_verify (issue #8427, P5; check after merge). The
+# helper reads PERSIST_POSTMERGE_VERIFY_ENABLED (default false) itself: off,
+# it only removes leftover ai:verify-pending labels whose window has passed.
+# On, it grades up to PERSIST_POSTMERGE_MAX_PER_TICK armed issues against the
+# first completed post-merge run (this tick's _load_actions_runs_cached blob
+# first, then one workflow-runs read) and reopens a failed one in
+# ai:planning. For each reopened issue this posts the same bare `/answer`
+# comment as the standalone retrigger_plan branch, honouring the phase caps;
+# a capped issue stays open in ai:planning for standalone stall recovery.
+# Always returns 0.
+run_persist_postmerge_verify() {
+  local ppv_helper="scripts/persist_postmerge_verify.py" ppv_base ppv_runs ppv_out ppv_issue ppv_rc
+  if [ ! -f "${ppv_helper}" ]; then
+    echo "PERSIST postmerge outcome=skipped reason=helper_absent" >&2
+    return 0
+  fi
+  ppv_base="${RUNTIME_DIR:-/tmp}"
+  [ -d "${ppv_base}" ] || ppv_base="/tmp"
+  ppv_runs="${ppv_base}/persist_postmerge_runs.json"
+  ppv_out="${ppv_base}/persist_postmerge_out.json"
+  _load_actions_runs_cached > "${ppv_runs}" 2>/dev/null || printf '%s' '{"workflow_runs":[]}' > "${ppv_runs}"
+  : > "${ppv_out}"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B "${ppv_helper}" check --repo "${GITHUB_REPOSITORY:-}" \
+    --runs-file "${ppv_runs}" --out "${ppv_out}" || true
+  while IFS= read -r ppv_issue; do
+    [[ "${ppv_issue}" =~ ^[1-9][0-9]*$ ]] || continue
+    if ! phase_cap_can_dispatch "ai:planning" retrigger_plan "${ppv_issue}"; then
+      echo "PERSIST postmerge outcome=deferred reason=phase_capped issue=${ppv_issue}" >&2
+      continue
+    fi
+    ppv_rc=0
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ppv_issue}/comments" -f body="$(cat <<'PERSIST_POSTMERGE_EOF'
+/answer
+
+_Check after merge: the post-merge check failed. Re-triggering plan generation._
+PERSIST_POSTMERGE_EOF
+)" >/dev/null 2>&1 || ppv_rc=$?
+    if [ "${ppv_rc}" -eq 0 ]; then
+      phase_cap_note_dispatch "ai:planning"
+      tg_notify_issue "${ppv_issue}" "Check after merge failed: reopened the issue and re-triggered planning." "DEBUG"
+      echo "PERSIST postmerge outcome=recurred reason=replan_dispatched issue=${ppv_issue}" >&2
+    else
+      echo "PERSIST postmerge outcome=error reason=answer_post_failed issue=${ppv_issue}" >&2
+    fi
+  done < <(jq -r '.replan[]? | select(type == "number") | tostring' "${ppv_out}" 2>/dev/null || true)
+  rm -f "${ppv_runs}" "${ppv_out}"
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -25295,6 +25344,7 @@ fi
 if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then
   prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
   run_standalone_stall_recovery
+  run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
   exit 0
 fi
 
@@ -31906,6 +31956,7 @@ done
 
 if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   run_standalone_stall_recovery
+  run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
 
   release_staged_support_needs_human_latches
 

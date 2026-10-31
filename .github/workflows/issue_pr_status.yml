@@ -50,6 +50,7 @@ jobs:
       - name: Fetch memory helper scripts
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          PERSIST_POSTMERGE_VERIFY_ENABLED: ${{ vars.PERSIST_POSTMERGE_VERIFY_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
@@ -163,6 +164,18 @@ jobs:
             echo "::warning::scripts/partial_delivery.py unavailable; partial-delivery PRs will leave their issues open without the remaining-items comment."
           fi
           _fetched_scripts+=("partial_delivery.py")
+          # Issue #8427 P5: helpers of the "Arm check after merge" step, fetched
+          # only when PERSIST_POSTMERGE_VERIFY_ENABLED is true. Optional: a miss
+          # leaves that step to log reason=helper_absent (or a fail-open error).
+          # targeted_file_context.py is imported by acceptance_check.py.
+          if [ "${PERSIST_POSTMERGE_VERIFY_ENABLED:-false}" = "true" ]; then
+            for _ppv_f in persist_postmerge_verify.py acceptance_check.py attempt_journal.py gh_api_retry.py targeted_file_context.py; do
+              if ! fetch_from_ref_or_local "scripts/${_ppv_f}" "scripts/${_ppv_f}" "false"; then
+                echo "::warning::scripts/${_ppv_f} unavailable; the check after merge may not arm."
+              fi
+              _fetched_scripts+=("${_ppv_f}")
+            done
+          fi
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -786,6 +799,53 @@ jobs:
           # Export linked issue numbers and orchestrator classification for
           # downstream lineage, alerting, and cleanup steps.
           export_orchestrator_issue_classification
+
+      - name: Arm check after merge
+        # Issue #8427 P5 (scripts/persist_postmerge_verify.py arm): when the
+        # approved plan's done-check names a post-merge workflow, post the
+        # pending marker and add ai:verify-pending; the poller grades it later.
+        # Only standalone issues this default-branch merge completed
+        # (LINEAGE_FINALIZE_ISSUE_NUMBERS minus MANAGED_ISSUES) are armed, and
+        # nothing is armed when the classification above is incomplete.
+        if: github.event.pull_request.merged == true && vars.PERSIST_POSTMERGE_VERIFY_ENABLED == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha || '' }}
+          PR_MERGED_AT: ${{ github.event.pull_request.merged_at || '' }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PERSIST_POSTMERGE_VERIFY_ENABLED: ${{ vars.PERSIST_POSTMERGE_VERIFY_ENABLED || 'false' }}
+          PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+          WORKFLOW_HEAL_VERIFY_ENABLED: ${{ vars.WORKFLOW_HEAL_VERIFY_ENABLED || 'false' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -uo pipefail
+          if [ ! -f scripts/persist_postmerge_verify.py ] || [ -L scripts/persist_postmerge_verify.py ]; then
+            echo "PERSIST postmerge outcome=skipped reason=helper_absent"
+            exit 0
+          fi
+          if [ -z "${PR_BASE_REF:-}" ] || [ "${PR_BASE_REF}" != "${PR_DEFAULT_BRANCH:-}" ]; then
+            echo "PERSIST postmerge outcome=skipped reason=not_default_branch"
+            exit 0
+          fi
+          if [ "${ORCHESTRATOR_CLASSIFICATION_COMPLETE:-false}" != "true" ]; then
+            echo "PERSIST postmerge outcome=skipped reason=classification_incomplete"
+            exit 0
+          fi
+          while IFS= read -r ppv_issue; do
+            [[ "${ppv_issue}" =~ ^[1-9][0-9]*$ ]] || continue
+            if [ -n "${MANAGED_ISSUES:-}" ] && printf '%s\n' "${MANAGED_ISSUES}" | grep -qxF "${ppv_issue}"; then
+              echo "PERSIST postmerge outcome=skipped reason=orchestrator_managed issue=${ppv_issue}"
+              continue
+            fi
+            python3 -I -B scripts/persist_postmerge_verify.py arm --repo "${REPOSITORY}" --issue "${ppv_issue}" \
+              --pr "${PR_NUMBER}" --merge-sha "${PR_MERGE_SHA}" --merged-at "${PR_MERGED_AT}" \
+              --base "${PR_BASE_REF}" --pr-labels-json "${PR_LABELS_JSON}" || true
+          done <<< "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}"
 
       - name: Expose the first linked issue
         # For the activation-verify job (port P4); LINKED_ISSUE_NUMBERS comes

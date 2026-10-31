@@ -29161,5 +29161,79 @@ def test_stall_judge_journal_is_switch_gated_and_keeps_the_cache_key_when_off():
 	assert "/comments" not in func
 
 
+# --- check after merge in the poller tick (issue #8427, P5) ---------------------------
+
+_PPV_STUB_HELPER = """import json, sys
+args = sys.argv
+with open(args[args.index("--out") + 1], "w", encoding="utf-8") as fh:
+	json.dump({"replan": [12, "13; rm -rf /", 14], "processed": 3}, fh)
+"""
+
+
+def _run_persist_postmerge(tmp_path: Path, with_helper: bool = True) -> tuple[subprocess.CompletedProcess, Path]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	func = _extract_bash_function(script, "run_persist_postmerge_verify() {")
+	calls = tmp_path / "calls.log"
+	work = tmp_path / "work"
+	(work / "runtime").mkdir(parents=True)
+	if with_helper:
+		(work / "scripts").mkdir()
+		(work / "scripts" / "persist_postmerge_verify.py").write_text(_PPV_STUB_HELPER, encoding="utf-8")
+	harness = (
+		"set -euo pipefail\n"
+		"GITHUB_REPOSITORY=owner/repo\n"
+		f"RUNTIME_DIR='{work / 'runtime'}'\n"
+		f"gh_retry() {{ printf 'CALL %s\\n' \"$*\" >> '{calls}'; }}\n"
+		"phase_cap_can_dispatch() { [ \"$3\" != \"14\" ]; }\n"
+		f"phase_cap_note_dispatch() {{ echo \"NOTE $1\" >> '{calls}'; }}\n"
+		"tg_notify_issue() { :; }\n"
+		"_load_actions_runs_cached() { printf '%s' '{\"workflow_runs\":[]}'; }\n"
+		+ func +
+		"run_persist_postmerge_verify\n"
+		"echo TICK_CONTINUES\n"
+	)
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	proc = subprocess.run(["bash", "-c", harness], cwd=work, env=env, capture_output=True, text=True, timeout=60)
+	return proc, calls
+
+
+def test_persist_postmerge_replan_posts_one_bare_answer_and_defers_capped():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, calls = _run_persist_postmerge(Path(tmp))
+		assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout, proc.stderr
+		log = calls.read_text(encoding="utf-8")
+		assert log.count("CALL gh api repos/owner/repo/issues/12/comments -f body=/answer\n\n_Check after merge:") == 1
+		assert log.count("CALL ") == 1 and log.count("NOTE ai:planning") == 1
+		assert "PERSIST postmerge outcome=deferred reason=phase_capped issue=14" in proc.stderr
+		assert "outcome=recurred reason=replan_dispatched issue=12" in proc.stderr
+		# Scratch files are removed.
+		assert list((Path(tmp) / "work" / "runtime").iterdir()) == []
+
+
+def test_persist_postmerge_missing_helper_is_a_noop():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, calls = _run_persist_postmerge(Path(tmp), with_helper=False)
+		assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout
+		assert "PERSIST postmerge outcome=skipped reason=helper_absent" in proc.stderr
+		assert not calls.exists()
+
+
+def test_persist_postmerge_runs_after_standalone_recovery_on_both_paths():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	call = ('  run_standalone_stall_recovery\n'
+		'  run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"\n')
+	assert script.count(call) == 2
+	sweep = script.index('if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then')
+	assert script.index(call, sweep) < script.index("  exit 0\nfi\n", sweep)
+	post_loop = script.index('if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then\n  run_standalone_stall_recovery\n')
+	assert script.index(call, post_loop) == post_loop + len('if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then\n')
+	assert script.index("run_persist_postmerge_verify() {") < sweep
+	func = _extract_bash_function(script, "run_persist_postmerge_verify() {")
+	assert "_load_actions_runs_cached >" in func and 'phase_cap_can_dispatch "ai:planning" retrigger_plan' in func
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert " gh_api_retry.py persist_postmerge_verify.py acceptance_check.py " in workflow
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
