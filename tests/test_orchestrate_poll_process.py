@@ -29252,5 +29252,255 @@ def test_persist_postmerge_runs_once_per_tick_on_idle_and_full_paths():
 	assert " gh_api_retry.py persist_postmerge_verify.py acceptance_check.py " in workflow
 
 
+# --- budget and progress governor in the poller tick (issue #8427, P6) ----------
+
+_PB_STUB_DECIDE = """import json, os, sys
+args = sys.argv
+with open(os.environ["PB_CALLS"], "a", encoding="utf-8") as fh:
+	fh.write("DECIDE login=" + args[args.index("--trusted-login") + 1] + " labels=" + args[args.index("--labels") + 1] + "\\n")
+decision = os.environ.get("PB_DECISION", "")
+if decision:
+	with open(args[args.index("--out") + 1], "w", encoding="utf-8") as fh:
+		fh.write(decision)
+"""
+
+_PB_STUB_JOURNAL = """import os, sys
+args = sys.argv
+note = open(args[args.index("--note-file") + 1], encoding="utf-8").read()
+with open(os.environ["PB_CALLS"], "a", encoding="utf-8") as fh:
+	fh.write("JOURNAL " + " ".join(args[1:]) + " NOTE=" + note + "\\n")
+"""
+
+
+def _pb_function_source() -> str:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index('PERSIST_BUDGET_TICK_DECISIONS="${PERSIST_BUDGET_TICK_DECISIONS:-0}"\n')
+	end = script.index("\n}\n", script.index("persist_budget_govern_issue() {", start)) + 3
+	return script[start:end]
+
+
+def _run_persist_budget(
+	tmp_path: Path,
+	decision: dict | None,
+	*,
+	labels: str = '["ai:done"]',
+	comments: str = '[{"id": 1, "body": "x"}]',
+	prior: str = "",
+	calls_per_run: int = 1,
+	active: str = "",
+	capped: bool = False,
+	scope: str = "standalone",
+	gh_fail: str = "",
+) -> tuple[subprocess.CompletedProcess, str]:
+	calls = tmp_path / "calls.log"
+	work = tmp_path / "work"
+	(work / "runtime").mkdir(parents=True)
+	(work / "scripts").mkdir()
+	(work / "scripts" / "persist_budget.py").write_text(_PB_STUB_DECIDE, encoding="utf-8")
+	(work / "scripts" / "attempt_journal.py").write_text(_PB_STUB_JOURNAL, encoding="utf-8")
+	harness = (
+		"set -euo pipefail\n"
+		"GITHUB_REPOSITORY=owner/repo\n"
+		f"RUNTIME_DIR='{work / 'runtime'}'\n"
+		f"ACTIVE_WORKFLOW_ISSUES='{active}'\n"
+		"PERSIST_JOURNAL_LOGIN_CACHE=''\n"
+		"issue_has_active_workflow() { echo \"${ACTIVE_WORKFLOW_ISSUES}\" | grep -qxF \"$1\"; }\n"
+		"gh_retry() {\n"
+		f"  printf 'CALL %s\\n' \"$*\" >> '{calls}'\n"
+		f"  case \"$*\" in *'{gh_fail or '@@never@@'}'*) return 1 ;; esac\n"
+		"  case \"$*\" in 'gh api user --jq .login') echo 'pipeline-bot' ;; *--paginate*) echo '[{\"id\":9,\"body\":\"y\"}]' ;; esac\n"
+		"}\n"
+		f"phase_cap_can_dispatch() {{ {'return 1' if capped else 'return 0'}; }}\n"
+		f"phase_cap_note_dispatch() {{ echo \"NOTE $1\" >> '{calls}'; }}\n"
+		f"tg_notify_issue() {{ echo \"TG $1 $3\" >> '{calls}'; }}\n"
+		+ _pb_function_source()
+		+ "".join(
+			f"persist_budget_govern_issue 12 '{comments}' '{labels}' '{prior}' {scope}\n"
+			"echo \"RESULT action=${PERSIST_BUDGET_LAST_ACTION} basis=${PERSIST_BUDGET_LAST_BASIS} n=${PERSIST_BUDGET_TICK_DECISIONS}\"\n"
+			for _ in range(calls_per_run)
+		)
+		+ "echo TICK_CONTINUES\n"
+	)
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["PB_CALLS"] = str(calls)
+	env["PB_DECISION"] = json.dumps(decision) if decision is not None else ""
+	proc = subprocess.run(["bash", "-c", harness], cwd=work, env=env, capture_output=True, text=True, timeout=60, check=False)
+	return proc, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+
+def _pb_decision(action: str, reason: str = "no_progress") -> dict:
+	return {"action": action, "reason": reason, "basis": "implement|77|1", "approaches": 1, "rounds": 2, "failed_streak": 2,
+		"summary": "Decision: x. Approaches tried: 1 of 3. @evil #5 <!-- -->"}
+
+
+def test_persist_budget_replan_moves_label_posts_one_answer_and_journals():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, log = _run_persist_budget(Path(tmp), _pb_decision("replan"))
+		assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout, proc.stderr
+		assert "RESULT action=replan basis=implement|77|1 n=1" in proc.stdout
+		assert log.count("CALL gh api user --jq .login") == 1
+		assert "DECIDE login=pipeline-bot labels=[\"ai:done\"]" in log
+		assert log.count("CALL gh issue edit 12 --repo owner/repo --add-label ai:planning --remove-label ai:done") == 1
+		assert log.count("CALL gh api repos/owner/repo/issues/12/comments -f body=/answer\n\n_Persistence budget: no_progress. Re-triggering plan generation._") == 1
+		# Writes: one label edit plus one comment; the summary loses mention/marker characters.
+		assert log.count("CALL gh issue edit") + log.count("/comments -f body=") == 2
+		assert "@evil" not in log and "<!--" not in log and "#5" not in log
+		assert log.count("NOTE ai:planning") == 1 and "TG 12 DEBUG" in log
+		assert "JOURNAL append --repo owner/repo --issue 12 --stage governor --outcome ok --approach inherit" in log
+		assert "--trusted-login pipeline-bot --note-file" in log and "NOTE=governor replan reason=no_progress" in log
+		assert "PERSIST governor outcome=replan reason=no_progress issue=12" in proc.stderr
+		assert list((Path(tmp) / "work" / "runtime").iterdir()) == []
+
+
+def test_persist_budget_replan_in_planning_phase_skips_the_label_edit():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, log = _run_persist_budget(Path(tmp), _pb_decision("replan"), labels='["ai:planning"]', scope="managed")
+		assert proc.returncode == 0, proc.stderr
+		assert "gh issue edit" not in log
+		assert "_Orchestrator persistence budget: no_progress. Re-triggering plan generation._" in log
+
+
+def test_persist_budget_escalate_adds_label_and_one_comment():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, log = _run_persist_budget(Path(tmp), _pb_decision("escalate", "max_approaches:failed_rounds"))
+		assert proc.returncode == 0, proc.stderr
+		assert "RESULT action=escalate" in proc.stdout
+		assert log.count("CALL gh issue edit 12 --repo owner/repo --add-label ai:needs-human") == 1
+		assert log.count("/comments -f body=## Persistence budget reached") == 1
+		assert log.count("CALL gh issue edit") + log.count("/comments -f body=") == 2
+		assert "/answer" not in log and "NOTE ai:planning" not in log
+		assert "--stage governor --outcome blocked" in log
+
+
+def test_persist_budget_tick_cap_defers_after_five_decisions():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, log = _run_persist_budget(Path(tmp), _pb_decision("escalate"), calls_per_run=6)
+		assert proc.returncode == 0, proc.stderr
+		assert log.count("add-label ai:needs-human") == 5
+		assert "PERSIST governor outcome=deferred reason=tick_cap issue=12" in proc.stderr
+		assert proc.stdout.count("RESULT action=escalate") == 5 and "RESULT action= basis= n=5" in proc.stdout
+
+
+def test_persist_budget_skips_and_defers_without_writes():
+	for kwargs, expected in (
+		({"active": "12"}, "skipped reason=active_workflow"),
+		({"capped": True}, "deferred reason=phase_capped"),
+		({"prior": "implement|77|1"}, "skipped reason=already_decided"),
+		({"gh_fail": "api user"}, "skipped reason=identity_unavailable"),
+	):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, log = _run_persist_budget(Path(tmp), _pb_decision("replan"), **kwargs)
+			assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout, proc.stderr
+			assert f"PERSIST governor outcome={expected} issue=12" in proc.stderr, kwargs
+			assert "gh issue edit" not in log and "/comments -f body=" not in log and "JOURNAL" not in log
+			assert "RESULT action= " in proc.stdout
+
+
+def test_persist_budget_continue_and_errors_write_nothing():
+	for decision, expected in (
+		(_pb_decision("continue", "within_budget"), "continue reason=within_budget"),
+		(_pb_decision("ignore", "journal_absent"), "ignore reason=journal_absent"),
+		(None, "error reason=decide_failed"),
+		({"action": "rm -rf /"}, "error reason=decide_failed"),
+	):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, log = _run_persist_budget(Path(tmp), decision)
+			assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout, proc.stderr
+			assert f"PERSIST governor outcome={expected} issue=12" in proc.stderr
+			assert "gh issue edit" not in log and "/comments -f body=" not in log and "JOURNAL" not in log
+
+
+def test_persist_budget_failed_answer_post_is_retried_next_tick():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, log = _run_persist_budget(Path(tmp), _pb_decision("replan"), labels='["ai:planning"]', gh_fail="body=/answer")
+		assert proc.returncode == 0, proc.stderr
+		assert "PERSIST governor outcome=error reason=answer_post_failed issue=12" in proc.stderr
+		assert "RESULT action= basis=implement|77|1 n=0" in proc.stdout and "JOURNAL" not in log
+
+
+def test_persist_budget_reads_comments_only_when_the_cache_cannot_be_used():
+	for comments, reads in (('[{"id":1,"body":"x"}]', 0), ("[]", 1), ("", 1), (json.dumps([{"id": i} for i in range(100)]), 1)):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, log = _run_persist_budget(Path(tmp), _pb_decision("continue", "within_budget"), comments=comments)
+			assert proc.returncode == 0, proc.stderr
+			assert log.count("--paginate repos/owner/repo/issues/12/comments?per_page=100") == reads, comments
+
+
+def test_persist_budget_hooks_are_switch_gated_and_placed():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	guard = 'if _is_truthy "${PERSIST_BUDGET_ENABLED:-false}" && [ -f scripts/persist_budget.py ]; then'
+	assert script.count(guard) == 2
+	assert script.index("run_persist_postmerge_verify() {") < script.index("persist_budget_govern_issue() {") < script.index("invoke_stall_judge() {")
+	# Standalone: after the capacity-wait skip, before the stall action.
+	recovery = _extract_bash_function(script, "run_standalone_stall_recovery() {")
+	hook = recovery.index(guard)
+	assert recovery.index('if [ "${phase}" = "ai:claude-capacity-wait" ]; then') < hook
+	assert hook < recovery.index("status_since=\"$(echo \"${updated_state}\" | jq -r '.status_since_ts // 0')\"")
+	block = recovery[hook:recovery.index("status_since=", hook)]
+	assert 'persist_budget_govern_issue "${issue_num}" "${comments_json}" "${labels_json}"' in block
+	assert ".persist_budget_basis // \"\"" in block and ".persist_budget_basis = $basis" in block
+	assert 'write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"\n          continue' in block
+	# Managed: inside the not-stuck branch, before stall detection.
+	managed = script.index("    PERSIST_BUDGET_STATE_CHANGED=false\n")
+	assert script.rindex('    if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then\n', 0, managed) > script.rindex("INVOKE_JUDGE_FOR_STUCK=false", 0, managed)
+	stall = script.index("    # Stall detection and self-healing\n", managed)
+	managed_block = script[managed:stall]
+	assert guard in managed_block
+	assert '"${_pb_prior}" managed < /dev/null' in managed_block
+	assert "merged|closed|skipped|not_created) continue ;;" in managed_block
+	assert "_current_wave_details_json" in managed_block and "gh " not in managed_block.replace("# ", "")
+	assert '[ "${PERSIST_BUDGET_STATE_CHANGED:-false}" = "true" ]' in script[stall:]
+	assert script.index('[ "${PERSIST_BUDGET_STATE_CHANGED:-false}" = "true" ] ||', stall) < script.index("post_state_comment || true", stall)
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert " persist_postmerge_verify.py acceptance_check.py persist_budget.py " in workflow
+
+
+def test_persist_budget_managed_hook_records_basis_on_replan():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("    PERSIST_BUDGET_STATE_CHANGED=false\n")
+	end = script.index("    # Stall detection and self-healing\n", start)
+	block = script[start:end]
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		state = tmp_path / "state.json"
+		state.write_text(json.dumps({"waves": [{"issues": [
+			{"id": "a", "github_issue": 12, "status": "pending"},
+			{"id": "b", "github_issue": 13, "status": "merged"},
+			{"id": "c", "github_issue": 14, "status": "pending", "persist_budget_basis": "old"},
+			{"id": "d", "github_issue": None, "status": "not_created"},
+		]}]}), encoding="utf-8")
+		calls = tmp_path / "calls.log"
+		harness = (
+			"set -euo pipefail\n"
+			"PERSIST_BUDGET_ENABLED=true\nWAVE_IDX=0\n"
+			f"STATE_FILE='{state}'\n"
+			"LABELS_JSON='{\"12\":[\"ai:done\"],\"14\":[\"ai:review-blocked\"]}'\n"
+			"_current_wave_details_json='{\"12\":{\"comments_available\":true,\"comments\":[{\"id\":1}]}}'\n"
+			"_is_truthy() { case \"$1\" in true) return 0 ;; *) return 1 ;; esac; }\n"
+			f"_load_actions_runs_cached() {{ echo RUNS >> '{calls}'; }}\n"
+			"build_active_issue_set() { echo 99; }\n"
+			"persist_budget_govern_issue() {\n"
+			f"  echo \"GOV $1 $2 $3 prior=$4 scope=$5 active=${{ACTIVE_WORKFLOW_ISSUES}}\" >> '{calls}'\n"
+			"  PERSIST_BUDGET_LAST_ACTION=replan; PERSIST_BUDGET_LAST_BASIS=\"review|$1|1\"\n"
+			"  [ \"$1\" = 12 ] || PERSIST_BUDGET_LAST_ACTION=continue\n"
+			"}\n"
+			"mkdir -p scripts && touch scripts/persist_budget.py\n"
+			+ block
+			+ "echo \"CHANGED=${PERSIST_BUDGET_STATE_CHANGED}\"\n"
+		)
+		proc = subprocess.run(["bash", "-c", harness], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False)
+		assert proc.returncode == 0, proc.stderr
+		assert "CHANGED=true" in proc.stdout
+		log = calls.read_text(encoding="utf-8")
+		assert 'GOV 12 [{"id":1}] ["ai:done"] prior= scope=managed active=99' in log
+		assert 'GOV 14 [] ["ai:review-blocked"] prior=old scope=managed' in log
+		assert "GOV 13" not in log and log.count("RUNS") == 1
+		issues = json.loads(state.read_text(encoding="utf-8"))["waves"][0]["issues"]
+		assert issues[0]["persist_budget_basis"] == "review|12|1"
+		assert issues[2]["persist_budget_basis"] == "old"
+		assert "persist_budget_basis" not in issues[1]
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
