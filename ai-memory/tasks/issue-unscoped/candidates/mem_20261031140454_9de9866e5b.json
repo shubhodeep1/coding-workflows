@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Merged implementation changes across workflow helpers, collection scripts, and healing logic repeatedly include a focused file under changelog.d. When planning a user-visible or operational behavior change, check the repository's changelog convention and include an appropriately scoped entry.",
+  "fingerprint": "624e653577b68747f5c6aaa035566f6631d5e32580bc3813a825a3e6a60e9388",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41208122962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41208122962",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8518",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8526",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8532",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8525",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8529",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8535",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8542"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261031140454_9de9866e5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Behavioral changes commonly include a changelog.d entry.",
+  "timestamps": {
+    "created_at": "2026-10-31T14:04:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
