@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-10-31T01:19:10Z",
+  "issue_number": 8490,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=scripts/partial_delivery.py:59; cited_path=scripts/partial_delivery.py, prompts/mode-plan-heal-counterfactual.txt; files_touched=.github/workflows/workflow-failure-heal-intake.yml, agents.d/heal-intake-reproduction.md, changelog.d/heal-intake-reproduction.md, scripts/workflow_failure_heal.py, scripts/workflow_failure_heal_intake.sh, tests/test_workflow_failure_heal.py.",
+  "phase": "review_autofix",
+  "pr_number": 8500,
+  "record_id": "lesson_20261031011910_ca708fac51",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/partial_delivery.py, prompts/mode-plan-heal-counterfactual.txt",
+    "scripts/partial_delivery.py",
+    ".github/workflows/workflow-failure-heal-intake.yml",
+    "agents.d/heal-intake-reproduction.md",
+    "changelog.d/heal-intake-reproduction.md",
+    "scripts/workflow_failure_heal.py",
+    "scripts/workflow_failure_heal_intake.sh",
+    "tests/test_workflow_failure_heal.py"
+  ]
+}
