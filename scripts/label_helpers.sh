@@ -84,6 +84,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:codex"]="0e8a16"
 	["ai:engine-claude"]="d4c5f9"
 	["ai:acceptance-unmet"]="fbca04"
+	["ai:verify-pending"]="c5def5"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -150,6 +151,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:codex"]="Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
 	["ai:engine-claude"]="Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
 	["ai:acceptance-unmet"]="The PR does not yet meet its plan's done-check"
+	["ai:verify-pending"]="Merged; waiting for the check after merge"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'

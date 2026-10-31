@@ -29161,5 +29161,96 @@ def test_stall_judge_journal_is_switch_gated_and_keeps_the_cache_key_when_off():
 	assert "/comments" not in func
 
 
+# --- check after merge in the poller tick (issue #8427, P5) ---------------------------
+
+_PPV_STUB_HELPER = """import json, sys
+args = sys.argv
+with open(args[args.index("--out") + 1], "w", encoding="utf-8") as fh:
+	json.dump({"replan": [12, "13; rm -rf /", 14], "processed": 3}, fh)
+"""
+
+
+def _run_persist_postmerge(tmp_path: Path, with_helper: bool = True, enabled: str = "true") -> tuple[subprocess.CompletedProcess, Path]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	func = _extract_bash_function(script, "run_persist_postmerge_verify() {")
+	calls = tmp_path / "calls.log"
+	work = tmp_path / "work"
+	(work / "runtime").mkdir(parents=True)
+	if with_helper:
+		(work / "scripts").mkdir()
+		(work / "scripts" / "persist_postmerge_verify.py").write_text(_PPV_STUB_HELPER, encoding="utf-8")
+	harness = (
+		"set -euo pipefail\n"
+		"GITHUB_REPOSITORY=owner/repo\n"
+		f"PERSIST_POSTMERGE_VERIFY_ENABLED='{enabled}'\n"
+		f"RUNTIME_DIR='{work / 'runtime'}'\n"
+		"_is_truthy() { case \"$(echo \"$1\" | tr '[:upper:]' '[:lower:]')\" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }\n"
+		f"gh_retry() {{ printf 'CALL %s\\n' \"$*\" >> '{calls}'; }}\n"
+		"phase_cap_can_dispatch() { [ \"$3\" != \"14\" ]; }\n"
+		f"phase_cap_note_dispatch() {{ echo \"NOTE $1\" >> '{calls}'; }}\n"
+		"tg_notify_issue() { :; }\n"
+		f"_load_actions_runs_cached() {{ echo RUNS_LOADED >> '{calls}'; printf '%s' '{{\"workflow_runs\":[]}}'; }}\n"
+		+ func +
+		"run_persist_postmerge_verify\n"
+		"echo TICK_CONTINUES\n"
+	)
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	proc = subprocess.run(["bash", "-c", harness], cwd=work, env=env, capture_output=True, text=True, timeout=60)
+	return proc, calls
+
+
+def test_persist_postmerge_replan_posts_one_bare_answer_and_defers_capped():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, calls = _run_persist_postmerge(Path(tmp))
+		assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout, proc.stderr
+		log = calls.read_text(encoding="utf-8")
+		assert log.count("CALL gh api repos/owner/repo/issues/12/comments -f body=/answer\n\n_Check after merge:") == 1
+		assert log.count("CALL ") == 1 and log.count("NOTE ai:planning") == 1 and log.count("RUNS_LOADED") == 1
+		assert "PERSIST postmerge outcome=deferred reason=phase_capped issue=14" in proc.stderr
+		assert "outcome=recurred reason=replan_dispatched issue=12" in proc.stderr
+		# Scratch files are removed.
+		assert list((Path(tmp) / "work" / "runtime").iterdir()) == []
+
+
+def test_persist_postmerge_switch_off_skips_the_runs_cache():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, calls = _run_persist_postmerge(Path(tmp), enabled="false")
+		assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout, proc.stderr
+		assert "RUNS_LOADED" not in calls.read_text(encoding="utf-8")
+
+
+def test_persist_postmerge_missing_helper_is_a_noop():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, calls = _run_persist_postmerge(Path(tmp), with_helper=False)
+		assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout
+		assert "PERSIST postmerge outcome=skipped reason=helper_absent" in proc.stderr
+		assert not calls.exists()
+
+
+def test_persist_postmerge_runs_once_per_tick_on_idle_and_full_paths():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	call = '  run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"\n'
+	assert script.count(call) == 2
+	# Idle ticks: the unblock-scan sweep runs on every tick without a project,
+	# unlike the standalone-recovery sweep (ENABLE_STANDALONE_STALL_RECOVERY).
+	unblock = script.index('if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then')
+	unblock_end = script.index("  exit 0\nfi\n", unblock)
+	assert unblock < script.index(call, unblock) < unblock_end
+	assert 'prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"' in script[unblock:unblock_end]
+	sweep = script.index('if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then')
+	assert "run_persist_postmerge_verify" not in script[sweep:script.index("  exit 0\nfi\n", sweep)]
+	post_loop = script.index('if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then\n  run_standalone_stall_recovery\n')
+	assert script.index(call, post_loop) == post_loop + len('if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then\n  run_standalone_stall_recovery\n')
+	assert script.index("run_persist_postmerge_verify() {") < unblock
+	func = _extract_bash_function(script, "run_persist_postmerge_verify() {")
+	assert "_load_actions_runs_cached >" in func and 'phase_cap_can_dispatch "ai:planning" retrigger_plan' in func
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	unblock_step = workflow[workflow.index("      - name: Run unblock scan without active projects\n"):]
+	unblock_step = unblock_step[:unblock_step.index("\n      - name: ", 10)]
+	assert "validate_env" not in unblock_step and "standalone_recovery" not in unblock_step
+	assert " gh_api_retry.py persist_postmerge_verify.py acceptance_check.py " in workflow
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

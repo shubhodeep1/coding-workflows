@@ -217,11 +217,16 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 		("UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS", "24"),
 	):
 		assert f"{name}: ${{{{ vars.{name} || '{default}' }}}}" in step
-	assert (
+	unblock_head = (
 		'if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then\n'
 		'  run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"\n'
-		'  exit 0'
-	) in poller
+	)
+	assert unblock_head in poller
+	# The idle-tick check after merge (#8427 P5) follows the scan, then the block exits.
+	unblock_block = poller[poller.index(unblock_head):]
+	unblock_block = unblock_block[:unblock_block.index("\nfi\n")]
+	assert unblock_block.endswith("  exit 0")
+	assert 'run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"' in unblock_block
 	yaml.safe_load(wf)
 
 
