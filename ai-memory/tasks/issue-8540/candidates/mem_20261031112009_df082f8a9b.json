@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: restore the `propagate-consumer-secrets.yml` checkout-audit allow-list entry\n\nPlanning ref: `ai/issue-8526` @ `e3f6e6daafe88fd7a577582160bcf357cf1085c0` (integration branch mismatch: false). This is the head of PR #8529.\n\nScope-mode: Hold Scope\nReuse-audit: extends ALLOWLIST_EXCEPTIONS\nScope-mode justification: The CI failure has one cause. PR #8529 commented out one entry in the `ALLOWLIST_EXCEPTIONS` dict in `tests/test_workflow_checkout_integration_ref_audit.py`, but the workflow it classifies still exists on the PR head and uses `actions/checkout@v5`. The complete fix and the minimal fix are the same change: put back the entry exactly as it is on the default branch and remove the wrong 3-line comment. It needs no new helper, interface or dependency. Following \u00a76 (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the fix restores the assertion as it was. It does not weaken the assertion, and it does not touch the workflow file.\n\n## Files likely to change\n- `tests/test_workflow_checkout_integration_ref_audit.py`\n\n## Functions or modules to implement\n- No new functions.\n- In the module-level `ALLOWLIST_EXCEPTIONS` dict (it currently ends around lines 66\u201370 of the planning ref), replace these 4 commented lines:\n  ```\n  \t# propagate-consumer-secrets.yml is absent from .github/workflows/ in this tree\n  \t# (see analysis/workflow-optimization-2026-10-22-3.md), so it is not classified\n  \t# here. Restore this entry together with the workflow file:\n  \t# \"propagate-consumer-secrets.yml\": \"Push-to-main / dispatch maintenance copies ...\",\n  ```\n  with the active entry, byte-for-byte as it is on the default branch (`isolated-base:tests/test_workflow_checkout_integration_ref_audit.py` line 66):\n  ```\n  \t\"propagate-consumer-secrets.yml\": \"Push-to-main / dispatch maintenance copies the library's Actions secrets into registered consumers; it reads the consumer registry on main and no tracking-issue metadata.\",\n  ```\n  Indent with a tab, as the neighbouring entries do. After this edit, `git diff isolated-base -- tests/test_workflow_checkout_integration_ref_audit.py` should be empty.\n\n## Data structures affected\n- `ALLOWLIST_EXCEPTIONS` gains back one key, `propagate-consumer-secrets.yml`. `REQUIRED_RESOLVER_WORKFLOWS` does not change.\n\n## API or interface changes\n- None. Nothing changes in workflows, scripts or env vars.\n\n## Decisions\n### D1 \u2014 Restore the allow-list entry instead of changing the workflow or the assertion\n- Chosen: Restore the original `ALLOWLIST_EXCEPTIONS` entry and delete the wrong comment.\n- Alternatives considered: (a) delete `.github/workflows/propagate-consumer-secrets.yml`; (b) loosen `test_checkout_workflows_are_all_classified` so it ignores unclassified workflows; (c) move the workflow into `REQUIRED_RESOLVER_WORKFLOWS`.\n- Why: The workflow is live, documented maintenance that runs on push to main and on dispatch, and `tests/test_propagate_consumer_secrets.py` line 29 still checks its path. It reads no tracking-issue metadata, so it belongs in the allow-list. Options (a) and (b) would remove behaviour or a safeguard. Option (c) would misclassify the workflow and fail the resolver contract checks.\n\n### D2 \u2014 Do not change the analysis document or the PR's other files\n- Chosen: Touch only the test file.\n- Alternatives considered: Correct line 473 of `analysis/workflow-optimization-2026-10-22-3.md`, which claims the workflow is missing.\n- Why: The triage issue scopes the fix to one file. The lesson in memory warns that review rejects findings outside the plan's scope. The analysis doc is historical output and is not part of the failing check.\n\n## Security considerations\n- Trust boundaries: none touched. The change only edits a static data dict in a test.\n- Authorization / new surfaces: none.\n- External input: none.\n- Abuse case: an unclassified `checkout@v5` workflow could check out the wrong ref in an orchestrator phase. That risk is exactly what the classification assertion catches, which is why the plan keeps it strict. The restored rationale string correctly says the workflow reads the consumer registry on main and no tracking-issue metadata. The `propagate-consumer-secrets.yml` workflow itself, which handles secrets, is not modified.\n\n## Risks and edge cases\n- **Conflict found:** the issue says `.github/workflows/propagate-consumer-secrets.yml` exists on the PR head and uses `actions/checkout@v5` at lines 51\u201352. The CI log proves it: the test lists that file as unclassified, and it could only do that if the file is in the CI checkout. However, this planning workspace and the `isolated-base` snapshot are both filtered, and the file is missing from both. The likely reason is that the sandbox drops files with credential-like names. That same filtering probably explains why the 2026-10-22 analysis doc, and then PR #8529, wrongly concluded the workflow had been removed.\n- **Local verification caveat:** if the implementer runs `python3 tests/test_workflow_checkout_integration_ref_audit.py` in a filtered sandbox, it fails on the other assertion: `Classified workflows without checkout@v5: ['propagate-consumer-secrets.yml']`. That does not mean the fix is wrong. Do not \"fix\" it by removing the entry again. CI on the real checkout is the authoritative check.\n- No other part of PR #8529 depends on the commented-out state. The restored line equals the default branch's line, so there is no merge-conflict risk against main.\n\n## Testing considerations\n- In CI, `python3 tests/test_workflow_checkout_integration_ref_audit.py` (the `static-checks` job) should pass `test_checkout_workflows_are_all_classified` and `test_allowlist_entries_have_rationale`.\n- `git diff isolated-base -- tests/test_workflow_checkout_integration_ref_audit.py` should produce no output.\n- No new tests are needed: the existing classification test is the regression guard.\n- `tests/test_review_autofix_provider_outage_contract.py::test_label_contract_and_reporter_skip` is out of scope, as the issue says. It passed in this CI run.\n\n## Pre-execution self-check\n- Clarify auto-answered and the issue was clear, so no answers needed mapping.\n- One file and one edit. The planned end state matches the default branch.\n- The file-list section contains only real paths. There is no Deferred scope, because the plan covers the whole issue.\n\nPLAN_SELF_CHECK: WARNING: propagate-consumer-secrets.yml is filtered out of the sandbox, so a local run of the audit test reports a false \"extra\" failure; verify in CI.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "2dddf9d1770b96fe570abec65768113f66766b0937772d01ad128c9df8f0bd9e",
+  "lineage": {
+    "issue_number": 8540,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41195993560",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41195993560",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8540"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261031112009_df082f8a9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8540,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41195993560"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8540",
+  "timestamps": {
+    "created_at": "2026-10-31T11:20:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
