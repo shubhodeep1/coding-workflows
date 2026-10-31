@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The release smoke gate's decomposition check no longer ends on the first empty child-issue poll.** In `test-and-mark-stable.yml`, the `orchestrate-decompose-test` dispatch step counted children with a bare `grep -c .`, which exits 1 on an empty poll and ended the step under `set -euo pipefail`. The count now comes from the fetched JSON with `jq` (0 on an empty, malformed or non-array result, numeric-guarded), so the 90s polling loop and its `last gh api stderr during child-issue polling` diagnostic run as intended. Refs #8531.
