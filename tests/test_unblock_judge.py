@@ -1285,6 +1285,10 @@ if method == "PATCH":
 	if os.environ.get("FAKE_GH_FAIL_CLOSE") and f.get("state") == "closed":
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	# #8530: fail only the PATCH that marks a wait comment done.
+	if os.environ.get("FAKE_GH_FAIL_WAIT_DONE") and "/issues/comments/" in endpoint and " done -->" in f.get("body", ""):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	state["patched"].append([endpoint, f])
 	done("{}")
 if method == "POST" and endpoint.endswith("/issues"):
@@ -5198,6 +5202,16 @@ def test_fixup_delivered_close_failure_keeps_the_wait_and_posts_the_marker_once(
 	assert "fixup=50 op=fixup_delivered outcome=closed pr=60" in result.stdout, result.stdout + result.stderr
 	assert not any(comment["body"].endswith(FIXUP_DELIVERED_MARKER) for comment in state["comments"])
 	assert _closed_completed(state)
+
+
+def test_fixup_delivered_close_logs_a_warning_when_the_wait_update_fails(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, FIXUP_DELIVERED_HEAL_ITEM, comments=_fixup_delivered_wait(), issues=MERGED_FIXUP,
+		FAKE_GH_FAIL_WAIT_DONE="1", **_fixup_delivered_env())
+	assert "fixup=50 op=fixup_delivered outcome=closed pr=60" in result.stdout, result.stdout + result.stderr
+	assert "item=7 kind=issue stop=blocked fixup=50 op=fixup_delivered outcome=warn reason=wait_update_failed" in result.stdout, result.stdout
+	assert _closed_completed(state)
+	assert not any(comment["body"].startswith("/answer") for comment in state["comments"])
+	assert not any("ai:unblock-wait:v1 item=7 fixup=50 done" in fields.get("body", "") for _, fields in state["patched"])
 
 
 def test_nothing_to_implement_close_runs_before_fixup_delivered_close(tmp_path: Path) -> None:

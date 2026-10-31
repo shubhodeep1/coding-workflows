@@ -13,4 +13,4 @@ What this means for operators: a heal issue whose fix landed on `main` closes it
 
 ### For contributors
 
-The check runs after the #8470 nothing-to-implement close. `scripts/unblock_actions.py fixup-delivered-body` does the body parsing without the network. Any read failure resumes; a failed write keeps the fix-up wait open, and the marker `<!-- ai:unblock-fixup-delivered:v1 item=<n> fixup=<f> pr=<pr> -->` stops the comment from being posted twice. Log: `UNBLOCK_JUDGE ... op=fixup_delivered outcome=closed|resume|skip`.
+The check runs after the #8470 nothing-to-implement close. `scripts/unblock_actions.py fixup-delivered-body` does the body parsing without the network. Any read failure resumes; a failed write keeps the fix-up wait open, and the marker `<!-- ai:unblock-fixup-delivered:v1 item=<n> fixup=<f> pr=<pr> -->` stops the comment from being posted twice. Log: `UNBLOCK_JUDGE ... op=fixup_delivered outcome=closed|resume|skip`, plus `outcome=warn reason=wait_update_failed` when the issue closed but the wait comment could not be marked done.

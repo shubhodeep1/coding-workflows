@@ -116,6 +116,7 @@
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=nothing_to_implement outcome=closed|skip reason=comment_failed|label_failed|close_failed
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=closed|resume|skip reason=|pr=
+#      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=warn reason=wait_update_failed
 #      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
 #      UNBLOCK_JUDGE item= op=hold_request issue= outcome=posted|failed|skip reason=
 #      UNBLOCK_TARGET_REPO_GUARD item= verdict= outcome=consumer|harness|mixed|disabled paths=
@@ -1838,7 +1839,7 @@ unblock_main()
 						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; it already carried this item's fix, so the unblock judge closed this item as completed instead of posting a resume command.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" \
-							|| unblock_log "item=${ITEM} fixup=${wait_fixup} op=fixup_delivered outcome=warn reason=wait_update_failed"
+							|| unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} op=fixup_delivered outcome=warn reason=wait_update_failed"
 					fi
 					return 0
 				fi
