@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_retro_fanout.sh:382-397 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `grep -qE 'HTTP 404'` check runs on `comment_reconfirm_err`, which captures the entire stderr of `gh_retry`, so it can misclassify the failure.\n  WHY: Unrelated diagnostics can hide a real 404 or an unrelated error body can match it, leading to an incorrect decision (source severity MAJOR; other reviewers adjudicated this as not a real issue).\n- .github/workflows/workflow-log-analysis.yml:739-741 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `grep -qE 'HTTP 404'` check runs on `TRACKER_COMMENT_RECONFIRM_ERR`, which captures the entire stderr of `gh_retry`.\n  WHY: `gh_retry` stderr is not guaranteed to contain only the specific HTTP error message (source severity MAJOR; other reviewers adjudicated this as not a real issue).\n- scripts/orchestrate_poll_process.sh:14002-14008 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The `merge_err_for_state` awk decode is not pinned by an executable test on the early-return paths, and it assumes a strict `::warning::  stderr: <escaped_text>` format.\n  WHY: A change to the `gh_retry` output shape, the prefix or the escape alphabet would leave escape sequences in `final_merge_error` with no failing test (NIT in both sources).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nHARDENING (not a finding): scripts/orchestrate_poll_process.sh lines 14002-14008 has no executable test pinning the `merge_err_for_state` decode on the early-return paths. Suggested fix: add one small contract test (about 8 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_retro_fanout.sh:382-397 | severity=MAJOR | confidence=4\n  PROBLEM: The `grep -qE 'HTTP 404'` check runs on `comment_reconfirm_err`, which captures the entire stderr of `gh_retry`.\n  WHY: `gh_retry` can emit other warnings or diagnostics, so the check might miss a real 404 or match an unrelated error body.\n- .github/workflows/workflow-log-analysis.yml:739-741 | severity=MAJOR | confidence=4\n  PROBLEM: The `grep -qE 'HTTP 404'` check runs on `TRACKER_COMMENT_RECONFIRM_ERR`, which captures the entire stderr of `gh_retry`.\n  WHY: Same as `scripts/workflow_retro_fanout.sh`; `gh_retry` stderr is not guaranteed to contain only the specific HTTP error message.\n- scripts/orchestrate_poll_process.sh:14002-14008 | severity=NIT | confidence=3\n  PROBLEM: The awk decoder for `merge_err_for_state` assumes a strict `::warning::  stderr: <escaped_text>` format.\n  WHY: If the `gh_retry` output shape changes, the decoder may strip unrelated content or leave escape sequences in the state file.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:14002-14008 | severity=NIT | confidence=3\n  PROBLEM: The `merge_err_for_state` decode feeds the `Last recorded error` text on the head-moved (14016-14021), mergeable=false (14026-14031) and mergeability-unknown (14033-14037) paths. No executable test exercises any of them with a `gh_retry`-shaped `merge_err`.\n  WHY: A future change to the `::warning::  stderr: ` prefix, the 2048 cap or the `%25`/`%0A`/`%0D` escape alphabet in scripts/gh_helpers.sh would silently leave escape sequences in `.final_merge_error` with no failing test.\nHARDENING (not a finding): .github/workflows/workflow-log-analysis.yml 739-743 (and scripts/workflow_retro_fanout.sh:389-397): the \"could not reconfirm it\" and stale-body paths exit without showing why the reconfirm GET failed. Suggested fix: print a bounded, escaped excerpt of the err file before each `exit 1` (about 4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c2016ba752440b7976e991094e18d7f5a9c0959033cfc749373b5d0fb788111b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8513,
+    "run_id": "41181603473",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41181603473",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031081557_b7ee6e967a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8513,
+    "run_id": "41181603473"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T08:15:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
