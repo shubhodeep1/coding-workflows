@@ -6803,7 +6803,7 @@ def parse_suspect_compare(compare: Any) -> dict[str, Any]:
 	"""
 	result: dict[str, Any] = {
 		"commits": [], "files": [], "pipeline_files": [], "total_commits": 0,
-		"commits_truncated": False, "commits_page_truncated": False, "pipeline_files_truncated": False, "reason": "malformed",
+		"commits_truncated": False, "commits_capped": False, "commits_page_truncated": False, "pipeline_files_truncated": False, "reason": "malformed",
 	}
 	if not isinstance(compare, dict) or not isinstance(compare.get("status"), str):
 		return result
@@ -6815,6 +6815,8 @@ def parse_suspect_compare(compare: Any) -> dict[str, Any]:
 	result["commits"] = parsed[-SUSPECT_COMMITS_MAX:]
 	result["total_commits"] = total
 	result["commits_truncated"] = total > len(result["commits"])
+	# True only when the SUSPECT_COMMITS_MAX cap itself removed valid commits.
+	result["commits_capped"] = len(parsed) > SUSPECT_COMMITS_MAX
 	# An unpaginated compare returns only the oldest page of a long range, so
 	# its tail is then not the newest part of the range.
 	# Count what GitHub listed, not what survived validation, so a dropped
@@ -6894,7 +6896,7 @@ def render_suspect_commits_section(
 	failing = failing_sha[:7] if isinstance(failing_sha, str) and _SUSPECT_SHA_RE.fullmatch(failing_sha) else "unknown"
 	# Only the SUSPECT_COMMITS_MAX cap leaves newer commits out; a malformed entry dropped
 	# by validation does not.
-	shown = f", newest {len(commits)} shown" if total > len(commits) and len(commits) >= SUSPECT_COMMITS_MAX else ""
+	shown = f", newest {len(commits)} shown" if total > len(commits) and doc.get("commits_capped") is True else ""
 	returned = doc.get("commits_returned")
 	if doc.get("commits_page_truncated") is True and isinstance(returned, int) and not isinstance(returned, bool):
 		shown = f", GitHub listed only the oldest {max(0, returned)}; the last {len(commits)} of those shown, the newest are not listed"
