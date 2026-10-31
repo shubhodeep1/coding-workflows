@@ -70,6 +70,12 @@
 # UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #8470): once a
 # fix-up is done, a standalone issue whose planning stop was "nothing to
 # implement" is closed as completed instead of resumed; `false` resumes it.
+# UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED (default true; #8530): once a fix-up
+# merged into the default branch and changed every file a standalone
+# pipeline-authored ai:workflow-heal issue lists under `## Affected files`,
+# while the issue's `Target branch:` is another branch, the issue is closed as
+# completed instead of resumed; `false` resumes it. Read from the script's
+# environment only; unblock_judge.yml does not forward it.
 #
 # Both engines run in a network-isolated container with a host-side provider relay;
 # its output is data, and verdicts containing literal or encoded credentials
@@ -109,6 +115,7 @@
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=nothing_to_implement outcome=closed|skip reason=comment_failed|label_failed|close_failed
+#      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=closed|resume|skip reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
 #      UNBLOCK_JUDGE item= op=hold_request issue= outcome=posted|failed|skip reason=
 #      UNBLOCK_TARGET_REPO_GUARD item= verdict= outcome=consumer|harness|mixed|disabled paths=
@@ -479,6 +486,115 @@ ${marker}" >/dev/null 2>&1; then
 	fi
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT="closed"
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=closed"
+	return 0
+}
+
+# unblock_fixup_delivered_close <fixup> <done text> <tracking> (#8530): a
+# standalone ai:workflow-heal issue, filed by the pipeline login, whose
+# `Target branch:` is not the default branch, is closed as completed once its
+# fix-up's ai/issue-<fixup> pull request merged into the default branch and
+# changed every file the issue lists under `## Affected files`. Resuming it
+# would plan on the target branch, which does not have the fix yet, and plan
+# the same change again (#8481 after fix-up #8484 / PR #8486).
+# Same return contract as unblock_nothing_to_implement_close: 0 when this run
+# must stop (closed, or a write failed: the fix-up wait stays open so the next
+# run retries, and the trusted marker is posted once only); 1 to resume as
+# usual. It sets UNBLOCK_FIXUP_DELIVERED_RESULT to `closed` after a close.
+# UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED=false (default true) restores the resume.
+# API budget (CLAUDE.md §15): at most two reads (the merged ai/issue-<fixup>
+# pull request, then its paginated file list), and only after every local
+# check passed; three writes on a close (comment, label, close), plus the
+# caller's wait update. Any read failure resumes as usual (fail open).
+unblock_fixup_delivered_close()
+{
+	local fixup="$1" done_text="$2" tracking_issue="$3"
+	local check_file="${RUNTIME_DIR}/fixup_delivered.json" files_file="${RUNTIME_DIR}/fixup_delivered_files.txt"
+	local pr_json pr_number pr_base pr_default pr_sha target marker owner path status reason log_head
+	log_head="item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=$(printf '%s' "${fixup}" | tr -cd '0-9' | cut -c1-20) op=fixup_delivered"
+	UNBLOCK_FIXUP_DELIVERED_RESULT=""
+	if [ "$(printf '%s' "${UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+		unblock_log "${log_head} outcome=resume reason=disabled"
+		return 1
+	fi
+	if [ "${ITEM_KIND}" != "issue" ] || [ -n "${tracking_issue}" ] || [ "${done_text}" != "merged" ] || [[ ! "${fixup}" =~ ^[1-9][0-9]*$ ]]; then
+		unblock_log "${log_head} outcome=resume reason=not_applicable"
+		return 1
+	fi
+	# Local checks first (no network): the trusted heal body, its single
+	# target branch and its Affected files (scripts/unblock_actions.py).
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" fixup-delivered-body --item-file "${RUNTIME_DIR}/item.json" \
+		--repo "${REPOSITORY}" --pipeline-login "${UNBLOCK_LOGIN}" > "${check_file}" 2>/dev/null \
+		|| ! jq -e '.status | type == "string"' "${check_file}" >/dev/null 2>&1; then
+		unblock_log "${log_head} outcome=resume reason=check_failed"
+		return 1
+	fi
+	status="$(jq -r '.status' "${check_file}")"
+	if [ "${status}" != "ok" ]; then
+		reason="$(jq -r '.reason // ""' "${check_file}" | tr -cd 'a-z_' | cut -c1-40)"
+		unblock_log "${log_head} outcome=resume reason=${reason:-check_failed}"
+		return 1
+	fi
+	target="$(jq -r '.target_branch // ""' "${check_file}" | tr -cd 'A-Za-z0-9._/-' | cut -c1-100)"
+	if [ -z "${target}" ]; then
+		unblock_log "${log_head} outcome=resume reason=no_target_branch"
+		return 1
+	fi
+	if ! jq -e '(.paths | type == "array") and (.paths | length > 0)' "${check_file}" >/dev/null 2>&1; then
+		unblock_log "${log_head} outcome=resume reason=no_affected_files"
+		return 1
+	fi
+	# Read 1: the fix-up's own merged branch, as in unblock_heal_already_fixed.
+	owner="${REPOSITORY%%/*}"
+	pr_json="$(gh api -X GET "repos/${REPOSITORY}/pulls" -f state=closed -f head="${owner}:ai/issue-${fixup}" -f per_page=10 \
+		--jq '[.[] | select(.merged_at != null and .head.ref == "ai/issue-'"${fixup}"'")] | sort_by(.merged_at) | last // empty' 2>/dev/null || true)"
+	pr_number="$(jq -r '.number // ""' <<< "${pr_json}" 2>/dev/null | tr -cd '0-9' | cut -c1-20)"
+	if [ -z "${pr_json}" ] || [[ ! "${pr_number}" =~ ^[1-9][0-9]*$ ]] \
+		|| ! jq -e '.merged_at != null and .head.ref == "ai/issue-'"${fixup}"'"' <<< "${pr_json}" >/dev/null 2>&1; then
+		unblock_log "${log_head} outcome=resume reason=no_merged_pr"
+		return 1
+	fi
+	pr_base="$(jq -r '.base.ref // ""' <<< "${pr_json}" | tr -cd 'A-Za-z0-9._/-' | cut -c1-100)"
+	pr_default="$(jq -r '.base.repo.default_branch // ""' <<< "${pr_json}" | tr -cd 'A-Za-z0-9._/-' | cut -c1-100)"
+	pr_sha="$(jq -r '.merge_commit_sha // ""' <<< "${pr_json}" | tr -cd '0-9a-f' | cut -c1-40)"
+	if [ -z "${pr_default}" ] || [ "${pr_base}" != "${pr_default}" ]; then
+		unblock_log "${log_head} outcome=resume reason=pr_not_on_default pr=${pr_number}"
+		return 1
+	fi
+	if [ "${target}" = "${pr_default}" ]; then
+		unblock_log "${log_head} outcome=resume reason=target_is_default pr=${pr_number}"
+		return 1
+	fi
+	# Read 2: the pull request's changed files must cover every affected path.
+	if ! gh api -X GET --paginate "repos/${REPOSITORY}/pulls/${pr_number}/files" -f per_page=100 --jq '.[].filename' > "${files_file}" 2>/dev/null; then
+		unblock_log "${log_head} outcome=resume reason=pr_files_unavailable pr=${pr_number}"
+		return 1
+	fi
+	while IFS= read -r path; do
+		if ! grep -Fxq -- "${path}" "${files_file}"; then
+			unblock_log "${log_head} outcome=resume reason=files_not_covered pr=${pr_number}"
+			return 1
+		fi
+	done < <(jq -r '.paths[]' "${check_file}")
+	marker="<!-- ai:unblock-fixup-delivered:v1 item=${ITEM} fixup=${fixup} pr=${pr_number} -->"
+	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
+		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
+		:
+	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: fix-up #${fixup} (pull request #${pr_number}, merged into \`${pr_default}\`${pr_sha:+ as \`${pr_sha}\`}) changed every file this issue lists under Affected files. This issue targets \`${target}\`, which does not have that commit yet, so planning there would redo the same change. The fix reaches \`${target}\` with the next release. Reopen this issue and reply \`/reclarify\` if work is still missing.
+
+${marker}" >/dev/null 2>&1; then
+		unblock_log "${log_head} outcome=skip reason=comment_failed pr=${pr_number}"
+		return 0
+	fi
+	if ! gh api -X POST "repos/${REPOSITORY}/issues/${ITEM}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
+		unblock_log "${log_head} outcome=skip reason=label_failed pr=${pr_number}"
+		return 0
+	fi
+	if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${ITEM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+		unblock_log "${log_head} outcome=skip reason=close_failed pr=${pr_number}"
+		return 0
+	fi
+	UNBLOCK_FIXUP_DELIVERED_RESULT="closed"
+	unblock_log "${log_head} outcome=closed pr=${pr_number}"
 	return 0
 }
 
@@ -1708,6 +1824,16 @@ unblock_main()
 				if unblock_nothing_to_implement_close "${wait_fixup}" "${fixup_done_text}" "${tracking}"; then
 					if [ "${UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT:-}" = "closed" ]; then
 						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; planning had found nothing to implement here, so the unblock judge closed this item as completed instead of posting a resume command.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
+					fi
+					return 0
+				fi
+				# #8530: a heal issue whose fix-up already delivered its fix on the
+				# default branch is closed, not re-planned on its target branch.
+				if unblock_fixup_delivered_close "${wait_fixup}" "${fixup_done_text}" "${tracking}"; then
+					if [ "${UNBLOCK_FIXUP_DELIVERED_RESULT:-}" = "closed" ]; then
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; it already carried this item's fix, so the unblock judge closed this item as completed instead of posting a resume command.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 					fi

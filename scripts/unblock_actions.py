@@ -65,6 +65,12 @@ the network; the shell only executes.
       `ai:check-triage-escalated`, or the `check-failure-triage:pr=` marker),
       and the issue's single line-anchored integration branch. Conflicting PR
       numbers or a URL into another repository give `pr: null`.
+  fixup-delivered-body --item-file PATH --repo R --pipeline-login L
+      Reads the already-fetched item JSON and prints `{"status": "ok"|"skip",
+      "reason": s, "target_branch": s|null, "paths": [s]}` for the unblock
+      judge's fix-up-delivered close (#8530): a pipeline-authored
+      `ai:workflow-heal` issue's single `Target branch:` and the paths under
+      `## Affected files`. Any unparsed line there is a skip.
   regrant --context-file PATH --rejection-file PATH
       For a scope-blocked issue whose newest automation-path rejection
       (`unblock_ledger.py automation-rejection`) the current guard now grants:
@@ -200,6 +206,15 @@ CHECK_TRIAGE_PR_LINE_RE = re.compile(
 )
 CI_OWNER_STATES = ("superseded", "open", "verified", "unverified")
 CI_OWNER_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+# A fix-up that already delivered a heal issue's fix (#8530): the issue's
+# `## Affected files` entries, `- owner/repo: `path`` (the repository part may
+# be backticked, a note may follow the path) or `- `owner/repo:path``.
+FIXUP_DELIVERED_HEAL_LABEL = "ai:workflow-heal"
+FIXUP_DELIVERED_AFFECTED_ENTRY_RE = re.compile(
+	r"^\s*[-*]\s+(?:`?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`?:\s+`([^`\n]+)`|`([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+):([^`\n]+)`)(?:\s.*)?$"
+)
+FIXUP_DELIVERED_PATH_RE = re.compile(r"^[A-Za-z0-9._@+-][A-Za-z0-9._/@+-]{0,199}$")
+FIXUP_DELIVERED_MAX_PATHS = 50
 
 
 class UsageError(Exception):
@@ -283,6 +298,75 @@ def _ci_owner(raw: object) -> dict | None:
 	if state == "open" and head_ref is None:
 		return unverified
 	return {"number": number, "state": state, "head_sha": head_sha, "head_ref": head_ref}
+
+
+def _fixup_delivered_path_ok(path: str) -> bool:
+	return (
+		bool(FIXUP_DELIVERED_PATH_RE.fullmatch(path)) and "//" not in path
+		and not path.endswith("/") and ".." not in path.split("/") and "." not in path.split("/")
+	)
+
+
+def fixup_delivered_body(item: object, repo: str, pipeline_login: str) -> dict:
+	"""The local checks of the fix-up-delivered close (#8530), no network.
+
+	For a pipeline-authored `ai:workflow-heal` issue: its single `Target
+	branch:` value and the repo-relative paths it lists under `## Affected
+	files`. Every other shape is `skip` with a fixed reason, and any line in
+	that section that does not parse is `affected_files_unparsed`, so an
+	unread line never lets a partial fix close the issue.
+	"""
+	def skip(reason: str) -> dict:
+		return {"status": "skip", "reason": reason, "target_branch": None, "paths": []}
+
+	if not isinstance(item, dict) or "pull_request" in item:
+		return skip("not_applicable")
+	labels = [label.get("name") for label in item.get("labels") or [] if isinstance(label, dict)]
+	if FIXUP_DELIVERED_HEAL_LABEL not in labels:
+		return skip("not_heal")
+	user = item.get("user") if isinstance(item.get("user"), dict) else {}
+	author = user.get("login") if isinstance(user.get("login"), str) else ""
+	if not author or not pipeline_login or author != pipeline_login:
+		return skip("untrusted_body")
+	body = item.get("body") if isinstance(item.get("body"), str) else ""
+	lines = body.splitlines()
+	# One line at a time: on the whole body the pattern's trailing `\s.*` can
+	# run into the next line and hide a second `Target branch:` line.
+	branches = [
+		(match.group(1) or match.group(2) or "").strip()
+		for match in (TARGET_BRANCH_LINE_RE.match(line) for line in lines) if match
+	]
+	if len(branches) != 1 or not _safe_branch_ref(branches[0]):
+		return skip("no_target_branch")
+	headings = [index for index, line in enumerate(lines) if line.strip().lower() == "## affected files"]
+	if len(headings) != 1:
+		return skip("no_affected_files")
+	paths: list[str] = []
+	other_repo = False
+	for line in lines[headings[0] + 1:]:
+		stripped = line.strip()
+		if stripped.startswith(("## ", "---")):
+			break
+		if not stripped:
+			continue
+		match = FIXUP_DELIVERED_AFFECTED_ENTRY_RE.match(line)
+		if not match:
+			return skip("affected_files_unparsed")
+		entry_repo = match.group(1) or match.group(3)
+		path = (match.group(2) or match.group(4) or "").strip()
+		if not _fixup_delivered_path_ok(path):
+			return skip("affected_files_unparsed")
+		if entry_repo.lower() != repo.lower():
+			other_repo = True
+		if path not in paths:
+			paths.append(path)
+		if len(paths) > FIXUP_DELIVERED_MAX_PATHS:
+			return skip("affected_files_unparsed")
+	if not paths:
+		return skip("no_affected_files")
+	if other_repo:
+		return skip("other_repo_files")
+	return {"status": "ok", "reason": "ok", "target_branch": branches[0], "paths": paths}
 
 
 def _security_reissue_metadata(body: str, labels: list[str], item: int) -> tuple[int | None, str | None, bool]:
@@ -1227,6 +1311,11 @@ def build_parser() -> argparse.ArgumentParser:
 	owner_cmd = sub.add_parser("ci-owner")
 	owner_cmd.add_argument("--item-file", required=True)
 	owner_cmd.add_argument("--repo", required=True)
+	# #8530: read-only checks of the fix-up-delivered close.
+	delivered_cmd = sub.add_parser("fixup-delivered-body")
+	delivered_cmd.add_argument("--item-file", required=True)
+	delivered_cmd.add_argument("--repo", required=True)
+	delivered_cmd.add_argument("--pipeline-login", required=True)
 	regrant_cmd = sub.add_parser("regrant")
 	regrant_cmd.add_argument("--context-file", required=True)
 	regrant_cmd.add_argument("--rejection-file", required=True)
@@ -1247,6 +1336,8 @@ def run(argv: list[str] | None = None) -> dict:
 		result = ci_owner_candidate(body, labels, args.repo)
 		result["declared_branch"] = declared_integration_branch(body)
 		return result
+	if args.command == "fixup-delivered-body":
+		return fixup_delivered_body(_read_json(args.item_file, "--item-file"), args.repo, args.pipeline_login)
 	ctx = _context(_read_json(args.context_file, "--context-file"))
 	if args.command == "followup":
 		if args.fixup < 1:
