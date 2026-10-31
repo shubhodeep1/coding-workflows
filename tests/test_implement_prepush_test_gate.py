@@ -530,3 +530,147 @@ def test_journal_rules_prompt_is_staged_and_the_helper_is_staged():
 	assert "--stage implement" in block and "prepush_gate/run2/result.json" in block
 	names = [name for name, _ in _steps(text)]
 	assert names.index("Record attempt journal entry (implement)") == names.index("Create Pull Request") + 1
+
+
+# --- Repair loop (issue #8427, P3) -------------------------------------------
+
+
+def _fail_n(count: int) -> dict:
+	return _result("fail", failures=[{"test": f"tests/test_a.py#{n}", "file": "tests/test_a.py", "names": ["test_x"],
+		"tail": "AssertionError\n"} for n in range(count)])
+
+
+def _loop_env(env: dict[str, str], **extra: str) -> dict[str, str]:
+	env = dict(env)
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	env.update(extra)
+	return env
+
+
+def _loop_line(proc: subprocess.CompletedProcess) -> str:
+	lines = [line for line in proc.stderr.splitlines() if line.startswith("PERSIST repair_loop outcome=") and " turns=" in line]
+	assert len(lines) == 1, proc.stderr
+	return lines[0]
+
+
+def test_loop_repairs_while_the_failure_count_drops(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(3), _fail_n(1), PASS])
+	proc = _run_step(repo, _loop_env(env))
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _editor_calls(tmp_path) == 2
+	assert _docker_runs(tmp_path) == 3
+	assert all((tmp_path / "runtime" / "prepush_gate" / f"run{n}" / "result.json").is_file() for n in (1, 2, 3))
+	text = _summary(tmp_path).read_text(encoding="utf-8")
+	assert "Repair turn: ran x2" in text and "Status: **pass**" in text
+	assert _loop_line(proc) == "PERSIST repair_loop outcome=pass turns=2 stop=clean acceptance=none"
+
+
+def test_loop_stops_without_progress(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(3), _fail_n(3)])
+	proc = _run_step(repo, _loop_env(env))
+	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 2
+	assert "stop=no_progress" in _loop_line(proc)
+	assert "Repair turn: ran x1" in _summary(tmp_path).read_text(encoding="utf-8")
+
+
+def test_loop_honours_the_turn_cap(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(5), _fail_n(4), _fail_n(3), _fail_n(2)])
+	proc = _run_step(repo, _loop_env(env, PERSIST_REPAIR_MAX_TURNS="2"))
+	assert _editor_calls(tmp_path) == 2 and _docker_runs(tmp_path) == 3
+	assert "turns=2 stop=max_turns" in _loop_line(proc)
+
+
+def test_loop_turn_cap_falls_back_to_three_for_bad_values(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(5), _fail_n(4), _fail_n(3), _fail_n(2)])
+	proc = _run_step(repo, _loop_env(env, PERSIST_REPAIR_MAX_TURNS="many"))
+	assert _editor_calls(tmp_path) == 3 and _docker_runs(tmp_path) == 4
+	assert "turns=3 stop=max_turns" in _loop_line(proc)
+
+
+def test_loop_ends_on_a_reverted_repair(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(3), PASS])
+	proc = _run_step(repo, _loop_env(env, FAKE_SYNTAX_RC="1"))
+	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 1
+	assert "turns=0 stop=reverted" in _loop_line(proc)
+	assert "Repair turn: reverted (syntax)" in _summary(tmp_path).read_text(encoding="utf-8")
+
+
+def test_loop_stops_when_the_step_budget_cannot_fit_a_turn(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(3), PASS])
+	proc = _run_step(repo, _loop_env(env, PREPUSH_TEST_GATE_TIMEOUT_MINUTES="53"))
+	assert _editor_calls(tmp_path) == 0 and _docker_runs(tmp_path) == 1
+	assert "turns=0 stop=budget" in _loop_line(proc)
+	assert "Repair turn: skipped (step time budget)" in _summary(tmp_path).read_text(encoding="utf-8")
+
+
+def _stage_acceptance(env: dict[str, str], tmp_path: Path, red_on_base: bool = True) -> None:
+	import sys
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import acceptance_check
+	run_dir = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
+	for name in ("acceptance_check.py", "partial_delivery.py", "targeted_file_context.py"):
+		shutil.copy2(REPO_ROOT / "scripts" / name, run_dir / name)
+	obj = {"schema": "acceptance.v1", "state": "valid", "source": "plan", "errors": [], "checks": [],
+		"tests": [{"path": "tests/test_a.py", "name": "test_x", "red_on_base": red_on_base}],
+		"post_merge": None, "post_merge_none": "library change only"}
+	plan = tmp_path / "plan.txt"
+	plan.write_text("Implementation Plan\n\n" + acceptance_check.marker_line(obj) + "\n<!-- ai:plan-proposal:v1 -->\n", encoding="utf-8")
+	env["PLAN_FILE"] = str(plan)
+
+
+def test_red_on_base_target_passing_on_base_is_unmet_but_drives_no_repair(tmp_path):
+	# The merge-base result cannot change by editing head, so no repair turn.
+	unmet = dict(PASS, acceptance={"tests/test_a.py::test_x": {"head": "pass", "base": "pass"}})
+	repo, env = _setup(tmp_path, [unmet, PASS])
+	env = _loop_env(env)
+	_stage_acceptance(env, tmp_path)
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _editor_calls(tmp_path) == 0 and _docker_runs(tmp_path) == 1
+	assert _loop_line(proc) == "PERSIST repair_loop outcome=pass turns=0 stop=clean acceptance=unmet"
+	scored = json.loads((tmp_path / "runtime" / "acceptance_result.json").read_text(encoding="utf-8"))
+	assert scored["state"] == "unmet" and scored["extra_unmet"] == 0
+
+
+def test_unmet_done_check_target_drives_a_repair(tmp_path):
+	unmet = dict(PASS, acceptance={"tests/test_a.py::test_x": {"head": "fail", "base": "not_run"}})
+	met = dict(PASS, acceptance={"tests/test_a.py::test_x": {"head": "pass", "base": "fail"}})
+	repo, env = _setup(tmp_path, [unmet, met])
+	env = _loop_env(env)
+	_stage_acceptance(env, tmp_path)
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	first_run = next(line for line in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "dst=/inputs,readonly" in first_run
+	assert "--tests-file /inputs/tests.txt" in first_run and "--expect-baseline-fail-file /inputs/baseline_fail.txt" in first_run
+	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 2
+	prompt = (_work(tmp_path) / "editor_prompt.txt").read_text(encoding="utf-8")
+	block = prompt.split("=== BEGIN UNTRUSTED DONE-CHECK STATUS (host-computed; targets are plan text) ===", 1)[1]
+	block = block.split("=== END UNTRUSTED DONE-CHECK STATUS ===", 1)[0]
+	assert block.strip() == "UNTRUSTED_DATA: tests/test_a.py::test_x: unmet"
+	assert "fix the change, not the test" in prompt
+	assert _loop_line(proc) == "PERSIST repair_loop outcome=pass turns=1 stop=met acceptance=met"
+	scored = json.loads((tmp_path / "runtime" / "acceptance_result.json").read_text(encoding="utf-8"))
+	assert scored["state"] == "met"
+
+
+def test_loop_off_keeps_the_docker_argv_and_writes_no_done_check_files(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(3), _fail_n(1)])
+	_stage_acceptance(env, tmp_path)
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "/inputs" not in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 2
+	assert "PERSIST repair_loop" not in proc.stderr
+	assert not (tmp_path / "runtime" / "acceptance_result.json").exists()
+	assert not (tmp_path / "runtime" / "prepush_gate" / "tests.txt").exists()
+	assert "Repair turn: ran\n" in _summary(tmp_path).read_text(encoding="utf-8")
+
+
+def test_workflows_default_the_repair_loop_switches_off():
+	for path in (IMPLEMENT_YML, REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"):
+		text = path.read_text(encoding="utf-8")
+		assert "  PERSIST_REPAIR_LOOP_ENABLED: ${{ vars.PERSIST_REPAIR_LOOP_ENABLED || 'false' }}\n" in text
+		assert "  PERSIST_REPAIR_MAX_TURNS: ${{ vars.PERSIST_REPAIR_MAX_TURNS || '3' }}\n" in text
+	script = STEP_SCRIPT.read_text(encoding="utf-8")
+	assert '"${PERSIST_REPAIR_LOOP_ENABLED:-false}"' in script and '"${PERSIST_REPAIR_MAX_TURNS:-3}"' in script

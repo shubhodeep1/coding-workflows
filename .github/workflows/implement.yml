@@ -21,6 +21,10 @@ env:
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
   # Done-check (issue #8427, P2): default off; see scripts/acceptance_check.py.
   PERSIST_ACCEPTANCE_ENABLED: ${{ vars.PERSIST_ACCEPTANCE_ENABLED || 'false' }}
+  # Repair loop (issue #8427, P3): default off; see scripts/implement_step_prepush_test_gate.sh.
+  PERSIST_REPAIR_LOOP_ENABLED: ${{ vars.PERSIST_REPAIR_LOOP_ENABLED || 'false' }}
+  # Repair loop (issue #8427, P3): repair turns cap, clamped to 1..5.
+  PERSIST_REPAIR_MAX_TURNS: ${{ vars.PERSIST_REPAIR_MAX_TURNS || '3' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: implement
   # Unattended §13: no Python bytecode in the checkout. Host steps import the
@@ -6152,10 +6156,15 @@ jobs:
             { echo; cat "${GATE_SUMMARY}"; } >> "${PR_BODY_FILE}"
           fi
           # Done-check (issue #8427, P2): the trailer marker of the trusted plan comment.
-          if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = true ] && [ -s "${PLAN_FILE:-}" ]; then
+          if { [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = true ] || [ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ]; } && [ -s "${PLAN_FILE:-}" ]; then
             ACCEPTANCE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/acceptance_check.py"
+            # Repair loop (issue #8427, P3): statuses from the gate's acceptance_result.json.
+            ACCEPTANCE_GATE_ARGS=()
+            if [ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ] && [ -f "${RUNTIME_DIR}/acceptance_result.json" ] && [ ! -L "${RUNTIME_DIR}/acceptance_result.json" ]; then
+              ACCEPTANCE_GATE_ARGS=(--gate-result "${RUNTIME_DIR}/acceptance_result.json")
+            fi
             if ACCEPTANCE_SECTION="$(python3 -I -B "${ACCEPTANCE_HELPER}" parse --plan-comment-file "${PLAN_FILE}" --out "${RUNTIME_DIR}/acceptance.json" \
-              && python3 -I -B "${ACCEPTANCE_HELPER}" render --in "${RUNTIME_DIR}/acceptance.json")"; then
+              && python3 -I -B "${ACCEPTANCE_HELPER}" render --in "${RUNTIME_DIR}/acceptance.json" ${ACCEPTANCE_GATE_ARGS[@]+"${ACCEPTANCE_GATE_ARGS[@]}"})"; then
               if [ -n "${ACCEPTANCE_SECTION}" ]; then printf '\n%s\n' "${ACCEPTANCE_SECTION}" >> "${PR_BODY_FILE}"; fi
             else
               echo "::warning::Could not render the done-check section for issue #${ISSUE_NUMBER}; the PR body omits it."
@@ -6217,6 +6226,20 @@ jobs:
             if [ -n "${PR_ENGINE_LABEL}" ]; then
               PR_CREATE_ARGS+=(--label "${PR_ENGINE_LABEL}")
               echo "AI_ENGINE_PR_LABEL issue=${ISSUE_NUMBER:-unknown} label=${PR_ENGINE_LABEL}"
+            fi
+          fi
+          # Repair loop (issue #8427, P3): an unmet done-check labels the PR (advisory, not a merge gate).
+          ACCEPTANCE_UNMET_LABEL=""
+          ACCEPTANCE_RESULT_FILE="${RUNTIME_DIR}/acceptance_result.json"
+          if [ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ] && [ -f "${ACCEPTANCE_RESULT_FILE}" ] && [ ! -L "${ACCEPTANCE_RESULT_FILE}" ] \
+            && [ "$(jq -r '.state // empty' "${ACCEPTANCE_RESULT_FILE}" 2>/dev/null || true)" = unmet ]; then
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/label_helpers.sh" 2>/dev/null || true
+            # Only an existing label may go to gh pr create; a missing one would fail it.
+            if type ensure_label_exists >/dev/null 2>&1 && ensure_label_exists "ai:acceptance-unmet" "${{ github.repository }}"; then
+              ACCEPTANCE_UNMET_LABEL="ai:acceptance-unmet"
+              PR_CREATE_ARGS+=(--label "${ACCEPTANCE_UNMET_LABEL}")
+            else
+              echo "::warning::Could not confirm label ai:acceptance-unmet; opening the PR without it."
             fi
           fi
 
@@ -6300,6 +6323,10 @@ jobs:
                 echo "::error::Could not copy the issue's engine label to existing PR ${EXISTING_PR}"
                 exit 1
               fi
+              if [ -n "${ACCEPTANCE_UNMET_LABEL:-}" ] && ! gh_retry gh pr edit "${EXISTING_PR}" \
+                  --repo "${{ github.repository }}" --add-label "${ACCEPTANCE_UNMET_LABEL}"; then
+                echo "::warning::Could not add ${ACCEPTANCE_UNMET_LABEL} to existing PR ${EXISTING_PR}"
+              fi
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -6339,7 +6366,8 @@ jobs:
           # final result (run2 after a repair turn, else run1); fail-open.
           outcome=fail gate=""
           [ "${PR_OUTCOME}" != success ] || outcome=ok
-          for g in "${RUNTIME_DIR}/prepush_gate/run2/result.json" "${RUNTIME_DIR}/prepush_gate/run1/result.json"; do
+          # The repair loop (issue #8427, P3) can leave its final result in run3..run6.
+          for g in "${RUNTIME_DIR}"/prepush_gate/run{6,5,4,3}/result.json "${RUNTIME_DIR}/prepush_gate/run2/result.json" "${RUNTIME_DIR}/prepush_gate/run1/result.json"; do
             if [ -f "${g}" ]; then gate="${g}"; break; fi
           done
           : > "${RUNTIME_DIR}/attempt_journal_files.txt"

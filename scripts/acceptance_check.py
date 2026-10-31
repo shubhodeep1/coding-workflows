@@ -33,8 +33,20 @@ CLI (exit 0 on handled outcomes; 2 on usage or IO errors):
 	marker --in F
 	parse --plan-comment-file F [--out F]
 	render --in F [--gate-result F]
+	gate-files --in F --tests-out F --baseline-out F          (P3)
+	gate-result --in F --gate-result F --out F                (P3)
+	fetch-plan --repo R --pr N --head-ref REF [--issue N] [--comments-file F]
+		[--trusted-login L] --out F                           (P3, review)
 Log lines (stderr, tokens only):
 	PERSIST acceptance outcome=<valid|invalid|none> errors=<n>
+
+Repair loop (issue #8427, P3; PERSIST_REPAIR_LOOP_ENABLED, read by the gate
+step scripts): `gate-files` turns a stored done-check into the pre-push gate's
+`--tests-file` / `--expect-baseline-fail-file` lists, `gate-result` scores the
+gate's `acceptance` map into `acceptance_result.v1` (the `acceptance.items`
+shape `render --gate-result` reads) and `fetch-plan` reads the done-check from
+the newest pipeline-authored plan comment of the PR's linked issue (one
+comments read plus one cached identity read, through attempt_journal.py).
 """
 
 from __future__ import annotations
@@ -499,6 +511,122 @@ def render(obj: dict, gate_result: Any = None) -> str:
 	return "\n".join(lines) + "\n"
 
 
+# --- Repair loop (issue #8427, P3) -------------------------------------------
+
+RESULT_SCHEMA = "acceptance_result.v1"
+UNMET_STATUSES = ("unmet", "unmet (passes on base)")
+
+
+def _target_of(test: dict) -> str:
+	return f"{test['path']}::{test['name']}" if test["name"] else test["path"]
+
+
+def gate_files(obj: Any) -> tuple[list[str], list[str]]:
+	"""(all test targets, red-on-base targets) of a valid done-check."""
+	obj = normalise(obj)
+	if obj["state"] != "valid":
+		return [], []
+	return [_target_of(t) for t in obj["tests"]], [_target_of(t) for t in obj["tests"] if t["red_on_base"]]
+
+
+def _test_status(test: dict, entry: Any) -> str:
+	if not isinstance(entry, dict):
+		return "not run"
+	head = entry.get("head")
+	if head == "fail":
+		return "unmet"
+	if head != "pass":
+		return "not run"
+	if not test["red_on_base"]:
+		return "met"
+	if entry.get("base") == "fail" or entry.get("base_reason") == "absent_on_base":
+		return "met"
+	if entry.get("base") == "pass":
+		return "unmet (passes on base)"
+	return "not run"
+
+
+def gate_result(obj: Any, gate: Any) -> dict:
+	"""Score a pre-push gate result.json against the done-check."""
+	obj = normalise(obj)
+	out = {"schema": RESULT_SCHEMA, "state": "none", "unmet_count": 0, "extra_unmet": 0, "acceptance": {"items": []}}
+	if obj["state"] != "valid":
+		return out
+	gate = gate if isinstance(gate, dict) else {}
+	acceptance = gate.get("acceptance") if isinstance(gate.get("acceptance"), dict) else {}
+	failures = gate.get("failures") if isinstance(gate.get("failures"), list) else []
+	failure_files = {f.get("file") for f in failures if isinstance(f, dict) and isinstance(f.get("file"), str)}
+	items: list[dict] = []
+	statuses: list[str] = []
+	for test in obj["tests"]:
+		target = _target_of(test)
+		status = _test_status(test, acceptance.get(target))
+		statuses.append(status)
+		items.append({"kind": "test", "target": target, "status": status})
+		if status in UNMET_STATUSES:
+			out["unmet_count"] += 1
+			# A target whose file is already a failure caused by this change
+			# is counted there; only the others add to the repair count.
+			# "unmet (passes on base)" comes from the merge-base tree, which
+			# no repair on head can change, so it never drives a repair turn.
+			if status == "unmet" and test["path"] not in failure_files:
+				out["extra_unmet"] += 1
+	for check in obj["checks"]:
+		items.append({"kind": "check", "target": check["name"], "status": "not run"})
+	if statuses and all(status == "met" for status in statuses):
+		out["state"] = "met"
+	elif any(status in UNMET_STATUSES for status in statuses):
+		out["state"] = "unmet"
+	else:
+		out["state"] = "not_run"
+	out["acceptance"]["items"] = items
+	return out
+
+
+def _plan_comment(comments: list, login: str) -> str | None:
+	"""Body of the newest comment by `login` that carries the plan trailer."""
+	import attempt_journal  # noqa: PLC0415 - lazy: only fetch-plan needs it
+
+	wanted = attempt_journal._norm_login(login)
+	best = None
+	for index, comment in enumerate(comments):
+		if not isinstance(comment, dict) or not wanted:
+			continue
+		if attempt_journal._norm_login(attempt_journal._comment_author(comment)) != wanted:
+			continue
+		body = comment.get("body")
+		if not isinstance(body, str) or PROPOSAL_TRAILER not in body:
+			continue
+		created = comment.get("created_at") or comment.get("createdAt") or ""
+		key = (created if isinstance(created, str) else "", index)
+		if best is None or key >= best[0]:
+			best = (key, body)
+	return best[1] if best else None
+
+
+def fetch_plan(repo: str | None, pr: str | None, head_ref: str | None, issue: str | None,
+		comments_file: str | None, trusted_login: str | None) -> tuple[dict, str]:
+	"""(acceptance.v1 object, reason token). Fail-open: state none on any error."""
+	import attempt_journal  # noqa: PLC0415 - lazy: validate/parse/render keep their imports
+
+	target = attempt_journal.resolve_target(issue, pr, head_ref)
+	if not target or (not issue and target == (pr or "")):
+		return _empty(), "plan_absent"
+	if not comments_file and not attempt_journal._valid_target(repo, target):
+		return _empty(), "fetch_failed"
+	login = attempt_journal.resolve_login(trusted_login)
+	if not login:
+		return _empty(), "identity_unavailable"
+	comments = attempt_journal.load_comments(comments_file, repo, target)
+	if comments is None:
+		return _empty(), "fetch_failed"
+	body = _plan_comment(comments, login)
+	if body is None:
+		return _empty(), "plan_absent"
+	obj = parse_marker(body)
+	return obj, ("ok" if obj["state"] == "valid" else "plan_absent")
+
+
 # --- CLI ----------------------------------------------------------------------
 
 
@@ -532,6 +660,22 @@ def build_parser() -> argparse.ArgumentParser:
 	ren = sub.add_parser("render")
 	ren.add_argument("--in", dest="in_file", required=True)
 	ren.add_argument("--gate-result")
+	files = sub.add_parser("gate-files")
+	files.add_argument("--in", dest="in_file", required=True)
+	files.add_argument("--tests-out", required=True)
+	files.add_argument("--baseline-out", required=True)
+	scored = sub.add_parser("gate-result")
+	scored.add_argument("--in", dest="in_file", required=True)
+	scored.add_argument("--gate-result", required=True)
+	scored.add_argument("--out", required=True)
+	fetch = sub.add_parser("fetch-plan")
+	fetch.add_argument("--repo")
+	fetch.add_argument("--pr")
+	fetch.add_argument("--head-ref")
+	fetch.add_argument("--issue")
+	fetch.add_argument("--comments-file")
+	fetch.add_argument("--trusted-login")
+	fetch.add_argument("--out", required=True)
 	return parser
 
 
@@ -556,6 +700,22 @@ def main(argv: list[str] | None = None) -> int:
 		elif args.cmd == "render":
 			gate = _read_json(args.gate_result) if args.gate_result else None
 			sys.stdout.write(render(_read_json(args.in_file), gate))
+		elif args.cmd == "gate-files":
+			tests, baseline = gate_files(_read_json(args.in_file))
+			Path(args.tests_out).write_text("".join(t + "\n" for t in tests), encoding="utf-8")
+			Path(args.baseline_out).write_text("".join(t + "\n" for t in baseline), encoding="utf-8")
+			print(len(tests))
+		elif args.cmd == "gate-result":
+			scored = gate_result(_read_json(args.in_file), _read_json(args.gate_result))
+			Path(args.out).write_text(_dump(scored), encoding="utf-8")
+			print(f"{scored['state']} {scored['extra_unmet']}")
+		elif args.cmd == "fetch-plan":
+			try:
+				obj, reason = fetch_plan(args.repo, args.pr, args.head_ref, args.issue, args.comments_file, args.trusted_login)
+			except Exception:  # noqa: BLE001 - fail open: no done-check
+				obj, reason = _empty(), "fetch_failed"
+			Path(args.out).write_text(_dump(obj), encoding="utf-8")
+			log(obj["state"], f"reason={reason}")
 	except OSError:
 		log("error", "reason=io")
 		return 2

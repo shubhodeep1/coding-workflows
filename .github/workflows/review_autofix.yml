@@ -119,6 +119,10 @@ env:
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+  # Repair loop (issue #8427, P3): default off; see scripts/review_autofix_step_prepush_test_gate.sh.
+  PERSIST_REPAIR_LOOP_ENABLED: ${{ vars.PERSIST_REPAIR_LOOP_ENABLED || 'false' }}
+  # Repair loop (issue #8427, P3): repair turns cap, clamped to 1..5.
+  PERSIST_REPAIR_MAX_TURNS: ${{ vars.PERSIST_REPAIR_MAX_TURNS || '3' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
   REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
@@ -3787,6 +3791,20 @@ jobs:
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
+      # Repair loop (issue #8427, P3): the done-check from the linked issue's plan
+      # comment, fetched here because the gate step has no token. Fail-open.
+      - name: Prepare done-check (repair loop)
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && vars.PREPUSH_TEST_GATE_MODE != 'off' && env.PERSIST_REPAIR_LOOP_ENABLED == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PREPUSH_TEST_GATE_STEP_MODE: acceptance_fetch
+        run: |
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_prepush_test_gate.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then echo "PERSIST acceptance outcome=skipped reason=script_absent"; exit 0; fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
       # Pre-push affected-test gate (plan P4): never blocks the commit or push.
       - name: Pre-push affected-test gate
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && vars.PREPUSH_TEST_GATE_MODE != 'off'
@@ -3814,6 +3832,20 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
+
+      # Repair loop (issue #8427, P3): ai:acceptance-unmet follows the committed
+      # head's done-check (one label write; a failed POST adds a create and a retry). Fail-open.
+      - name: Sync done-check label
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && vars.PREPUSH_TEST_GATE_MODE != 'off' && steps.commit_changes.outputs.did_commit == 'true' && env.PERSIST_REPAIR_LOOP_ENABLED == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PREPUSH_TEST_GATE_STEP_MODE: acceptance_label
+        run: |
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_prepush_test_gate.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then echo "PERSIST acceptance_label outcome=skipped reason=script_absent"; exit 0; fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       # Runs after the commit (#6484, run 37666355049): a failed cleanup must not
       # skip the commit and be misreported as editor_changes_lost; push and the

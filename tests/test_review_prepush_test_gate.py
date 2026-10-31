@@ -439,7 +439,9 @@ def test_step_sits_before_commit_changes_with_the_same_condition():
 	steps = _steps()
 	names = [step.get("name") for step in steps]
 	index = names.index(STEP_NAME)
-	assert names[index - 1] == "Decide partial-finalize validation/push safety"
+	# Repair loop (issue #8427, P3): the switch-gated done-check fetch sits in between.
+	assert names[index - 1] == "Prepare done-check (repair loop)"
+	assert names[index - 2] == "Decide partial-finalize validation/push safety"
 	assert names[index + 1] == "Commit changes"
 	step, commit = steps[index], steps[index + 1]
 	assert step["if"] == commit["if"] + " && vars.PREPUSH_TEST_GATE_MODE != 'off'"
@@ -712,3 +714,220 @@ def test_journal_rules_without_the_marker_line_are_logged_as_absent(tmp_path, mo
 	assert "=== EDITOR DELETIONS THIS ROUND ===" in text
 	assert "no marker here" not in text and "Role: x." not in text
 	assert "PERSIST journal outcome=skipped reason=rules_absent" in proc.stderr
+
+
+# --- Repair loop (issue #8427, P3) -------------------------------------------
+
+FAKE_GH = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "__WORK__/gh.log"
+case "$*" in
+	*" user"|"api user") printf '{"login": "pipeline-bot"}\n' ;;
+	*comments*) cat "__WORK__/comments.json" ;;
+	*) printf '{}\n' ;;
+esac
+exit 0
+'''
+
+
+def _fail_n(count: int) -> dict:
+	return _result("fail", failures=[{"test": f"tests/test_a.py#{n}", "file": "tests/test_a.py", "names": ["test_x"],
+		"tail": "AssertionError\n"} for n in range(count)])
+
+
+def _with_fake_gh(tmp_path: Path, env: dict[str, str], comments: list | None = None) -> Path:
+	work = _work(tmp_path)
+	gh = tmp_path / "bin" / "gh"
+	gh.write_text(FAKE_GH.replace("__WORK__", str(work)), encoding="utf-8")
+	gh.chmod(0o755)
+	(work / "comments.json").write_text(json.dumps(comments or []), encoding="utf-8")
+	support = tmp_path / "support" / "scripts"
+	for name in ("acceptance_check.py", "partial_delivery.py", "targeted_file_context.py", "attempt_journal.py", "gh_api_retry.py"):
+		shutil.copy2(REPO_ROOT / "scripts" / name, support / name)
+	env.update({"GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "12", "HEAD_REF": "ai/issue-7", "GH_TOKEN": "x"})
+	return work / "gh.log"
+
+
+def _gh_calls(log: Path) -> list[str]:
+	return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+def _marker_body(path: str = "tests/test_a.py") -> str:
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import acceptance_check
+	obj = {"schema": "acceptance.v1", "state": "valid", "source": "plan", "errors": [], "checks": [],
+		"tests": [{"path": path, "name": "", "red_on_base": False}], "post_merge": None, "post_merge_none": "library only"}
+	return "Implementation Plan\n" + acceptance_check.marker_line(obj) + "\n<!-- ai:plan-proposal:v1 -->"
+
+
+def test_review_loop_repairs_while_the_failure_count_drops(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(3), _fail_n(1), PASS])
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _editor_calls(tmp_path) == 2 and _docker_runs(tmp_path) == 3
+	assert "PERSIST repair_loop outcome=pass turns=2 stop=clean acceptance=none" in proc.stderr
+	assert "Repair turn: ran x2" in _summary(tmp_path).read_text(encoding="utf-8")
+
+
+def test_review_loop_stops_without_progress(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(2), _fail_n(2)])
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	proc = _run_step(tmp_path, repo, env)
+	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 2
+	assert "turns=1 stop=no_progress" in proc.stderr
+
+
+def test_review_loop_uses_the_fetched_done_check(tmp_path):
+	unmet = dict(PASS, acceptance={"tests/test_a.py": {"head": "fail", "base": "not_run"}})
+	repo, env = _setup(tmp_path, [unmet, PASS])
+	_with_fake_gh(tmp_path, env)
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	gate_dir = tmp_path / "runtime" / "prepush_gate"
+	gate_dir.mkdir(parents=True)
+	(gate_dir / "acceptance.json").write_text(json.dumps({"schema": "acceptance.v1", "state": "valid", "source": "plan",
+		"errors": [], "checks": [], "tests": [{"path": "tests/test_a.py", "name": "", "red_on_base": False}],
+		"post_merge": None, "post_merge_none": "library only"}), encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "--tests-file /inputs/tests.txt" in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert _editor_calls(tmp_path) == 1
+	assert "turns=1 stop=clean acceptance=not_run" in proc.stderr
+
+
+def test_review_loop_off_changes_nothing(tmp_path):
+	repo, env = _setup(tmp_path, [_fail_n(2), _fail_n(1)])
+	log = _with_fake_gh(tmp_path, env)
+	proc = _run_step(tmp_path, repo, env)
+	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 2
+	assert "PERSIST repair_loop" not in proc.stderr and "/inputs" not in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	for mode in ("acceptance_fetch", "acceptance_label"):
+		_run_step(tmp_path, repo, dict(env, PREPUSH_TEST_GATE_STEP_MODE=mode))
+	assert _gh_calls(log) == []
+	assert not (tmp_path / "runtime" / "prepush_gate" / "acceptance.json").exists()
+
+
+def test_gate_subcommand_passes_the_done_check_files_through(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	tests = tmp_path / "tests.txt"
+	tests.write_text("tests/test_a.py\n", encoding="utf-8")
+	base = _git(repo, "rev-parse", "HEAD")
+	proc = subprocess.run(["bash", str(tmp_path / "support" / "scripts" / STEP_SCRIPT.name), "gate", "--worktree", str(repo),
+		"--base", base, "--image", IMAGE, "--out", str(tmp_path / "gate_out"), "--tests-file", str(tests),
+		"--expect-baseline-fail-file", str(tests)], cwd=repo, env=env, capture_output=True, text=True, timeout=180)
+	assert proc.stdout.strip() == "pass 0 0", proc.stderr
+	docker = (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert "dst=/inputs,readonly" in docker and "--expect-baseline-fail-file /inputs/baseline_fail.txt" in docker
+
+
+def test_acceptance_fetch_reads_the_newest_trusted_plan_comment(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	comments = [
+		{"user": {"login": "pipeline-bot"}, "created_at": "2026-10-01T00:00:00Z", "body": _marker_body("tests/old.py")},
+		{"user": {"login": "pipeline-bot"}, "created_at": "2026-10-02T00:00:00Z", "body": _marker_body()},
+		{"user": {"login": "mallory"}, "created_at": "2026-10-03T00:00:00Z", "body": _marker_body("tests/evil.py")},
+	]
+	log = _with_fake_gh(tmp_path, env, comments)
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	proc = _run_step(tmp_path, repo, dict(env, PREPUSH_TEST_GATE_STEP_MODE="acceptance_fetch"))
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	data = json.loads((tmp_path / "runtime" / "prepush_gate" / "acceptance.json").read_text(encoding="utf-8"))
+	assert data["state"] == "valid" and data["tests"][0]["path"] == "tests/test_a.py"
+	calls = _gh_calls(log)
+	assert len(calls) <= 2 and sum("comments" in c for c in calls) == 1
+	assert _docker_runs(tmp_path) == 0
+
+
+def _label_env(tmp_path: Path, env: dict[str, str], state: str, labels: list[str] | None) -> Path:
+	log = _with_fake_gh(tmp_path, env)
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	env["PREPUSH_TEST_GATE_STEP_MODE"] = "acceptance_label"
+	(tmp_path / "runtime" / "acceptance_result.json").write_text(json.dumps({"schema": "acceptance_result.v1", "state": state}), encoding="utf-8")
+	if labels is not None:
+		meta = tmp_path / "runtime" / "pr_meta.json"
+		meta.write_text(json.dumps({"labels": [{"name": n} for n in labels]}), encoding="utf-8")
+		env["PR_META_FILE"] = str(meta)
+	return log
+
+
+@pytest.mark.parametrize(("state", "labels", "expected"), [
+	("met", ["ai:acceptance-unmet"], "DELETE"),
+	("unmet", [], "POST"),
+	("unmet", None, "POST"),
+	("met", [], None),
+	("met", None, None),
+	("unmet", ["ai:acceptance-unmet"], None),
+	("not_run", [], None),
+])
+def test_acceptance_label_writes_at_most_once(tmp_path, state, labels, expected):
+	repo, env = _setup(tmp_path, [PASS])
+	log = _label_env(tmp_path, env, state, labels)
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	calls = _gh_calls(log)
+	if expected is None:
+		assert calls == []
+	else:
+		assert len(calls) == 1 and f"-X {expected}" in calls[0] and "repos/o/r/issues/12/labels" in calls[0]
+	assert "PERSIST acceptance_label outcome=" in proc.stderr
+
+
+def test_review_workflow_wires_the_switch_gated_steps():
+	steps = _steps()
+	by_name = {step.get("name"): step for step in steps}
+	names = [step.get("name") for step in steps]
+	fetch, label = by_name["Prepare done-check (repair loop)"], by_name["Sync done-check label"]
+	assert names.index("Prepare done-check (repair loop)") + 1 == names.index(STEP_NAME)
+	assert names.index("Commit changes") + 1 == names.index("Sync done-check label")
+	assert fetch["if"] == by_name[STEP_NAME]["if"] + " && env.PERSIST_REPAIR_LOOP_ENABLED == 'true'"
+	assert label["if"].endswith("&& steps.commit_changes.outputs.did_commit == 'true' && env.PERSIST_REPAIR_LOOP_ENABLED == 'true'")
+	for step, mode in ((fetch, "acceptance_fetch"), (label, "acceptance_label")):
+		assert step["continue-on-error"] is True and step["timeout-minutes"] == 5
+		assert step["env"]["PREPUSH_TEST_GATE_STEP_MODE"] == mode
+	assert "GH_TOKEN" not in (by_name[STEP_NAME].get("env") or {})
+
+
+def test_acceptance_label_reads_labels_from_the_full_pr_payload(tmp_path):
+	# Production shape: PR_META_FILE is a projection without labels; the full
+	# PR payload carries them, so a met done-check removes the label.
+	repo, env = _setup(tmp_path, [PASS])
+	log = _label_env(tmp_path, env, "met", None)
+	meta = tmp_path / "runtime" / "pr_meta.json"
+	meta.write_text(json.dumps({"title": "t", "body": "", "headRefName": "ai/issue-7"}), encoding="utf-8")
+	payload = tmp_path / "runtime" / "pr_payload.json"
+	payload.write_text(json.dumps({"labels": [{"name": "ai:acceptance-unmet"}]}), encoding="utf-8")
+	env.update({"PR_META_FILE": str(meta), "PR_PAYLOAD_FILE": str(payload)})
+	proc = _run_step(tmp_path, repo, env)
+	calls = _gh_calls(log)
+	assert len(calls) == 1 and "-X DELETE" in calls[0], proc.stderr
+	# A projection without a labels key alone means unknown: never delete.
+	log.unlink()
+	env.pop("PR_PAYLOAD_FILE")
+	proc = _run_step(tmp_path, repo, env)
+	assert _gh_calls(log) == [] and "outcome=unchanged" in proc.stderr
+
+
+def test_acceptance_label_posts_once_with_label_helpers_staged(tmp_path):
+	# Production stages label_helpers.sh; a successful POST must stay one write.
+	repo, env = _setup(tmp_path, [PASS])
+	log = _label_env(tmp_path, env, "unmet", [])
+	helpers = tmp_path / "support" / "scripts" / "label_helpers.sh"
+	helpers.write_text('ensure_label_exists() { printf "label create %s\\n" "$1" >> "' + str(log) + '"; }\n', encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	calls = _gh_calls(log)
+	assert len(calls) == 1 and "-X POST" in calls[0], proc.stderr
+	assert "PERSIST acceptance_label outcome=added" in proc.stderr
+
+
+def test_acceptance_label_creates_and_retries_after_a_failed_post(tmp_path):
+	# Documented budget: a failed labels POST adds one label create and one retry POST.
+	repo, env = _setup(tmp_path, [PASS])
+	log = _label_env(tmp_path, env, "unmet", [])
+	gh, marker = tmp_path / "bin" / "gh", _work(tmp_path) / "post_failed_once"
+	gh.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "{log}"\n'
+		f'case "$*" in *"-X POST"*) [ -e "{marker}" ] || {{ : > "{marker}"; exit 1; }} ;; esac\nexit 0\n', encoding="utf-8")
+	helpers = tmp_path / "support" / "scripts" / "label_helpers.sh"
+	helpers.write_text('ensure_label_exists() { printf "label create %s\\n" "$1" >> "' + str(log) + '"; }\n', encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	calls = _gh_calls(log)
+	assert len(calls) == 3 and "-X POST" in calls[0] and calls[1] == "label create ai:acceptance-unmet" and "-X POST" in calls[2], proc.stderr
+	assert "PERSIST acceptance_label outcome=added" in proc.stderr

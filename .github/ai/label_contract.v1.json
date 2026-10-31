@@ -248,6 +248,10 @@
     "ai:engine-claude": {
       "color": "d4c5f9",
       "description": "Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
+    },
+    "ai:acceptance-unmet": {
+      "color": "fbca04",
+      "description": "The PR does not yet meet its plan's done-check"
     }
   },
   "phase_groups": [
