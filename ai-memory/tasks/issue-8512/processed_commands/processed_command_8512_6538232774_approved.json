@@ -5,13 +5,30 @@
   "entry_id": "processed_command_8512_6538232774_approved",
   "issue_number": 8512,
   "metadata": {
+    "branch": "ai/issue-8512",
+    "changed_files": [
+      ".github/workflows/plan.yml",
+      "agents.d/heal-counterfactual-reproducible.md",
+      "changelog.d/heal-counterfactual-reproducible.md",
+      "prompts/_templates/mode-plan-heal-counterfactual.txt",
+      "prompts/mode-plan-heal-counterfactual.txt",
+      "scripts/partial_delivery.py",
+      "tests/test_partial_delivery.py",
+      "tests/test_plan_auto_approve_safe_state_fetch.py",
+      "tests/test_plan_heal_counterfactual_gate.py"
+    ],
+    "issue_number": 8512,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8512",
+    "pr_number": 8514,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8514",
+    "run_attempt": "1",
+    "run_id": "41163212322",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41163212322"
   },
   "run_attempt": 1,
   "run_id": "41163212322",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-31T03:12:08Z",
+  "status": "completed",
+  "timestamp": "2026-10-31T03:56:23Z",
   "workflow": "implement"
 }
