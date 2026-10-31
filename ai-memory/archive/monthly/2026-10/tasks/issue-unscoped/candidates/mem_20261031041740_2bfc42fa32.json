@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/unblock_judge.yml:149-190 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The \"Judge the blocked item\" env block forwards `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED` at line 174 but does not forward `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED`, so a repository variable cannot disable the new close behavior.\n  WHY: An operator setting `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false` still gets the default `true`, and eligible issues are closed instead of resumed. The reviewer rated this MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`)\n  expected_change_site: `.github/workflows/unblock_judge.yml`, `env:` block of the \"Judge the blocked item\" step (next to line 174's `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED`)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No diff hunk touches `.github/workflows/unblock_judge.yml`, the env block at lines 149-190 forwards other unblock settings but not this variable, so workflow runs always use the script default of `true`. The README, the agents.d fragment and the changelog document this limit, and five prior editor runs deferred it. Severity disagreement: sonnet rated it NIT with confidence 3, the others MAJOR with confidence 5.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: The PR description lists a \"Kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`)\".\n  Expected change site: the env block of the \"Judge the blocked item\" step in `.github/workflows/unblock_judge.yml`, next to `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED`.\n  Evidence of absence: No diff hunk touches `.github/workflows/unblock_judge.yml`, so a repository variable cannot turn the switch off in workflow runs. The README, the agents.d fragment and the changelog document this limit. Five earlier autofix summaries record why the edit was deferred. The reviewer calls this a repeat of an already-accepted residual, and a one-line follow-up documented in the PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: The PR description specifies a UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED kill switch (default true).\n  Expected change site: .github/workflows/unblock_judge.yml, env block of the \"Judge the blocked item\" step.\n  Evidence of absence: No diff hunk touches .github/workflows/unblock_judge.yml, and the environment block (lines 149\u2013190) forwards other unblock settings but does not forward this variable, so a repository variable cannot disable this behavior as documented.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: PR description specifies a `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` kill switch (default `true`) that operators can use to disable the new close behavior.\n  Expected change site: `.github/workflows/unblock_judge.yml`, the `env:` block of the \"Judge the blocked item\" step (next to line 174's `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED: ${{ vars.UNBLOCK_HEAL_ALREADY_FIXED_ENABLED || 'true' }}`).\n  Evidence of absence: The PR diff contains no hunk touching `.github/workflows/unblock_judge.yml`. The env block at lines 149-190 forwards twelve other `UNBLOCK_*_ENABLED` variables but omits this one. The script therefore always uses its built-in `true` default in workflow runs. Five prior editor runs (41151388923, 41155739204, 41158034273, 41160359739, 41164700167) deferred this as TASK_GAP_DEFERRED.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/unblock_judge.yml:149-190 | severity=MAJOR | confidence=5\n  PROBLEM: The new close behavior defaults to enabled in workflow runs, and setting the documented repository variable cannot disable it because the workflow does not pass that variable to the script.\n  WHY: An operator setting `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false` in repository variables still gets the default `true`; eligible issues are closed instead of resumed.\nTASK_GAP:\n- Requirement: \"Kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`).\"\n  Expected change site: `.github/workflows/unblock_judge.yml`, in the \"Judge the blocked item\" step's `env:` block.\n  Evidence of absence: The PR adds the script-level switch and documents it, but has no diff hunk for the workflow environment block. That block does not pass the variable to `scripts/unblock_judge.sh`, so the repository-level kill switch is not effective in workflow runs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0ab66545fd7861b0f25ed3c776ce6489762996623d6d5b3fb4d3ab925a3a4b64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8488,
+    "run_id": "41166130116",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41166130116",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031041740_2bfc42fa32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8488,
+    "run_id": "41166130116"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T04:17:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

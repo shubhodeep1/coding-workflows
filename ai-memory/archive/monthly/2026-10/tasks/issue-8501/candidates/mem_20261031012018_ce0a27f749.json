@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: fix the stale substring-count assertion for credential scrubs in the heal-intake contract test\n\n**Planning ref:** `ai/issue-8490` at `f1fcdc5971e90bb2ddf3dcc015b061d7791bce1d`. The integration branch matches (`Integration branch mismatch: false`).\n\nScope-mode: Hold Scope\nReuse-audit: extends test_heal_intake_routes_through_the_selector_from_its_own_directory\nScope-mode justification: The failure is one out-of-date assertion in an existing contract test. The script is correct: the new reproduction runner in `scripts/workflow_failure_heal_intake.sh` (line 3095) adds a stricter scrub that also unsets `OPENROUTER_API_KEY`. The complete fix is about the same size as a shortcut like bumping the count to 3. It pins the two model-launch scrubs exactly and checks the reproduction scrub separately, so it costs about 3 more lines and keeps the test's intent. Under the \u00a76 order (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the complete option wins. Simply bumping the count would also stop the test from noticing if the reproduction scrub lost its `-u OPENROUTER_API_KEY`. No new script, workflow, supervisor, dependency or external interface is added.\n\n### Automation / wiring (\u00a720.E)\n- **Change type:** edits one existing test. No new script, and no script is extended.\n- **Scheduler / PR-push entry point:** none new. The test already runs in the `tests-release-and-log-analysis` job of the existing CI workflow (`.github/workflows/ci.yml`, triggered by pull_request / push), and that job feeds the aggregate `CI / lint` check.\n- **Long-running supervisor:** not needed.\n- **DB work:** none.\n- **Pending-removal registry entry:** not needed.\n\n## Files likely to change\n- `tests/test_claude_engine_utility_roles.py`\n\n## Functions or modules to implement\nIn `tests/test_claude_engine_utility_roles.py`, change `test_heal_intake_routes_through_the_selector_from_its_own_directory`, replacing the assertion at line 337:\n```python\nassert text.count(\"env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID\") == 2\n```\nwith:\n1. A local variable for the model-launch scrub, ending in the line continuation: `\"env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \\\\\\n\"`. Asserting `text.count(<that>) == 2` keeps the original check: exactly two scrubbed model launches, the `claude_run_selected` launch at line 3271 and the `heal_codex_cmd` fallback at line 3279.\n2. A separate check that the reproduction-runner scrub is present: `\"env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \\\\\\n\" in text`.\n3. A short comment saying the reproduction runner also scrubs the model key.\n\nChoose a local variable name that does not clash with anything in the function (\u00a710). The function has no local called `model_scrub`, so that name is fine; `heal_model_scrub` is a safe alternative. Indent with tabs to match the file. Leave the script alone.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone. The change is only to the test.\n\n## Decisions\n### D1 \u2014 Count only exact model-launch scrubs, and pin the reproduction scrub separately\n- **Chosen:** Count the prefix followed by ` \\` and a newline (expect exactly 2), and separately assert that the stricter `-u OPENROUTER_API_KEY` reproduction scrub is present.\n- **Alternatives considered:** (a) Raise the expected count from 2 to 3. (b) Change the script so the reproduction scrub no longer starts with the same text. (c) Use a regex anchored on the launch lines that follow.\n- **Why:** (a) would still break on the next new scrub and would no longer check the stricter scrub. (b) changes a correct, security-relevant script just to satisfy a test (\u00a718). (c) is more fragile than an exact substring.\n\n### D2 \u2014 Fix it on this PR branch\n- **Chosen:** Edit the test on `ai/issue-8490`.\n- **Alternatives considered:** Fix it on the default branch.\n- **Why:** The issue suggested the failure might be inherited from the base branch. That is not the case: on `isolated-base` (the default branch snapshot), `scripts/workflow_failure_heal_intake.sh` has only 2 matches, so the reproduction block, and with it the failure, comes from this branch.\n\n## Security considerations\n- **Trust boundaries:** none touched. The change is limited to a test file.\n- **Credential scrubbing:** the change strengthens the contract on it. Both model launches must still scrub `GH_TOKEN`, `GITHUB_TOKEN` and the Telegram secrets. The reproduction helper, which runs untrusted reproduction tests, must also unset `OPENROUTER_API_KEY`. If either scrub regresses, the test fails.\n- **Abuse case covered:** an edit that drops `-u OPENROUTER_API_KEY` from the reproduction runner would now fail CI. Before, the substring count still matched in that case, so the regression went undetected.\n- No secrets go into the test; it only contains variable names.\n\n## Potential risks or edge cases\n- The whitespace is exact: in the script, `\\` is preceded by a single space and followed directly by a newline (checked with `cat -A` on lines 3095, 3271 and 3279). The Python literal must be `\" \\\\\\n\"`, not a raw string.\n- If a later change reformats the launch lines, for example by joining them into one line, the count drops to 0 and the test fails loudly. That is acceptable.\n- **Conflict note:** the issue says the reproduction block might already be on the base branch. On `isolated-base` the count is 2, so this branch introduced it.\n\n## Testing considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine_utility_roles.py` and expect all tests to pass, 87 in total.\n- Optional check: temporarily remove `-u OPENROUTER_API_KEY` from line 3095 locally (do not commit this). The new membership assertion should then fail, which shows it guards the scrub.\n\n## Pre-execution self-check\n- Only the one test file named in the issue's `AFFECTED_FILES` changes.\n- The three matches and their exact line endings were confirmed on the planning ref, and the base-branch count of 2 was confirmed on `isolated-base`.\n- No workflow, script or agents.md change, and no auto-close reference to a tracking issue is needed.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "af384ef9cbd02776ba5fbadc92539a84f261384b6e96d6689054f84b8390cc69",
+  "lineage": {
+    "issue_number": 8501,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41154418205",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41154418205",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8501"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261031012018_ce0a27f749",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8501,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41154418205"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8501",
+  "timestamps": {
+    "created_at": "2026-10-31T01:20:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

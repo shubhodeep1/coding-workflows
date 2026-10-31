@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8543,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8543\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8545\",\"pr_number\":8545,\"branch\":\"ai/issue-8543\",\"run_id\":\"41201231369\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41201231369\",\"changed_files\":[\".github/workflows/plan.yml\",\"agents.d/heal-regression-plan-gate.md\",\"changelog.d/heal-regression-plan-gate.md\",\"prompts/_templates/mode-plan-heal-counterfactual.txt\",\"prompts/_templates/mode-workflow-failure-heal.txt\",\"prompts/mode-plan-heal-counterfactual.txt\",\"prompts/mode-workflow-failure-heal.txt\",\"scripts/partial_delivery.py\",\"tests/test_partial_delivery.py\",\"tests/test_plan_heal_counterfactual_gate.py\"]}",
+  "fingerprint": "dffcee4c410ea367d642b92280b6e561c4158eed63d14c9262660d78cf5d76c8",
+  "lineage": {
+    "issue_number": 8543,
+    "parent_ids": [],
+    "pr_number": 8545,
+    "run_id": "41201231369",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41201231369",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8545"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261031131547_9170e1c4e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8543,
+    "level": "run",
+    "pr_number": 8545,
+    "run_id": "41201231369"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8543: https://github.com/shubhodeep1/coding-workflows/pull/8545",
+  "timestamps": {
+    "created_at": "2026-10-31T13:15:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

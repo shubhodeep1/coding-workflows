@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_orchestrate_child_count.py:62-68, 109-115 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The extracted polling block depends on CHILDREN_DEADLINE and CHILDREN_ERR_FILE, but the test extracts the block starting at CHILDREN=\"\" and does not initialize either variable in its shell prelude.\n  WHY: The prelude enables set -u, so expanding CHILDREN_DEADLINE in the loop condition exits the test before the first poll, and the CHILDREN_ERR_FILE redirection is also unbound, so the behavior tests do not exercise the empty-poll-then-two-children path. The reviewer labelled this SEVERITY: MAJOR, which is mapped to high here. Minimax_minimax-m3 read the workflow block and concluded the extracted block includes the CHILDREN_DEADLINE assignment, so the two reviewers disagree on this point.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_orchestrate_child_count.py:62-68, 109-115 | severity=MAJOR | confidence=5\n  PROBLEM: The extracted polling block depends on CHILDREN_DEADLINE and CHILDREN_ERR_FILE, but the test extracts the block starting at CHILDREN=\"\" and does not initialize either variable in its shell prelude.\n  WHY: The prelude enables set -u, so expanding CHILDREN_DEADLINE in the loop condition exits the test before the first poll. If that variable is initialized, the CHILDREN_ERR_FILE redirection is also unbound. The behavior tests therefore do not exercise the empty-poll-then-two-children path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "76cf7f0be81c74a3284fd685e981c6896a33d2391c99a59b789bc283e4dfabb1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8536,
+    "run_id": "41194742573",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41194742573",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031111849_0aa4b27e7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8536,
+    "run_id": "41194742573"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-31T11:18:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

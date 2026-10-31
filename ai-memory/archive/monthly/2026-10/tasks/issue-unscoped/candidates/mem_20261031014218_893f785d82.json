@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_unblock_judge.py:539-545 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: Out-of-scope whitespace-only reindentation (hunk `@@ -536,13 +536,13 @@`) of continuation lines in test_rejection_snapshot_provenance_and_subset is still in the PR, with tab-only indentation where the base had one tab plus aligning spaces.\n  WHY: It has no runtime effect but adds unrelated diff noise that breaks the minimal-change rule, and earlier editor claims that it was restored did not land. Both reviewers rated it NIT.\n- .github/workflows/unblock_judge.yml:~174 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The workflow env block forwards only `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED`, not `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED`, which `scripts/unblock_judge.sh` reads.\n  WHY: A repository variable cannot turn the new close behavior off, although the default of `true` keeps it safe. Rated NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`) must be reachable by operators, and `false` restores the resume.\n  expected_change_site: `.github/workflows/unblock_judge.yml` \"Judge the blocked item\" env block (`UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED: ${{ vars.UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED || 'true' }}`), plus a contract test that the variable is forwarded\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The workflow env block (lines 149-189) forwards only `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED`, the PR diff touches no workflow file or forwarding test, `scripts/unblock_judge.sh` line 425 reads the variable, and the README row 125, agents.d fragment and changelog state it is not forwarded. Severity disagreement: NIT (anthropic_claude-sonnet-5_5) versus MAJOR (the other three).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_unblock_judge.py:539-541,545 | severity=NIT | confidence=4\n  PROBLEM: Continuation lines in test_rejection_snapshot_provenance_and_subset have tab-only indentation where the base had one tab plus aligning spaces, and the whitespace-only hunk `@@ -536,13 +536,13 @@` is still in the PR.\n  WHY: It has no runtime effect but is unrelated diff noise that breaks the minimal-change rule.\n- .github/workflows/unblock_judge.yml:~174 | severity=NIT | confidence=4\n  PROBLEM: `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` is read by `scripts/unblock_judge.sh` but never forwarded by the workflow.\n  WHY: A repository variable cannot disable the new close behavior, though the default `true` is intended and nothing breaks.\n- TASK_GAP: Requirement: PR description \"Kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`)\"; `false` restores the resume.\n  Expected change site: `.github/workflows/unblock_judge.yml` \"Judge the blocked item\" env block, as `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED` at line 174 does.\n  Evidence of absence: Only `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED` appears in the workflow and the PR diff touches no workflow file. The omission is documented and the script default is safe.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: The kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` must be reachable by operators (default `true`, `false` restores the resume command).\n  Expected change site: `.github/workflows/unblock_judge.yml` \"Judge the blocked item\" env block.\n  Evidence of absence: `scripts/unblock_judge.sh` reads the variable, but the workflow does not forward it, and the README states a repository variable alone does not reach the script.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: The new kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`) must be reachable through the normal operator surface so that `false` restores the resume, as the PR description, README row 125, agents.d fragment and changelog describe.\n  Expected change site: `.github/workflows/unblock_judge.yml` \"Judge the blocked item\" env block; needs `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED: ${{ vars.UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED || 'true' }}`, plus a contract test that the variable is forwarded.\n  Evidence of absence: `scripts/unblock_judge.sh` line 425 reads the variable, but the workflow env block does not forward it. README row 125, `agents.d/8470-unblock-nothing-to-implement-close.md` line 2 and `changelog.d/8470-nothing-to-implement-close-and-heal-create-detail.md` row 3 confirm the gap, and the LAST RUN DIFF (commit 27f30cf) does not touch the workflow. Editor summaries recorded it as `TASK_GAP_DEFERRED`, which is a workaround description and not a release of the requirement.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: The PR description introduces the `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` kill switch, defaulting to `true`, with `false` restoring the resume behavior.\n  Expected change site: `.github/workflows/unblock_judge.yml` \"Judge the blocked item\" step `env` block, plus a workflow contract test confirming the variable is forwarded.\n  Evidence of absence: The step environment at lines 149-189 does not pass the variable, and the PR diff adds no workflow wiring or forwarding contract test. Setting the repository variable does not disable the close behavior, as the README also documents.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_unblock_judge.py:539-541,545 | severity=NIT | confidence=4\n  PROBLEM: The out-of-scope whitespace-only reindentation of the `invalid_run` and `invalid_artifact` continuation lines (hunk `@@ -536,13 +536,13 @@`, `test_rejection_snapshot_provenance_and_subset`) is still in the PR at head 27f30cf. It uses three tabs where the base had one tab plus aligning spaces.\n  WHY: It has no runtime effect, but earlier editor claims that it was restored did not land, and it breaks the minimal-change rule.\n- Task gaps: none reported. The reviewer cites the explicit deferral of forwarding `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` in the PR itself (README row 125, agents.d fragment, changelog) and skips it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "15e31fe1582c9c3b3279b92c2996bea5aebc48bcc0d13410e842121489791b3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8488,
+    "run_id": "41155739204",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41155739204",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031014218_893f785d82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8488,
+    "run_id": "41155739204"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T01:42:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2289-2327 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The head SHA check `[ \"${_rb_retry_head}\" != \"${RB_JUDGED_HEAD_SHA:-}\" ]` in rb_judge_merge_retry_transient may trigger when RB_JUDGED_HEAD_SHA is unset or empty, treating the PR as \"head moved\" and aborting the retry early.\n  WHY: The reviewer rated it MAJOR, which maps to high here. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) checked the code and found it unreachable, because all merge sites require a 40-hex RB_JUDGED_HEAD_SHA first (scripts/review_rb_judge.sh:2335, 2475, 2995).\n- scripts/review_rb_judge.sh:2275-2276 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `head -c 65536 -- \"${_rb_transient_file}\" 2>/dev/null` in the process substitution hides a head failure. If the stderr file is unreadable, grep gets empty input and the transient retry is silently skipped.\n  WHY: The reviewer rated it NIT, which maps to low here. The behavior fails closed, and other reviewers called it intended.\n- (unmapped) | severity=high | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate reports `Status: fail` with \"Failures caused by this change: ruff\". No rule, file or line is given, and the previous autofix run did not address it. The nearest executable surface is `.claude/hooks/prepush_affected_tests.py:449`.\n  WHY: The reviewer rated it MAJOR, which maps to high here. A red gate blocks the merge, but static inspection found no E/F violation, so the cause may be a sandbox issue or a gate misattribution.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:2289-2327 | severity=MAJOR | confidence=3\n  PROBLEM: The head SHA check `[ \"${_rb_retry_head}\" != \"${RB_JUDGED_HEAD_SHA:-}\" ]` may trigger if RB_JUDGED_HEAD_SHA is unset or empty, treating the PR as \"head moved\".\n  WHY: If RB_JUDGED_HEAD_SHA was not set to a full 40-char SHA, the check is true even when the head has not moved, so the retry aborts early.\n- scripts/review_rb_judge.sh:2275-2276 | severity=NIT | confidence=3\n  PROBLEM: `head -c 65536 ... 2>/dev/null` in the process substitution hides a head failure. grep then gets no input and rb_judge_merge_err_is_transient returns 1.\n  WHY: This fails closed. An unreadable stderr capture file means a transient error that should be retried is not retried.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (unmapped) \u2014 pre-push test gate report on head 1dc12e315c4d6f6f915d956b5fecf6b05ae5f65b; nearest surface `.claude/hooks/prepush_affected_tests.py:449` | severity=MAJOR | confidence=2\n  PROBLEM: The pre-push gate reports `Status: fail` with \"Failures caused by this change: ruff\" and no rule, file or line. The previous autofix run did not address it.\n  WHY: A red gate blocks the merge. Static inspection found no E/F violation in the changed lines and the PR touches no `scripts/*.py`, so the cause is either a ruff 0.17.2 sandbox issue (`scripts/codex_isolated_exec.sh:184`) or a gate misattribution.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5c838dfd30ccfb5e785e896748cacd9f676975a24c1b6bf28ca606b302bdf26b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8524,
+    "run_id": "41184844480",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41184844480",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031085331_43759e9320",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8524,
+    "run_id": "41184844480"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-31T08:53:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

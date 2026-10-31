@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/docs/s21-merged-pr-commit-guard.md:\u00a721.F Step 2 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The instruction for branch creation (`git checkout -b <branch>-resend`) uses a hardcoded `<branch>-resend` string rather than the branch name/suffix selected in step 1.\n  WHY: If a suffixed branch such as `<branch>-resend-2` is selected, the user creates the wrong branch and the later push steps fail. Severity was reported as MAJOR, which is mapped to high.\n- CLAUDE.md:\u00a721.F Step 2 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The instruction for branch creation uses a hardcoded `<branch>-resend` string rather than the branch name/suffix selected in step 1.\n  WHY: Users following the shortened instructions create the wrong branch and fail to push the correct suffixed branch. Severity was reported as MAJOR, which is mapped to high.\n- workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md:\u00a721.F Step 2 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The instruction for branch creation uses a hardcoded `<branch>-resend` string rather than the branch name/suffix selected in step 1.\n  WHY: Users following these instructions create the wrong branch and fail to push the correct suffixed branch. Severity was reported as MAJOR, which is mapped to high.\n- changelog.d/8534-s21-resend-branch-fallback.md:4 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog says to push with `git push -u origin <branch>-resend`, which ignores the documented `-resend-2` (or later) fallback suffix. The three \u00a721.F files already say to use the suffix picked in step 1.\n  WHY: When a suffixed branch is selected, the literal command pushes a missing or stale ref, so the chosen branch is never published. Severity was reported as NIT, which is mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/docs/s21-merged-pr-commit-guard.md:\u00a721.F, Step 2 | severity=MAJOR | confidence=4\n  PROBLEM: The instruction for branch creation (`git checkout -b <branch>-resend`) uses a hardcoded `<branch>-resend` string rather than the branch name/suffix selected in step 1.\n  WHY: If the procedure selects a suffixed branch (e.g., `<branch>-resend-2`), the user creates the wrong branch, leaving the suffixed branch uncreated and causing subsequent push steps to fail.\n- CLAUDE.md:\u00a721.F, Step 2 | severity=MAJOR | confidence=4\n  PROBLEM: Same issue as above; the branch creation instruction uses a hardcoded `<branch>-resend` string rather than the branch name/suffix selected in step 1.\n  WHY: Users following the shortened instructions in CLAUDE.md create the wrong branch and fail to push the correct suffixed branch.\n- workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md:\u00a721.F, Step 2 | severity=MAJOR | confidence=4\n  PROBLEM: Same issue as above; the branch creation instruction uses a hardcoded `<branch>-resend` string rather than the branch name/suffix selected in step 1.\n  WHY: Users following these instructions create the wrong branch and fail to push the correct suffixed branch.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/8534-s21-resend-branch-fallback.md:line 4, the clause \"push it with a plain `git push -u origin <branch>-resend`\" | severity=NIT | confidence=4\n  PROBLEM: The lead paragraph says to push with `git push -u origin <branch>-resend`, which does not match the branch created when the algorithm selects a suffix such as `<branch>-resend-2`. The three \u00a721.F files (CLAUDE.md, .claude/docs/s21-merged-pr-commit-guard.md, workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md) were corrected in the LAST RUN DIFF so step 3 reads \"with the same suffix picked in step 1 (for example `git push -u origin <branch>-resend-2`)\". The \u00a720 fragment was not updated and now contradicts the documented procedure.\n  WHY: A reader following the changelog literally runs `git push -u origin <branch>-resend` even when the chosen name is `-resend-2`. The push either fails because the local ref does not exist or pushes a stale `-resend` ref, so the chosen branch is never published.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/8534-s21-resend-branch-fallback.md:Line 4 says to push with `git push -u origin <branch>-resend`; `.claude/docs/s21-merged-pr-commit-guard.md` lines 242-244 says to use the suffix selected in step 1. | severity=NIT | confidence=4\n  PROBLEM: The changelog's push command does not account for the documented `-resend-2` (or later) fallback.\n  WHY: When `<branch>-resend` is taken and the procedure selects `<branch>-resend-2`, following the changelog command pushes the wrong ref. The push fails if that local branch does not exist, or publishes a stale branch instead of the new work.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/8534-s21-resend-branch-fallback.md:line 4 | severity=NIT | confidence=4\n  PROBLEM: The changelog says to push \"with a plain `git push -u origin <branch>-resend`\", but the procedure it documents now selects the first free suffix and pushes that branch name (`.claude/docs/s21-merged-pr-commit-guard.md:242-244`, CLAUDE.md:899-900). When `<branch>-resend` is taken and the session creates `<branch>-resend-2`, the changelog's example push command names a branch that does not exist locally.\n  WHY: Following the changelog's literal command after a suffixed name was selected runs `git push -u origin <branch>-resend` against a missing local ref; the push fails and the selected branch is never published. The last run fixed exactly this mismatch in the three \u00a721.F copies but left the changelog out of sync.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "363d70a25a5a2d80c46bad4a6d1e5110249a7d6599ee36b6a72f928cebd42477",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8534,
+    "run_id": "41205765525",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41205765525",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031134257_61a3d88fff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8534,
+    "run_id": "41205765525"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T13:42:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

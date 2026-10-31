@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:6420-6421 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The logic `shifted = shifted or (total is not None and count != total)` will mark history as truncated even if the total count remains consistent between pages, if `total` is set in the first iteration.\n  WHY: If the `total_count` is consistent between the first and subsequent pages (which is expected for a stable list), `shifted` is incorrectly set to true, causing the function to report `history=truncated` even when the data is complete and consistent. The source severity was MAJOR, mapped here to high. The other four reviewers reported no findings, and anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each traced `_trend_single_table` and found the shifted guard correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add `WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}` to the recovery-scan job env in `.github/workflows/workflow-failure-heal-intake.yml`.\n  expected_change_site: `.github/workflows/workflow-failure-heal-intake.yml` recovery-scan job env section.\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff shows the environment variable added to the `intake` job (lines 142-147) and `recovery-scan` job (lines 429-434), but the `recovery-scan` env section appears to only contain `WORKFLOW_HEAL_TREND_ENABLED`, not `WORKFLOW_HEAL_TREND_REGRESSION_RATIO`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:_trend_single_table (lines 6420-6421) | severity=MAJOR | confidence=4\n  PROBLEM: The logic `shifted = shifted or (total is not None and count != total)` will mark history as truncated even if the total count remains consistent between pages, if `total` is set in the first iteration.\n  WHY: If the `total_count` is consistent between the first and subsequent pages (which is expected for a stable list), `shifted` is incorrectly set to true, causing the function to report `history=truncated` even when the data is complete and consistent.\n- TASK_GAP\n  Requirement: Add `WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}` to the recovery-scan job env in `.github/workflows/workflow-failure-heal-intake.yml`.\n  Expected change site: `.github/workflows/workflow-failure-heal-intake.yml` recovery-scan job env section.\n  Evidence of absence: The PR diff shows the environment variable added to the `intake` job (lines 142-147) and `recovery-scan` job (lines 429-434), but the `recovery-scan` env section appears to only contain `WORKFLOW_HEAL_TREND_ENABLED`, not `WORKFLOW_HEAL_TREND_REGRESSION_RATIO`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a01ab3c85c275c36f5689c352e44f3de708b404b6738226d91fe3641a7b6f4c7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8529,
+    "run_id": "41196250480",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41196250480",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031115404_c7adaa6100",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8529,
+    "run_id": "41196250480"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-31T11:54:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

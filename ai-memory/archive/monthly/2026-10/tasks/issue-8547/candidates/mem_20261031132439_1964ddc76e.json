@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which area of the repository should this issue change?\nChoices:\nA) The issue \u2192 PR pipeline phases (clarify, plan or implement workflows and their prompts)\nB) The review and autofix pipeline (`review_autofix.yml` and its helper scripts)\nC) The orchestrator (polling, judge, integration-sync, stall recovery)\nD) Docs and onboarding (README, `docs/how-it-works.md`, quickstart)\nE) Something else: name the file, workflow or script in your `/answer` (RECOMMENDED)\nQ2: What kind of improvement do you want?\nChoices:\nA) Fix a specific bug or failing behaviour (describe the symptom, or link a run or log) (RECOMMENDED)\nB) Reduce cost or run time (fewer tokens, fewer GitHub API calls, faster runs)\nC) Make it more reliable (fewer stalls, better retries, safer failure handling)\nD) Make it clearer for users (better messages, docs or Telegram alerts)\nE) Add a new feature (describe it in your `/answer`)\nQ3: How will you know the change worked?\nChoices:\nA) A specific failing run, test or reproduction now passes (give its ID or steps) (RECOMMENDED)\nB) A metric moves past a threshold you name (for example, cost per run or stall count)\nC) A documented behaviour change that contract tests check, with no fixed metric\nD) No firm criteria: the planner proposes them and you approve them at the plan stage",
+  "fingerprint": "9a9e89e3a9279d87f9764cbbe4b9e1b47120a1c8d4609eabe0fc235e19687de1",
+  "lineage": {
+    "issue_number": 8547,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41204984390",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41204984390",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261031132439_1964ddc76e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8547,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41204984390"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8547 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-31T13:24:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

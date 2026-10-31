@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2289-2327 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: In `rb_judge_merge_retry_transient`, `|| true` on the `gh api` PR read hides only the exit status, so a 5xx error body can land in `_rb_retry_state` and be treated as `not_open`, which aborts the retry (lines 2301 and 2311 per anthropic_claude-sonnet-5_5).\n  WHY: During a GitHub outage the helper logs `outcome=not_open` and returns 1 instead of doing the head-bound retry, so the `merge_failed` result the PR targets still happens. Both reviewers rated it MAJOR. z-ai_glm-5_3-flash disputes the premise and says `gh api` writes errors to stderr, which the call discards, so stdout is empty.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_rb_judge.sh:2301,2311 (`rb_judge_merge_retry_transient`) | severity=MAJOR | confidence=4\n  PROBLEM: `|| true` hides only the `gh api` exit status. On an HTTP error the JSON or HTML error body reaches stdout and is parsed into `_rb_retry_state`. That value is non-empty and not \"open\", so the `not_open` branch fires.\n  WHY: When the REST read also gets a 5xx, the helper logs `outcome=not_open` and returns 1 after the first 10s wait, with no head-bound retry. `test_unreadable_pr_state_still_retries_head_bound_merge` does not catch it, because its shim writes only to stderr. Suggested fix: after the `read`, reset all four fields unless the state is `open` or `closed`, and add a test whose shim prints `{\"message\":\"Server Error\"}` to stdout and exits 1.\n- HARDENING_SUGGESTIONS: scripts/review_rb_judge.sh, after the `IFS=$'\\t' read` on line 2302. The PR-state fields are not validated before use. Fix: reset all four fields unless the state is `open` or `closed`. About 3 lines changed. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:2289-2327 (`rb_judge_merge_retry_transient`) | severity=MAJOR | confidence=4\n  PROBLEM: `|| true` on the `gh api` PR read hides the exit status but still lets the error body be captured in `_rb_retry_pr`. The `[ -n \"${_rb_retry_state}\" ] && [ \"${_rb_retry_state}\" != \"open\" ]` check then classifies an unreadable PR state as `not_open`.\n  WHY: During a transient 5xx outage, the helper waits 10s, the PR read fails, and the error text lands in `_rb_retry_state`. The helper then logs `outcome=not_open` and returns 1 instead of retrying until the 70-second deadline or success.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nThe reviewer explicitly rejected the pass-1 consensus finding at scripts/review_rb_judge.sh:2301-2314 after verification. Its reasoning: `gh api` sends API errors to stderr, which is discarded via `2>/dev/null`. Stdout is therefore empty on failure, the empty-variable parse takes the documented fail-open retry path, and the head-bound `--match-head-commit` still protects the retried merge. It found no task gaps. It confirmed the PR description's deliverables are present in scripts/review_rb_judge.sh:2264-2325, 2390-2394, 2422-2427, 2515-2520 and 3052-3071. It also confirmed the RB_JUDGE_MERGE_RETRY prefix is registered in agents.d/8524-rb-judge-merge-transient-retry.md and the changelog fragment is present.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b30652203d11d3a6dfc48f6790b3bef8800d094effd69464cfa02f6257469d04",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8524,
+    "run_id": "41186889099",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41186889099",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031091310_d9d5ad0f0e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8524,
+    "run_id": "41186889099"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T09:13:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/partial_delivery.py:78-85,273-279 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The REPRODUCIBLE validator `HEAL_CF_REPRO_PATH_RE = re.compile(r\"^[A-Za-z0-9_./+-]+$\")` (with the per-id checks in `_heal_counterfactual_repro_tests`) accepts any safe relative path, such as `README.md`, `docs/foo.md`, `Makefile` or `setup.py`. It does not require the `tests/<path>.py[::name]` pytest node-id format that the prompt specifies.\n  WHY: With `WORKFLOW_HEAL_REPRODUCE_ENABLED=true`, a plan that lists a non-test file returns `approve_pending_repro`, and `.github/workflows/plan.yml` (lines 3056 and 3236) turns that into `/approved [auto-approved-by-plan] [repro-required]` with `auto_approved=true` instead of holding it as an invalid list. The downstream re-run then gets a path that is not a pytest test, and `test_reproducible_invalid_test_lists_hold` has no case without the `tests/` prefix or the `.py` extension. All three reviewers stated MAJOR, mapped here to high. Two reviewers disagree: anthropic_claude-sonnet-5_5 dropped this finding because the grammar deliberately copies `cmd_tests` in `scripts/heal_isolated_implement.sh` and the implement-side re-run exits 43 for anything that is not `fixed`. z-ai_glm-5_3-flash reclassified it as a NIT task gap (confidence 3) for the same reasons.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: `REPRODUCIBLE` test ids should be enforced as pytest node ids under `tests/` (`tests/<path>.py[::name]`) per the prompt and the plan.yml remediation text.\n  expected_change_site: scripts/partial_delivery.py:85, 273-279 (cited 380-384 exists as REPRODUCIBLE decision handling)\n  confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: `HEAL_CF_REPRO_PATH_RE` accepts `README.md` and no `tests/` prefix check exists. The reviewer reclassified this as a NIT because the grammar is a deliberate, documented copy of `cmd_tests` in `scripts/heal_isolated_implement.sh` (identical checks at scripts/heal_isolated_implement.sh:414-415, 520-522) and the failure is fail-closed downstream. It recommends adding the `tests/` check in both places, or relaxing the prompt/plan.yml wording to match the enforced grammar.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/partial_delivery.py:80 | severity=MAJOR | confidence=4\n  PROBLEM: The regular expression `HEAL_CF_REPRO_PATH_RE` allows arbitrary alphanumeric strings plus characters like `.` and `+` in test file paths. It does not require paths to start with `tests/` or end with `.py`, as the pytest node-id format expected by heal intake and downstream runners does.\n  WHY: An arbitrary string such as \"README.md\" passes validation, so the plan is auto-approved with `[repro-required]`. The heal editor's re-run of that test ID then fails because \"README.md\" is not a valid pytest node ID, and the heal automation stalls unexpectedly.\n- HARDENING: scripts/partial_delivery.py line 80. Update `HEAL_CF_REPRO_PATH_RE` to `re.compile(r\"^tests/[A-Za-z0-9_./+-]+\\.py$\")`; about 1 line changed. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/partial_delivery.py:lines 78-83 (`HEAL_CF_REPRO_PATH_RE = re.compile(r\"^[A-Za-z0-9_./+-]+$\")`) and the per-id path/name check at lines 273-279 (`_heal_counterfactual_repro_tests`) | severity=MAJOR | confidence=4\n  PROBLEM: The REPRODUCIBLE validator accepts any path matching `^[A-Za-z0-9_./+-]+$` (`README.md`, `docs/foo.md`, `Makefile`, `requirements.txt`, `setup.py`) instead of the pytest node-id grammar the prompt mandates (\"pytest node ids (`tests/<path>.py[::name]`), comma- or space-separated, at most 50\"). The only extra checks are `path.startswith(\"/\")` and `\"..\" in path.split(\"/\")`.\n  WHY: With `WORKFLOW_HEAL_REPRODUCE_ENABLED=true`, `HEAL_COUNTERFACTUAL: REPRODUCIBLE: README.md` returns `approve_pending_repro`, and `.github/workflows/plan.yml` (lines 3056 and 3236) issues `/approved [auto-approved-by-plan] [repro-required]` with `auto_approved=true`, which starts implement on a non-test file. The reviewer argues the plan gate should be stricter than `cmd_tests`. Neither `tests/test_plan_heal_counterfactual_gate.py::test_reproducible_invalid_test_lists_hold` nor `tests/test_partial_delivery.py::test_cli_heal_counterfactual_reads_the_reproduce_switch` covers a case without the `tests/` prefix or the `.py` extension.\n- HARDENING: In `_heal_counterfactual_repro_tests`, require `path.startswith(\"tests/\")` and `path.endswith(\".py\")` before the `HEAL_CF_REPRO_PATH_RE.match` check. Update `agents.d/heal-counterfactual-reproducible.md` and `test_reproducible_invalid_test_lists_hold` (cases `README.md`, `docs/foo.md`, `Makefile`); about 4 + 3 lines. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/partial_delivery.py:85, 273-278 | severity=MAJOR | confidence=5\n  PROBLEM: The REPRODUCIBLE validator accepts safe relative paths such as README.md and does not require the `tests/<path>.py[::name]` format the prompt specifies.\n  WHY: With `WORKFLOW_HEAL_REPRODUCE_ENABLED=true`, a plan listing `README.md` passes validation and is approved with `[repro-required]` instead of being held as an invalid test list, so the implement-side reproduction check receives a path that does not identify a pytest test.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (consensus), reclassified NIT | confidence=3\n  Requirement: `REPRODUCIBLE` test ids should be enforced as pytest node ids under `tests/` (`tests/<path>.py[::name]`) per the prompt and the plan.yml remediation text.\n  Expected change site: scripts/partial_delivery.py:85, 273-279 (cited 380-384 exists as REPRODUCIBLE decision handling).\n  Evidence: `HEAL_CF_REPRO_PATH_RE` accepts `README.md`; no `tests/` prefix check exists.\n  Downgrade rationale: The grammar is a deliberate, documented copy of `cmd_tests` (scripts/heal_isolated_implement.sh:414-415, 520-522; \"change both together\" per scripts/partial_delivery.py:81-83), and the failure is fail-closed downstream, so the worst case is a wasted implement cycle. The reviewer recommends adding the `tests/` check in both places, or relaxing the prompt/plan.yml wording. All other categories: NONE; \"No blocking findings. Delivery matches the linked issue.\"\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "317b05c14eaec515e9e003987d2a33d1f2882b0767434fdb16185aa7127adafb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8514,
+    "run_id": "41169318270",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41169318270",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031051626_161c1f120c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8514,
+    "run_id": "41169318270"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T05:16:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

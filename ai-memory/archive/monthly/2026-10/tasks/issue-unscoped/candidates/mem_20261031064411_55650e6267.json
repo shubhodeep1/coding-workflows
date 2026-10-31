@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Reviewer pass requires the PR diff, last-run diff, linked issue body, and PR description to compare intent against delivery.\n  expected_change_site: Reviewer bundle input (PR diff / issue artefacts).\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: No PR diff, PR number, issue body, or description present in the bundle; the bundle is truncated mid-text and the checkout contains no review runtime diff files.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: Reviewer pass requires the PR diff, last-run diff, linked issue body, and PR description to compare intent against delivery.\n  Expected change site: Reviewer bundle input (PR diff / issue artefacts).\n  Evidence of absence: No PR diff, PR number, issue body, or description present in the bundle; the bundle is truncated mid-text and the checkout contains no review runtime diff files.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: high\n- BLOCKED: reviewer bundle contains no PR diff, no linked-issue text, and no PR description \u2014 cannot produce verified findings; re-run with the filtered diff artifacts populated.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0733845cfcd67ca4b00072bfa7c0702fb2b88f855457e6964280b8a84dae6bab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41177022126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41177022126",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031064411_55650e6267",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41177022126"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-31T06:44:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
