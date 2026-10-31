@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Several CI changes involving poll grouping or promotion of stalled steps update `tests/test_ci_poll_test_sharding.py`. When changing poll-job grouping or related step placement, inspect and update this test module to keep the sharding contract covered.",
+  "fingerprint": "2a740f67015dfa09a409ab22fc58bb47ca645f5aa9f92d455db22d2209083489",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41153918772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41153918772",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8472",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8479",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8480",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8484",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8485",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8476",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8482",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8483",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8486",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8487"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261031011526_a2fa9bdf41",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "CI poll test sharding is maintained through a dedicated test module.",
+  "timestamps": {
+    "created_at": "2026-10-31T01:15:26Z",
+    "promoted_at": "2026-10-31T01:16:01Z",
+    "superseded_at": null
+  }
+}
