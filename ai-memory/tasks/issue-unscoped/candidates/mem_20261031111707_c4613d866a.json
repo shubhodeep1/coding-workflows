@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2311-2317 | severity=high | confidence=3\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: rb_judge_merge_retry_transient treats any `.head.sha` mismatch as `head_moved` before checking whether the PR is merged, so a judged head that merged and then had the source branch advanced is reported as failure.\n  WHY: The helper returns failure, so the caller records `merge_failed` or `sync_merge_failed` even though the judged commit was merged (source severity label: MAJOR; mapped to high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh:2311-2317 | severity=high | confidence=3\n  PROBLEM: rb_judge_merge_retry_transient treats any `.head.sha` mismatch as `head_moved` before checking whether the PR is merged. The REST endpoint's head SHA is the source branch's current tip, which can advance after the judged commit was merged.\n  WHY: If the judged head merges and someone then pushes to the source branch during the retry wait, the read reports `merged=true` with a newer head SHA. The helper returns failure, so the caller records `merge_failed` or `sync_merge_failed` even though the judged commit was merged.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7b24caf9f5acdbe461108b832ceb11b3149892c55f1d6dc39ae004e40a50f86f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8524,
+    "run_id": "41195126961",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41195126961",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031111707_c4613d866a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8524,
+    "run_id": "41195126961"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-31T11:17:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
