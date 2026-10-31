@@ -135,6 +135,11 @@ jobs:
       # timelines to the heal issue body after the scope freeze; off by default.
       WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED || 'false' }}
       WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES || '12000' }}
+      # Reproduction (P2 step 4): 'true' re-runs the extracted failing tests in
+      # the gate sandbox (scripts/heal_reproduce.sh, from this checkout) against
+      # the last green run and adds `## Reproduction`; off by default.
+      WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
+      WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
       # Non-retryable review/autofix failures (#6756): 'false' skips the PR
       # diagnosis; host-only stops then keep #6745's skip, others are healed.
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
@@ -412,6 +417,11 @@ jobs:
       # timelines to the heal issue body after the scope freeze; off by default.
       WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED || 'false' }}
       WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES || '12000' }}
+      # Reproduction (P2 step 4): 'true' re-runs the extracted failing tests in
+      # the gate sandbox (scripts/heal_reproduce.sh, from this checkout) against
+      # the last green run and adds `## Reproduction`; off by default.
+      WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
+      WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
       # Synced-file security findings (project #7604); kept in step with the
       # intake job's env (test_heal_scope_recovery_scan_workflow_wiring).
