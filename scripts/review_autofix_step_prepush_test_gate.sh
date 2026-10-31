@@ -840,8 +840,9 @@ review_prepush_test_gate_acceptance_fetch_main()
 
 # PREPUSH_TEST_GATE_STEP_MODE=acceptance_label ("Sync done-check label" step,
 # after a commit): ai:acceptance-unmet follows acceptance_result.json's state.
-# Only met and unmet act; never deletes when the PR's labels are unknown; at
-# most one write.
+# Only met and unmet act; never deletes when the PR's labels are unknown. One
+# write normally; only after a failed labels POST does it add one label create
+# (ensure_label_exists) and one retry POST.
 review_prepush_test_gate_acceptance_label_main()
 {
 	set +eu

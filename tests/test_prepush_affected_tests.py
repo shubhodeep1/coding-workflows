@@ -1193,3 +1193,23 @@ def test_done_check_baseline_rerun_gets_the_floored_deadline(tmp_path, monkeypat
 	base_calls = [d for cwd, d in seen if cwd == base.resolve()]
 	assert base_calls and all(d >= t0 + gate.BASELINE_MIN_SECS for d in base_calls)
 	assert result["acceptance"]["tests/red_case.py"]["base"] != "unverified"
+
+
+def test_red_on_base_target_failing_on_head_is_not_rerun_on_base(tmp_path, monkeypatch):
+	# A head-failing target scores "unmet" whatever its base result, so its
+	# base re-run would only use up the shared baseline window.
+	head = _plain_tree(tmp_path / "head", {"tests/broken_case.py": "import sys\nsys.exit(3)\n", "tests/red_case.py": "import sys\nsys.exit(0)\n"})
+	base = _plain_tree(tmp_path / "base", {"tests/broken_case.py": "import sys\nsys.exit(1)\n", "tests/red_case.py": "import sys\nsys.exit(1)\n"})
+	reran = []
+	real = gate._baseline_target_statuses
+
+	def spy(repo, baseline, targets, deadline, shards):
+		reran.extend(t[0] for t in targets)
+		return real(repo, baseline, targets, deadline, shards)
+
+	monkeypatch.setattr(gate, "_baseline_target_statuses", spy)
+	result = gate.run_gate(head, {"affected_tests": [], "changed_files": []}, base, 2, 2,
+		explicit_tests=["tests/broken_case.py", "tests/red_case.py"], expect_baseline_fail=["tests/broken_case.py", "tests/red_case.py"])
+	assert reran == ["tests/red_case.py"]
+	assert result["acceptance"]["tests/broken_case.py"] == {"head": "fail", "base": "not_run"}
+	assert result["acceptance"]["tests/red_case.py"] == {"head": "pass", "base": "fail"}

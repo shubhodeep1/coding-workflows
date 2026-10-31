@@ -1050,6 +1050,9 @@ def run_gate(
 	changed_assertions = assertion_diff(repo, baseline, selection.get("changed_files", [])) if baseline is not None and baseline.is_dir() else []
 	acceptance: dict[str, dict] = {}
 	if acceptance_requested:
+		# A base result is scored only when the head run passed, so skip the
+		# baseline re-run for red-on-base targets that already fail on head.
+		base_targets = [t for t in base_targets if _target_status(results, t[1], t[2]) == "pass"]
 		base_statuses = _baseline_target_statuses(repo, baseline, base_targets, baseline_deadline, shards) if base_targets else {}
 		for target, path, name in head_targets:
 			entry = {"head": _target_status(results, path, name), "base": "not_run"}
