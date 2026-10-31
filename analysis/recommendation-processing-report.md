@@ -1612,3 +1612,27 @@ Processed: 2026-10-25
 - SHELL-001: rejected — style only; SC2043 is not enforced at CI's error severity.
 - DEBT-001: already-implemented — the 480,000-byte CI guard exists, and `ci_budget_watch` opens `ai:ci-budget` at 440,000 bytes.
 - MERGE-001 and MERGE-002: rejected — tagged RISKY_SKIP by the doc itself.
+
+### `analysis/workflow-optimization-2026-09-26-2.md`
+Source doc: `analysis/workflow-optimization-2026-09-26-2.md`
+Processed: 2026-10-31
+Source commit: `19a95097a14b558e52d1de31a1374f23daba2b74`
+- Inventory parity reconcile + run early (Exec summary 1, Speed 1, Reliability 1): already-implemented — the cited `claude-issue-intake.yml`, `claude_issue_handoff.sh`, `claude_issue_intake.sh` and `claude_issue_route.py` no longer exist, `Inventory parity` runs in `ci.yml`, and `tests/test_ci_inventory_parity_order_contract.py` pins where it runs. The machine-readable parity summary is rejected because nothing consumes it.
+- Resolver scope failures (Speed 2, Reliability 2): already-implemented — the root cause is addressed by the resolver private model index (`docs/completed/issue-5627-resolver-private-model-index-plan.md`). The `reason_code` diagnostic is rejected because `Resolver scope check failed closed (ValueError).` is pinned by `tests/test_workflow_failure_heal.py` and `tests/test_review_conflict_resolve_retry_prelude_render.py`.
+- Logical outcome / editor_changes_lost (Exec 3, Cost 1, Reliability 3): rejected — `AUTOFIX_FAILURE_REASON` and `AUTOFIX_FINGERPRINT_CAP_TRIPPED` already report the terminal reason, the existing caps stop repeats, and a new `logical_outcome` signal would have no consumer.
+- Measurement-only proposals (Speed 3 CI shard timing; Cost 2–5 per-phase usage, prefix identity, Semble selected/included bytes, rerun correlation; Reliability 4 MCP classification; GH API endpoint summary; prompt-cache logging; orchestrator/poller dwell-time logging; queue timestamps): rejected — instrumentation with no defect shown and no defined consumer.
+- AI Memory Health: already-implemented — `AI_MEMORY_TELEMETRY` in `scripts/ai_memory.py` already emits op, records_selected, estimated_tokens, keyword_method, fail_open and did_push.
+- BUG-001: already-implemented — the `active_snapshot_incomplete` gate and `AUTOFIX_SWEEP_SKIP ... reason=active_snapshot_incomplete` are in `review_autofix_sweep.yml`.
+- BUG-002: rejected — obsolete; there is no fork-specific dispatch path in `review_autofix_sweep.yml` or `scripts/*sweep*`.
+- BUG-003: already-implemented — `set_issue_phase_label_resilient` in `scripts/label_helpers.sh` POSTs the target, DELETEs stale phase labels and never PUTs the full set.
+- BUG-004: already-implemented — `gh_retry` makes a single attempt for unsafe POSTs, including the implicit POST from `-f` (`_gh_cmd_is_unsafe_post`, issue #6634).
+- BUG-005: applied — retro tracker and fan-out PATCH reconfirm (comment reconfirm in `scripts/workflow_retro_fanout.sh`).
+- SEC-001: already-implemented / applied — argument logging was already bounded by `_gh_cmd_log_summary` (#8095); the raw final stderr dump is applied (`tests/test_gh_retry_final_stderr_redaction.py`).
+- API-001, API-002, API-003, BATCH-001, BATCH-002, MERGE-001, MERGE-002: rejected — tagged RISKY_SKIP by the doc itself; for API-003 the sleep after the final attempt is already gone.
+- BATCH-003: rejected — tagged NEEDS_VERIFICATION by the doc, and `scripts/promote_main_cycle.sh` is the promote-cycle dispatcher whose trusted-author filter needs a manual check before any GraphQL substitution.
+- DUP-001, DUP-002, DUP-003: rejected — duplication removal across trusted-staging boundaries with no defect shown; DUP-003 itself says not to remove the fallbacks until cleanup-path tests exist.
+- EXPR-001: already-implemented — the "Stage workflow support files" step in `implement.yml` passes values through `STAGE_*` env and keeps `${{ }}` out of its run body.
+- DEAD-001: already-implemented — `BRANCH_REBUILD_SKIP_REASON` and `BRANCH_REBUILD_LAST_REBUILD_AT` are read by the `BRANCH_REBUILD_THRESHOLD_DECISION` log line in `scripts/orchestrate_poll_process.sh`.
+- SHELL-001: applied — `CDPATH=''` on the script-dir resolution in `scripts/review_enable_auto_merge.sh`.
+- SHELL-002: already-implemented — `test-and-mark-stable.yml` reads the consumer list line by line (`while IFS= read -r REPO`), validates each entry against a strict `owner/repo` regex, rejects `.`/`..` segments, and logs only the position of a rejected entry.
+- DEBT-001: already-implemented — `tests/test_workflow_file_size_limit.py` enforces the 480,000-byte guard; nothing else is needed until the next large addition.
