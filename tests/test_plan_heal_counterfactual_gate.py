@@ -243,6 +243,70 @@ def test_issue_8327_fixture_trailing_note_is_held() -> None:
 	assert len(PD.parse_plan(bullets_only)["items"]) == 3
 
 
+_REPRO_LINE = "HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/test_a.py::test_b, tests/test_c.py"
+
+
+def test_reproducible_with_the_switch_on_is_approve_pending_repro() -> None:
+	# Issue #8512: REPRODUCIBLE approves only behind WORKFLOW_HEAL_REPRODUCE_ENABLED.
+	for flag in ("true", " TRUE ", "True"):
+		result = PD.parse_heal_counterfactual(_plan(_REPRO_LINE), "true", flag)
+		assert (result["decision"], result["result"], result["reason"]) == (
+			"approve_pending_repro", "REPRODUCIBLE", "reproducible"), (flag, result)
+		assert set(result) == {"gate", "flag_invalid", "result", "decision", "reason", "line", "jobs", "unmatched_jobs"}
+
+
+def test_reproducible_with_the_switch_off_holds() -> None:
+	for flag in (None, "", "false", "banana", "yes", "1"):
+		result = PD.parse_heal_counterfactual(_plan(_REPRO_LINE), "true", flag)
+		assert (result["decision"], result["result"], result["reason"]) == (
+			"hold", "REPRODUCIBLE", "reproduction_disabled"), (flag, result)
+	# The two-argument call (older callers) holds the same way.
+	assert _check(_plan(_REPRO_LINE))["reason"] == "reproduction_disabled"
+
+
+def test_reproducible_invalid_test_lists_hold() -> None:
+	bad = ("HEAL_COUNTERFACTUAL: REPRODUCIBLE", "HEAL_COUNTERFACTUAL: REPRODUCIBLE:",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: ,", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: /abs.py",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/../x.py", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/a.py::x<y",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/a b.py;rm",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: " + ", ".join(f"tests/test_{i}.py" for i in range(51)))
+	for line in bad:
+		for flag in ("true", "false"):
+			result = PD.parse_heal_counterfactual(_plan(line), "true", flag)
+			assert (result["decision"], result["result"], result["reason"]) == (
+				"hold", "FAIL", "reproducible_test_list_invalid"), (line, flag, result)
+
+
+def test_reproducible_valid_list_forms() -> None:
+	assert PD._heal_counterfactual_repro_tests("tests/a.py::t1 tests/b.py") == ["tests/a.py::t1", "tests/b.py"]
+	assert PD._heal_counterfactual_repro_tests("`tests/a.py::t1`, `tests/b.py`") == ["tests/a.py::t1", "tests/b.py"]
+	assert PD._heal_counterfactual_repro_tests("tests/a.py::test_x[a,b],tests/c.py") == ["tests/a.py::test_x[a,b]", "tests/c.py"]
+	assert len(PD._heal_counterfactual_repro_tests(" ".join(f"tests/t{i}.py" for i in range(50)))) == 50
+	for line in ("HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/a.py::t1 tests/b.py",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: `tests/a.py::test_x[a,b]`"):
+		assert PD.parse_heal_counterfactual(_plan(line), "true", "true")["decision"] == "approve_pending_repro", line
+
+
+def test_reproducible_duplicate_and_gate_off() -> None:
+	duplicate = PD.parse_heal_counterfactual(_plan(_REPRO_LINE, extra="HEAL_COUNTERFACTUAL: PASS"), "true", "true")
+	assert (duplicate["decision"], duplicate["reason"]) == ("hold", "duplicate_line"), duplicate
+	off = PD.parse_heal_counterfactual(_plan(_REPRO_LINE), "false", "true")
+	assert (off["gate"], off["decision"], off["reason"], off["result"]) == ("off", "approve", "gate_disabled", "REPRODUCIBLE"), off
+
+
+def test_existing_values_ignore_the_reproduce_switch() -> None:
+	plans = [_plan("HEAL_COUNTERFACTUAL: PASS"), _plan("HEAL_COUNTERFACTUAL: FAIL: no"),
+		_plan("HEAL_COUNTERFACTUAL: UNVERIFIED: missing timeline"), _plan(None),
+		_plan("HEAL_COUNTERFACTUAL: PARTIAL: job-a", deferred=["job-a still fails"]),
+		_plan("HEAL_COUNTERFACTUAL: PARTIAL: job-b", deferred=["job-a still fails"]),
+		FIXTURE_8241.read_text(encoding="utf-8"), FIXTURE_8327.read_text(encoding="utf-8")]
+	for text in plans:
+		for gate in ("true", "false"):
+			baseline = PD.parse_heal_counterfactual(text, gate)
+			for flag in ("true", "false", None):
+				assert PD.parse_heal_counterfactual(text, gate, flag) == baseline, (text, gate, flag)
+
+
 def test_cli_exit_codes() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		plan = Path(tmp) / "plan.md"
@@ -271,6 +335,9 @@ def test_counterfactual_prompt_contract() -> None:
 	assert "{{" not in text
 	# Issue #8327: the planner must know that a note inside the section holds the plan.
 	assert "section holds only `- ` bullets: a prose line or note inside it makes it" in text
+	# Issue #8512: REPRODUCIBLE only from a reproduced ## Reproduction section.
+	for needle in ("HEAL_COUNTERFACTUAL: REPRODUCIBLE:", "status: reproduced", "## Reproduction"):
+		assert needle in text, needle
 
 
 def test_heal_intake_prompt_has_the_would_it_pass_subsection() -> None:
@@ -376,7 +443,7 @@ def _jq_available() -> bool:
 
 
 def _run_step(issue: dict, plan_text: str, *, flag: str | None = None, comments: list | None = None,
-	heal_route: str = "false", copy_parser: bool = True) -> dict:
+	heal_route: str = "false", copy_parser: bool = True, reproduce: str | None = None) -> dict:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		(root / "scripts").mkdir()
@@ -388,13 +455,16 @@ def _run_step(issue: dict, plan_text: str, *, flag: str | None = None, comments:
 		(root / "plan.txt").write_text(plan_text, encoding="utf-8")
 		env = {name: value for name, value in os.environ.items()
 			if name not in ("BASH_ENV", "ENV", "HEAL_COUNTERFACTUAL_GATE_ENABLED", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
-				"HEAL_ROUTE", "PLAN_COMMENT_ID", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED")}
+				"HEAL_ROUTE", "PLAN_COMMENT_ID", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED",
+				"WORKFLOW_HEAL_REPRODUCE_ENABLED")}
 		env.update({"GITHUB_OUTPUT": str(root / "output"), "PLAN_STEP_REPO": "owner/repo", "ISSUE_NUMBER": "123",
 			"ISSUE_RESPONSE": json.dumps(issue), "COMMENTS_RESPONSE": json.dumps(comments or []),
 			"POST_LOG": str(root / "posts"), "AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true", "CODEX_OUTPUT_FILE": str(root / "plan.txt"),
 			"RUNNER_TEMP": str(root), "PLAN_COMMENT_ID": "555", "HEAL_ROUTE": heal_route})
 		if flag is not None:
 			env["HEAL_COUNTERFACTUAL_GATE_ENABLED"] = flag
+		if reproduce is not None:
+			env["WORKFLOW_HEAL_REPRODUCE_ENABLED"] = reproduce
 		proc = subprocess.run(["bash", "-c", _step_run("Auto-approve clear plan")], cwd=root, env=env, text=True,
 			capture_output=True, check=False)
 		assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -531,6 +601,38 @@ def test_plan_step_leaves_non_heal_issues_alone() -> None:
 	run = _run_step(_ORDINARY_ISSUE, _ORDINARY_PLAN)
 	assert "gate=heal_counterfactual" not in run["stdout"]
 	assert len(run["approvals"]) == 1, run["stdout"]
+	assert "[repro-required]" not in run["approvals"][0]
+	# The reproduce switch alone changes nothing for a non-heal plan.
+	run = _run_step(_ORDINARY_ISSUE, _ORDINARY_PLAN, reproduce="true")
+	assert len(run["approvals"]) == 1 and "[repro-required]" not in run["approvals"][0], run["stdout"]
+
+
+_REPRO_PLAN = _ORDINARY_PLAN + "\n## Counterfactual check\n\nHEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/test_a.py::test_b\n"
+
+
+def test_plan_step_reproducible_posts_a_repro_required_approval() -> None:
+	if _skip_without_jq():
+		return
+	run = _run_step(_ORDINARY_ISSUE, _REPRO_PLAN, heal_route="true", reproduce="true")
+	assert "gate=heal_counterfactual outcome=approve result=REPRODUCIBLE reason=reproducible issue=123" in run["stdout"]
+	assert len(run["approvals"]) == 1, run["stdout"]
+	body = run["approvals"][0].split("body=", 1)[1]
+	assert body.split("\n", 1)[0] == "/approved [auto-approved-by-plan] [repro-required]", body
+	assert "Auto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled." in body
+	assert run["holds"] == []
+
+
+def test_plan_step_reproducible_holds_with_the_switch_off() -> None:
+	if _skip_without_jq():
+		return
+	for reproduce in (None, "false", "yes"):
+		run = _run_step(_ORDINARY_ISSUE, _REPRO_PLAN, heal_route="true", reproduce=reproduce)
+		assert run["approvals"] == [], run["stdout"]
+		assert "auto_approve_hold_reason=heal_counterfactual_hold" in run["output"]
+		assert "outcome=hold result=REPRODUCIBLE reason=reproduction_disabled issue=123" in run["stdout"]
+		assert len(run["holds"]) == 1
+		assert "reproduction_disabled" in run["holds"][0] and "result=REPRODUCIBLE" in run["holds"][0]
+		assert "`WORKFLOW_HEAL_REPRODUCE_ENABLED` is not `true`" in run["holds"][0]
 
 
 # --- wiring -----------------------------------------------------------------
@@ -543,7 +645,11 @@ def test_plan_workflow_wiring() -> None:
 	assert "prompts/mode-plan-heal-counterfactual.txt" in text
 	post = _step_run("Post implementation plan")
 	assert 'PLAN_COMMENT_ID="$(gh_retry gh api' in post and "--jq '.id'" in post
+	assert ("WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}"
+		in _step_env("Auto-approve clear plan"))
 	approve = _step_run("Auto-approve clear plan")
+	assert '"approve_pending_repro"' in approve and "tr -cd 'a-z_'" in approve
+	assert '" [repro-required]"' in approve
 	# The counterfactual gate runs before the automation-path gate.
 	assert approve.index("partial_delivery.py heal-counterfactual") < approve.index('plan_gate_file="${CODEX_OUTPUT_FILE:-}"')
 

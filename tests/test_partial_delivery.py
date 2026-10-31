@@ -154,6 +154,33 @@ def test_cli_subcommands() -> None:
 		assert _cli("bogus").returncode == 2
 
 
+def test_cli_heal_counterfactual_reads_the_reproduce_switch() -> None:
+	"""Issue #8512: REPRODUCIBLE reads WORKFLOW_HEAL_REPRODUCE_ENABLED unless --reproduce-flag is given."""
+	import os
+
+	plan_text = ("Plan\n\n## Counterfactual check\n\n- walked it.\n\n"
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/test_a.py::test_b\n")
+	base_env = {name: value for name, value in os.environ.items() if name != "WORKFLOW_HEAL_REPRODUCE_ENABLED"}
+
+	def run(env: dict, *extra: str) -> dict:
+		proc = subprocess.run([sys.executable, "-I", "-B", str(HELPER), "heal-counterfactual", "--plan-file", str(plan), *extra],
+			capture_output=True, text=True, check=False, env=env)
+		assert proc.returncode == 0, proc.stderr
+		return json.loads(proc.stdout)
+
+	with tempfile.TemporaryDirectory() as tmp:
+		plan = Path(tmp) / "plan.md"
+		plan.write_text(plan_text, encoding="utf-8")
+		on = run(dict(base_env, WORKFLOW_HEAL_REPRODUCE_ENABLED="true"))
+		assert (on["decision"], on["result"], on["reason"]) == ("approve_pending_repro", "REPRODUCIBLE", "reproducible"), on
+		unset = run(base_env)
+		assert (unset["decision"], unset["reason"]) == ("hold", "reproduction_disabled"), unset
+		overridden = run(dict(base_env, WORKFLOW_HEAL_REPRODUCE_ENABLED="true"), "--reproduce-flag", "false")
+		assert (overridden["decision"], overridden["reason"]) == ("hold", "reproduction_disabled"), overridden
+		flag_on = run(base_env, "--reproduce-flag", "true")
+		assert flag_on["decision"] == "approve_pending_repro", flag_on
+
+
 def test_plan_prompt_copies_carry_the_same_deferred_scope_rule() -> None:
 	rules = []
 	for relative in ("prompts/mode-plan.txt", "prompts/_templates/mode-plan.txt", "scripts/run_plan_codex.sh"):

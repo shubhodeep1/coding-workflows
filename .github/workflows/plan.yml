@@ -2809,6 +2809,8 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          # Read by partial_delivery.py heal-counterfactual (REPRODUCIBLE line, #8512).
+          WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
           # Read as ${PLAN_STEP_REPO} so the run: body carries no expression
           # (tests/test_workflow_file_size_limit.py expression guard).
           PLAN_STEP_REPO: ${{ github.repository }}
@@ -2972,6 +2974,8 @@ jobs:
                      elif $reason == "partial_jobs_not_deferred" then "These jobs would still fail but are not listed under `## Deferred scope`:\n" + ($unmatched | map("- " + .) | join("\n")) + "\nAdd them to `## Deferred scope` or fix them."
                      elif $reason == "deferred_scope_missing" then "The line says `PARTIAL`, but the plan has no readable `## Deferred scope` section listing the jobs that would still fail. The section must appear once and hold only `- ` bullets: a prose line or note inside it makes it unreadable."
                      elif $reason == "partial_job_list_invalid" then "The `PARTIAL:` line must list the still-failing jobs, comma-separated (at most 20)."
+                     elif $reason == "reproduction_disabled" then "The plan says `REPRODUCIBLE`, but reproduction checks are off (`WORKFLOW_HEAL_REPRODUCE_ENABLED` is not `true`)."
+                     elif $reason == "reproducible_test_list_invalid" then "The `REPRODUCIBLE:` line must list 1-50 test ids (`tests/<path>.py[::name]`), comma- or space-separated."
                      elif ($reason | IN("heal_counterfactual_check_unavailable", "heal_route_unknown")) then "The heal counterfactual check could not run."
                      else "The plan must end its `## Counterfactual check` with exactly one `HEAL_COUNTERFACTUAL:` line." end),
                     "",
@@ -3007,6 +3011,7 @@ jobs:
               # written. Every error holds; a human /approved still works.
               # HEAL_COUNTERFACTUAL_GATE_ENABLED=false turns it off.
               heal_cf_route="false"
+              heal_cf_repro_required="false"
               if [ "${HEAL_ROUTE:-false}" = "true" ]; then
                 heal_cf_route="true"
               else
@@ -3031,7 +3036,7 @@ jobs:
                   esac
                 elif [ -f scripts/partial_delivery.py ] && heal_cf_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/partial_delivery.py heal-counterfactual \
                     --plan-file "${CODEX_OUTPUT_FILE:-}" --gate-flag "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" 2>/dev/null)" \
-                  && printf '%s' "${heal_cf_json}" | jq -e '.decision | IN("approve", "hold")' >/dev/null 2>&1; then
+                  && printf '%s' "${heal_cf_json}" | jq -e '.decision | IN("approve", "approve_pending_repro", "hold")' >/dev/null 2>&1; then
                   :
                 else
                   heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[]}'
@@ -3044,9 +3049,11 @@ jobs:
                 if printf '%s' "${heal_cf_json}" | jq -e '.flag_invalid == true' >/dev/null 2>&1; then
                   echo "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true"
                 fi
-                heal_cf_decision="$(printf '%s' "${heal_cf_json}" | jq -r '.decision' 2>/dev/null | tr -cd 'a-z' || true)"
+                heal_cf_decision="$(printf '%s' "${heal_cf_json}" | jq -r '.decision' 2>/dev/null | tr -cd 'a-z_' || true)"
                 heal_cf_result="$(printf '%s' "${heal_cf_json}" | jq -r '.result // "missing"' 2>/dev/null | tr -cd 'A-Za-z_' | cut -c1-20 || true)"
                 heal_cf_reason="$(printf '%s' "${heal_cf_json}" | jq -r '.reason // "heal_counterfactual_check_unavailable"' 2>/dev/null | tr -cd 'a-z_' | cut -c1-80 || true)"
+                # REPRODUCIBLE with WORKFLOW_HEAL_REPRODUCE_ENABLED=true: approve with [repro-required].
+                if [ "${heal_cf_decision}" = "approve_pending_repro" ]; then heal_cf_repro_required="true"; heal_cf_decision="approve"; fi
                 [ "${heal_cf_decision}" = "approve" ] || heal_cf_decision="hold"
                 heal_cf_outcome="approve"
                 [ "${heal_cf_decision}" = "approve" ] || heal_cf_outcome="hold"
@@ -3223,8 +3230,10 @@ jobs:
               # the auto-approval comment triggers the implement workflow. Without
               # this, the implement workflow may see stale comment state.
               sleep 3
+              heal_cf_approval_tag=""
+              if [ "${heal_cf_repro_required:-false}" = "true" ]; then heal_cf_approval_tag=" [repro-required]"; fi
               gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" \
-                -f body=$'/approved [auto-approved-by-plan]\n\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'
+                -f body="/approved [auto-approved-by-plan]${heal_cf_approval_tag}"$'\n\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'
               echo "auto_approved=true" >> "$GITHUB_OUTPUT"
               ;;
             *)
