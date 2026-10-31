@@ -1656,6 +1656,14 @@ if args[:1] == ["api"]:
 		if issue is None:
 			fail("HTTP 404")
 		out(json.dumps(issue))
+	if "/actions/workflows/" in path and path.endswith("/runs"):
+		if method != "GET":
+			fail("HTTP method must be GET for workflow runs list")
+		# last_green_runs (P2 step 4): the workflow's success list; None (or unset) is a 404.
+		doc = state.get("last_green_runs")
+		if doc is None:
+			fail("HTTP 404")
+		out(json.dumps(doc))
 	if path.endswith("/actions/runs"):
 		if method != "GET":
 			fail("HTTP method must be GET for runs list")
@@ -10395,3 +10403,323 @@ def test_evidence_pack_api_reads_are_behind_the_switch_and_single_attempt() -> N
 	api_lines = [line for line in fetch.splitlines() if " gh api " in line]
 	assert len(api_lines) == 3, api_lines
 	assert all("GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file" in line and "--method GET" in line for line in api_lines)
+
+
+# ---------------------------------------------------------------------------
+# Reproduction (P2 step 4): scripts/heal_reproduce.sh wired into the intake
+# behind WORKFLOW_HEAL_REPRODUCE_ENABLED. The helper is faked: it records its
+# argv and test list and writes MOCK_REPRO_RESULT to --out.
+# ---------------------------------------------------------------------------
+
+P2_FAILING_TEST = "tests/test_demo.py::test_alpha"
+P2_FAILED_SHA = "4f1c2b9e8d7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e"
+P2_GREEN_SHA = "c" * 40
+P2_WORKFLOW_ID = 118204331
+P2_ENV_LINES = (
+	"      WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}\n",
+	"      WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}\n",
+)
+DIAG_TRANSIENT = "## Classification\ntransient\n\n## Summary\nThe runner lost its network for a moment.\n"
+P2_FAKE_REPRODUCE = r"""#!/usr/bin/env bash
+set -u
+argv=("$@")
+out="" tests=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--out) out="$2"; shift 2 ;;
+		--tests-file) tests="$2"; shift 2 ;;
+		*) shift ;;
+	esac
+done
+printf '%s\n' "${argv[@]}" > "${MOCK_REPRO_DIR}/argv.txt"
+cp "${tests}" "${MOCK_REPRO_DIR}/tests.txt"
+printf '%s' "${GH_TOKEN:-}${GITHUB_TOKEN:-}${TG_BOT_SECRET:-}${OPENROUTER_API_KEY:-}" > "${MOCK_REPRO_DIR}/secrets.txt"
+printf '%s' "${WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES:-}" > "${MOCK_REPRO_DIR}/timeout.txt"
+[ "${MOCK_REPRO_MODE:-}" != "no_result" ] || exit 1
+printf '%s' "${MOCK_REPRO_RESULT}" > "${out}"
+exit 0
+"""
+
+
+def _p2_result(status: str, reason: str, *, test_status: str | None = None, test_reason: str | None = None, passing_at: str = P2_GREEN_SHA) -> dict:
+	return {
+		"schema": heal.HEAL_REPRO_SCHEMA, "status": status, "reason": reason, "failing_at": P2_FAILED_SHA, "passing_at": passing_at,
+		"tests": [{"test": P2_FAILING_TEST, "status": test_status or status, "reason": test_reason or reason}],
+	}
+
+
+def _p2_green_runs(head_sha: str = P2_GREEN_SHA, created_at: str = "2026-10-26T08:00:00Z") -> dict:
+	return {"total_count": 1, "workflow_runs": [{"id": 40800000001, "head_sha": head_sha, "created_at": created_at, "conclusion": "success"}]}
+
+
+def _p2_state(*, failing_line: bool = True, last_green: object = "default") -> dict:
+	state = _p1_state()
+	if failing_line:
+		state["job_logs"][str(P1_FAILING_JOB_ID)] = P1_PARENT_LOG + f"2026-09-20T10:00:05.000Z FAILED {P2_FAILING_TEST} - AssertionError: boom\n"
+	state["last_green_runs"] = _p2_green_runs() if last_green == "default" else last_green
+	return state
+
+
+def _run_p2_intake(state: dict, extra_env: dict[str, str | None], *, result: dict | None = None, diagnosis: str = DIAG_WORKFLOW_DEFECT, mode: str = "") -> tuple[subprocess.CompletedProcess[str], dict, dict]:
+	with tempfile.TemporaryDirectory(prefix="heal-p2-") as tmp_name:
+		repro_dir = Path(tmp_name) / "repro"
+		repro_dir.mkdir()
+
+		fake = Path(tmp_name) / "heal_reproduce.sh"
+		fake.write_text(P2_FAKE_REPRODUCE, encoding="utf-8")
+		fake.chmod(0o755)
+		env = {
+			"RUNTIME_DIR": str(Path(tmp_name) / "runtime"),
+			"MOCK_REPRO_DIR": str(repro_dir),
+			"MOCK_REPRO_RESULT": json.dumps(result if result is not None else _p2_result("reproduced", "regression")),
+			"MOCK_REPRO_MODE": mode,
+			"WORKFLOW_HEAL_REPRODUCE_SCRIPT": str(fake),
+			**extra_env,
+		}
+		proc, state_after, _prompt = _run_intake(_p1_payload(), state, diagnosis=diagnosis, extra_env=env)
+		seen = {name: (repro_dir / name).read_text(encoding="utf-8") for name in ("argv.txt", "tests.txt", "secrets.txt", "timeout.txt") if (repro_dir / name).exists()}
+	return proc, state_after, seen
+
+
+def _p2_green_calls(state: dict) -> list[list[str]]:
+	return [call for call in _p1_api_calls(state) if any("/actions/workflows/" in str(part) for part in call)]
+
+
+def _p2_section(body: str) -> str:
+	start = body.index("## Reproduction")
+	return body[start:body.index("\n---\n", start)]
+
+
+def _p2_issue(state: dict) -> dict:
+	return state["composed_issue"]
+
+
+def test_last_green_run_makes_one_get_and_fails_open() -> None:
+	calls: list[list[str]] = []
+
+	def runner(doc, returncode=0):
+		def run(argv, timeout):
+			calls.append(argv)
+			return subprocess.CompletedProcess(argv, returncode, stdout=json.dumps(doc) if not isinstance(doc, str) else doc, stderr="")
+		return run
+
+	ok = heal.last_green_run(SELF_REPO, P2_WORKFLOW_ID, "main", failing_sha=SHA_A, before="2026-10-27T09:40:12Z", run_gh=runner(_p2_green_runs()))
+	assert ok == {"run_id": 40800000001, "head_sha": P2_GREEN_SHA, "created_at": "2026-10-26T08:00:00Z", "reason": "ok"}
+	assert calls == [["gh", "api", "--method", "GET", f"repos/{SELF_REPO}/actions/workflows/{P2_WORKFLOW_ID}/runs", "-f", "status=success", "-f", "branch=main", "-F", "per_page=1", "-f", "created=<2026-10-27T09:40:12Z"]]
+	calls.clear()
+	heal.last_green_run(SELF_REPO, P2_WORKFLOW_ID, "main", run_gh=runner(_p2_green_runs()))
+	assert calls and not any(part.startswith("created=") for part in calls[0])
+	calls.clear()
+	for repo, workflow_id, branch in ((SELF_REPO, "abc", "main"), ("not a repo", 1, "main"), (SELF_REPO, 1, "bad..branch"), (SELF_REPO, 0, "main"), (SELF_REPO, True, "main")):
+		assert heal.last_green_run(repo, workflow_id, branch, run_gh=runner(_p2_green_runs()))["reason"] == "invalid_input"
+	assert calls == []
+
+	def boom(argv, timeout):
+		raise subprocess.TimeoutExpired(argv, timeout)
+
+	assert heal.last_green_run(SELF_REPO, 1, "main", run_gh=boom)["reason"] == "request_failed"
+	assert heal.last_green_run(SELF_REPO, 1, "main", run_gh=runner({}, returncode=1))["reason"] == "request_failed"
+	assert heal.last_green_run(SELF_REPO, 1, "main", run_gh=runner("not json"))["reason"] == "malformed"
+	cases = [
+		({"total_count": 0}, {}, "malformed"),
+		({"workflow_runs": [{"head_sha": "xyz"}]}, {}, "malformed"),
+		({"workflow_runs": []}, {}, "no_success_run"),
+		(_p2_green_runs(head_sha=SHA_A), {"failing_sha": SHA_A}, "same_sha"),
+		(_p2_green_runs(created_at="2026-10-27T09:40:12Z"), {"before": "2026-10-27T09:40:12Z"}, "newer_than_failure"),
+		(_p2_green_runs(created_at="2026-10-28T00:00:00Z"), {"before": "2026-10-27T09:40:12Z"}, "newer_than_failure"),
+		(_p2_green_runs(), {"before": "2026-10-27T09:40:12Z", "failing_sha": SHA_A}, "ok"),
+	]
+	for doc, kwargs, reason in cases:
+		assert heal.parse_last_green_run(doc, **kwargs)["reason"] == reason, (doc, kwargs)
+	# Reusable by later phases (trends, suspect commits): documented contract.
+	doc = heal.last_green_run.__doc__ or ""
+	assert "Batching contract" in doc and "GH_PAT_BUDGET" in doc and "exactly one" in doc
+
+
+def test_reproduction_test_list_keeps_file_qualified_ids_only() -> None:
+	found = {
+		"names": ["test_alpha", "test_bare"],
+		"files": ["tests/test_demo.py", "tests/test_other.py", "tests/../scripts/x.py", "tests/test_other.py"],
+		"pairs": ["tests/test_demo.py::test_alpha", "tests/test_x.py::test_a\nstatus: reproduced", "tests/test x.py::test_a"],
+	}
+	assert heal.reproduction_test_list(found) == ["tests/test_demo.py::test_alpha", "tests/test_other.py"]
+	assert heal.reproduction_test_list({"names": ["test_alpha"], "files": [], "pairs": []}) == []
+	assert heal.reproduction_test_list(None) == []
+	many = {"files": [f"tests/test_{index}.py" for index in range(100)], "pairs": []}
+	assert len(heal.reproduction_test_list(many)) == heal.HEAL_REPRO_TEST_LIMIT == 2 * heal.FAILING_TEST_LIMIT
+
+
+def test_normalize_and_render_reproduction_section() -> None:
+	good = _p2_result("reproduced", "regression")
+	assert heal.normalize_reproduction_result(good, tests=[P2_FAILING_TEST]) == good
+	bad_docs = [
+		dict(good, schema="heal_repro.v2"),
+		dict(good, status="transient"),
+		dict(good, reason="Bad Reason"),
+		dict(good, failing_at="abc"),
+		dict(good, tests=[{"test": "tests/x.py::t `<!-- x -->`", "status": "reproduced", "reason": "regression"}]),
+		dict(good, tests=[{"test": P2_FAILING_TEST, "status": "maybe", "reason": "regression"}]),
+		"not a dict",
+	]
+	for doc in bad_docs:
+		normalized = heal.normalize_reproduction_result(doc, tests=[P2_FAILING_TEST, "not a test"])
+		assert normalized["status"] == "unverified" and normalized["reason"] == "result_invalid", doc
+		assert normalized["tests"] == [{"test": P2_FAILING_TEST, "status": "unverified", "reason": "result_invalid"}]
+	section = heal.render_reproduction_section(good)
+	lines = section.splitlines()
+	assert lines[0] == "## Reproduction" and heal.HEAL_REPRO_BANNER in lines
+	assert lines[lines.index("status: reproduced"):lines.index("status: reproduced") + 4] == [
+		"status: reproduced", "reason: regression", f"failing_at: {P2_FAILED_SHA}", f"passing_at: {P2_GREEN_SHA}",
+	]
+	assert f"- `{P2_FAILING_TEST}`: reproduced (regression)" in lines
+	empty = heal.render_reproduction_section(heal.normalize_reproduction_result(None, tests=[]))
+	assert "status: unverified" in empty and "failing_at: none" in empty and "passing_at: none" in empty
+	assert "<!--" not in section and "`" not in section.replace(f"`{P2_FAILING_TEST}`", "")
+
+
+def test_compose_issue_body_reproduction_is_optional() -> None:
+	payload = _p1_payload()
+	kwargs = dict(payload=payload, diagnosis=DIAG_WORKFLOW_DEFECT, fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect",
+		target_branch="main", max_depth=3, intake_run_url="https://example.invalid/run", run_summaries=[])
+	plain = heal.compose_issue_body(**kwargs)
+	assert heal.compose_issue_body(**kwargs, reproduction=None) == plain
+	assert heal.compose_issue_body(**kwargs, reproduction="") == plain
+	section = heal.render_reproduction_section(_p2_result("reproduced", "regression"))
+	with_section = heal.compose_issue_body(**kwargs, reproduction=section)
+	assert with_section.index("## Reproduction") < with_section.index("The resolver rejects a missing integration branch")
+	assert heal.validate_heal_issue_body_routing(with_section, target_branch="main", integration_branch=None) == ""
+
+
+def test_reproduction_cli_subcommands_always_exit_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	failing = tmp_path / "failing.json"
+	failing.write_text(json.dumps({"names": [], "files": ["tests/test_demo.py"], "pairs": [P2_FAILING_TEST]}), encoding="utf-8")
+	out = tmp_path / "tests.txt"
+	assert heal.main(["reproduction-tests", "--failing-tests-json", str(failing), "--out", str(out)]) == 0
+	assert json.loads(capsys.readouterr().out) == {"count": 1}
+	assert out.read_text(encoding="utf-8") == P2_FAILING_TEST + "\n"
+	assert heal.main(["reproduction-tests", "--failing-tests-json", str(tmp_path / "missing.json"), "--out", str(out)]) == 0
+	assert json.loads(capsys.readouterr().out) == {"count": 0}
+	out.write_text(P2_FAILING_TEST + "\n", encoding="utf-8")
+	normalized = tmp_path / "normalized.json"
+	assert heal.main(["reproduction-normalize", "--result-file", str(tmp_path / "missing.json"), "--tests-file", str(out), "--out", str(normalized)]) == 0
+	assert json.loads(capsys.readouterr().out) == {"status": "unverified", "reason": "result_invalid", "tests": 1}
+	assert json.loads(normalized.read_text(encoding="utf-8"))["tests"][0]["test"] == P2_FAILING_TEST
+	assert heal.main(["last-green-run", "--repo", SELF_REPO, "--workflow-id", "x", "--branch", "main"]) == 0
+	assert json.loads(capsys.readouterr().out)["reason"] == "invalid_input"
+
+
+def test_intake_reproduction_reproduced_adds_section_with_one_extra_call() -> None:
+	on_result, on_state, seen = _run_p2_intake(_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"})
+	off_result, off_state, off_seen = _run_p2_intake(_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "false"})
+	for result in (on_result, off_result):
+		assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL reproduction outcome=reproduced reason=regression tests=1 baseline=ok" in on_result.stdout
+	section = _p2_section(_p2_issue(on_state)["body"])
+	assert "\nstatus: reproduced\n" in section and f"\nfailing_at: {P2_FAILED_SHA}\n" in section and f"\npassing_at: {P2_GREEN_SHA}\n" in section
+	assert f"- `{P2_FAILING_TEST}`: reproduced (regression)" in section
+	argv = seen["argv.txt"].splitlines()
+	assert argv[argv.index("--sha") + 1] == P2_FAILED_SHA and argv[argv.index("--baseline") + 1] == P2_GREEN_SHA
+	assert seen["tests.txt"] == P2_FAILING_TEST + "\n"
+	assert seen["secrets.txt"] == "" and seen["timeout.txt"] == "10"
+	assert not off_seen
+	# At most one extra API call per report: the last-green lookup.
+	extra = _p1_extra_calls(on_state, off_state)
+	assert extra == _p2_green_calls(on_state) and len(extra) == 1, extra
+	call = extra[0]
+	assert call[call.index("--method") + 1] == "GET" and f"repos/{SELF_REPO}/actions/workflows/{P2_WORKFLOW_ID}/runs" in call
+	assert {"status=success", "branch=main", "per_page=1"} <= set(call)
+	assert any(part.startswith("created=<") for part in call)
+	# Classification is unchanged for a non-transient verdict.
+	assert heal.parse_heal_markers(_p2_issue(on_state)["body"])["classification"] == "workflow-defect"
+
+
+@pytest.mark.parametrize(
+	("result", "status_line", "reason_line", "bullet"),
+	(
+		(_p2_result("not_reproduced", "pre_existing", passing_at=""), "not_reproduced", "pre_existing", "not_reproduced (pre_existing)"),
+		(_p2_result("not_reproduced", "passes_at_failing_sha"), "not_reproduced", "passes_at_failing_sha", "not_reproduced (passes_at_failing_sha)"),
+		(_p2_result("unverified", "timeout", passing_at=""), "unverified", "timeout", "unverified (timeout)"),
+	),
+)
+def test_intake_reproduction_other_statuses_are_shown_and_change_nothing(result: dict, status_line: str, reason_line: str, bullet: str) -> None:
+	on_result, on_state, _seen = _run_p2_intake(_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"}, result=result)
+	off_result, off_state, _ = _run_p2_intake(_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "false"})
+	assert on_result.returncode == 0, on_result.stderr + on_result.stdout
+	on_body, off_body = _p2_issue(on_state)["body"], _p2_issue(off_state)["body"]
+	section = _p2_section(on_body)
+	assert f"\nstatus: {status_line}\n" in section and f"\nreason: {reason_line}\n" in section
+	assert f"- `{P2_FAILING_TEST}`: {bullet}" in section
+	# Only the section differs: same classification, route and markers.
+	start = on_body.index("## Reproduction")
+	end = on_body.index("\n---\n", start)
+	assert on_body[:start] + on_body[end + 1:] == off_body
+	assert "classification_remapped" not in on_result.stdout
+
+
+def test_intake_reproduction_only_reproduced_remaps_transient() -> None:
+	reproduced, reproduced_state, _ = _run_p2_intake(_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"}, diagnosis=DIAG_TRANSIENT)
+	assert reproduced.returncode == 0, reproduced.stderr + reproduced.stdout
+	assert "WORKFLOW_HEAL classification_remapped from=transient to=inconclusive reason=reproduced " in reproduced.stdout
+	body = _p2_issue(reproduced_state)["body"]
+	assert heal.parse_heal_markers(body)["classification"] == "inconclusive"
+	assert "but the heal intake reproduced it" in body and "\nstatus: reproduced\n" in body
+	pre_existing, pre_state, _ = _run_p2_intake(
+		_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"}, diagnosis=DIAG_TRANSIENT, result=_p2_result("not_reproduced", "pre_existing", passing_at=""),
+	)
+	off, off_state, _ = _run_p2_intake(_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "false"}, diagnosis=DIAG_TRANSIENT)
+	for result in (pre_existing, off):
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "classification_remapped" not in result.stdout
+		assert "WORKFLOW_HEAL classification=transient" in result.stdout
+	# The unchanged transient route: no heal issue composed either way.
+	assert "composed_issue" not in pre_state and "composed_issue" not in off_state
+
+
+def test_intake_reproduction_skips_without_tests_and_without_baseline() -> None:
+	no_tests, no_tests_state, no_tests_seen = _run_p2_intake(_p2_state(failing_line=False), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"})
+	assert no_tests.returncode == 0, no_tests.stderr + no_tests.stdout
+	assert "WORKFLOW_HEAL reproduction outcome=skipped reason=no_tests tests=0" in no_tests.stdout
+	assert not no_tests_seen and not _p2_green_calls(no_tests_state)
+	assert "## Reproduction" not in _p2_issue(no_tests_state)["body"]
+	no_green, no_green_state, no_green_seen = _run_p2_intake(_p2_state(last_green=None), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"})
+	assert no_green.returncode == 0, no_green.stderr + no_green.stdout
+	assert "WORKFLOW_HEAL reproduction outcome=unverified reason=no_baseline tests=1 baseline=request_failed" in no_green.stdout
+	assert not no_green_seen and len(_p2_green_calls(no_green_state)) == 1
+	section = _p2_section(_p2_issue(no_green_state)["body"])
+	assert "\nstatus: unverified\n" in section and "\nreason: no_baseline\n" in section and "\npassing_at: none\n" in section
+	newer, _newer_state, newer_seen = _run_p2_intake(_p2_state(last_green=_p2_green_runs(created_at="2026-10-28T00:00:00Z")), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"})
+	assert "reason=no_baseline tests=1 baseline=newer_than_failure" in newer.stdout and not newer_seen
+	failed, failed_state, _ = _run_p2_intake(_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"}, mode="no_result")
+	assert "WORKFLOW_HEAL reproduction outcome=unverified reason=helper_failed tests=1 baseline=ok" in failed.stdout
+	assert "\nreason: helper_failed\n" in _p2_section(_p2_issue(failed_state)["body"])
+
+
+def test_intake_reproduction_off_is_byte_identical() -> None:
+	unset_result, unset_state, unset_seen = _run_p2_intake(_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": None})
+	off_result, off_state, off_seen = _run_p2_intake(_p2_state(), {"WORKFLOW_HEAL_REPRODUCE_ENABLED": "false"})
+	for result in (unset_result, off_result):
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL reproduction outcome=skipped reason=disabled tests=0" in result.stdout
+	assert _p2_issue(unset_state)["body"] == _p2_issue(off_state)["body"]
+	assert "## Reproduction" not in _p2_issue(off_state)["body"]
+	assert _p1_api_calls(unset_state) == _p1_api_calls(off_state)
+	assert not _p2_green_calls(off_state) and not unset_seen and not off_seen
+
+
+def test_reproduction_switch_defaults_and_workflow_wiring() -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'REPRODUCE_ENABLED="${WORKFLOW_HEAL_REPRODUCE_ENABLED:-false}"' in script
+	assert 'REPRODUCE_TIMEOUT_MINUTES="$(_positive_or_default "${WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES:-}" 10)"' in script
+	assert script.index('chmod 0444 "${SCOPE_INPUTS_FROZEN}"') < script.index("\n_heal_run_reproduction ||") < script.index('python3 "${HEAL_PY}" compose-issue')
+	runner = script.split("\n_heal_run_reproduction()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "gh " not in runner and "gh_retry" not in runner
+	assert runner.count('python3 "${HEAL_PY}" last-green-run') == 1
+	assert "-u GH_TOKEN -u GITHUB_TOKEN" in runner and "HEAL_SOURCE_DIR" not in runner
+	# heal_reproduce.sh lets an inherited seconds value replace the clamped minutes.
+	assert "-u WORKFLOW_HEAL_REPRODUCE_TIMEOUT_SECS" in runner
+	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	intake_job, scan_job = workflow.split("\n  recovery-scan:\n", 1)
+	for line in P2_ENV_LINES:
+		assert workflow.count(line) == 2, line
+		assert intake_job.split("\n  intake:\n", 1)[1].count(line) == 1, line
+		assert scan_job.count(line) == 1, line

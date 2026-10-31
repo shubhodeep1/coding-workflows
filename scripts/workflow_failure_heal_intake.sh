@@ -133,6 +133,11 @@
 #   WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED   default "false": only "true" adds the `## Evidence pack`
 #                                         (failed-run and linked-run step timelines) to the issue body
 #   WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES evidence pack byte cap (default 12000, clamped 1024-20000)
+#   WORKFLOW_HEAL_REPRODUCE_ENABLED       default "false": only "true" re-runs the extracted failing
+#                                         tests (scripts/heal_reproduce.sh) at the failing SHA against
+#                                         the workflow's last green SHA and adds `## Reproduction`
+#   WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES reproduction wall time (default 10; the intake clamps 1-20)
+#   WORKFLOW_HEAL_REPRODUCE_SCRIPT        reproduction helper (default: heal_reproduce.sh next to this script; tests)
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
@@ -304,6 +309,11 @@ SCOPE_LINKED_WORKFLOWS_ENABLED="${WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED:-
 EVIDENCE_PACK_ENABLED="${WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED:-false}"
 EVIDENCE_PACK_MAX_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES:-}" 12000)"
 EVIDENCE_PACK_FILE=""
+# Reproduction (P2 step 4): only the literal 'true' turns it on.
+REPRODUCE_ENABLED="${WORKFLOW_HEAL_REPRODUCE_ENABLED:-false}"
+REPRODUCE_TIMEOUT_MINUTES="$(_positive_or_default "${WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES:-}" 10)"
+REPRODUCTION_FILE=""
+REPRO_STATUS=""
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
@@ -2971,6 +2981,144 @@ _heal_build_evidence_pack()
 }
 _heal_build_evidence_pack || { : > "${RUNTIME_DIR}/evidence_pack.md"; log "evidence_pack outcome=partial bytes=0 reason=helper_failed"; }
 
+# --- Reproduction (P2 step 4, evidence only) --------------------------------
+
+# _heal_write_unverified_reproduction OUT TESTS_FILE REASON
+#   Writes a heal_repro.v1 result in which the run and every listed test are
+#   unverified/<REASON> (failing_at = HEAD_SHA), for the paths that never ran
+#   the helper or got no result from it.
+_heal_write_unverified_reproduction()
+{
+	local out="$1" tests_file="$2" reason="$3"
+	jq -n --arg reason "${reason}" --arg failing_at "${HEAD_SHA:-}" --rawfile tests "${tests_file}" \
+		'{schema: "heal_repro.v1", status: "unverified", reason: $reason, failing_at: $failing_at, passing_at: "",
+		  tests: ($tests | split("\n") | map(select(length > 0)) | map({test: ., status: "unverified", reason: $reason}))}' \
+		> "${out}"
+}
+
+# _heal_run_reproduction
+#   Behind WORKFLOW_HEAL_REPRODUCE_ENABLED (only the literal 'true'), re-runs
+#   the failing tests `heal-scope failing-tests` extracted (FAILING_TESTS_JSON)
+#   through scripts/heal_reproduce.sh at HEAD_SHA against the last green SHA of
+#   the same workflow on the same branch, and leaves a normalized heal_repro.v1
+#   result in REPRODUCTION_FILE and its status in REPRO_STATUS. Runs after the
+#   scope freeze; nothing here feeds the scope, the marker or the fingerprint.
+#   Applies to self-repo workflow_run reports with a 40-hex HEAD_SHA only (the
+#   checkout holds this repository's tests), and only when at least one
+#   file-qualified test (`tests/<path>.py[::name]`) was extracted.
+#   Batching contract (CLAUDE.md §14): at most 1 GitHub REST GET per report,
+#   `workflow_failure_heal.py last-green-run` (repos/<self>/actions/workflows/<id>/runs?
+#   status=success&branch=<b>&per_page=1, single attempt), counted in
+#   GH_PAT_BUDGET; none with the switch off, for other reports, or with no
+#   tests. The workflow id and the failing run's created_at come from the
+#   saved ${LOG_DIR}/run-<id>-info.json.
+#   Fails open: no baseline (`last-green-run` reason not ok) gives
+#   unverified/no_baseline; a missing helper, no result file or the outer
+#   timeout give unverified/helper_missing|helper_failed|timeout. One log line:
+#   `reproduction outcome=<status|skipped> reason=<token> tests=<n> [baseline=<reason>]`.
+#   The helper runs from this script's own directory (never from the failing
+#   SHA's tree), without the GitHub, Telegram or model credentials.
+_heal_run_reproduction()
+{
+	local repro_dir="${RUNTIME_DIR}/reproduction"
+	local repro_tests_file="${RUNTIME_DIR}/reproduction/tests.txt"
+	local repro_raw_file="${RUNTIME_DIR}/reproduction/result.json"
+	local repro_result_file="${RUNTIME_DIR}/reproduction/normalized.json"
+	local repro_count_json="" repro_count=0 repro_run_id="" repro_info_file="" repro_workflow_id="" repro_before=""
+	local repro_green_json="" repro_green_reason="" repro_green_sha="" repro_summary="" repro_reason="" repro_tests=0
+	local repro_wall=10 repro_rc=0 heal_script_dir_repro="" repro_helper=""
+	REPRODUCTION_FILE=""
+	REPRO_STATUS=""
+	if [ "${REPRODUCE_ENABLED}" != true ]; then
+		log "reproduction outcome=skipped reason=disabled tests=0"
+		return 0
+	fi
+	if [ "${SOURCE_KIND:-}" != workflow_run ] || [ "${SOURCE_REPO,,}" != "${SELF_REPO,,}" ] || [[ ! "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		log "reproduction outcome=skipped reason=not_applicable tests=0"
+		return 0
+	fi
+	rm -rf "${repro_dir}"
+	mkdir -p "${repro_dir}" || return 1
+	printf '%s' "${FAILING_TESTS_JSON:-}" > "${repro_dir}/failing_tests.json" || return 1
+	repro_count_json="$(python3 "${HEAL_PY}" reproduction-tests --failing-tests-json "${repro_dir}/failing_tests.json" --out "${repro_tests_file}" 2>/dev/null)" || repro_count_json=""
+	repro_count="$(jq -r '(.count // 0) | tostring' <<< "${repro_count_json}" 2>/dev/null || true)"
+	[[ "${repro_count}" =~ ^[0-9]+$ ]] || repro_count=0
+	if [ "${repro_count}" -eq 0 ] || [ ! -s "${repro_tests_file}" ]; then
+		log "reproduction outcome=skipped reason=no_tests tests=0"
+		return 0
+	fi
+	# The reported run at HEAD_SHA: its workflow id and creation time (saved run JSON, no call).
+	if [ -s "${SUMMARIES_FILE:-}" ]; then
+		while IFS= read -r repro_run_id; do
+			[[ "${repro_run_id}" =~ ^[0-9]+$ ]] || continue
+			repro_info_file="${LOG_DIR}/run-${repro_run_id}-info.json"
+			[ -s "${repro_info_file}" ] || continue
+			if jq -e --arg sha "${HEAD_SHA}" '.head_sha == $sha' "${repro_info_file}" >/dev/null 2>&1; then
+				repro_workflow_id="$(jq -r '(.workflow_id // "") | tostring' "${repro_info_file}" 2>/dev/null || true)"
+				repro_before="$(jq -r '.created_at // ""' "${repro_info_file}" 2>/dev/null || true)"
+				break
+			fi
+		done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+	fi
+	[[ "${repro_workflow_id}" =~ ^[1-9][0-9]{0,19}$ ]] || repro_workflow_id=""
+	[[ "${repro_before}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || repro_before=""
+	if [ -n "${repro_workflow_id}" ] && [ -n "${repro_before}" ]; then
+		repro_green_json="$(python3 "${HEAL_PY}" last-green-run --repo "${SELF_REPO}" --workflow-id "${repro_workflow_id}" \
+			--branch "${HEAD_BRANCH:-}" --failing-sha "${HEAD_SHA}" --before "${repro_before}" 2>/dev/null)" || repro_green_json=""
+		repro_green_reason="$(jq -r '.reason // ""' <<< "${repro_green_json}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+		repro_green_sha="$(jq -r '.head_sha // ""' <<< "${repro_green_json}" 2>/dev/null || true)"
+		[ -n "${repro_green_reason}" ] || repro_green_reason="request_failed"
+	else
+		repro_green_reason="run_unavailable"
+	fi
+	[[ "${repro_green_sha}" =~ ^[0-9a-f]{40}$ ]] || repro_green_sha=""
+	if [ "${repro_green_reason}" != ok ] || [ -z "${repro_green_sha}" ]; then
+		_heal_write_unverified_reproduction "${repro_raw_file}" "${repro_tests_file}" no_baseline || true
+	else
+		heal_script_dir_repro="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+		repro_helper="${WORKFLOW_HEAL_REPRODUCE_SCRIPT:-${heal_script_dir_repro}/heal_reproduce.sh}"
+		if [ ! -f "${repro_helper}" ] || [ -L "${repro_helper}" ]; then
+			_heal_write_unverified_reproduction "${repro_raw_file}" "${repro_tests_file}" helper_missing || true
+		else
+			# The intake caps the wall at 20 minutes (the helper allows 1-60) so the
+			# intake job's timeout covers it; the outer guard sits 5 minutes above
+			# it so the helper's cleanup normally runs first.
+			if [[ "${REPRODUCE_TIMEOUT_MINUTES}" =~ ^[0-9]{1,4}$ ]]; then
+				repro_wall=$((10#${REPRODUCE_TIMEOUT_MINUTES}))
+			else
+				repro_wall=20
+			fi
+			[ "${repro_wall}" -ge 1 ] || repro_wall=1
+			[ "${repro_wall}" -le 20 ] || repro_wall=20
+			rm -f "${repro_raw_file}"
+			repro_rc=0
+			timeout --kill-after=30s "$((repro_wall * 60 + 300))" \
+				env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \
+				-u WORKFLOW_HEAL_REPRODUCE_TIMEOUT_SECS \
+				GIT_TERMINAL_PROMPT=0 WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES="${repro_wall}" \
+				bash "${repro_helper}" --tests-file "${repro_tests_file}" \
+				--sha "${HEAD_SHA}" --baseline "${repro_green_sha}" --out "${repro_raw_file}" < /dev/null 1>&2 || repro_rc=$?
+			if [ "${repro_rc}" -eq 124 ] || [ "${repro_rc}" -eq 137 ]; then
+				_heal_write_unverified_reproduction "${repro_raw_file}" "${repro_tests_file}" timeout || true
+			elif [ ! -s "${repro_raw_file}" ]; then
+				_heal_write_unverified_reproduction "${repro_raw_file}" "${repro_tests_file}" helper_failed || true
+			fi
+		fi
+	fi
+	repro_summary="$(python3 "${HEAL_PY}" reproduction-normalize --result-file "${repro_raw_file}" --tests-file "${repro_tests_file}" --out "${repro_result_file}" 2>/dev/null)" || repro_summary=""
+	[ -s "${repro_result_file}" ] || return 1
+	REPRODUCTION_FILE="${repro_result_file}"
+	REPRO_STATUS="$(jq -r '.status // ""' <<< "${repro_summary}" 2>/dev/null | tr -cd 'a-z_' | head -c 20 || true)"
+	case "${REPRO_STATUS}" in reproduced|not_reproduced|unverified) ;; *) REPRO_STATUS="unverified" ;; esac
+	repro_reason="$(jq -r '.reason // ""' <<< "${repro_summary}" 2>/dev/null | tr -cd 'a-z0-9_:.-' | head -c 64 || true)"
+	[ -n "${repro_reason}" ] || repro_reason="result_invalid"
+	repro_tests="$(jq -r '(.tests // 0) | tostring' <<< "${repro_summary}" 2>/dev/null || true)"
+	[[ "${repro_tests}" =~ ^[0-9]+$ ]] || repro_tests=0
+	log "reproduction outcome=${REPRO_STATUS} reason=${repro_reason} tests=${repro_tests} baseline=${repro_green_reason}"
+	return 0
+}
+_heal_run_reproduction || { REPRODUCTION_FILE=""; REPRO_STATUS=""; log "reproduction outcome=skipped reason=helper_failed tests=0"; }
+
 # --- Run the diagnosis model -----------------------------------------------
 
 PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
@@ -3217,6 +3365,20 @@ if [ "${CLASSIFICATION}" = "transient" ] \
 	} > "${DIAG_FILE}.tmp" && mv "${DIAG_FILE}.tmp" "${DIAG_FILE}"
 fi
 
+# Reproduction (P2 step 4): a failure the intake reproduced in the gate sandbox
+# (it fails at the failing SHA and passes at the last green SHA) is not
+# `transient`. Only `reproduced` changes the classification; every other
+# reproduction status is shown in the issue body and changes nothing.
+if [ "${CLASSIFICATION}" = "transient" ] && [ "${REPRODUCE_ENABLED:-false}" = true ] && [ "${REPRO_STATUS:-}" = "reproduced" ]; then
+	log "classification_remapped from=transient to=inconclusive reason=reproduced source=${SOURCE_LABEL} fp=${FP} gen=${GEN}"
+	CLASSIFICATION="inconclusive"
+	{
+		echo "> **Heal intake note:** the diagnosis below classified this failure as \`transient\`, but the heal intake reproduced it: the failing tests fail at the failing SHA and pass at the last green SHA (see \`## Reproduction\`). A re-run cannot clear it, so it was filed as \`inconclusive\`. Find the deterministic cause; a retry is not an accepted fix."
+		echo
+		cat "${DIAG_FILE}"
+	} > "${DIAG_FILE}.tmp" && mv "${DIAG_FILE}.tmp" "${DIAG_FILE}"
+fi
+
 # A validation_failure report never opens an issue in the source repository,
 # and a verdict that the failure is not a harness defect opens none here
 # either: it is bounced back to the consumer with the diagnosis. This runs
@@ -3448,6 +3610,11 @@ _open_issue()
 	if [ "${EVIDENCE_PACK_ENABLED}" = true ] && [ -s "${EVIDENCE_PACK_FILE:-}" ]; then
 		evidence_pack_args=(--evidence-pack-file "${EVIDENCE_PACK_FILE}")
 	fi
+	# Reproduction (P2 step 4): same rule, so a switch-off body is byte-identical.
+	local -a reproduction_args=()
+	if [ "${REPRODUCE_ENABLED}" = true ] && [ -s "${REPRODUCTION_FILE:-}" ]; then
+		reproduction_args=(--reproduction-file "${REPRODUCTION_FILE}" --reproduction-tests-file "${RUNTIME_DIR}/reproduction/tests.txt")
+	fi
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${compose_payload_file}" \
 		--diagnosis-file "${DIAG_FILE}" \
@@ -3462,7 +3629,7 @@ _open_issue()
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
-		--body-out "${body_file}" "${evidence_pack_args[@]}"; then
+		--body-out "${body_file}" "${evidence_pack_args[@]}" "${reproduction_args[@]}"; then
 		log "error issue_compose_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
 		tg_send_msg "Workflow failure heal FAILED to compose a safe issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		return 1

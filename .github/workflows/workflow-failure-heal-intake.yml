@@ -98,8 +98,10 @@ jobs:
          github.event.workflow_run.head_branch == github.event.repository.default_branch)))
     runs-on: ubuntu-latest
     # 45 minutes of intake work plus up to HEAL_INTAKE_QUEUE_MAX_WAIT_SECONDS
-    # (80 minutes) waiting for its turn in the report queue.
-    timeout-minutes: 130
+    # (80 minutes) waiting for its turn in the report queue, plus up to 26
+    # minutes of reproduction (WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES, capped
+    # at 20 by the intake, and its 5.5-minute outer guard).
+    timeout-minutes: 156
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -135,6 +137,11 @@ jobs:
       # timelines to the heal issue body after the scope freeze; off by default.
       WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED || 'false' }}
       WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES || '12000' }}
+      # Reproduction (P2 step 4): 'true' re-runs the extracted failing tests in
+      # the gate sandbox (scripts/heal_reproduce.sh, from this checkout) against
+      # the last green run and adds `## Reproduction`; off by default.
+      WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
+      WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
       # Non-retryable review/autofix failures (#6756): 'false' skips the PR
       # diagnosis; host-only stops then keep #6745's skip, others are healed.
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
@@ -412,6 +419,11 @@ jobs:
       # timelines to the heal issue body after the scope freeze; off by default.
       WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED || 'false' }}
       WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES || '12000' }}
+      # Reproduction (P2 step 4): 'true' re-runs the extracted failing tests in
+      # the gate sandbox (scripts/heal_reproduce.sh, from this checkout) against
+      # the last green run and adds `## Reproduction`; off by default.
+      WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
+      WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
       # Synced-file security findings (project #7604); kept in step with the
       # intake job's env (test_heal_scope_recovery_scan_workflow_wiring).
