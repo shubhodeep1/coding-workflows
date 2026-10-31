@@ -916,3 +916,18 @@ def test_acceptance_label_posts_once_with_label_helpers_staged(tmp_path):
 	calls = _gh_calls(log)
 	assert len(calls) == 1 and "-X POST" in calls[0], proc.stderr
 	assert "PERSIST acceptance_label outcome=added" in proc.stderr
+
+
+def test_acceptance_label_creates_and_retries_after_a_failed_post(tmp_path):
+	# Documented budget: a failed labels POST adds one label create and one retry POST.
+	repo, env = _setup(tmp_path, [PASS])
+	log = _label_env(tmp_path, env, "unmet", [])
+	gh, marker = tmp_path / "bin" / "gh", _work(tmp_path) / "post_failed_once"
+	gh.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "{log}"\n'
+		f'case "$*" in *"-X POST"*) [ -e "{marker}" ] || {{ : > "{marker}"; exit 1; }} ;; esac\nexit 0\n', encoding="utf-8")
+	helpers = tmp_path / "support" / "scripts" / "label_helpers.sh"
+	helpers.write_text('ensure_label_exists() { printf "label create %s\\n" "$1" >> "' + str(log) + '"; }\n', encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	calls = _gh_calls(log)
+	assert len(calls) == 3 and "-X POST" in calls[0] and calls[1] == "label create ai:acceptance-unmet" and "-X POST" in calls[2], proc.stderr
+	assert "PERSIST acceptance_label outcome=added" in proc.stderr
