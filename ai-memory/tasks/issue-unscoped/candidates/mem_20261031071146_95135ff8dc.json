@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_changelog_fragment_contract.py:N/A | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI reports failures in `test_assembler_and_fragment_directory_exist` and `test_gitattributes_carries_the_union_backstop` caused by this change.\n  WHY: The new changelog fragment `changelog.d/8427-p3-resolver-repair-loop.md` may not conform to the fragment contract, or may be named with the tracking issue number 8427 rather than 8516. Severity was reported as BLOCKER, mapped here to critical. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) rejected this as not caused by the PR.\n- tests/test_ai_label_precreation_contract.py:N/A | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI reports failures in the label pre-creation contract tests caused by this change.\n  WHY: The repair loop in `scripts/review_conflict_resolve.sh` may alter the resolver's gate logic or side effects. Severity was reported as BLOCKER, mapped here to critical. Other reviewers disputed the causation.\n- tests/test_review_autofix_provider_outage_contract.py:N/A | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI reports failures in `test_label_contract_and_reporter_skip` caused by this change.\n  WHY: The resolver repair loop's integration with the pre-push test gate may interfere with the provider outage contract tests. Severity was reported as BLOCKER, mapped here to critical. Other reviewers disputed the causation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_changelog_fragment_contract.py:N/A | severity=BLOCKER | confidence=5\n  PROBLEM: CI reports failures in `test_assembler_and_fragment_directory_exist` and `test_gitattributes_carries_the_union_backstop` caused by this change.\n  WHY: The new changelog fragment (`changelog.d/8427-p3-resolver-repair-loop.md`) may not conform to the fragment contract, or the assembly may be failing. The tracking issue number 8427 may conflict, since the PR issue is 8516.\n- tests/test_ai_label_precreation_contract.py:N/A | severity=BLOCKER | confidence=5\n  PROBLEM: CI reports failures in the label pre-creation contract tests caused by this change.\n  WHY: The repair loop in `scripts/review_conflict_resolve.sh` likely modifies the resolver's gate logic or side effects in a way that breaks the contract.\n- tests/test_review_autofix_provider_outage_contract.py:N/A | severity=BLOCKER | confidence=5\n  PROBLEM: CI reports failures in `test_label_contract_and_reporter_skip` caused by this change.\n  WHY: The resolver's repair loop integration with the pre-push test gate appears to interfere with the provider outage contract tests.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "11c4f8605a17e6dc90760926cab728cb212b80b7096d17d0d76a36a91abe18f0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8521,
+    "run_id": "41177346879",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41177346879",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031071146_95135ff8dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8521,
+    "run_id": "41177346879"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-31T07:11:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
