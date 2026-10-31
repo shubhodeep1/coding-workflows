@@ -2270,8 +2270,10 @@ rb_judge_merge_err_is_transient() {
   local _rb_transient_file="${RB_MERGE_ERR_DIRECT_FILE:-/dev/null}"
   [ -n "${RB_MERGE_ERR_DIR:-}" ] || return 1
   [ -f "${_rb_transient_file}" ] && [ ! -L "${_rb_transient_file}" ] || return 1
-  head -c 65536 -- "${_rb_transient_file}" 2>/dev/null \
-    | LC_ALL=C grep -qiE 'HTTP 5[0-9][0-9]|Something went wrong while executing your query|50[234] (Bad Gateway|Service Unavailable|Gateway Time-?out)|connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF'
+  # Process substitution, not a pipe: under pipefail an early `grep -q`
+  # exit could turn head's SIGPIPE into a missed match.
+  LC_ALL=C grep -qiE 'HTTP 5[0-9][0-9]|Something went wrong while executing your query|50[234] (Bad Gateway|Service Unavailable|Gateway Time-?out)|connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF' \
+    < <(head -c 65536 -- "${_rb_transient_file}" 2>/dev/null)
 }
 
 # Called only after the site's own `gh pr merge` attempts all failed
