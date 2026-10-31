@@ -5,13 +5,32 @@
   "entry_id": "processed_command_8544_6543448832_approved",
   "issue_number": 8544,
   "metadata": {
+    "branch": "ai/issue-8544",
+    "changed_files": [
+      ".github/ai/label_contract.v1.json",
+      ".github/workflows/issue_pr_status.yml",
+      ".github/workflows/orchestrate_poll.yml",
+      "agents.d/8427-p5-persist-postmerge-verify.md",
+      "changelog.d/8427-p5-persist-postmerge-verify.md",
+      "scripts/label_helpers.sh",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/persist_postmerge_verify.py",
+      "tests/fixtures/persist/postmerge_release_gate_runs.json",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_persist_postmerge_verify.py"
+    ],
+    "issue_number": 8544,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8544",
+    "pr_number": 8552,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8552",
+    "run_attempt": "1",
+    "run_id": "41201941593",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41201941593"
   },
   "run_attempt": 1,
   "run_id": "41201941593",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-31T12:38:54Z",
+  "status": "completed",
+  "timestamp": "2026-10-31T13:34:45Z",
   "workflow": "implement"
 }
