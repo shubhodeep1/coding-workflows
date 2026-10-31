@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply validated recommendations from analysis/workflow-optimization-2026-09-26-2.md\",\"issues\":[{\"id\":\"sec001-gh-retry-final-stderr\",\"title\":\"gh_retry / gh_retry_to_file: replace raw final stderr dump with a bounded, escaped single line (SEC-001 remainder)\",\"priority\":1},{\"id\":\"bug005-retro-comment-patch-reconfirm\",\"title\":\"Retro tracker/fan-out comment upsert: re-read the marked comment after a failed PATCH and POST only on confirmed absence (BUG-005)\",\"priority\":2},{\"id\":\"shell001-auto-merge-cdpath\",\"title\":\"review_enable_auto_merge.sh: use explicit CDPATH='' in SCRIPT_DIR resolution (SHELL-001)\",\"priority\":3},{\"id\":\"final-report-and-delete-source\",\"title\":\"Record verdicts for workflow-optimization-2026-09-26-2.md in the processing report and delete the source doc\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"sec001-gh-retry-final-stderr\",\"to\":\"final-report-and-delete-source\"},{\"from\":\"bug005-retro-comment-patch-reconfirm\",\"to\":\"final-report-and-delete-source\"},{\"from\":\"shell001-auto-merge-cdpath\",\"to\":\"final-report-and-delete-source\"}]}",
+  "fingerprint": "ad7d25ab438ad155968cfeffe2a5c88d47c0d9eae3c2242c19f9c663dde15913",
+  "lineage": {
+    "issue_number": 8504,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41157094306",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41157094306",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261031015656_744e1f68d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8504,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41157094306"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply validated recommendations from analysis/workflow-optimization-2026-09-26-2.md' into 4 issues (tracking #8504)",
+  "timestamps": {
+    "created_at": "2026-10-31T01:56:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
