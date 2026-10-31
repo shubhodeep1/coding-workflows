@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-10-31T09:27:50Z",
+  "issue_number": 8526,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=tests/test_review_autofix_provider_outage_contract.py:121; cited_path=tests/test_review_autofix_provider_outage_contract.py, tests/test_workflow_checkout_integration_ref_audit.py; files_touched=.github/workflows/workflow-failure-heal-intake.yml, agents.d/heal-run-time-trend.md, changelog.d/heal-run-time-trend.md, scripts/workflow_failure_heal.py, scripts/workflow_failure_heal_intake.sh, tests/fixtures/heal/p3_trend_runs.json, tests/test_workflow_failure_heal.py.",
+  "phase": "review_autofix",
+  "pr_number": 8529,
+  "record_id": "lesson_20261031092750_00ddd3a16e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_review_autofix_provider_outage_contract.py, tests/test_workflow_checkout_integration_ref_audit.py",
+    "tests/test_review_autofix_provider_outage_contract.py",
+    ".github/workflows/workflow-failure-heal-intake.yml",
+    "agents.d/heal-run-time-trend.md",
+    "changelog.d/heal-run-time-trend.md",
+    "scripts/workflow_failure_heal.py",
+    "scripts/workflow_failure_heal_intake.sh",
+    "tests/fixtures/heal/p3_trend_runs.json",
+    "tests/test_workflow_failure_heal.py"
+  ]
+}
