@@ -1659,6 +1659,17 @@ if args[:1] == ["api"]:
 	if "/actions/workflows/" in path and path.endswith("/runs"):
 		if method != "GET":
 			fail("HTTP method must be GET for workflow runs list")
+		# trend_runs_pages (P3 run-time trend): with a `page=` field, one REST page
+		# per page number, keyed by the workflow segment ("*" for any); a None
+		# page, or a missing workflow, is a 404.
+		if state.get("trend_runs_pages") is not None and any(a.startswith("page=") for a in rest):
+			trend_key = path.split("/actions/workflows/", 1)[1][:-len("/runs")]
+			trend_pages = state["trend_runs_pages"].get(trend_key, state["trend_runs_pages"].get("*"))
+			trend_page = next((a[len("page="):] for a in rest if a.startswith("page=")), "1")
+			trend_index = int(trend_page) - 1 if trend_page.isdigit() else 0
+			if not trend_pages or trend_index < 0 or trend_index >= len(trend_pages) or trend_pages[trend_index] is None:
+				fail("HTTP 404")
+			out(json.dumps(trend_pages[trend_index]))
 		# last_green_runs (P2 step 4): the workflow's success list; None (or unset) is a 404.
 		doc = state.get("last_green_runs")
 		if doc is None:
@@ -10824,18 +10835,25 @@ def test_classify_failure_shape_robust_inputs() -> None:
 		assert heal.classify_failure_shape(signature) in heal.FAILURE_SHAPES  # type: ignore[arg-type]
 
 
-def test_classify_failure_shape_has_no_caller_yet() -> None:
+def test_classify_failure_shape_only_called_by_run_time_trend() -> None:
+	# The run-time trend (P3 steps 2, 3 and 5) is the first planned caller: the
+	# only call sits in run_time_trend, which gates the trend on the shape.
 	tree = ast.parse(LIB_PATH.read_text(encoding="utf-8"))
-	callers = [
-		node
-		for node in ast.walk(tree)
-		if isinstance(node, ast.Call)
-		and (
-			(isinstance(node.func, ast.Name) and node.func.id == "classify_failure_shape")
-			or (isinstance(node.func, ast.Attribute) and node.func.attr == "classify_failure_shape")
-		)
-	]
-	assert callers == []
+
+	def calls_in(node: ast.AST) -> list[ast.Call]:
+		return [
+			call
+			for call in ast.walk(node)
+			if isinstance(call, ast.Call)
+			and (
+				(isinstance(call.func, ast.Name) and call.func.id == "classify_failure_shape")
+				or (isinstance(call.func, ast.Attribute) and call.func.attr == "classify_failure_shape")
+			)
+		]
+
+	trend_fn = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_time_trend")
+	assert len(calls_in(trend_fn)) == 1
+	assert len(calls_in(tree)) == 1
 
 
 def test_classify_failure_shape_numeric_alternatives_through_error_signature() -> None:
@@ -10861,3 +10879,316 @@ def test_classify_failure_shape_numeric_alternatives_through_error_signature() -
 	# A longer digit run must not match on its prefix.
 	assert heal.classify_failure_shape("x", raw_error_text="exit code 1370") == "other"
 	assert heal.classify_failure_shape("x", raw_error_text="HTTP 4040 from upstream") == "other"
+
+
+# ---------------------------------------------------------------------------
+# Run-time trend (P3 steps 2, 3 and 5): WORKFLOW_HEAL_TREND_ENABLED adds a
+# `## Run-time trend` section to stall / timeout heal issues. The fixture is
+# hand-built in the shape of the REST "list workflow runs" response: 4 fast
+# UTC days of about 23 minutes, then 3 slow days of about 53 minutes.
+# ---------------------------------------------------------------------------
+
+P3_TREND_NOW = datetime(2026, 10, 30, 6, 0, 0, tzinfo=timezone.utc)
+P3_TREND_TARGET = {"workflow": "internal-implement.yml", "branch": "main", "event": "issue_comment"}
+P3_TREND_LINE_RE = re.compile(r"^- regression=(true|false) first_slow_day=(\d{4}-\d{2}-\d{2}|none) history=(complete|truncated)$", re.MULTILINE)
+P3_ENV_LINES = (
+	"      WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}\n",
+	"      WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}\n",
+)
+
+
+def _p3_runs_doc() -> dict:
+	return json.loads((HEAL_EVIDENCE_FIXTURES / "p3_trend_runs.json").read_text(encoding="utf-8"))
+
+
+def _p3_runner(pages: dict | list, calls: list[list[str]]):
+	"""Fake gh: ``pages`` is one page list for every workflow or a map workflow -> page list; None or an int is an exit code."""
+	def run(argv, timeout):
+		calls.append(argv)
+		key = argv[4].split("/actions/workflows/", 1)[1][:-len("/runs")]
+		page_list = pages.get(key, pages.get("*")) if isinstance(pages, dict) else pages
+		index = int(argv[-1][len("page="):]) - 1
+		doc = page_list[index] if page_list and index < len(page_list) else None
+		if doc is None or isinstance(doc, int):
+			return subprocess.CompletedProcess(argv, doc or 1, stdout="", stderr="HTTP 404")
+		return subprocess.CompletedProcess(argv, 0, stdout=doc if isinstance(doc, str) else json.dumps(doc), stderr="")
+	return run
+
+
+def _p3_run(created: datetime, seconds: int, *, run_id: int = 1, path: str = ".github/workflows/internal-implement.yml", **extra) -> dict:
+	fmt = "%Y-%m-%dT%H:%M:%SZ"
+	run = {
+		"id": run_id, "created_at": created.strftime(fmt), "run_started_at": created.strftime(fmt),
+		"updated_at": (created + timedelta(seconds=seconds)).strftime(fmt), "head_branch": "main", "event": "issue_comment",
+		"status": "completed", "conclusion": "success", "path": path, "workflow_id": 118204400,
+		"repository": {"full_name": SELF_REPO},
+	}
+	run.update(extra)
+	return run
+
+
+def test_trend_fixture_reports_regression_and_first_slow_day() -> None:
+	calls: list[list[str]] = []
+	result = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=P3_TREND_NOW, run_gh=_p3_runner([_p3_runs_doc()], calls))
+	assert result["regression"] is True and result["first_slow_day"] == "2026-10-27" and result["history"] == "complete"
+	assert result["reason"] == "ok" and result["pages"] == 1
+	assert calls == [[
+		"gh", "api", "--method", "GET", f"repos/{SELF_REPO}/actions/workflows/internal-implement.yml/runs",
+		"-f", "status=success", "-f", "branch=main", "-f", "event=issue_comment", "-f", "created=>=2026-10-23T06:00:00Z",
+		"-F", "per_page=100", "-F", "page=1",
+	]]
+	table = result["tables"][0]
+	assert [day["day"] for day in table["days"]] == [f"2026-10-{day}" for day in range(23, 30)]
+	assert all(day["n"] == 3 for day in table["days"])
+	assert table["days"][0]["median_s"] == 1380 and table["days"][-1]["median_s"] == 3190
+	section = heal.render_trend_section(result)
+	assert section.startswith("## Run-time trend\n\n" + heal.TREND_BANNER + "\n\n")
+	assert P3_TREND_LINE_RE.findall(section) == [("true", "2026-10-27", "complete")]
+	assert "| 2026-10-27 | 3 | 53m00s | 54m00s |" in section and ", complete history, regressed" in section
+
+
+def test_trend_truncated_history_never_sets_regression() -> None:
+	now = P3_TREND_NOW
+	# 200 runs within the last ~33 hours, slow on the latest day: two full pages
+	# that never reach the window start.
+	runs = [_p3_run(now - timedelta(minutes=10 * index + 5), 3200 if index < 60 else 1380, run_id=index + 1) for index in range(200)]
+	pages = [{"total_count": 450, "workflow_runs": runs[:100]}, {"total_count": 450, "workflow_runs": runs[100:]}]
+	calls: list[list[str]] = []
+	result = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, calls))
+	assert len(calls) == 2 and [call[-1] for call in calls] == ["page=1", "page=2"]
+	assert result["history"] == "truncated" and result["regression"] is False and result["first_slow_day"] is None
+	assert result["tables"][0]["reason"] == "history_truncated" and result["tables"][0]["regression"] is False
+	assert P3_TREND_LINE_RE.findall(heal.render_trend_section(result)) == [("false", "none", "truncated")]
+	# A page-2 read failure is partial and truncated as well.
+	calls.clear()
+	failed = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner([pages[0], None], calls))
+	assert len(calls) == 2 and failed["reason"] == "request_failed" and failed["history"] == "truncated" and failed["regression"] is False
+	malformed = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(["not json"], []))
+	assert malformed["reason"] == "malformed" and malformed["history"] == "truncated"
+	# A partial last page ends the read without truncation.
+	calls.clear()
+	short = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=P3_TREND_NOW, run_gh=_p3_runner([_p3_runs_doc(), _p3_runs_doc()], calls))
+	assert len(calls) == 1 and short["history"] == "complete"
+
+
+def test_trend_invalid_input_makes_no_call_and_never_raises() -> None:
+	calls: list[list[str]] = []
+	runner = _p3_runner([_p3_runs_doc()], calls)
+	assert heal.trend_table("not a repo", [P3_TREND_TARGET], run_gh=runner)["reason"] == "invalid_input"
+	for bad in (
+		dict(P3_TREND_TARGET, branch="bad..branch"), dict(P3_TREND_TARGET, branch="x;rm -rf"), dict(P3_TREND_TARGET, event="Push!"),
+		dict(P3_TREND_TARGET, workflow="../x.yml"), dict(P3_TREND_TARGET, workflow="a/b.yml"), dict(P3_TREND_TARGET, workflow="0"), "x", None,
+	):
+		assert heal.trend_table(SELF_REPO, [bad], run_gh=runner)["reason"] == "no_run"
+	assert calls == []
+
+	def boom(argv, timeout):
+		raise subprocess.TimeoutExpired(argv, timeout)
+
+	result = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], run_gh=boom)
+	assert result["reason"] == "request_failed" and result["history"] == "truncated" and result["regression"] is False
+
+
+def test_trend_ratio_parsing_falls_back_to_default() -> None:
+	assert heal._trend_ratio("2") == 2.0 and heal._trend_ratio("1.25") == 1.25 and heal._trend_ratio("10") == 10.0
+	for bad in ("", "1", "1.0", "0.5", "11", "abc", "1.5x", "-2", "1e3", None, True, "1.2345"):
+		assert heal._trend_ratio(bad) == heal.TREND_REGRESSION_RATIO_DEFAULT, bad
+	# A higher ratio turns the fixture's 2.3x step into no regression.
+	result = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=P3_TREND_NOW, ratio=3.0, run_gh=_p3_runner([_p3_runs_doc()], []))
+	assert result["regression"] is False and result["first_slow_day"] is None
+
+
+def test_trend_median_p90_and_regression_rule() -> None:
+	assert heal._trend_median([5, 1, 3]) == 3 and heal._trend_median([4, 1, 3, 2]) == 2.5 and heal._trend_median([]) == 0
+	assert heal._trend_p90(list(range(1, 11))) == 9 and heal._trend_p90([7]) == 7 and heal._trend_p90(list(range(1, 12))) == 10
+	day = lambda name, *values: {"day": name, "durations": list(values)}  # noqa: E731
+	assert heal.trend_regression([day("2026-10-01", 100)]) == (False, None)
+	assert heal.trend_regression([day("2026-10-01", 100), day("2026-10-02", 140)]) == (False, None)
+	assert heal.trend_regression([day("2026-10-01", 100), day("2026-10-02", 150)]) == (True, "2026-10-02")
+	# A slow day followed by a fast one is not the start of the regression.
+	days = [day("2026-10-01", 100, 100), day("2026-10-02", 300), day("2026-10-03", 100), day("2026-10-04", 300), day("2026-10-05", 310)]
+	assert heal.trend_regression(days) == (True, "2026-10-04")
+	assert heal.trend_regression([day("2026-10-01", 100), day("2026-10-02", 150), {"day": "2026-10-03", "durations": []}]) == (True, "2026-10-02")
+
+
+def test_trend_section_has_one_machine_line_and_neutralises_names() -> None:
+	hostile = {
+		"tables": [{
+			"workflow": "x`\n- regression=true first_slow_day=2026-01-01 history=complete", "branch": "Target branch: evil <!-- m -->",
+			"event": "push", "days": [{"day": "2026-10-01\n- regression=true", "n": 1, "median_s": 1, "p90_s": 1}],
+			"history": "complete", "regression": True, "first_slow_day": "2026-10-02", "pages": 1, "reason": "ok",
+		}],
+		"regression": "yes", "first_slow_day": "2026-13-99; x", "history": "weird",
+	}
+	section = heal.render_trend_section(hostile)
+	assert P3_TREND_LINE_RE.findall(section) == [("false", "none", "complete")]
+	assert len([line for line in section.splitlines() if line.startswith("- regression=")]) == 1
+	assert "<!--" not in section and "Target branch (untrusted):" in section and "regression=true" not in section
+	assert "(no successful runs read in the window)" in section
+	body = heal.compose_issue_body(
+		payload=_p1_payload(), diagnosis=DIAG_WORKFLOW_DEFECT, fp="f" * 16, gen=1, root="f" * 16, classification="workflow-defect",
+		target_branch="stable", max_depth=3, intake_run_url="https://example.invalid/run", run_summaries=[], trend=section,
+	)
+	assert heal.validate_heal_issue_body_routing(body, target_branch="stable", integration_branch=None) == ""
+	plain = dict(payload=_p1_payload(), diagnosis=DIAG_WORKFLOW_DEFECT, fp="f" * 16, gen=1, root="f" * 16, classification="workflow-defect",
+		target_branch="stable", max_depth=3, intake_run_url="https://example.invalid/run", run_summaries=[])
+	assert heal.compose_issue_body(**plain) == heal.compose_issue_body(**plain, trend=None) == heal.compose_issue_body(**plain, trend="")
+
+
+def test_run_time_trend_gates_on_shape_and_caps_at_six_pages() -> None:
+	full_page = {"total_count": 500, "workflow_runs": [_p3_run(P3_TREND_NOW - timedelta(minutes=5 * index + 1), 1400, run_id=index + 1) for index in range(100)]}
+	failed = _p3_run(P3_TREND_NOW, 60, path=".github/workflows/test-and-mark-stable.yml@refs/heads/main", event="workflow_dispatch")
+	linked = [
+		_p3_run(P3_TREND_NOW, 60, path=".github/workflows/internal-implement.yml"),
+		_p3_run(P3_TREND_NOW, 60, path=".github/workflows/test-and-mark-stable.yml"),  # same workflow: deduped
+		_p3_run(P3_TREND_NOW, 60, path=".github/workflows/x.yml", repository={"full_name": "other/repo"}),  # other repo: dropped
+	]
+	issue = {"number": 8301, "title": "Smoke issue"}
+	issue_page = {"total_count": 2, "workflow_runs": [
+		_p3_run(P3_TREND_NOW, 60, path="", workflow_id=555, display_title="Smoke issue"),
+		_p3_run(P3_TREND_NOW, 60, path=".github/workflows/ai-review.yml", display_title="Smoke issue"),  # fourth workflow: capped
+	]}
+	common = dict(repo=SELF_REPO, failing_tests={"names": [], "files": []}, failed_runs=[failed], linked_runs=linked,
+		issue_runs=[(8301, issue)], issue_pages=[issue_page], now=P3_TREND_NOW)
+	for signature, conclusion, shape in (("tests failed x", None, "test_failure"), ("traceback x", None, "crash"),
+			("http <n> api rate limit", None, "api_error"), ("no-error-lines", None, "other")):
+		calls: list[list[str]] = []
+		summary, section = heal.run_time_trend(signature=signature, job_conclusion=conclusion, run_gh=_p3_runner([full_page, full_page], calls), **common)
+		assert summary["outcome"] == "skipped" and summary["reason"] == f"shape_{shape}" and section == "" and calls == [], signature
+	failing = dict(common, failing_tests={"names": ["test_x"], "files": []})
+	summary, section = heal.run_time_trend(signature="no-error-lines", job_conclusion=None, run_gh=_p3_runner([], []), **failing)
+	assert summary["reason"] == "shape_test_failure" and section == ""
+	for signature, conclusion, shape in (("implement stalled: no activity for <n> minutes", None, "stall"), ("no-error-lines", "timed_out", "timeout")):
+		calls = []
+		summary, section = heal.run_time_trend(signature=signature, job_conclusion=conclusion, run_gh=_p3_runner([full_page, full_page], calls), **common)
+		assert summary["shape"] == shape and summary["workflows"] == 3 and summary["pages"] == 6 and len(calls) == 6
+		assert summary["outcome"] == "partial" and summary["reason"] == "history_truncated" and summary["history"] == "truncated"
+		keys = [call[4].split("/actions/workflows/", 1)[1] for call in calls]
+		assert keys == ["test-and-mark-stable.yml/runs"] * 2 + ["internal-implement.yml/runs"] * 2 + ["555/runs"] * 2
+		assert any("event=workflow_dispatch" == part for part in calls[0])
+		assert P3_TREND_LINE_RE.findall(section) == [("false", "none", "truncated")]
+	summary, section = heal.run_time_trend(signature="stalled", job_conclusion=None, run_gh=_p3_runner([], []), **dict(common, failed_runs=[], linked_runs=[], issue_runs=[]))
+	assert summary["outcome"] == "skipped" and summary["reason"] == "no_run" and section == ""
+
+
+def _p3_shifted_runs_doc() -> tuple[dict, str]:
+	"""The fixture moved so its last slow day is yesterday (UTC), for the intake, which trends against the real clock."""
+	shift = (datetime.now(timezone.utc).date() - P3_TREND_NOW.date()).days
+	doc = _p3_runs_doc()
+	for run in doc["workflow_runs"]:
+		for field in ("created_at", "run_started_at", "updated_at"):
+			moved = datetime.strptime(run[field], "%Y-%m-%dT%H:%M:%SZ") + timedelta(days=shift)
+			run[field] = moved.strftime("%Y-%m-%dT%H:%M:%SZ")
+	first_slow = (datetime(2026, 10, 27) + timedelta(days=shift)).strftime("%Y-%m-%d")
+	return doc, first_slow
+
+
+def _p3_state() -> dict:
+	linked = _p1_linked_run(path=".github/workflows/internal-implement.yml", workflow_id=118204400, head_branch="main", event="issue_comment")
+	state = _p1_state(linked=linked)
+	doc, _first = _p3_shifted_runs_doc()
+	state["trend_runs_pages"] = {"test-and-mark-stable.yml": [{"total_count": 0, "workflow_runs": []}], "internal-implement.yml": [doc]}
+	return state
+
+
+def _p3_trend_calls(state: dict) -> list[list[str]]:
+	return [call for call in _p1_api_calls(state) if any("/actions/workflows/" in str(part) for part in call) and any(str(part).startswith("page=") for part in call)]
+
+
+def test_intake_trend_adds_section_for_stall_reports() -> None:
+	on_result, on_state, _ = _run_p1_intake(_p3_state(), {"WORKFLOW_HEAL_TREND_ENABLED": "true"})
+	assert on_result.returncode == 0, on_result.stderr + on_result.stdout
+	_doc, first_slow = _p3_shifted_runs_doc()
+	assert "WORKFLOW_HEAL trend outcome=ok reason=ok shape=stall workflows=2 pages=2 regression=true history=complete" in on_result.stdout
+	body = on_state["composed_issue"]["body"]
+	start = body.index("## Run-time trend")
+	section = body[start:body.index("\n---\n", start)]
+	assert P3_TREND_LINE_RE.findall(section) == [("true", first_slow, "complete")]
+	assert "Workflow `test-and-mark-stable.yml` on `main` (`workflow_dispatch`)" in section
+	assert "Workflow `internal-implement.yml` on `main` (`issue_comment`), complete history, regressed" in section
+	# compose-issue validated the whole body (validate_heal_issue_body_routing) before filing it.
+	assert "body_validation_failed" not in on_result.stdout + on_result.stderr
+	trend_calls = _p3_trend_calls(on_state)
+	assert 1 <= len(trend_calls) <= 6 and all(call[call.index("--method") + 1] == "GET" for call in trend_calls)
+	# With the reproduction on as well, the trend follows `## Reproduction`.
+	both_state_in = _p2_state()
+	both_state_in["run_details"]["600"] = _p3_state()["run_details"]["600"]
+	both_state_in["trend_runs_pages"] = _p3_state()["trend_runs_pages"]
+	both, both_state, _seen = _run_p2_intake(both_state_in, {"WORKFLOW_HEAL_TREND_ENABLED": "true", "WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"})
+	assert both.returncode == 0, both.stderr + both.stdout
+	both_body = both_state["composed_issue"]["body"]
+	assert both_body.index("## Reproduction") < both_body.index("## Run-time trend") < both_body.index("The resolver rejects a missing integration branch")
+
+
+def test_intake_trend_off_is_byte_identical() -> None:
+	unset_result, unset_state, _ = _run_p1_intake(_p3_state(), {"WORKFLOW_HEAL_TREND_ENABLED": None})
+	off_result, off_state, _ = _run_p1_intake(_p3_state(), {"WORKFLOW_HEAL_TREND_ENABLED": "false"})
+	for result in (unset_result, off_result):
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL trend" not in result.stdout
+	assert unset_state["composed_issue"]["body"] == off_state["composed_issue"]["body"]
+	assert "## Run-time trend" not in off_state["composed_issue"]["body"]
+	assert _p1_api_calls(unset_state) == _p1_api_calls(off_state) and not _p3_trend_calls(off_state)
+	strip_run = lambda text: re.sub(r"/tmp/[^\s'\"]+|heal-[a-z0-9]+-[A-Za-z0-9_]+", "<tmp>", text)  # noqa: E731
+	assert strip_run(unset_result.stdout) == strip_run(off_result.stdout)
+
+
+def test_intake_trend_skips_non_stall_shapes_without_calls() -> None:
+	state = _p3_state()
+	state["job_logs"][str(P1_FAILING_JOB_ID)] = JOB_LOG
+	result, state_after, _ = _run_p1_intake(state, {"WORKFLOW_HEAL_TREND_ENABLED": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = re.search(r"WORKFLOW_HEAL trend outcome=skipped reason=shape_([a-z_]+) shape=([a-z_]+) workflows=0 pages=0 regression=false history=complete", result.stdout)
+	assert match and match.group(2) not in heal.TREND_SHAPES, result.stdout
+	assert "## Run-time trend" not in state_after["composed_issue"]["body"] and not _p3_trend_calls(state_after)
+
+
+def test_trend_switch_defaults_and_workflow_wiring() -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'TREND_ENABLED="${WORKFLOW_HEAL_TREND_ENABLED:-false}"' in script
+	assert 'TREND_RATIO="${WORKFLOW_HEAL_TREND_REGRESSION_RATIO:-1.5}"' in script
+	assert script.index("\n_heal_run_reproduction ||") < script.index("\n_heal_build_run_time_trend ||") < script.index("# --- Run the diagnosis model")
+	runner = script.split("\n_heal_build_run_time_trend()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "gh api" not in runner and "gh_retry" not in runner
+	assert runner.count('python3 "${HEAL_PY}" run-time-trend') == 1
+	assert '[ "${TREND_ENABLED}" = true ] || return 0' in runner
+	assert '"${reproduction_args[@]}" "${trend_args[@]}"; then' in script
+	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	intake_job, scan_job = workflow.split("\n  recovery-scan:\n", 1)
+	for line in P3_ENV_LINES:
+		assert workflow.count(line) == 2, line
+		assert intake_job.split("\n  intake:\n", 1)[1].count(line) == 1, line
+		assert scan_job.count(line) == 1, line
+
+
+def test_trend_exact_two_full_pages_is_complete_history() -> None:
+	# total_count equals the runs read: a full second page is not truncation.
+	now = P3_TREND_NOW
+	runs = [_p3_run(now - timedelta(minutes=10 * index + 5), 1380, run_id=index + 1) for index in range(200)]
+	pages = [{"total_count": 200, "workflow_runs": runs[:100]}, {"total_count": 200, "workflow_runs": runs[100:]}]
+	calls: list[list[str]] = []
+	result = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, calls))
+	assert len(calls) == 2 and result["history"] == "complete" and result["reason"] == "ok"
+	# Exactly one full page with total_count 100 reads no second page.
+	calls.clear()
+	single = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner([{"total_count": 100, "workflow_runs": runs[:100]}], calls))
+	assert len(calls) == 1 and single["history"] == "complete"
+
+
+def test_trend_shifted_pages_are_truncated_history() -> None:
+	# A run created between the two page reads repeats one page-1 run on page 2
+	# while total_count still equals the runs read: the read is incomplete.
+	now = P3_TREND_NOW
+	runs = [_p3_run(now - timedelta(minutes=10 * index + 5), 3200 if index < 60 else 1380, run_id=index + 1) for index in range(200)]
+	shifted_page2 = [runs[99]] + runs[100:199]
+	pages = [{"total_count": 200, "workflow_runs": runs[:100]}, {"total_count": 200, "workflow_runs": shifted_page2}]
+	calls: list[list[str]] = []
+	result = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, calls))
+	assert len(calls) == 2 and result["history"] == "truncated" and result["regression"] is False
+	assert result["tables"][0]["reason"] == "history_truncated"
+	# A total_count that changes between pages is truncated as well. Page 2's
+	# total equals the runs read, so only the changed-total guard can truncate.
+	pages = [{"total_count": 201, "workflow_runs": runs[:100]}, {"total_count": 200, "workflow_runs": runs[100:]}]
+	changed = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, []))
+	assert changed["history"] == "truncated" and changed["regression"] is False
+	assert changed["tables"][0]["reason"] == "history_truncated"

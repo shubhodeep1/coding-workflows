@@ -589,7 +589,7 @@ def test_clarify_label_missing_refusal_holds_issue() -> None:
 		assert posts[0][posts[0].index("POST") + 1] == "repos/consumer/repo/issues/5/comments", posts
 		body = _post_body(posts[0])
 		assert body.rstrip().endswith(_LABEL_MISSING_MARKER), body
-		assert not any(l.lstrip().startswith("/reclarify") for l in body.splitlines()), body
+		assert not any(ln.lstrip().startswith("/reclarify") for ln in body.splitlines()), body
 		assert "ai:check-triage" in body and "`- Tracking issue: #N`" in body and "(untrusted)" not in body, body
 		assert posts[1][posts[1].index("POST") + 1] == "repos/consumer/repo/issues/5/labels", posts
 		assert "labels[]=ai:blocked" in posts[1], posts
@@ -674,7 +674,7 @@ def test_clarify_steps_after_refctx_honour_label_missing_hold() -> None:
 	refctx = names.index("Resolve integration ref")
 	assert len(steps) - refctx > 20, names
 	for name, chunk in steps[refctx + 1:]:
-		ifs = [l for l in chunk.splitlines() if l.startswith("        if: ")]
+		ifs = [ln for ln in chunk.splitlines() if ln.startswith("        if: ")]
 		cond = ifs[0] if ifs else ""
 		if name in _HOLD_GATE_FAILURE_STEPS:
 			assert "failure()" in cond or "cancelled()" in cond, name
@@ -822,7 +822,7 @@ def test_plan_label_missing_refusal_holds_issue() -> None:
 		body = _post_body(posts[0])
 		assert body.rstrip().endswith(_LABEL_MISSING_MARKER), body
 		assert "Planning is on hold" in body and "_Posted by the plan workflow._" in body, body
-		assert not any(l.lstrip().startswith("/reclarify") for l in body.splitlines()), body
+		assert not any(ln.lstrip().startswith("/reclarify") for ln in body.splitlines()), body
 		assert "labels[]=ai:blocked" in posts[1], posts
 		deletes = _deletes(calls)
 		assert len(deletes) == 1, calls
@@ -923,7 +923,7 @@ def test_plan_steps_after_refctx_skip_on_skip_plan() -> None:
 		"Auto-approve clear plan",
 	):
 		step = _step_text(wf, name)
-		cond = next((l for l in step.splitlines() if l.startswith("        if: ")), "")
+		cond = next((ln for ln in step.splitlines() if ln.startswith("        if: ")), "")
 		assert "env.SKIP_PLAN != 'true'" in cond, f"{name}: {cond!r}"
 	# Setup steps between the hold and the planning steps (#8151 review):
 	# a failure there would still fail a held run and file plan_failed.
@@ -941,7 +941,7 @@ def test_plan_steps_after_refctx_skip_on_skip_plan() -> None:
 		"Fetch issue metadata",
 	):
 		step = _step_text(wf, name)
-		cond = next((l for l in step.splitlines() if l.startswith("        if: ")), "")
+		cond = next((ln for ln in step.splitlines() if ln.startswith("        if: ")), "")
 		assert "steps.refctx.outputs.label_missing_hold != 'true'" in cond, f"{name}: {cond!r}"
 
 
@@ -964,7 +964,7 @@ def test_plan_setup_steps_skip_on_label_missing_hold() -> None:
 		"Fetch issue metadata",
 	):
 		step = _step_text(wf, name)
-		cond = next((l for l in step.splitlines() if l.startswith("        if: ")), "")
+		cond = next((ln for ln in step.splitlines() if ln.startswith("        if: ")), "")
 		assert "steps.refctx.outputs.label_missing_hold != 'true'" in cond, f"{name}: {cond!r}"
 
 
