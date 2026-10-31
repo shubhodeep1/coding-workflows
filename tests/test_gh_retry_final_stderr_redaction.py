@@ -32,7 +32,17 @@ GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 EXCERPT_CAP = 2048
 TRUNCATED_SUFFIX = " [truncated]"
 FINAL_WARNING_PREFIX = "::warning::  stderr: "
-ALLOWED_COMMAND_PREFIXES = ("::error::", "::warning::", "::notice::")
+# The only workflow-command lines the helpers themselves print in these
+# tests: the final ``failed after`` error, the per-attempt retry warning,
+# the escaped single-line ``stderr:`` warning and gh_retry's stdout-drop
+# note. Any other ``::`` line (a ``::notice::``, or a forged
+# ``::warning::add-mask::x``) fails the test.
+ALLOWED_COMMAND_LINE_RES = (
+	re.compile(r"^::error::gh (?:command|api) failed "),
+	re.compile(r"^::warning::gh command failed \(attempt [0-9]+/[0-9]+\), retrying in "),
+	re.compile(r"^::warning::  stderr: [^\n]*$"),
+	re.compile(r"^::warning::  gh_retry: dropped [0-9]+ bytes of stdout from failed attempt [0-9]+/[0-9]+$"),
+)
 
 # "HTTP 502" is transient: neither _is_gh_permanent_failure nor
 # _is_gh_rate_limit matches it, so the call reaches the final-failure path.
@@ -135,7 +145,7 @@ def _final_warning_lines(stderr: str, error_line_prefix: str) -> list[str]:
 def _assert_no_foreign_workflow_commands(stderr: str) -> None:
 	for line in stderr.split("\n"):
 		if line.startswith("::"):
-			assert line.startswith(ALLOWED_COMMAND_PREFIXES), line
+			assert any(rx.match(line) for rx in ALLOWED_COMMAND_LINE_RES), line
 		assert not line.startswith("::set-output"), line
 		assert not line.startswith("::add-mask"), line
 

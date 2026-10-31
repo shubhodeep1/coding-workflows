@@ -165,15 +165,18 @@ _gh_actions_escape()
 
 # ---------------------------------------------------------------
 # _gh_final_stderr_excerpt — print a bounded excerpt of a stderr
-# capture file for the final-failure line of gh_retry,
-# gh_retry_to_file and gh_api_json_to_file (SEC-001, follow-up to
-# issue #8095).
+# capture file for every `::warning::  stderr: ...` line of
+# gh_retry, gh_retry_to_file and gh_api_json_to_file (the
+# per-attempt warnings and the final-failure line) and for the
+# permanent and transient give-up paths of gh_api_retry (SEC-001,
+# follow-up to issue #8095).
 #
-# Those paths used to `cat` the raw stderr after their `failed
-# after N attempts` annotation: unbounded, and a line starting
-# with `::` was read as a workflow command. Callers now wrap this
-# helper's output in _gh_actions_escape and print it as a single
-# `::warning::  stderr: ...` line.
+# The final-failure paths used to `cat` the raw stderr after their
+# `failed after N attempts` annotation: unbounded, and a line
+# starting with `::` was read as a workflow command. Callers wrap
+# this helper's output in _gh_actions_escape and print it as a
+# single `::warning::  stderr: ...` line, so the cap below applies
+# to every caller, not only the final-failure lines.
 #
 #   * at most the first 2048 bytes are printed;
 #   * NUL bytes are stripped so the caller's $(...) does not make
