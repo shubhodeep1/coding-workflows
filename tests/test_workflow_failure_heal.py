@@ -10836,3 +10836,25 @@ def test_classify_failure_shape_has_no_caller_yet() -> None:
 		)
 	]
 	assert callers == []
+
+
+def test_classify_failure_shape_numeric_alternatives_through_error_signature() -> None:
+	# error_signature() turns digits into "<n>", so the numeric alternatives
+	# cannot fire on the signature alone; the raw error text carries them.
+	exit_log = "##[error]Process completed with exit code 137."
+	http_log = "::error::request failed: HTTP 503 from upstream"
+	exit_sig = heal.error_signature(exit_log)
+	http_sig = heal.error_signature(http_log)
+	assert "<n>" in exit_sig and "137" not in exit_sig
+	assert "<n>" in http_sig and "503" not in http_sig
+	assert heal.classify_failure_shape(exit_sig) == "other"
+	assert heal.classify_failure_shape(http_sig) == "other"
+	assert heal.classify_failure_shape(exit_sig, raw_error_text=exit_log) == "crash"
+	assert heal.classify_failure_shape(http_sig, raw_error_text=http_log) == "api_error"
+	# Raw text feeds only the two numeric alternatives, at their own positions.
+	assert heal.classify_failure_shape("no-error-lines", raw_error_text="Traceback (most recent call last)") == "other"
+	assert heal.classify_failure_shape("no-error-lines", raw_error_text="exit code 1") == "other"
+	assert heal.classify_failure_shape("no-error-lines", raw_error_text="HTTP 200 OK") == "other"
+	assert heal.classify_failure_shape("job stalled", raw_error_text=exit_log) == "stall"
+	assert heal.classify_failure_shape("api rate limit", raw_error_text=exit_log) == "crash"
+	assert heal.classify_failure_shape("x", raw_error_text=123) == "other"  # type: ignore[arg-type]
