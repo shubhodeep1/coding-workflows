@@ -81,6 +81,9 @@ HEAL_CF_MAX_LINE_CHARS = 300
 # REPRODUCIBLE test ids (issue #8512). Same grammar as cmd_tests in
 # scripts/heal_isolated_implement.sh (PATH_RE / NAME_RE, 1-50 ids), so an id
 # list the plan gate accepts is one the heal editor can read. Keep in sync.
+# The gate is stricter on one point: the path must be tests/<path>.py, the
+# only shape the intake writes (_HEAL_REPRO_TEST_ID_RE in
+# scripts/workflow_failure_heal.py), so a non-test file such as README.md holds.
 HEAL_CF_REPRO_MAX_TESTS = 50
 HEAL_CF_REPRO_PATH_RE = re.compile(r"^[A-Za-z0-9_./+-]+$")
 HEAL_CF_REPRO_NAME_RE = re.compile(r"^[^\s`<>]+$")
@@ -273,6 +276,8 @@ def _heal_counterfactual_repro_tests(detail: str) -> list[str] | None:
 	for item in ids:
 		path, sep, name = item.partition("::")
 		if not HEAL_CF_REPRO_PATH_RE.match(path) or path.startswith("/") or ".." in path.split("/"):
+			return None
+		if not (path.startswith("tests/") and path.endswith(".py") and len(path) > len("tests/.py")):
 			return None
 		if sep and not HEAL_CF_REPRO_NAME_RE.match(name):
 			return None

@@ -269,6 +269,11 @@ def test_reproducible_invalid_test_lists_hold() -> None:
 		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: ,", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: /abs.py",
 		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/../x.py", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/a.py::x<y",
 		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/a b.py;rm",
+		# Only tests/<path>.py ids, as the intake writes them, are accepted.
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: README.md", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: docs/foo.md",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: Makefile", "HEAL_COUNTERFACTUAL: REPRODUCIBLE: setup.py",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/test_a.py, README.md",
+		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: tests/conftest.txt",
 		"HEAL_COUNTERFACTUAL: REPRODUCIBLE: " + ", ".join(f"tests/test_{i}.py" for i in range(51)))
 	for line in bad:
 		for flag in ("true", "false"):
