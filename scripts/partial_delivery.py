@@ -449,6 +449,12 @@ HEAL_RG_CONTEXT_HEADING_RE = re.compile(
 	r"^[ ]{0,3}(#{1,6})[ \t]+(?:\d+[a-z]?[.)][ \t]+)?(?:decisions|security[ \t]+considerations|risks\b[^\n]*|testing\b[^\n]*)[ \t]*:?[ \t]*$",
 	re.IGNORECASE)
 HEAL_RG_PLACEHOLDER_RE = re.compile(r"^<[^<>]*>$")
+# A line that says an identifier stays as it is mentions it without changing
+# it, so its identifiers do not count as another change (knobs still count).
+# This can only add a hold; a human /approved still releases it.
+HEAL_RG_UNCHANGED_RE = re.compile(
+	r"\b(?:unchanged|untouched|as[- ]is|no[ \t]+change|do(?:es)?[ \t]+not[ \t]+(?:change|modify|touch)|don't[ \t]+(?:change|modify|touch))\b",
+	re.IGNORECASE)
 
 
 def normalize_heal_trend_flag(value: str | None) -> bool:
@@ -533,8 +539,9 @@ def _heal_regression_line(lines: list[str]) -> dict:
 		return outcome
 	not_match = HEAL_RG_NOT_RE.match(value)
 	if not_match:
-		reason = not_match.group(1).strip()
-		# The template placeholder "<reason>" copied literally is no reason.
+		reason = not_match.group(1).strip().strip("`").strip()
+		# The template placeholder "<reason>" copied literally (backticked or
+		# not) is no reason.
 		if not reason or HEAL_RG_PLACEHOLDER_RE.match(reason):
 			outcome["detail"] = "empty"
 			return outcome
@@ -549,11 +556,11 @@ def _heal_regression_line(lines: list[str]) -> dict:
 	if not any(_heal_regression_target_ok(token) for token in tokens):
 		outcome["detail"] = "invalid_target"
 		return outcome
-	outcome.update(form="named", detail="named")
+	outcome.update(form="named", detail="named", targets=[token for token in tokens if _heal_regression_target_ok(token)])
 	return outcome
 
 
-def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool:
+def _heal_regression_budget_only(lines: list[str], workflow: str | None, named: tuple[str, ...] = ()) -> bool:
 	"""True when the plan only raises a timeout or budget in the failing workflow.
 
 	Assumption (the plan contains no code, so this is approximated from what it
@@ -574,6 +581,13 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 	failing workflow at least once; and identifiers inside the Decisions,
 	Security considerations, Risks and Testing sections are context, not
 	another change (knobs named there still count).
+
+	A companion path the HEAL_REGRESSION line names (``named``) is kept: a plan
+	that fixes that file does not name only the failing workflow. A Files
+	bullet is read by its first path-like token (backticked spans first, then
+	words); an indented sub-bullet without one describes the change and is
+	skipped. Identifiers on a line that says they stay unchanged are mentions,
+	not changes.
 	"""
 	files: list[str] = []
 	other: list[tuple[str, bool]] = []
@@ -602,16 +616,16 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 		if files_level:
 			bullet = BULLET_RE.match(line)
 			if bullet:
-				ticked = re.search(r"`([^`]+)`", bullet.group(1))
-				if ticked:
-					files.append(ticked.group(1).strip())
-				else:
-					words = bullet.group(1).split()
-					pathlike = [word for word in words if "/" in word or HEAL_RG_EXT_RE.search(word)]
-					files.append((pathlike[0] if pathlike else words[0]).strip())
+				spans = [span.strip() for span in re.findall(r"`([^`]+)`", bullet.group(1)) if span.strip()]
+				words = [word.strip("`") for word in bullet.group(1).split() if word.strip("`")]
+				pathlike = [token for token in spans + words if "/" in token or HEAL_RG_EXT_RE.search(token)]
+				if pathlike:
+					files.append(pathlike[0])
+				elif line[:1] not in (" ", "\t") and (spans or words):
+					files.append((spans or words)[0])
 			continue
 		other.append((line, bool(context_level)))
-	files = [path for path in files if not HEAL_RG_COMPANION_PATH_RE.match(path)]
+	files = [path for path in files if path in named or not HEAL_RG_COMPANION_PATH_RE.match(path)]
 	if not files:
 		return False
 	names = []
@@ -631,7 +645,7 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 			continue
 		if HEAL_RG_KNOB_RE.search(line):
 			knob_seen = True
-		if in_context:
+		if in_context or HEAL_RG_UNCHANGED_RE.search(line):
 			continue
 		for ident in HEAL_RG_IDENT_RE.findall(line):
 			if ident not in HEAL_RG_CONTEXT_TOKENS and HEAL_RG_KNOB_RE.fullmatch(ident) is None:
@@ -667,7 +681,7 @@ def parse_heal_regression(text: str, issue_body: str, trend_flag: str | None = N
 	if line["form"] not in ("named", "not_regression"):
 		outcome.update(decision="hold", reason="regression_line_missing")
 		return outcome
-	if _heal_regression_budget_only(lines, workflow):
+	if _heal_regression_budget_only(lines, workflow, tuple(line.get("targets", ()))):
 		outcome.update(decision="hold", reason="budget_only_plan")
 		return outcome
 	outcome["reason"] = "regression_named" if line["form"] == "named" else "not_a_regression"

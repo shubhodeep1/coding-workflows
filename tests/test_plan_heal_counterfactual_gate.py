@@ -786,6 +786,29 @@ def test_regression_line_rejects_directories_prose_numbers_and_placeholders() ->
 	assert _rg(_rg_plan("HEAL_REGRESSION: scripts/a.sh"))["reason"] == "regression_named"
 
 
+def test_regression_budget_only_reads_paths_not_knobs_in_files_bullets() -> None:
+	# Review findings: a knob-first backticked bullet, an indented sub-bullet and a
+	# "leave X unchanged" mention must not lift the budget-only hold.
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	knob_first = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		"- `.github/workflows/ci.yml`", "- Raise `PHASE_TIMEOUT` in `.github/workflows/ci.yml`\n  - raise `timeout-minutes` to 120")
+	assert _rg(knob_first)["reason"] == "budget_only_plan"
+	unchanged = _rg(_rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY + "\nLeave `CACHE_KEY_PREFIX` unchanged."))
+	assert unchanged["reason"] == "budget_only_plan", unchanged
+	# A backticked placeholder is no reason.
+	placeholder = _rg(_rg_plan("HEAL_REGRESSION: not a regression: `<reason>`"))
+	assert (placeholder["reason"], placeholder["detail"]) == ("regression_line_missing", "empty"), placeholder
+
+
+def test_regression_named_test_file_is_not_a_companion() -> None:
+	# A test file the HEAL_REGRESSION line names is the regressing file, not a companion.
+	files = _BUDGET_FILES + ["tests/test_slow.py"]
+	named = _rg(_rg_plan("HEAL_REGRESSION: tests/test_slow.py", files=files, body=_BUDGET_BODY))
+	assert (named["decision"], named["reason"]) == ("approve", "regression_named"), named
+	unnamed = _rg(_rg_plan("HEAL_REGRESSION: abc1234", files=files, body=_BUDGET_BODY))
+	assert unnamed["reason"] == "budget_only_plan", unnamed
+
+
 # Step plans name src/app.py so the automation-path gate does not defer them.
 _STEP_FILES = ["src/app.py"]
 _STEP_BODY = "Fix the slow loop in `src/app.py`."
