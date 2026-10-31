@@ -1080,3 +1080,313 @@ def test_wrapper_mounts_node_modules_read_only_on_both_trees(tmp_path):
 	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
 	assert f"src={node_modules.resolve()},dst=/source/node_modules,readonly" in run_line
 	assert f"src={node_modules.resolve()},dst=/baseline/node_modules,readonly" in run_line
+
+
+# --- run --tests-file (issue #8461) -----------------------------------------
+
+TF_PR_A = "def test_ok():\n\tpass\n\n\ndef test_new_break():\n\tassert False\n\n\ndef test_old_break():\n\tassert False\n"
+TF_BASE_A = "def test_ok():\n\tpass\n\n\ndef test_new_break():\n\tpass\n\n\ndef test_old_break():\n\tassert False\n"
+
+
+def _tests_file_run(tmp_path: Path, root: Path, lines: str | bytes, baseline: Path | None = None, changed: str = "M\ttests/test_a.py\n") -> dict:
+	changed_file = tmp_path / "changed.txt"
+	changed_file.write_text(changed, encoding="utf-8")
+	listing = tmp_path / "tests.txt"
+	if isinstance(lines, bytes):
+		listing.write_bytes(lines)
+	else:
+		listing.write_text(lines, encoding="utf-8")
+	out = tmp_path / "result.json"
+	argv = ["run", "--repo-root", str(root), "--changed-files-file", str(changed_file), "--tests-file", str(listing),
+		"--timeout-minutes", "2", "--shards", "2", "--out", str(out)]
+	if baseline is not None:
+		argv += ["--baseline-tree", str(baseline)]
+	assert gate.main(argv) == 0
+	return json.loads(out.read_text(encoding="utf-8"))
+
+
+def test_tests_file_runs_listed_files_and_names_on_both_trees(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_A, "tests/test_b.py": FAILING, "tests/test_c.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_A, "tests/test_b.py": FAILING}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_new_break\ntests/test_b.py\n", baseline)
+	# Only the listed files ran (test_c.py fails but was not listed).
+	assert sorted(result["ran"]) == ["tests/test_a.py", "tests/test_b.py"]
+	assert result["status"] == "fail"
+	assert [f["test"] for f in result["failures"]] == ["tests/test_a.py"]
+	names = result["failures"][0]["names"]
+	# Only the named function ran: test_old_break also fails on this tree.
+	assert any(n.endswith("test_new_break") for n in names) and not any("test_old_break" in n for n in names)
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_b.py"]
+	assert result["unverified"] == []
+
+	inherited = _tests_file_run(tmp_path, root, "tests/test_a.py::test_old_break\n", baseline)
+	assert inherited["status"] == "pass"
+	assert inherited["failures"] == [] and [i["test"] for i in inherited["inherited"]] == ["tests/test_a.py"]
+
+
+def test_tests_file_merges_duplicate_and_whole_file_lines(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_A, "tests/test_b.py": ""})
+	affected, rejected = gate.parse_tests_file(root, "tests/test_b.py::test_y\ntests/test_b.py::test_x\ntests/test_b.py::test_y\n"
+		"tests/test_a.py::Case::test_m[p-1]\ntests/test_a.py\n")
+	assert rejected == []
+	assert affected == [
+		{"path": "tests/test_a.py", "reasons": ["tests_file"], "functions": []},
+		{"path": "tests/test_b.py", "reasons": ["tests_file"], "functions": ["test_y", "test_x"]},
+	]
+
+
+def test_tests_file_bypasses_select_tests(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_ok.py": "", "lib/zz.py": "import os\n", "tests/test_ci_wires_every_test_file.py": ""})
+
+	def boom(*args, **kwargs):
+		raise AssertionError("select_tests must not run with --tests-file")
+
+	monkeypatch.setattr(gate, "select_tests", boom)
+	result = _tests_file_run(tmp_path, root, "tests/test_ok.py\n", changed="M\tlib/zz.py\nA\ttests/test_new.py\n")
+	assert result["ran"] == ["tests/test_ok.py"] and result["status"] == "pass"
+	selection = gate.tests_file_selection(root, str(tmp_path / "tests.txt"), ["lib/zz.py"])
+	assert selection["registry_checks"] == [] and selection["static_checks"] == [] and selection["companion_files"] == []
+	assert selection["changed_files"] == ["lib/zz.py"] and selection["tests_file_rejected"] == []
+
+
+@pytest.mark.parametrize("line,reason", [
+	("/abs/tests/test_zz.py", "tests_file_absolute_path"),
+	("C:/zz/test_zz.py", "tests_file_absolute_path"),
+	("tests\\test_zz.py", "tests_file_absolute_path"),
+	("tests/../tests/test_zz.py", "tests_file_parent_traversal"),
+	("-p/test_zz.py", "tests_file_invalid_path"),
+	("tests//test_zz.py", "tests_file_invalid_path"),
+	("./tests/test_zz.py", "tests_file_invalid_path"),
+	("tests/test_zz\x01.py", "tests_file_control_character"),
+	("tests/test_zz_missing.py", "tests_file_missing"),
+	("tests/test_zzlink.py", "tests_file_outside_repo"),
+	("lib/zz_helper.py", "tests_file_not_test_file"),
+	("tests/test_ok.py::zz bad", "tests_file_invalid_name"),
+	("tests/test_ok.py::--zz", "tests_file_invalid_name"),
+	("tests/test_ok.py::", "tests_file_invalid_name"),
+	("tests/test_zz.py::" + "a" * 1100, "tests_file_line_too_long"),
+	("tests/test_zz.py\x0c", "tests_file_control_character"),
+	("\ttests/test_zz.py", "tests_file_control_character"),
+])
+def test_tests_file_rejects_invalid_entries(tmp_path, line, reason):
+	root = _repo(tmp_path, {"tests/test_ok.py": "", "lib/zz_helper.py": ""})
+	outside = tmp_path / "outside" / "test_zz.py"
+	outside.parent.mkdir()
+	outside.write_text("", encoding="utf-8")
+	(root / "tests" / "test_zzlink.py").symlink_to(outside)
+	result = _tests_file_run(tmp_path, root, f"tests/test_ok.py\n{line}\n")
+	assert result["unverified"] == [{"item": "tests_file:line2", "reason": reason}]
+	assert result["ran"] == ["tests/test_ok.py"]
+	assert result["status"] == "unverified"
+	# Rejected text is never echoed back.
+	assert "zz" not in json.dumps(result) and "zz" not in gate.write_summary(result)
+
+
+def test_tests_file_caps_and_unreadable(tmp_path):
+	root = _repo(tmp_path, {"tests/test_ok.py": ""})
+	too_large = _tests_file_run(tmp_path, root, b"#" * (gate.MAX_TESTS_FILE_BYTES + 1))
+	assert too_large["status"] == "unverified" and too_large["ran"] == []
+	assert too_large["unverified"] == [{"item": "tests_file", "reason": "tests_file_too_large"}]
+	unreadable = _tests_file_run(tmp_path, root, b"\xff\xfe tests/test_ok.py\n")
+	assert unreadable["status"] == "unverified"
+	assert unreadable["unverified"] == [{"item": "tests_file", "reason": "tests_file_unreadable"}]
+	many = _tests_file_run(tmp_path, root, "tests/test_ok.py\n" * (gate.MAX_TESTS_FILE_ENTRIES + 5))
+	assert many["ran"] == ["tests/test_ok.py"]
+	assert many["unverified"] == [{"item": "tests_file", "reason": "tests_file_too_many_entries"}]
+	empty = _tests_file_run(tmp_path, root, "\n# a comment\n\n   \n")
+	assert empty["status"] == "skipped" and empty["ran"] == [] and empty["unverified"] == []
+	commented = _tests_file_run(tmp_path, root, "# comment\n\ntests/test_ok.py\n")
+	assert commented["status"] == "pass" and commented["ran"] == ["tests/test_ok.py"]
+
+
+def test_run_without_tests_file_is_unchanged(tmp_path):
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n"})
+	changed = tmp_path / "changed.txt"
+	changed.write_text("M\tlib/a.py\n", encoding="utf-8")
+	out = tmp_path / "result.json"
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--timeout-minutes", "2", "--out", str(out)]) == 0
+	result = json.loads(out.read_text(encoding="utf-8"))
+	selection = _select(root, "M\tlib/a.py")
+	expected = gate.run_gate(root, selection, timeout_minutes=2)
+	assert "tests_file_rejected" not in selection
+	assert sorted(result["ran"]) == sorted(expected["ran"]) and result["selected"] == expected["selected"]
+	assert "tests/test_a.py" in result["ran"]
+
+
+def _run_wrapper_with(tmp_path: Path, worktree: Path, env: dict[str, str], *extra: str) -> tuple[subprocess.CompletedProcess, Path]:
+	out = tmp_path / "out"
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(out), "--timeout-minutes", "2", *extra], capture_output=True, text=True, env=env, timeout=120)
+	return proc, out
+
+
+def test_wrapper_passes_tests_file_read_only(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	capture = tmp_path / "capture.tests"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		'\tfor a in "$@"; do case "$a" in type=bind,src=*,dst=/gate/tests.txt,readonly) t="${a#type=bind,src=}"; t="${t%,dst=/gate/tests.txt,readonly}"; cp "$t" "__CAP__"; stat -c %a "$t" > "__CAP__.mode" ;; esac; done\n\tprintf \'{"schema"',
+	).replace("__CAP__", str(capture)), encoding="utf-8")
+	listing = tmp_path / "list, with comma.txt"
+	listing.write_text("tests/test_a.py::test_x\n", encoding="utf-8")
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file", str(listing))
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert gate.re.search(r"type=bind,src=\S+/tests\.txt,dst=/gate/tests\.txt,readonly", run_line)
+	assert "--tests-file /gate/tests.txt" in run_line
+	assert "--changed-files-file /results/changed.txt" in run_line
+	assert "comma" not in run_line
+	for flag in ("--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges"):
+		assert flag in run_line
+	assert "--env" not in run_line
+	assert capture.read_text(encoding="utf-8") == "tests/test_a.py::test_x\n"
+	assert (tmp_path / "capture.tests.mode").read_text(encoding="utf-8").strip() == "444"
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass"
+
+
+def test_wrapper_without_tests_file_adds_no_mount_or_flag(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, _ = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "/gate/tests.txt" not in run_line and "--tests-file" not in run_line
+
+
+@pytest.mark.parametrize("kind,reason", [
+	("missing", "tests_file_missing"),
+	("symlink", "tests_file_not_regular"),
+	("directory", "tests_file_not_regular"),
+	("oversize", "tests_file_too_large"),
+	("empty", "usage_error"),
+])
+def test_wrapper_rejects_bad_tests_file(tmp_path, kind, reason):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	real = tmp_path / "real.txt"
+	real.write_text("tests/test_a.py\n", encoding="utf-8")
+	if kind == "missing":
+		value = str(tmp_path / "nope.txt")
+	elif kind == "symlink":
+		value = str(tmp_path / "link.txt")
+		os.symlink(real, value)
+	elif kind == "directory":
+		value = str(tmp_path / "adir")
+		os.mkdir(value)
+	elif kind == "oversize":
+		value = str(tmp_path / "big.txt")
+		Path(value).write_bytes(b"#" * 262145)
+	else:
+		value = ""
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file", value)
+	assert proc.returncode == 0
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert result["status"] == "unverified" and result["reason"] == reason
+	assert f"reason={reason}" in proc.stderr
+	assert not log.exists()
+
+
+TF_PR_NEW = "def test_ok():\n\tpass\n\n\ndef test_added_break():\n\tassert False\n"
+TF_BASE_NEW = "def test_ok():\n\tpass\n"
+
+
+def test_tests_file_named_test_missing_on_baseline_is_caused_by_the_change(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_NEW})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_added_break\n", baseline)
+	# pytest exits 4 on the baseline (node not found); that is not inherited.
+	assert result["status"] == "fail"
+	assert [f["test"] for f in result["failures"]] == ["tests/test_a.py"]
+	assert result["inherited"] == []
+
+
+def test_tests_file_rejects_names_on_non_python_tests(tmp_path):
+	root = _repo(tmp_path, {"tests/test_ok.py": "", "tests/test_run.sh": "true\n"})
+	affected, rejected = gate.parse_tests_file(root, "tests/test_ok.py\ntests/test_run.sh::case_x\ntests/test_run.sh\n")
+	assert rejected == [{"item": "tests_file:line2", "reason": "tests_file_name_unsupported"}]
+	assert [entry["path"] for entry in affected] == ["tests/test_ok.py", "tests/test_run.sh"]
+
+
+def test_tests_file_empty_value_never_falls_back_to_selection(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_ok.py": ""})
+
+	def boom(*args, **kwargs):
+		raise AssertionError("an empty --tests-file must not run the selection")
+
+	monkeypatch.setattr(gate, "select_tests", boom)
+	changed = tmp_path / "changed.txt"
+	changed.write_text("M\ttests/test_ok.py\n", encoding="utf-8")
+	out = tmp_path / "result.json"
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--tests-file", "", "--timeout-minutes", "2", "--out", str(out)]) == 0
+	result = json.loads(out.read_text(encoding="utf-8"))
+	assert result["ran"] == []
+	assert result["unverified"] == [{"item": "tests_file", "reason": "tests_file_unreadable"}]
+
+
+def test_tests_file_named_test_missing_on_both_trees_is_inherited(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_nowhere\n", baseline)
+	# pytest exits 4 on both trees: the change did not cause it.
+	assert result["failures"] == []
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_a.py"]
+
+
+def test_tests_file_names_ignored_by_whole_file_runners_are_unverified(tmp_path):
+	script = _repo(tmp_path, {"tests/test_m.py": "def test_x():\n\tpass\n\nif __name__ == '__main__':\n\ttest_x()\n"}, name="script")
+	units, unverified = gate.plan_units(script, {"affected_tests": [{"path": "tests/test_m.py", "reasons": ["tests_file"], "functions": ["test_x"]}]})
+	assert units[0]["argv"] == ["python3", "tests/test_m.py"]
+	assert unverified == [{"item": "tests/test_m.py", "reason": "tests_file_names_ignored"}]
+	override = _repo(tmp_path, {".ai/validate.yml": "prepush_test_command: run {files}\n", "tests/test_a.py": ""}, name="override")
+	units, unverified = gate.plan_units(override, {"affected_tests": [{"path": "tests/test_a.py", "reasons": ["tests_file"], "functions": ["test_x"]}]})
+	assert [u["id"] for u in units] == ["prepush_test_command"]
+	assert unverified == [{"item": "tests/test_a.py", "reason": "tests_file_names_ignored"}]
+	# Without --tests-file the selection's functions keep the old behaviour.
+	assert gate.plan_units(script, {"affected_tests": [{"path": "tests/test_m.py", "reasons": [], "functions": ["test_x"]}]})[1] == []
+
+
+def test_wrapper_trailing_tests_file_without_value_is_a_usage_error(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file")
+	assert proc.returncode == 0
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "usage_error"
+	assert not log.exists()
+
+
+TF_PR_MIXED = "def test_added():\n\tpass\n\n\ndef test_old_break():\n\tassert False\n"
+TF_BASE_MIXED = "def test_old_break():\n\tassert False\n"
+
+
+def test_tests_file_multi_name_unit_missing_node_on_baseline_is_unverified(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_MIXED})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_MIXED}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_added\ntests/test_a.py::test_old_break\n", baseline)
+	# pytest exits 4 on the baseline (test_added missing) without running
+	# test_old_break, so the inherited failure cannot be told apart.
+	assert result["failures"] == [] and result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]
+	assert result["status"] == "unverified"
+
+
+def test_tests_file_named_test_missing_on_pr_tree_only_is_unverified(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW + "\n\ndef test_gone():\n\tassert False\n"}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_gone\n", baseline)
+	# The requested test never ran on this change's tree: not inherited.
+	assert result["failures"] == [] and result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]
+
+
+def test_tests_file_multi_name_unit_missing_node_on_both_trees_is_unverified(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": "def test_x():\n\tassert False\n"})
+	baseline = _repo(tmp_path, {"tests/test_a.py": "def test_x():\n\tpass\n"}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_stale\ntests/test_a.py::test_x\n", baseline)
+	# test_stale is missing on both trees, so pytest exits 4 on both without
+	# running test_x: the change-caused test_x failure must not pass as inherited.
+	assert result["failures"] == [] and result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]
+	assert result["status"] == "unverified"

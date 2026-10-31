@@ -34,6 +34,15 @@
 #      runs, read from the scope-commit tree, never from the diagnosis.
 #      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED=false (default true)
 #      turns that scope part off and leaves the frozen inputs as before.
+#      After the scope freeze, WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED=true
+#      (default false) renders an `## Evidence pack` for the issue body: the
+#      failed runs' step timelines and the linked runs' timelines with their
+#      head refs, from JSON already saved (no API call), capped at
+#      WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES (default 12000). For a
+#      workflow_run report the same switch adds the runs started for up to 2
+#      issues the failed jobs' logs name, and (self repo only) the commits on
+#      the default branch that are not on the heal issue's target branch (the
+#      failed run's branch), at most 5 extra GitHub GETs (#8475).
 #   3. Fingerprints the failure (workflow + failing step + normalised error
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
@@ -121,6 +130,19 @@
 #                                         workflow_run report's linked runs add their workflow,
 #                                         called workflows and step scripts to the frozen scope
 #                                         (#8360); "false" (any case) turns that off
+#   WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED   default "false": only "true" adds the `## Evidence pack`
+#                                         (failed-run and linked-run step timelines) to the issue body
+#   WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES evidence pack byte cap (default 12000, clamped 1024-20000)
+#   WORKFLOW_HEAL_REPRODUCE_ENABLED       default "false": only "true" re-runs the extracted failing
+#                                         tests (scripts/heal_reproduce.sh) at the failing SHA against
+#                                         the workflow's last green SHA and adds `## Reproduction`
+#   WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES reproduction wall time (default 10; the intake clamps 1-20)
+#   WORKFLOW_HEAL_REPRODUCE_SCRIPT        reproduction helper (default: heal_reproduce.sh next to this script; tests)
+#   WORKFLOW_HEAL_TREND_ENABLED           default "false": only "true" adds `## Run-time trend` (per-UTC-day
+#                                         n / median / p90 of the last 7 days of successful runs) to
+#                                         stall / timeout heal issues
+#   WORKFLOW_HEAL_TREND_REGRESSION_RATIO  latest-day median / earlier median that counts as a
+#                                         regression (default 1.5; outside 1.0 < r <= 10 gives 1.5)
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
@@ -305,6 +327,19 @@ MAX_LINKED_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_LINKED_RUNS:-}" 4)"
 LINKED_RUN_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_LINKED_RUN_LOG_BYTES:-}" 30000)"
 # Linked-run scope paths (#8360): only the literal 'false' turns them off.
 SCOPE_LINKED_WORKFLOWS_ENABLED="${WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED:-true}"
+# Evidence pack (P1): only the literal 'true' turns it on.
+EVIDENCE_PACK_ENABLED="${WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED:-false}"
+EVIDENCE_PACK_MAX_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES:-}" 12000)"
+EVIDENCE_PACK_FILE=""
+# Reproduction (P2 step 4): only the literal 'true' turns it on.
+REPRODUCE_ENABLED="${WORKFLOW_HEAL_REPRODUCE_ENABLED:-false}"
+REPRODUCE_TIMEOUT_MINUTES="$(_positive_or_default "${WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES:-}" 10)"
+REPRODUCTION_FILE=""
+REPRO_STATUS=""
+# Run-time trend (P3): only the literal 'true' turns it on.
+TREND_ENABLED="${WORKFLOW_HEAL_TREND_ENABLED:-false}"
+TREND_RATIO="${WORKFLOW_HEAL_TREND_REGRESSION_RATIO:-1.5}"
+TREND_FILE=""
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
@@ -2779,6 +2814,449 @@ _heal_collect_linked_runs()
 }
 _heal_collect_linked_runs || log "warn linked_runs_failed"
 
+# --- Evidence pack (P1, evidence only) --------------------------------------
+
+# _heal_fetch_evidence_pack_api (#8475, P1 steps 2 and 3)
+#   Called only from _heal_build_evidence_pack, after its switch-off return, so
+#   with WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED off it makes no call. Runs for a
+#   workflow_run report only. `workflow_failure_heal.py evidence-pack-requests`
+#   parses the failed jobs' filtered logs (same-repo `issues/<n>` URLs and
+#   `issue #<n>`, at most 2) and the saved jobs JSON (the failed jobs'
+#   started_at..completed_at window); the shell never parses log text. It then
+#   appends `evidence-pack` arguments to the caller's `pack_api_args` array.
+#   Batching contract (CLAUDE.md §14): at most 5 GitHub REST GETs per report,
+#   each a single attempt (GH_RETRY_MAX_ATTEMPTS=1) counted in GH_PAT_BUDGET:
+#     - repos/<source>/issues/<n> (title), at most 2;
+#     - repos/<source>/actions/runs?created=<window>&per_page=100&page=<p>,
+#       shared by every issue, page 2 only when page 1 is full and
+#       total_count > 100;
+#     - repos/<self>/compare/<target>...<PROVENANCE_DEFAULT_BRANCH>, where
+#       <target> is the heal issue's target (the failed run's HEAD_BRANCH, the
+#       promote-candidate mirror mapped to the default branch, else
+#       TARGET_BRANCH_DEFAULT); self-repo reports only, skipped quietly when
+#       either branch is empty or invalid, or the two are equal.
+#   Audited: none of the intake's earlier reads (run/jobs GETs, the linked-run
+#   reads, the failed-sha...branch compare of the branch-progress block)
+#   returns an issue title, a time-windowed runs list or a target...default
+#   compare. No issue is read when no failed-job window exists.
+#   Fails open: a failed read adds a `--pack-reason <token>` (issue_unreadable,
+#   runs_unreadable, compare_unreadable, job_window_unavailable,
+#   requests_failed) that the single `evidence_pack` log line reports; it
+#   never returns non-zero. The files stay under ${RUNTIME_DIR}/evidence_pack_api/
+#   and feed nothing but the pack.
+_heal_fetch_evidence_pack_api()
+{
+	local api_dir="${RUNTIME_DIR}/evidence_pack_api"
+	local requests_json="" requests_reason="" requests_window="" request_run_id="" issue_number="" issue_file=""
+	local runs_page="" runs_file="" divergence_file="" divergence_target="" divergence_default=""
+	local titles_read=0
+	local -a request_logs=() request_jobs_files=() request_issue_numbers=()
+	[ "${SOURCE_KIND:-}" = workflow_run ] || return 0
+	[ -s "${SUMMARIES_FILE:-}" ] || return 0
+	# Stale responses from an earlier call must never be reused; the directory
+	# is this function's own scratch space under RUNTIME_DIR.
+	rm -rf "${api_dir}"
+	mkdir -p "${api_dir}" || return 0
+	mapfile -t request_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+	while IFS= read -r request_run_id; do
+		[[ "${request_run_id}" =~ ^[0-9]+$ ]] || continue
+		if [ -s "${LOG_DIR}/run-${request_run_id}-jobs.json" ]; then
+			request_jobs_files+=("${LOG_DIR}/run-${request_run_id}-jobs.json")
+		fi
+	done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+	if ! requests_json="$(python3 "${HEAL_PY}" evidence-pack-requests --repo "${SOURCE_REPO}" \
+		--log-files "${request_logs[@]}" --jobs-json "${request_jobs_files[@]}" 2>/dev/null)" \
+		|| ! jq -e 'type == "object" and (.issues | type == "array")' <<< "${requests_json}" >/dev/null 2>&1; then
+		pack_api_args+=(--pack-reason requests_failed)
+		requests_json='{"issues":[],"created":"","reason":""}'
+	fi
+	requests_reason="$(jq -r '.reason // ""' <<< "${requests_json}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+	[ -z "${requests_reason}" ] || pack_api_args+=(--pack-reason "${requests_reason}")
+	requests_window="$(jq -r '.created // ""' <<< "${requests_json}" 2>/dev/null || true)"
+	[[ "${requests_window}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\.\.[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || requests_window=""
+	mapfile -t request_issue_numbers < <(jq -r '.issues[]? | tostring' <<< "${requests_json}" 2>/dev/null | head -n 2)
+	if [ -n "${requests_window}" ]; then
+		for issue_number in "${request_issue_numbers[@]}"; do
+			[[ "${issue_number}" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+			issue_file="${api_dir}/issue-${issue_number}.json"
+			if GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${issue_file}" gh api --method GET "repos/${SOURCE_REPO}/issues/${issue_number}" 2>/dev/null \
+				&& jq -e --argjson n "${issue_number}" 'type == "object" and .number == $n and (.title | type == "string")' "${issue_file}" >/dev/null 2>&1; then
+				pack_api_args+=(--issue-runs "${issue_number}" "${issue_file}")
+				titles_read=$((titles_read + 1))
+			else
+				pack_api_args+=(--pack-reason issue_unreadable)
+			fi
+		done
+	fi
+	if [ "${titles_read}" -gt 0 ]; then
+		for runs_page in 1 2; do
+			runs_file="${api_dir}/runs-page-${runs_page}.json"
+			if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${runs_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs" \
+				-f "created=${requests_window}" -F per_page=100 -F "page=${runs_page}" 2>/dev/null \
+				|| ! jq -e 'type == "object" and (.workflow_runs | type == "array")' "${runs_file}" >/dev/null 2>&1; then
+				pack_api_args+=(--pack-reason runs_unreadable)
+				break
+			fi
+			pack_api_args+=(--issue-runs-page "${runs_file}")
+			# Page 2 only when page 1 is full and the window holds more runs.
+			jq -e '(.total_count | type == "number") and .total_count > 100 and (.workflow_runs | length) >= 100' "${runs_file}" >/dev/null 2>&1 || break
+		done
+	fi
+	# The heal issue's own target, as the Route block below sets it for a
+	# workflow_run report: the failed run's branch, with the promote-candidate
+	# mirror retargeted to the default branch. A main-targeted heal skips the
+	# compare (target == default). The Route block's branch-exists fallback is
+	# not applied here: a run branch deleted since the run makes the compare
+	# 404, which fails open as reason=compare_unreadable.
+	divergence_target="${TARGET_BRANCH_DEFAULT:-}"
+	[ -z "${HEAD_BRANCH:-}" ] || divergence_target="${HEAD_BRANCH}"
+	[ "${divergence_target}" != "${HEAL_PIPELINE_MIRROR_BRANCH}" ] || divergence_target="${PROVENANCE_DEFAULT_BRANCH:-main}"
+	divergence_default="${PROVENANCE_DEFAULT_BRANCH:-}"
+	if [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ] && [ -n "${divergence_target}" ] && [ -n "${divergence_default}" ] \
+		&& [[ "${divergence_target}" != *..* ]] && [[ "${divergence_default}" != *..* ]] \
+		&& [[ "${divergence_target}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] && [[ "${divergence_default}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] \
+		&& [ "${divergence_target}" != "${divergence_default}" ]; then
+		divergence_file="${api_dir}/divergence.json"
+		if GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${divergence_file}" gh api --method GET "repos/${SELF_REPO}/compare/${divergence_target}...${divergence_default}" 2>/dev/null; then
+			pack_api_args+=(--divergence-compare "${divergence_file}" --divergence-target "${divergence_target}" --divergence-default "${divergence_default}")
+		else
+			pack_api_args+=(--pack-reason compare_unreadable)
+		fi
+	fi
+	return 0
+}
+
+# _heal_build_evidence_pack
+#   Renders ${RUNTIME_DIR}/evidence_pack.md for the heal issue body through
+#   `workflow_failure_heal.py evidence-pack`: the step timeline of each
+#   reported run (${LOG_DIR}/run-<id>-info.json + run-<id>-jobs.json) and of
+#   each linked run (${RUNTIME_DIR}/linked_runs/run-<id>.json + -jobs.json)
+#   with head_sha / head_branch. Runs after SCOPE_INPUTS_FROZEN is written and
+#   read-only; nothing reads the pack into the scope, the marker or the
+#   fingerprint, and the diagnosis prompt does not see it.
+#   Batching contract (CLAUDE.md §14): 0 GitHub API calls. Input is the run and
+#   jobs JSON the reported-run loop and _heal_fetch_linked_runs already saved;
+#   a run without both files is left out. Since #8475 the builder also calls
+#   _heal_fetch_evidence_pack_api (switch on, workflow_run only), which makes
+#   at most 5 GitHub GETs (see its batching contract above); the timelines
+#   still make none. Output is the pack file plus one
+#   `evidence_pack outcome=ok|partial|skipped bytes=<n> [reason=<token>] [truncated=true]` line.
+#   Fails open: a helper failure empties the pack and the issue is composed
+#   exactly as with the switch off.
+_heal_build_evidence_pack()
+{
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
+	local pack_json="" pack_outcome="" pack_reason="" pack_bytes="" pack_run_id="" pack_seen_ids=" " pack_truncated="" pack_neutralized=""
+	local -a pack_args=() pack_parent_logs=() pack_api_args=()
+	EVIDENCE_PACK_FILE="${RUNTIME_DIR}/evidence_pack.md"
+	: > "${EVIDENCE_PACK_FILE}"
+	if [ "${EVIDENCE_PACK_ENABLED}" != true ]; then
+		log "evidence_pack outcome=skipped bytes=0 reason=disabled"
+		return 0
+	fi
+	if [ -s "${SUMMARIES_FILE:-}" ]; then
+		while IFS= read -r pack_run_id; do
+			[[ "${pack_run_id}" =~ ^[0-9]+$ ]] || continue
+			case "${pack_seen_ids}" in *" ${pack_run_id} "*) continue ;; esac
+			pack_seen_ids="${pack_seen_ids}${pack_run_id} "
+			if [ -s "${LOG_DIR}/run-${pack_run_id}-info.json" ] && [ -s "${LOG_DIR}/run-${pack_run_id}-jobs.json" ]; then
+				pack_args+=(--failed-run "${LOG_DIR}/run-${pack_run_id}-info.json" "${LOG_DIR}/run-${pack_run_id}-jobs.json")
+			fi
+		done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+		# The parent logs, for the stall-window hints ([LONG] marks).
+		mapfile -t pack_parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+	fi
+	if [ -s "${fetched_ids_file}" ]; then
+		while IFS= read -r pack_run_id; do
+			[[ "${pack_run_id}" =~ ^[0-9]+$ ]] || continue
+			if [ -s "${linked_dir}/run-${pack_run_id}.json" ] && [ -s "${linked_dir}/run-${pack_run_id}-jobs.json" ]; then
+				pack_args+=(--linked-run "${linked_dir}/run-${pack_run_id}.json" "${linked_dir}/run-${pack_run_id}-jobs.json")
+			fi
+		done < "${fetched_ids_file}"
+	fi
+	# Issue-linked runs and branch divergence (#8475); fills pack_api_args and fails open.
+	_heal_fetch_evidence_pack_api || true
+	pack_args+=("${pack_api_args[@]}")
+	if [ "${#pack_args[@]}" -eq 0 ]; then
+		log "evidence_pack outcome=skipped bytes=0 reason=no_data"
+		return 0
+	fi
+	if ! pack_json="$(python3 "${HEAL_PY}" evidence-pack "${pack_args[@]}" --repo "${SOURCE_REPO}" \
+		--max-bytes "${EVIDENCE_PACK_MAX_BYTES}" --out "${EVIDENCE_PACK_FILE}" --stall-hint-files "${pack_parent_logs[@]}" 2>/dev/null)" \
+		|| ! jq -e 'type == "object" and (.outcome | type == "string")' <<< "${pack_json}" >/dev/null 2>&1; then
+		: > "${EVIDENCE_PACK_FILE}"
+		log "evidence_pack outcome=partial bytes=0 reason=helper_failed"
+		return 0
+	fi
+	pack_outcome="$(jq -r '.outcome' <<< "${pack_json}" | tr -cd 'a-z_' | head -c 40)"
+	case "${pack_outcome}" in ok|partial|skipped) ;; *) pack_outcome="partial" ;; esac
+	pack_reason="$(jq -r '.reason // ""' <<< "${pack_json}" | tr -cd 'a-z_' | head -c 40)"
+	pack_bytes="$(jq -r '(.bytes // 0) | tostring' <<< "${pack_json}" 2>/dev/null || true)"
+	[[ "${pack_bytes}" =~ ^[0-9]+$ ]] || pack_bytes=0
+	pack_truncated=""
+	if [ "${pack_reason}" != truncated ] && [ "$(jq -r '.truncated == true' <<< "${pack_json}" 2>/dev/null)" = true ]; then
+		pack_truncated=" truncated=true"
+	fi
+	log "evidence_pack outcome=${pack_outcome} bytes=${pack_bytes}${pack_reason:+ reason=${pack_reason}}${pack_truncated}"
+	pack_neutralized="$(jq -r '(.neutralized // 0) | tostring' <<< "${pack_json}" 2>/dev/null || true)"
+	if [[ "${pack_neutralized}" =~ ^[0-9]+$ ]] && [ "${pack_neutralized}" -gt 0 ]; then
+		log "neutralized count=${pack_neutralized} source=evidence_pack"
+	fi
+	return 0
+}
+_heal_build_evidence_pack || { : > "${RUNTIME_DIR}/evidence_pack.md"; log "evidence_pack outcome=partial bytes=0 reason=helper_failed"; }
+
+# --- Reproduction (P2 step 4, evidence only) --------------------------------
+
+# _heal_write_unverified_reproduction OUT TESTS_FILE REASON
+#   Writes a heal_repro.v1 result in which the run and every listed test are
+#   unverified/<REASON> (failing_at = HEAD_SHA), for the paths that never ran
+#   the helper or got no result from it.
+_heal_write_unverified_reproduction()
+{
+	local out="$1" tests_file="$2" reason="$3"
+	jq -n --arg reason "${reason}" --arg failing_at "${HEAD_SHA:-}" --rawfile tests "${tests_file}" \
+		'{schema: "heal_repro.v1", status: "unverified", reason: $reason, failing_at: $failing_at, passing_at: "",
+		  tests: ($tests | split("\n") | map(select(length > 0)) | map({test: ., status: "unverified", reason: $reason}))}' \
+		> "${out}"
+}
+
+# _heal_run_reproduction
+#   Behind WORKFLOW_HEAL_REPRODUCE_ENABLED (only the literal 'true'), re-runs
+#   the failing tests `heal-scope failing-tests` extracted (FAILING_TESTS_JSON)
+#   through scripts/heal_reproduce.sh at HEAD_SHA against the last green SHA of
+#   the same workflow on the same branch, and leaves a normalized heal_repro.v1
+#   result in REPRODUCTION_FILE and its status in REPRO_STATUS. Runs after the
+#   scope freeze; nothing here feeds the scope, the marker or the fingerprint.
+#   Applies to self-repo workflow_run reports with a 40-hex HEAD_SHA only (the
+#   checkout holds this repository's tests), and only when at least one
+#   file-qualified test (`tests/<path>.py[::name]`) was extracted.
+#   Batching contract (CLAUDE.md §14): at most 1 GitHub REST GET per report,
+#   `workflow_failure_heal.py last-green-run` (repos/<self>/actions/workflows/<id>/runs?
+#   status=success&branch=<b>&per_page=1, single attempt), counted in
+#   GH_PAT_BUDGET; none with the switch off, for other reports, or with no
+#   tests. The workflow id and the failing run's created_at come from the
+#   saved ${LOG_DIR}/run-<id>-info.json.
+#   Fails open: no baseline (`last-green-run` reason not ok) gives
+#   unverified/no_baseline; a missing helper, no result file or the outer
+#   timeout give unverified/helper_missing|helper_failed|timeout. One log line:
+#   `reproduction outcome=<status|skipped> reason=<token> tests=<n> [baseline=<reason>]`.
+#   The helper runs from this script's own directory (never from the failing
+#   SHA's tree), without the GitHub, Telegram or model credentials.
+_heal_run_reproduction()
+{
+	local repro_dir="${RUNTIME_DIR}/reproduction"
+	local repro_tests_file="${RUNTIME_DIR}/reproduction/tests.txt"
+	local repro_raw_file="${RUNTIME_DIR}/reproduction/result.json"
+	local repro_result_file="${RUNTIME_DIR}/reproduction/normalized.json"
+	local repro_count_json="" repro_count=0 repro_run_id="" repro_info_file="" repro_workflow_id="" repro_before=""
+	local repro_green_json="" repro_green_reason="" repro_green_sha="" repro_summary="" repro_reason="" repro_tests=0
+	local repro_wall=10 repro_rc=0 heal_script_dir_repro="" repro_helper=""
+	REPRODUCTION_FILE=""
+	REPRO_STATUS=""
+	if [ "${REPRODUCE_ENABLED}" != true ]; then
+		log "reproduction outcome=skipped reason=disabled tests=0"
+		return 0
+	fi
+	if [ "${SOURCE_KIND:-}" != workflow_run ] || [ "${SOURCE_REPO,,}" != "${SELF_REPO,,}" ] || [[ ! "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		log "reproduction outcome=skipped reason=not_applicable tests=0"
+		return 0
+	fi
+	rm -rf "${repro_dir}"
+	mkdir -p "${repro_dir}" || return 1
+	printf '%s' "${FAILING_TESTS_JSON:-}" > "${repro_dir}/failing_tests.json" || return 1
+	repro_count_json="$(python3 "${HEAL_PY}" reproduction-tests --failing-tests-json "${repro_dir}/failing_tests.json" --out "${repro_tests_file}" 2>/dev/null)" || repro_count_json=""
+	repro_count="$(jq -r '(.count // 0) | tostring' <<< "${repro_count_json}" 2>/dev/null || true)"
+	[[ "${repro_count}" =~ ^[0-9]+$ ]] || repro_count=0
+	if [ "${repro_count}" -eq 0 ] || [ ! -s "${repro_tests_file}" ]; then
+		log "reproduction outcome=skipped reason=no_tests tests=0"
+		return 0
+	fi
+	# The reported run at HEAD_SHA: its workflow id and creation time (saved run JSON, no call).
+	if [ -s "${SUMMARIES_FILE:-}" ]; then
+		while IFS= read -r repro_run_id; do
+			[[ "${repro_run_id}" =~ ^[0-9]+$ ]] || continue
+			repro_info_file="${LOG_DIR}/run-${repro_run_id}-info.json"
+			[ -s "${repro_info_file}" ] || continue
+			if jq -e --arg sha "${HEAD_SHA}" '.head_sha == $sha' "${repro_info_file}" >/dev/null 2>&1; then
+				repro_workflow_id="$(jq -r '(.workflow_id // "") | tostring' "${repro_info_file}" 2>/dev/null || true)"
+				repro_before="$(jq -r '.created_at // ""' "${repro_info_file}" 2>/dev/null || true)"
+				break
+			fi
+		done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+	fi
+	[[ "${repro_workflow_id}" =~ ^[1-9][0-9]{0,19}$ ]] || repro_workflow_id=""
+	[[ "${repro_before}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || repro_before=""
+	if [ -n "${repro_workflow_id}" ] && [ -n "${repro_before}" ]; then
+		repro_green_json="$(python3 "${HEAL_PY}" last-green-run --repo "${SELF_REPO}" --workflow-id "${repro_workflow_id}" \
+			--branch "${HEAD_BRANCH:-}" --failing-sha "${HEAD_SHA}" --before "${repro_before}" 2>/dev/null)" || repro_green_json=""
+		repro_green_reason="$(jq -r '.reason // ""' <<< "${repro_green_json}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+		repro_green_sha="$(jq -r '.head_sha // ""' <<< "${repro_green_json}" 2>/dev/null || true)"
+		[ -n "${repro_green_reason}" ] || repro_green_reason="request_failed"
+	else
+		repro_green_reason="run_unavailable"
+	fi
+	[[ "${repro_green_sha}" =~ ^[0-9a-f]{40}$ ]] || repro_green_sha=""
+	if [ "${repro_green_reason}" != ok ] || [ -z "${repro_green_sha}" ]; then
+		_heal_write_unverified_reproduction "${repro_raw_file}" "${repro_tests_file}" no_baseline || true
+	else
+		heal_script_dir_repro="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+		repro_helper="${WORKFLOW_HEAL_REPRODUCE_SCRIPT:-${heal_script_dir_repro}/heal_reproduce.sh}"
+		if [ ! -f "${repro_helper}" ] || [ -L "${repro_helper}" ]; then
+			_heal_write_unverified_reproduction "${repro_raw_file}" "${repro_tests_file}" helper_missing || true
+		else
+			# The intake caps the wall at 20 minutes (the helper allows 1-60) so the
+			# intake job's timeout covers it; the outer guard sits 5 minutes above
+			# it so the helper's cleanup normally runs first.
+			if [[ "${REPRODUCE_TIMEOUT_MINUTES}" =~ ^[0-9]{1,4}$ ]]; then
+				repro_wall=$((10#${REPRODUCE_TIMEOUT_MINUTES}))
+			else
+				repro_wall=20
+			fi
+			[ "${repro_wall}" -ge 1 ] || repro_wall=1
+			[ "${repro_wall}" -le 20 ] || repro_wall=20
+			rm -f "${repro_raw_file}"
+			repro_rc=0
+			timeout --kill-after=30s "$((repro_wall * 60 + 300))" \
+				env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \
+				-u WORKFLOW_HEAL_REPRODUCE_TIMEOUT_SECS \
+				GIT_TERMINAL_PROMPT=0 WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES="${repro_wall}" \
+				bash "${repro_helper}" --tests-file "${repro_tests_file}" \
+				--sha "${HEAD_SHA}" --baseline "${repro_green_sha}" --out "${repro_raw_file}" < /dev/null 1>&2 || repro_rc=$?
+			if [ "${repro_rc}" -eq 124 ] || [ "${repro_rc}" -eq 137 ]; then
+				_heal_write_unverified_reproduction "${repro_raw_file}" "${repro_tests_file}" timeout || true
+			elif [ ! -s "${repro_raw_file}" ]; then
+				_heal_write_unverified_reproduction "${repro_raw_file}" "${repro_tests_file}" helper_failed || true
+			fi
+		fi
+	fi
+	repro_summary="$(python3 "${HEAL_PY}" reproduction-normalize --result-file "${repro_raw_file}" --tests-file "${repro_tests_file}" --out "${repro_result_file}" 2>/dev/null)" || repro_summary=""
+	[ -s "${repro_result_file}" ] || return 1
+	REPRODUCTION_FILE="${repro_result_file}"
+	REPRO_STATUS="$(jq -r '.status // ""' <<< "${repro_summary}" 2>/dev/null | tr -cd 'a-z_' | head -c 20 || true)"
+	case "${REPRO_STATUS}" in reproduced|not_reproduced|unverified) ;; *) REPRO_STATUS="unverified" ;; esac
+	repro_reason="$(jq -r '.reason // ""' <<< "${repro_summary}" 2>/dev/null | tr -cd 'a-z0-9_:.-' | head -c 64 || true)"
+	[ -n "${repro_reason}" ] || repro_reason="result_invalid"
+	repro_tests="$(jq -r '(.tests // 0) | tostring' <<< "${repro_summary}" 2>/dev/null || true)"
+	[[ "${repro_tests}" =~ ^[0-9]+$ ]] || repro_tests=0
+	log "reproduction outcome=${REPRO_STATUS} reason=${repro_reason} tests=${repro_tests} baseline=${repro_green_reason}"
+	return 0
+}
+_heal_run_reproduction || { REPRODUCTION_FILE=""; REPRO_STATUS=""; log "reproduction outcome=skipped reason=helper_failed tests=0"; }
+
+# --- Run-time trend (P3 steps 2, 3 and 5, evidence only) ---------------------
+
+# _heal_build_run_time_trend
+#   Behind WORKFLOW_HEAL_TREND_ENABLED (only the literal 'true'), renders the
+#   `## Run-time trend` section into TREND_FILE through
+#   `workflow_failure_heal.py run-time-trend`, which classifies the failure
+#   shape first (classify_failure_shape) and trends stall / timeout shapes
+#   only. Runs after the scope freeze; nothing here feeds the scope, the
+#   marker, the fingerprint or the diagnosis prompt. With the switch off it
+#   returns at once: no file, no call and no log line, so the run is
+#   byte-identical to one without the step.
+#   Inputs (all already saved, no call): SIGNATURE, the current run's (run_refs[0])
+#   jobs conclusions (`timed_out` when any of its jobs timed out), FAILING_TESTS_JSON, the
+#   reported runs' ${LOG_DIR}/run-<id>-info.json, the linked runs'
+#   ${RUNTIME_DIR}/linked_runs/run-<id>.json and, when the evidence pack ran,
+#   ${RUNTIME_DIR}/evidence_pack_api/issue-<n>.json + runs-page-<n>.json.
+#   Batching contract (CLAUDE.md §14): at most 6 single-attempt GitHub REST GETs
+#   per report, 2 pages for each of at most 3 workflows,
+#   repos/<repo>/actions/workflows/<file|id>/runs?status=success&branch=<b>&event=<e>&created=>=<now-7d>&per_page=100&page=<n>,
+#   counted in GH_PAT_BUDGET; none with the switch off or for other shapes.
+#   No existing intake read lists a workflow's successful runs over 7 days
+#   (last-green-run reads one run; the evidence-pack runs pages cover only the
+#   failed job's window).
+#   Fails open: one log line
+#   `trend outcome=<ok|partial|skipped> reason=<token> shape=<shape> workflows=<n> pages=<n> regression=<true|false> history=<complete|truncated>`;
+#   a helper failure logs `trend outcome=partial reason=helper_failed` and the
+#   issue is composed without the section.
+_heal_build_run_time_trend()
+{
+	local trend_dir="${RUNTIME_DIR}/trend"
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
+	local trend_api_dir="${RUNTIME_DIR}/evidence_pack_api"
+	local trend_json="" trend_outcome="" trend_reason="" trend_shape="" trend_workflows="" trend_pages="" trend_regression="" trend_history=""
+	local trend_run_id="" trend_seen_ids=" " trend_conclusion="failure" trend_api_file="" trend_issue_number=""
+	local -a trend_args=()
+	local trend_current_run_id=""
+	TREND_FILE=""
+	[ "${TREND_ENABLED}" = true ] || return 0
+	# The shape follows the current failing run only (run_refs[0]); earlier
+	# streak runs are context and must not turn a test failure into a timeout.
+	trend_current_run_id="$(jq -r '.run_refs[0].run_id // "" | tostring' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+	rm -rf "${trend_dir}"
+	mkdir -p "${trend_dir}" || return 1
+	printf '%s' "${SIGNATURE:-}" > "${trend_dir}/signature.txt" || return 1
+	printf '%s' "${FAILING_TESTS_JSON:-}" > "${trend_dir}/failing_tests.json" || return 1
+	if [ -s "${SUMMARIES_FILE:-}" ]; then
+		while IFS= read -r trend_run_id; do
+			[[ "${trend_run_id}" =~ ^[0-9]+$ ]] || continue
+			case "${trend_seen_ids}" in *" ${trend_run_id} "*) continue ;; esac
+			trend_seen_ids="${trend_seen_ids}${trend_run_id} "
+			if [ -s "${LOG_DIR}/run-${trend_run_id}-info.json" ]; then
+				trend_args+=(--failed-run "${LOG_DIR}/run-${trend_run_id}-info.json")
+			fi
+			if [ "${trend_run_id}" = "${trend_current_run_id}" ] && [ -s "${LOG_DIR}/run-${trend_run_id}-jobs.json" ] \
+				&& jq -e '[(if type == "object" then (.jobs // []) else . end)[]? | objects | .conclusion?] | any(. == "timed_out")' \
+					"${LOG_DIR}/run-${trend_run_id}-jobs.json" >/dev/null 2>&1; then
+				trend_conclusion="timed_out"
+			fi
+		done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+	fi
+	if [ -s "${fetched_ids_file}" ]; then
+		while IFS= read -r trend_run_id; do
+			[[ "${trend_run_id}" =~ ^[0-9]+$ ]] || continue
+			if [ -s "${linked_dir}/run-${trend_run_id}.json" ]; then
+				trend_args+=(--linked-run "${linked_dir}/run-${trend_run_id}.json")
+			fi
+		done < "${fetched_ids_file}"
+	fi
+	# Issue-linked runs exist only when this run's evidence pack fetched them.
+	if [ "${EVIDENCE_PACK_ENABLED:-false}" = true ] && [ -d "${trend_api_dir}" ]; then
+		for trend_api_file in "${trend_api_dir}"/issue-*.json; do
+			[ -s "${trend_api_file}" ] || continue
+			trend_issue_number="${trend_api_file##*/issue-}"
+			trend_issue_number="${trend_issue_number%.json}"
+			[[ "${trend_issue_number}" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+			trend_args+=(--issue-runs "${trend_issue_number}" "${trend_api_file}")
+		done
+		for trend_api_file in "${trend_api_dir}/runs-page-1.json" "${trend_api_dir}/runs-page-2.json"; do
+			[ -s "${trend_api_file}" ] || continue
+			trend_args+=(--issue-runs-page "${trend_api_file}")
+		done
+	fi
+	if ! trend_json="$(GH_RETRY_MAX_ATTEMPTS=1 python3 "${HEAL_PY}" run-time-trend --repo "${SOURCE_REPO}" \
+		--signature-file "${trend_dir}/signature.txt" --job-conclusion "${trend_conclusion}" \
+		--failing-tests-json "${trend_dir}/failing_tests.json" --ratio "${TREND_RATIO}" \
+		--out "${trend_dir}/trend.md" "${trend_args[@]}" 2>/dev/null)" \
+		|| ! jq -e 'type == "object" and (.outcome | type == "string")' <<< "${trend_json}" >/dev/null 2>&1; then
+		log "trend outcome=partial reason=helper_failed"
+		return 0
+	fi
+	trend_outcome="$(jq -r '.outcome' <<< "${trend_json}" | tr -cd 'a-z_' | head -c 20)"
+	case "${trend_outcome}" in ok|partial|skipped) ;; *) trend_outcome="partial" ;; esac
+	trend_reason="$(jq -r '.reason // ""' <<< "${trend_json}" | tr -cd 'a-z_' | head -c 40)"
+	[ -n "${trend_reason}" ] || trend_reason="malformed"
+	trend_shape="$(jq -r '.shape // ""' <<< "${trend_json}" | tr -cd 'a-z_' | head -c 20)"
+	trend_workflows="$(jq -r '(.workflows // 0) | tostring' <<< "${trend_json}" 2>/dev/null || true)"
+	[[ "${trend_workflows}" =~ ^[0-9]{1,3}$ ]] || trend_workflows=0
+	trend_pages="$(jq -r '(.pages // 0) | tostring' <<< "${trend_json}" 2>/dev/null || true)"
+	[[ "${trend_pages}" =~ ^[0-9]{1,3}$ ]] || trend_pages=0
+	trend_regression="false"
+	[ "$(jq -r '.regression == true' <<< "${trend_json}" 2>/dev/null)" != true ] || trend_regression="true"
+	trend_history="complete"
+	[ "$(jq -r '.history == "truncated"' <<< "${trend_json}" 2>/dev/null)" != true ] || trend_history="truncated"
+	log "trend outcome=${trend_outcome} reason=${trend_reason} shape=${trend_shape:-unknown} workflows=${trend_workflows} pages=${trend_pages} regression=${trend_regression} history=${trend_history}"
+	if [ "${trend_outcome}" != skipped ] && [ -s "${trend_dir}/trend.md" ]; then
+		TREND_FILE="${trend_dir}/trend.md"
+	fi
+	return 0
+}
+_heal_build_run_time_trend || { TREND_FILE=""; log "trend outcome=partial reason=helper_failed"; }
+
 # --- Run the diagnosis model -----------------------------------------------
 
 PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
@@ -3025,6 +3503,20 @@ if [ "${CLASSIFICATION}" = "transient" ] \
 	} > "${DIAG_FILE}.tmp" && mv "${DIAG_FILE}.tmp" "${DIAG_FILE}"
 fi
 
+# Reproduction (P2 step 4): a failure the intake reproduced in the gate sandbox
+# (it fails at the failing SHA and passes at the last green SHA) is not
+# `transient`. Only `reproduced` changes the classification; every other
+# reproduction status is shown in the issue body and changes nothing.
+if [ "${CLASSIFICATION}" = "transient" ] && [ "${REPRODUCE_ENABLED:-false}" = true ] && [ "${REPRO_STATUS:-}" = "reproduced" ]; then
+	log "classification_remapped from=transient to=inconclusive reason=reproduced source=${SOURCE_LABEL} fp=${FP} gen=${GEN}"
+	CLASSIFICATION="inconclusive"
+	{
+		echo "> **Heal intake note:** the diagnosis below classified this failure as \`transient\`, but the heal intake reproduced it: the failing tests fail at the failing SHA and pass at the last green SHA (see \`## Reproduction\`). A re-run cannot clear it, so it was filed as \`inconclusive\`. Find the deterministic cause; a retry is not an accepted fix."
+		echo
+		cat "${DIAG_FILE}"
+	} > "${DIAG_FILE}.tmp" && mv "${DIAG_FILE}.tmp" "${DIAG_FILE}"
+fi
+
 # A validation_failure report never opens an issue in the source repository,
 # and a verdict that the failure is not a harness defect opens none here
 # either: it is bounced back to the consumer with the diagnosis. This runs
@@ -3250,6 +3742,22 @@ _open_issue()
 	rm -f "${title_file}" "${body_file}"
 	local compose_payload_file
 	compose_payload_file="$(_compose_payload_file)" || compose_payload_file="${PAYLOAD_FILE}"
+	# Evidence pack (P1): passed only when it is on and has text, so a
+	# switch-off body is byte-identical. compose-issue validates it with the body.
+	local -a evidence_pack_args=()
+	if [ "${EVIDENCE_PACK_ENABLED}" = true ] && [ -s "${EVIDENCE_PACK_FILE:-}" ]; then
+		evidence_pack_args=(--evidence-pack-file "${EVIDENCE_PACK_FILE}")
+	fi
+	# Reproduction (P2 step 4): same rule, so a switch-off body is byte-identical.
+	local -a reproduction_args=()
+	if [ "${REPRODUCE_ENABLED}" = true ] && [ -s "${REPRODUCTION_FILE:-}" ]; then
+		reproduction_args=(--reproduction-file "${REPRODUCTION_FILE}" --reproduction-tests-file "${RUNTIME_DIR}/reproduction/tests.txt")
+	fi
+	# Run-time trend (P3): same rule, so a switch-off body is byte-identical.
+	local -a trend_args=()
+	if [ "${TREND_ENABLED}" = true ] && [ -s "${TREND_FILE:-}" ]; then
+		trend_args=(--trend-file "${TREND_FILE}")
+	fi
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${compose_payload_file}" \
 		--diagnosis-file "${DIAG_FILE}" \
@@ -3264,7 +3772,7 @@ _open_issue()
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
-		--body-out "${body_file}"; then
+		--body-out "${body_file}" "${evidence_pack_args[@]}" "${reproduction_args[@]}" "${trend_args[@]}"; then
 		log "error issue_compose_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
 		tg_send_msg "Workflow failure heal FAILED to compose a safe issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		return 1
