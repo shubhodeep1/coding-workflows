@@ -13999,7 +13999,12 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
 
   if [ -n "${merge_err}" ]; then
     merge_err="$(printf '%s' "${merge_err}" | head -c 5000)"
-    jq --arg err "${merge_err}" '.final_merge_error = $err' \
+    # Store gh_retry's escaped "::warning::  stderr:" line decoded (#8505),
+    # as the refusal path below does; merge_err itself stays raw for it.
+    local merge_err_for_state=""
+    merge_err_for_state="$(printf '%s\n' "${merge_err}" \
+      | awk '{ line = $0; if (sub(/^::warning::[ \t]*stderr: /, "", line)) { gsub(/%0[AD]/, "\n", line); gsub(/%25/, "%", line) } print line }')"
+    jq --arg err "${merge_err_for_state}" '.final_merge_error = $err' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
 
