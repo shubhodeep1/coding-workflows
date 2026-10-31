@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:14001-14008 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The new `merge_err_for_state` decoder restores newlines and keeps `::error::` text, and it is stored in `.final_merge_error` without the flattening or sanitizing the refusal path applies. The value is rendered raw at line 16611 (\"Last recorded error\").\n  WHY: A multi-line gh error breaks the Markdown structure of the tracking comment. Severity disagreement: NIT (sonnet, openai, glm), MAJOR (gemini, minimax); the highest is used, written as high. The minimax reviewer also notes the early-return paths at 14016, 14026 and 14033 leave the value unsanitized.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:14005-14007 (and the render at line 16611) | severity=NIT | confidence=2\n  PROBLEM: The stored error is not flattened or stripped of backticks, unlike `merge_refusal_detail` on the refusal path. A multi-line GitHub error therefore renders with its line breaks in the tracking comment.\n  WHY: This is cosmetic only. The stored value was multi-line before this PR too, so it is not a regression.\n- HARDENING_SUGGESTIONS: pipe the decoded text through `tr '\\n\\r' '  '` before the `jq` write at line 14005 (about 1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:14001-14005 | severity=MAJOR | confidence=3\n  PROBLEM: The error message is decoded and persisted in JSON, but it can contain newlines that break Markdown tables when interpolated.\n  WHY: `merge_err_for_state` restores newlines via `gsub(/%0[AD]/, \"\\n\", line)`. When the value is interpolated into a tracker comment, the newlines break the table structure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:14004-14008 (stored via 14007, rendered at 16611; early-return paths at 14016, 14026, 14033) | severity=MAJOR | confidence=4\n  PROBLEM: The `merge_err_for_state` decoder at 14005-14006 only strips the `::warning::  stderr:` prefix and decodes `%0A`, `%0D` and `%25`. It does not flatten newlines, strip the remaining `::error::` prefixes, drop backticks or control characters, or cap length. The early-return paths at 14016, 14026 and 14033 keep the unsanitized value in `.final_merge_error`.\n  WHY: A multi-line gh error breaks the bullet at 16611 and puts a raw `::error::` prefix in the operator-visible line. The refusal path at 14053-14060 applies the sanitization that the inline comment says it mirrors.\n- scripts/orchestrate_poll_process.sh:14004-14008 combined with 14016-14037 | severity=MAJOR | confidence=4\n  PROBLEM: The early-return error paths at 14016, 14026 and 14033 do not apply the same flatten/trim/cap steps as the refusal-path handler at 14053-14060. The two paths therefore produce different `.final_merge_error` payloads from the same `merge_err` source.\n  WHY: A multi-line gh error on a head-moved, mergeable-false or mergeable-unknown early return leaves a non-flattened value in state. The comment at 16611 then renders as broken Markdown.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:14005-14007 (rendered at 16611) | severity=NIT | confidence=4\n  PROBLEM: The new decoder restores embedded newlines in `merge_err_for_state`. The value is later interpolated into a Markdown comment without flattening or sanitizing.\n  WHY: A multi-line GitHub CLI error can add unintended Markdown structure to the \"Last recorded error\" comment when final-merge attempts are exhausted.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:14000-14009 (renderer at 16596/16611; contrast with the flattened write at 14053-14068) | severity=NIT | confidence=3\n  PROBLEM: The new decode stores `.final_merge_error` as multi-line text and keeps the leading `::error::gh command failed after ...` line. The refusal path stores a flattened, one-line, sanitized version in the same field (lines 14057-14060). The renderer at 16611 interpolates the field raw.\n  WHY: A multi-line GitHub error can inject list or code-fence structure into the \"Last recorded error\" bullet and push the \"Manual intervention required\" paragraph out of shape. The state path now writes a different shape into the same key.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7c94c119e34ffdb0091096da2e9f9690d04fd0f84cd4a8dc128981ba23422281",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8513,
+    "run_id": "41180285022",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41180285022",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031074316_225215caf5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8513,
+    "run_id": "41180285022"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T07:43:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
