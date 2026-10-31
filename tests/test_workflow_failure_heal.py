@@ -10715,6 +10715,8 @@ def test_reproduction_switch_defaults_and_workflow_wiring() -> None:
 	assert "gh " not in runner and "gh_retry" not in runner
 	assert runner.count('python3 "${HEAL_PY}" last-green-run') == 1
 	assert "-u GH_TOKEN -u GITHUB_TOKEN" in runner and "HEAL_SOURCE_DIR" not in runner
+	# heal_reproduce.sh lets an inherited seconds value replace the clamped minutes.
+	assert "-u WORKFLOW_HEAL_REPRODUCE_TIMEOUT_SECS" in runner
 	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
 	intake_job, scan_job = workflow.split("\n  recovery-scan:\n", 1)
 	for line in P2_ENV_LINES:
