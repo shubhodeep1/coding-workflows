@@ -331,8 +331,8 @@ def test_check_recurred_from_failed_job_reopens_in_planning(fake, monkeypatch, t
 	assert body.startswith(ppv.HEADER_FAILED + "\n") and "actions/runs/502" in body and "release-gate" in body
 	assert ppv.marker_line(dict(MARKER, state="recurred")) in body.split("\n")
 	assert fake.writes()[2] == [f"repos/{REPO}/issues/12/labels/ai%3Averify-pending", "-X", "DELETE"]
-	# list + comments + workflow runs + compare + jobs + 3 writes; within 1 + 8 x MAX_PER_TICK.
-	assert len(fake.calls) == 8 and len(fake.calls) <= 1 + 8 * 3
+	# list + comments + workflow runs + compare + jobs + 3 writes; within 1 + 9 x MAX_PER_TICK.
+	assert len(fake.calls) == 8 and len(fake.calls) <= 1 + 9 * 3
 	queries = [e for e in fake.endpoints() if "/actions/workflows/" in e]
 	assert queries == [f"repos/{REPO}/actions/workflows/release-gate.yml/runs?branch=main&status=completed"
 		f"&created=%3E%3D2026-10-20T10%3A00%3A00Z&per_page=100"]
