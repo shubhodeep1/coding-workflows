@@ -6050,8 +6050,8 @@ def last_green_run(
 		``request_failed``, ``malformed``, ``no_success_run``, ``same_sha`` or
 		``newer_than_failure``.
 	- API calls: exactly one single-attempt (no retry) REST GET,
-		``repos/<repo>/actions/workflows/<id>/runs?status=success&branch=<b>&per_page=1``,
-		or zero when the input is invalid. It is counted in the job's
+		``repos/<repo>/actions/workflows/<id>/runs?status=success&branch=<b>&per_page=1``
+		(plus ``created=<<before>`` when ``before`` parses), or zero when the input is invalid. It is counted in the job's
 		``GH_PAT_BUDGET`` start/end delta like every other call of the job. No
 		existing intake read (run/jobs GETs, linked-run reads, branch-progress
 		compare, evidence-pack reads) returns a workflow-scoped list of
@@ -6069,6 +6069,11 @@ def last_green_run(
 		"gh", "api", "--method", "GET", f"repos/{repo}/actions/workflows/{workflow_text}/runs",
 		"-f", "status=success", "-f", f"branch={branch}", "-F", "per_page=1",
 	]
+	# A green run created after the failing run is no baseline: bound the
+	# search server-side so the one GET returns the newest green run before it.
+	before_bound = _parse_iso(before) if before else None
+	if before_bound is not None:
+		argv += ["-f", f"created=<{_iso(before_bound)}"]
 	runner = run_gh if run_gh is not None else _last_green_run_gh
 	try:
 		completed = runner(argv, timeout)

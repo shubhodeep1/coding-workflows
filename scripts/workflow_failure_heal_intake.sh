@@ -136,7 +136,7 @@
 #   WORKFLOW_HEAL_REPRODUCE_ENABLED       default "false": only "true" re-runs the extracted failing
 #                                         tests (scripts/heal_reproduce.sh) at the failing SHA against
 #                                         the workflow's last green SHA and adds `## Reproduction`
-#   WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES reproduction wall time (default 10; the helper clamps 1-60)
+#   WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES reproduction wall time (default 10; the intake clamps 1-20)
 #   WORKFLOW_HEAL_REPRODUCE_SCRIPT        reproduction helper (default: heal_reproduce.sh next to this script; tests)
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
@@ -3080,20 +3080,21 @@ _heal_run_reproduction()
 		if [ ! -f "${repro_helper}" ] || [ -L "${repro_helper}" ]; then
 			_heal_write_unverified_reproduction "${repro_raw_file}" "${repro_tests_file}" helper_missing || true
 		else
-			# The helper clamps its own wall to 1-60 minutes; the outer guard sits
-			# 5 minutes above it so the helper's cleanup normally runs first.
+			# The intake caps the wall at 20 minutes (the helper allows 1-60) so the
+			# intake job's timeout covers it; the outer guard sits 5 minutes above
+			# it so the helper's cleanup normally runs first.
 			if [[ "${REPRODUCE_TIMEOUT_MINUTES}" =~ ^[0-9]{1,4}$ ]]; then
 				repro_wall=$((10#${REPRODUCE_TIMEOUT_MINUTES}))
 			else
-				repro_wall=60
+				repro_wall=20
 			fi
 			[ "${repro_wall}" -ge 1 ] || repro_wall=1
-			[ "${repro_wall}" -le 60 ] || repro_wall=60
+			[ "${repro_wall}" -le 20 ] || repro_wall=20
 			rm -f "${repro_raw_file}"
 			repro_rc=0
 			timeout --kill-after=30s "$((repro_wall * 60 + 300))" \
 				env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \
-				WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES="${REPRODUCE_TIMEOUT_MINUTES}" \
+				GIT_TERMINAL_PROMPT=0 WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES="${repro_wall}" \
 				bash "${repro_helper}" --tests-file "${repro_tests_file}" \
 				--sha "${HEAD_SHA}" --baseline "${repro_green_sha}" --out "${repro_raw_file}" < /dev/null 1>&2 || repro_rc=$?
 			if [ "${repro_rc}" -eq 124 ] || [ "${repro_rc}" -eq 137 ]; then

@@ -7,7 +7,8 @@ The heal issue gets a `## Reproduction` section, marked as untrusted evidence, w
 | --- | --- |
 | Default | off (`WORKFLOW_HEAL_REPRODUCE_ENABLED=false`) |
 | Extra GitHub API calls | at most 1 per report (the last-green lookup), none when no failing tests were extracted |
-| Wall time | 10 minutes (`WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES`, clamped 1-60) |
+| Wall time | 10 minutes (`WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES`, clamped 1-20 by the intake) |
+| Intake job timeout | 156 minutes (was 130), to cover the reproduction wall |
 | Log line | `WORKFLOW_HEAL reproduction outcome=<status> reason=<reason> tests=<n> [baseline=<reason>]` |
 
 What this means for operators: with the switch off the heal issue body and the API calls are byte-identical to before. Test code only runs in the network-less, credential-free gate container.
