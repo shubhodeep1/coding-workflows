@@ -25,6 +25,9 @@ env:
   PERSIST_REPAIR_LOOP_ENABLED: ${{ vars.PERSIST_REPAIR_LOOP_ENABLED || 'false' }}
   # Repair loop (issue #8427, P3): repair turns cap, clamped to 1..5.
   PERSIST_REPAIR_MAX_TURNS: ${{ vars.PERSIST_REPAIR_MAX_TURNS || '3' }}
+  # Evidence packs (issue #8427, P4): default off; see scripts/evidence_pack.py.
+  PERSIST_EVIDENCE_PACK_ENABLED: ${{ vars.PERSIST_EVIDENCE_PACK_ENABLED || 'false' }}
+  PERSIST_EVIDENCE_PACK_MAX_BYTES: ${{ vars.PERSIST_EVIDENCE_PACK_MAX_BYTES || '12000' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: implement
   # Unattended §13: no Python bytecode in the checkout. Host steps import the
@@ -1479,7 +1482,7 @@ jobs:
           mkdir -p scripts
           mkdir -p -- "${RUNTIME_DIR}/host_python"
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh attempt_journal.py acceptance_check.py gh_api_retry.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh attempt_journal.py acceptance_check.py evidence_pack.py gh_api_retry.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -2870,6 +2873,15 @@ jobs:
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
+      - name: Build evidence pack
+        if: env.PERSIST_EVIDENCE_PACK_ENABLED == 'true' && env.SKIP_IMPLEMENT != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/evidence_pack.py" build --repo "${GITHUB_REPOSITORY}" \
+            --plan-file "${PLAN_FILE}" --repo-root . --out "${RUNTIME_DIR}/evidence_pack.txt" || true
+
       - name: Run Codex implementation
         if: env.SKIP_IMPLEMENT != 'true'
         id: implement_run
@@ -3197,6 +3209,9 @@ jobs:
           fi
           if [ "${HEAL_ROUTE:-false}" = true ]; then
             cat "${RUNTIME_DIR}/heal_evidence.md" >> "${CODEX_PROMPT_FILE}"
+          fi
+          if [ "${PERSIST_EVIDENCE_PACK_ENABLED:-false}" = "true" ] && [ -s "${RUNTIME_DIR}/evidence_pack.txt" ]; then
+            { echo; cat "${RUNTIME_DIR}/evidence_pack.txt"; } >> "${CODEX_PROMPT_FILE}"
           fi
 
           # Safety net: codex-cli hard-caps `turn/start` stdin at 1,048,576

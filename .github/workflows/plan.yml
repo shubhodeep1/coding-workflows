@@ -20,6 +20,9 @@ env:
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
   # Done-check (issue #8427, P2): default off; see scripts/acceptance_check.py.
   PERSIST_ACCEPTANCE_ENABLED: ${{ vars.PERSIST_ACCEPTANCE_ENABLED || 'false' }}
+  # Evidence packs (issue #8427, P4): default off; see scripts/evidence_pack.py.
+  PERSIST_EVIDENCE_PACK_ENABLED: ${{ vars.PERSIST_EVIDENCE_PACK_ENABLED || 'false' }}
+  PERSIST_EVIDENCE_PACK_MAX_BYTES: ${{ vars.PERSIST_EVIDENCE_PACK_MAX_BYTES || '12000' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -653,6 +656,21 @@ jobs:
             fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional done-check helper ${f} unavailable on ${SCRIPT_REF}; plans carry no done-check."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
+          # Evidence-pack helper (issue #8427, P4): optional, so a support ref
+          # without it never fails planning while PERSIST_EVIDENCE_PACK_ENABLED is off.
+          for f in evidence_pack.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional evidence-pack helper ${f} unavailable on ${SCRIPT_REF}; prompts carry no evidence pack."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"

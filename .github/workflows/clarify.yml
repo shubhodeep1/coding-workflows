@@ -19,6 +19,9 @@ env:
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+  # Evidence packs (issue #8427, P4): default off; see scripts/evidence_pack.py.
+  PERSIST_EVIDENCE_PACK_ENABLED: ${{ vars.PERSIST_EVIDENCE_PACK_ENABLED || 'false' }}
+  PERSIST_EVIDENCE_PACK_MAX_BYTES: ${{ vars.PERSIST_EVIDENCE_PACK_MAX_BYTES || '12000' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -498,6 +501,26 @@ jobs:
             esac
             _fetched_scripts+=("${f}")
           done
+
+          # Evidence-pack helpers (issue #8427, P4): optional, so a support ref
+          # without them never fails clarification while PERSIST_EVIDENCE_PACK_ENABLED
+          # is off. The host copies run beside the journal and retry helpers they import.
+          for f in evidence_pack.py targeted_file_context.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional evidence-pack helper ${f} unavailable on ${SCRIPT_REF}; prompts carry no evidence pack."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}"
+            _fetched_scripts+=("${f}")
+          done
+          if [ -f "${CLARIFY_HOST_PYTHON_DIR}/evidence_pack.py" ]; then
+            install -m 0755 scripts/attempt_journal.py scripts/gh_api_retry.py "${CLARIFY_HOST_PYTHON_DIR}/"
+          fi
 
           # The image build context is fixed support code, never the issue checkout.
           mkdir -p scripts/clarify_sandbox
@@ -1416,6 +1439,20 @@ jobs:
             bash scripts/workflow_failure_heal_evidence.sh
           fi
 
+      - name: Build evidence pack
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true') && env.PERSIST_EVIDENCE_PACK_ENABLED == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ -f "${CLARIFY_HOST_PYTHON_DIR}/evidence_pack.py" ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/evidence_pack.py" build --repo "${GITHUB_REPOSITORY}" \
+              --default-branch "${DEFAULT_BRANCH:-}" --text-file "${ISSUE_CONTEXT_FILE}" --repo-root . --out "${RUNTIME_DIR}/evidence_pack.txt" || true
+          else
+            echo "PERSIST evidence_pack outcome=skipped reason=helper_absent"
+          fi
+
       # scripts/clarify_isolated_run.sh builds scripts/clarify_sandbox/Dockerfile
       # (FROM node:<tag>) with a plain `docker build`, which on a fresh runner
       # is an anonymous Docker Hub pull. Docker Hub answered 429 Too Many
@@ -1643,6 +1680,10 @@ jobs:
 
           if [ "${HEAL_ROUTE:-false}" = true ]; then
             cat "${RUNTIME_DIR}/heal_evidence.md" >> "${CODEX_PROMPT_FILE}"
+          fi
+          if [ "${PERSIST_EVIDENCE_PACK_ENABLED:-false}" = "true" ] && [ -s "${RUNTIME_DIR}/evidence_pack.txt" ]; then
+            # Evidence pack (issue #8427, P4): fenced, after the dynamic context.
+            { echo; cat "${RUNTIME_DIR}/evidence_pack.txt"; } >> "${CODEX_PROMPT_FILE}"
           fi
 
           if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
