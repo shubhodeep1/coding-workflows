@@ -6810,15 +6810,17 @@ def parse_suspect_compare(compare: Any) -> dict[str, Any]:
 	raw_commits = compare.get("commits") if isinstance(compare.get("commits"), list) else []
 	parsed = [entry for entry in (_suspect_commit_entry(item) for item in raw_commits) if entry is not None]
 	total = compare.get("total_commits")
-	if not isinstance(total, int) or isinstance(total, bool) or total < len(parsed):
-		total = len(parsed)
+	if not isinstance(total, int) or isinstance(total, bool) or total < len(raw_commits):
+		total = len(raw_commits)
 	result["commits"] = parsed[-SUSPECT_COMMITS_MAX:]
 	result["total_commits"] = total
 	result["commits_truncated"] = total > len(result["commits"])
 	# An unpaginated compare returns only the oldest page of a long range, so
 	# its tail is then not the newest part of the range.
-	result["commits_page_truncated"] = total > len(parsed)
-	result["commits_returned"] = len(parsed)
+	# Count what GitHub listed, not what survived validation, so a dropped
+	# malformed entry is not reported as an unlisted newer commit.
+	result["commits_page_truncated"] = total > len(raw_commits)
+	result["commits_returned"] = len(raw_commits)
 	raw_files = compare.get("files") if isinstance(compare.get("files"), list) else []
 	files = [entry for entry in (_suspect_file_entry(item) for item in raw_files[:SUSPECT_COMPARE_FILES_MAX]) if entry is not None]
 	result["files"] = files
@@ -6953,7 +6955,9 @@ def suspect_commits(
 		lookup only when ``last_green`` is None (``repos/<repo>/actions/workflows/<id>/runs``,
 		through :func:`last_green_run`), then ``repos/<repo>/compare/<green>...<failing>``
 		once, then ``repos/<repo>/commits?sha=<default>&since=<day>T00:00:00Z&until=<day+1>T00:00:00Z&per_page=50``
-		only when the trend line says ``regression=true``. Zero for invalid
+		only when the trend line says ``regression=true`` (without ``sha`` when
+		no ``default_branch`` is passed, so GitHub uses ``repo``'s own default
+		branch, as for a consumer report). Zero for invalid
 		input. Counted in the job's ``GH_PAT_BUDGET`` start/end delta; with the
 		trend's at most 6 page reads, P3 makes at most 9 calls per report.
 		Audited existing reads: the branch-progress compare is
@@ -6964,8 +6968,8 @@ def suspect_commits(
 		with no compare call; a failed or unparsable compare gives
 		``partial/compare_failed|malformed`` and no section; a failed commits
 		read keeps the section (without the slow-day list) and gives
-		``partial/slow_day_commits_failed``; a missing default branch skips
-		that call with ``partial/default_branch_unavailable``.
+		``partial/slow_day_commits_failed``; a passed but invalid default
+		branch skips that call with ``partial/default_branch_unavailable``.
 
 	``run_gh(argv, timeout)`` is injectable; the default runs ``gh`` with a list
 	argv through :func:`subprocess.run`, never a shell.
@@ -7026,13 +7030,16 @@ def suspect_commits(
 	slow_rows: list[dict[str, Any]] | None = None
 	if regressed and slow_day:
 		branch_name = default_branch if isinstance(default_branch, str) else ""
-		if not _SUSPECT_DEFAULT_BRANCH_RE.fullmatch(branch_name) or not is_valid_branch(branch_name):
+		if branch_name and (not _SUSPECT_DEFAULT_BRANCH_RE.fullmatch(branch_name) or not is_valid_branch(branch_name)):
 			reason = "default_branch_unavailable"
 		else:
 			until = (datetime.strptime(slow_day, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+			# No default branch passed (a consumer report): leave out `sha`, so
+			# GitHub lists the repository's own default branch.
+			sha_args = ["-f", f"sha={branch_name}"] if branch_name else []
 			argv = [
 				"gh", "api", "--method", "GET", f"repos/{repo}/commits",
-				"-f", f"sha={branch_name}", "-f", f"since={slow_day}T00:00:00Z", "-f", f"until={until}T00:00:00Z",
+				*sha_args, "-f", f"since={slow_day}T00:00:00Z", "-f", f"until={until}T00:00:00Z",
 				"-F", f"per_page={SUSPECT_SLOW_DAY_PER_PAGE}",
 			]
 			try:

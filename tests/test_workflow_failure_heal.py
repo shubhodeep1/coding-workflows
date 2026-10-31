@@ -11282,6 +11282,10 @@ def test_parse_suspect_compare_fixture_lists_8192_and_pipeline_files() -> None:
 	paged_section = heal.render_suspect_commits_section(paged, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
 	assert "newest 15 shown" not in paged_section and "GitHub listed only the oldest 20; the last 15 of those shown" in paged_section
 	assert capped["commits_page_truncated"] is False
+	# A dropped malformed entry is not reported as an unlisted newer commit.
+	dropped = heal.parse_suspect_compare({"status": "ahead", "total_commits": 4, "commits": [{"sha": "nothex"}] + many["commits"][:3]})
+	assert dropped["commits_page_truncated"] is False and dropped["commits_returned"] == 4 and len(dropped["commits"]) == 3
+	assert "GitHub listed only" not in heal.render_suspect_commits_section(dropped, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
 	# Hostile or malformed input never raises.
 	for bad in (None, [], "x", {"commits": []}, {"status": 1}):
 		assert heal.parse_suspect_compare(bad)["reason"] == "malformed"
@@ -11360,9 +11364,14 @@ def test_suspect_commits_slow_day_call_only_on_regression_and_budget() -> None:
 		summary, _section, _files = heal.suspect_commits(**_p3_suspect_kwargs(trend_text=text), last_green=cached, run_gh=_p3_suspect_runner(calls))
 		assert summary["last_green"] == "cached" and summary["calls"] == expected == len(calls)
 		assert not any("/actions/workflows/" in call[4] for call in calls)
-	# No default branch: the slow-day call is skipped, the section stays.
+	# No default branch (a consumer report): the slow-day call leaves out `sha`, so GitHub uses the repo's default branch.
 	calls.clear()
 	summary, section, _files = heal.suspect_commits(**_p3_suspect_kwargs(trend_text=P3_SUSPECT_REGRESSION_TEXT, default_branch=""), run_gh=_p3_suspect_runner(calls))
+	assert (summary["outcome"], summary["reason"], summary["slow_day_commits"], len(calls)) == ("ok", "ok", 2, 3) and section
+	assert not any(str(part).startswith("sha=") for part in calls[2]) and "since=2026-10-27T00:00:00Z" in calls[2]
+	# A passed but invalid default branch: the slow-day call is skipped, the section stays.
+	calls.clear()
+	summary, section, _files = heal.suspect_commits(**_p3_suspect_kwargs(trend_text=P3_SUSPECT_REGRESSION_TEXT, default_branch="bad branch"), run_gh=_p3_suspect_runner(calls))
 	assert (summary["outcome"], summary["reason"], len(calls)) == ("partial", "default_branch_unavailable", 2) and section
 
 

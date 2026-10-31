@@ -3336,7 +3336,8 @@ _heal_build_suspect_commits()
 	suspect_branch="$(printf '%s' "${HEAD_BRANCH:-}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
 	# PROVENANCE_DEFAULT_BRANCH is this repository's default branch: pass it only
 	# when SOURCE_REPO is this repository (as the reproduction and divergence
-	# steps do), else the helper reports partial/default_branch_unavailable.
+	# steps do); otherwise the helper leaves out `sha`, so GitHub lists the
+	# source repository's own default branch.
 	if [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
 		suspect_default_branch="$(printf '%s' "${PROVENANCE_DEFAULT_BRANCH:-}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
 	fi

@@ -1,7 +1,7 @@
 <!-- changelog: added -->
 - **Stall and timeout heal issues can now list suspect commits.** Behind `WORKFLOW_HEAL_TREND_ENABLED` (off by default) the heal intake adds a `## Suspect commits` section after the run-time trend: the commits merged since the failing workflow last passed (short SHA, subject and the PR number of a squash merge), the pipeline files that changed in that range (`scripts/`, `.github/workflows/`, `workflow-templates/`, `prompts/`), and, when the trend reports a regression, the default-branch commits merged on the first slow day. A heal plan can then start from the change that most likely made runs slower.
 
-Commit subjects and file names are shown as untrusted data and escaped. The first-slow-day list is shown only for reports about coding-workflows itself, because the intake knows only its own default branch. The intake reuses the last-green lookup the reproduction step already made, other failure shapes get no section and no extra API call, a failed read never blocks the issue, and with the switch off the heal issue is unchanged.
+Commit subjects and file names are shown as untrusted data and escaped. For a consumer report the first-slow-day list comes from that repository's own default branch. The intake reuses the last-green lookup the reproduction step already made, other failure shapes get no section and no extra API call, a failed read never blocks the issue, and with the switch off the heal issue is unchanged.
 
 | The numbers that matter | Value |
 | --- | --- |
