@@ -787,6 +787,21 @@ def test_merge_that_landed_despite_the_error_is_not_retried(path: str) -> None:
 	_assert_merge_succeeded(path, output, proc.stdout)
 
 
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_merge_at_another_head_is_not_the_judged_merge(path: str) -> None:
+	responses = _first_failure(path) + [_pr_state(state="closed", merged="true", head=OTHER)]
+	proc, output, calls, _sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert len(calls) == len(_expected_calls(path)) + 1
+	assert _retry_lines(proc.stdout)[-1].endswith("outcome=head_moved")
+	assert len(_error_lines(proc.stdout)) == 1
+	if path == "sync":
+		assert "judge_skip_reason=sync_merge_failed" in output.splitlines()
+		assert "MERGE_CONFIRMED=" in proc.stdout.splitlines()
+	else:
+		assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+
+
 @pytest.mark.parametrize("path", ("merge", "terminal"))
 def test_auto_merge_enabled_on_judged_head_counts_as_success(path: str) -> None:
 	responses = _first_failure(path) + [_pr_state(auto="true")]

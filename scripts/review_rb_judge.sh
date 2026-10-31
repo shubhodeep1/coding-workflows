@@ -2306,13 +2306,15 @@ rb_judge_merge_retry_transient() {
       open|closed) ;;
       *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head="" ;;
     esac
-    if [ "${_rb_retry_merged}" = "true" ]; then
-      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=already_merged"
-      return 0
-    fi
+    # Head first: a PR merged at a head other than the judged one is not the
+    # judge's merge, so it stays a failure (head_moved).
     if [ -n "${_rb_retry_head}" ] && [ "${_rb_retry_head}" != "${RB_JUDGED_HEAD_SHA:-}" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=head_moved"
       return 1
+    fi
+    if [ "${_rb_retry_merged}" = "true" ]; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=already_merged"
+      return 0
     fi
     if [ -n "${_rb_retry_state}" ] && [ "${_rb_retry_state}" != "open" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=not_open"
