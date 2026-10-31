@@ -257,11 +257,19 @@ def collect_paths(paths_file: str | None, text_file: str | None, plan_file: str 
 	# Trusted inputs: a planned new file is kept so open PRs adding it are found.
 	for line in _read_text(paths_file).splitlines():
 		add(line, allow_missing=True)
-	plan_text = _read_text(plan_file)
-	if plan_text:
-		for path in _tfc.extract_paths_from_plan(_likely_section(plan_text)):
-			add(path, allow_missing=True)
 	text = _read_text(text_file)
+	plan_text = _read_text(plan_file)
+	deferred: list[str] = []
+	if plan_text:
+		# With issue text present (a re-plan), the previous plan may take at most
+		# half the cap first so the current issue's paths still get slots; the
+		# rest of the plan's paths fill whatever the issue text leaves free.
+		plan_limit = MAX_PATHS // 2 if text else MAX_PATHS
+		for path in _tfc.extract_paths_from_plan(_likely_section(plan_text)):
+			if len(found) < plan_limit:
+				add(path, allow_missing=True)
+			else:
+				deferred.append(path)
 	if text and len(found) < MAX_PATHS:
 		# Untrusted issue text: every candidate must also be a tracked file.
 		ordered: list[str] = []
@@ -283,6 +291,8 @@ def collect_paths(paths_file: str | None, text_file: str | None, plan_file: str 
 		for path in ordered:
 			if path in tracked:
 				add(path)
+	for path in deferred:
+		add(path, allow_missing=True)
 	return found
 
 
@@ -389,12 +399,14 @@ class Builder:
 		if partial_clone is not None and partial_clone.returncode == 0 and partial_clone.stdout.strip() == "origin":
 			fetch.append("--filter=blob:none")
 		fetch += ["origin", f"+refs/heads/{branch}:{HISTORY_REF}"]
-		proc = _git(root, fetch)
-		if proc is None or proc.returncode != 0:
-			self.partial = True
-			return ["history unavailable"]
 		lines: list[str] = []
+		# The fetch is inside the try, so a SIGTERM (SystemExit) during it still
+		# deletes the private ref; deleting an absent ref is harmless.
 		try:
+			proc = _git(root, fetch)
+			if proc is None or proc.returncode != 0:
+				self.partial = True
+				return ["history unavailable"]
 			for path in paths[:MAX_PATHS]:
 				lines.append(f"{path}:")
 				log_proc = _git(root, ["log", "-n", str(LOG_PER_PATH), "--no-color", "--format=%h %as %s", HISTORY_REF, "--", path])

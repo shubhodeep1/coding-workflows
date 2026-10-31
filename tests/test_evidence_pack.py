@@ -460,3 +460,35 @@ def test_sigterm_still_deletes_the_history_ref(monkeypatch):
 		assert exc.value.code == 143
 	finally:
 		_signal.signal(_signal.SIGTERM, before)
+
+
+def test_replan_keeps_slots_for_issue_paths_when_previous_plan_is_long(world):
+	work = world["work"]
+	plan = world["tmp"] / "prev_plan.txt"
+	plan.write_text("## Files likely to change\n" + "".join(f"- `new/p{n}.py`\n" for n in range(12)), encoding="utf-8")
+	text = world["tmp"] / "issue.txt"
+	text.write_text("Touch `a.py` and `b.py`.\n", encoding="utf-8")
+	paths = ep.collect_paths(None, str(text), str(plan), work)
+	assert len(paths) == ep.MAX_PATHS
+	assert "a.py" in paths and "b.py" in paths
+	assert paths[:5] == [f"new/p{n}.py" for n in range(5)]
+	assert paths[5:7] == ["a.py", "b.py"] and paths[7:] == [f"new/p{n}.py" for n in range(5, 8)]
+	# Without issue text (the implement path) the plan may fill the whole cap.
+	assert ep.collect_paths(None, None, str(plan), work) == [f"new/p{n}.py" for n in range(10)]
+
+
+@pytest.mark.parametrize("stage", ["fetch", "log"])
+def test_sigterm_during_history_deletes_the_private_ref(world, monkeypatch, stage):
+	real_git = ep._git
+
+	def killing_git(root, args, timeout=ep.FETCH_TIMEOUT_SECS):
+		proc = real_git(root, args, timeout)
+		if args and args[0] == stage:
+			raise SystemExit(143)
+		return proc
+
+	monkeypatch.setattr(ep, "_git", killing_git)
+	monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+	with pytest.raises(SystemExit):
+		ep.Builder().history(world["work"], "main", ["a.py"])
+	assert _git(world["work"], "for-each-ref", "--format=%(refname)", "refs/persist") == ""
