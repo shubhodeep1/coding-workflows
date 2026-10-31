@@ -2982,6 +2982,15 @@ def test_unblock_workflow_keeps_protected_handoff_off_by_default() -> None:
 	assert steps["Judge the blocked item"]["env"]["UNBLOCK_PROTECTED_HANDOFF_ENABLED"] == "${{ vars.UNBLOCK_PROTECTED_HANDOFF_ENABLED || 'false' }}"
 
 
+def test_unblock_workflow_forwards_nothing_to_implement_close_switch() -> None:
+	# #8515: the #8470 kill switch must reach scripts/unblock_judge.sh from a repository variable.
+	import yaml
+
+	reusable = yaml.safe_load((ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8"))
+	steps = {step["name"]: step for step in reusable["jobs"]["unblock-judge"]["steps"]}
+	assert steps["Judge the blocked item"]["env"]["UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] == "${{ vars.UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED || 'true' }}"
+
+
 HANDOFF_VERDICT = {"verdict": "operator_step", "reason": "needs a grant", "instructions": "gate it",
 	"placeholder": "NIGHTLY_ENABLED", "operator_instructions": "grant the workflow paths"}
 

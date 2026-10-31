@@ -6,7 +6,7 @@ Issue #8470 was a CI-triage issue whose only fix was a CI re-run. Planning stopp
 | The numbers that matter | Value |
 | --- | --- |
 | Planning runs #8470 spent on the same block | 2 |
-| New kill switch | `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`; script environment, not yet forwarded by `unblock_judge.yml`) |
+| New kill switch | `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`; repository variable, forwarded by `unblock_judge.yml`) |
 | Error text kept on a failed heal issue create | last 300 bytes, one line |
 
 What this means for operators: a nothing-to-implement issue closes itself once its fix-up lands, instead of coming back as "Planning blocked: human input required". The next `issue_create_failed` page comes with a reason you can act on. Orchestrator items still resume as before.
