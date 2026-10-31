@@ -271,3 +271,42 @@ def test_gh_api_retry_final_stderr_is_single_escaped_bounded_line(tmp_path: Path
 	assert len(content.encode("utf-8")) <= EXCERPT_CAP
 	assert "::set-output name=x::y" in content
 	assert sorted(p.name for p in (tmp_path / "tmpdir").iterdir()) == []
+
+
+# The poller stores a refused final merge's error in `.final_merge_error`
+# (scripts/orchestrate_poll_process.sh, `merge_err_for_state`) after decoding
+# gh_retry's escaped "::warning::  stderr:" line. This pins that decode against
+# the real _gh_actions_escape / _gh_final_stderr_excerpt output, so a change to
+# the prefix or the escape alphabet fails here instead of leaving %0A / %25
+# text in the state file.
+POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+MERGE_ERR_FOR_STATE_AWK_RE = re.compile(
+	r"""merge_err_for_state="\$\(printf '%s\\n' "\$\{merge_err\}" \\\n\s*\| awk '(?P<prog>[^']+)'"""
+)
+
+
+def test_poller_final_merge_error_decode_inverts_gh_retry_escape(tmp_path: Path) -> None:
+	match = MERGE_ERR_FOR_STATE_AWK_RE.search(POLLER.read_text(encoding="utf-8"))
+	assert match is not None
+	capture = tmp_path / "capture"
+	capture.write_text("a\nb% literal %0A\rc", encoding="utf-8")
+	env = _setup(tmp_path, b"")
+	produced = _run(
+		tmp_path,
+		env,
+		"echo '::error::gh command failed after 1 attempts: gh pr merge 1'; "
+		f"echo \"::warning::  stderr: $(_gh_actions_escape \"$(_gh_final_stderr_excerpt '{capture}')\")\"",
+	)
+	assert produced.returncode == 0, produced.stderr
+	decoded = subprocess.run(
+		["awk", match.group("prog")],
+		input=produced.stdout,
+		capture_output=True,
+		text=True,
+		check=True,
+	).stdout
+	assert decoded == (
+		"::error::gh command failed after 1 attempts: gh pr merge 1\n"
+		# %0D decodes to a newline too, as in the refusal path.
+		"a\nb% literal %0A\nc\n"
+	)
