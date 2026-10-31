@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8561,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8561\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8563\",\"pr_number\":8563,\"branch\":\"ai/issue-8561\",\"run_id\":\"41232809460\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41232809460\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"agents.d/8427-p6-persist-budget.md\",\"changelog.d/8427-p6-persist-budget.md\",\"scripts/orchestrate_poll_process.sh\",\"scripts/persist_budget.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_orchestrate_poll_workflow_contract.py\",\"tests/test_persist_budget.py\"]}",
+  "fingerprint": "8f28fc76b0d5ddac617962bbca068fc94e1a0f0f9eb401104a4157a8c863a378",
+  "lineage": {
+    "issue_number": 8561,
+    "parent_ids": [],
+    "pr_number": 8563,
+    "run_id": "41232809460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41232809460",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8563"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261031203119_374dd1e7ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8561,
+    "level": "run",
+    "pr_number": 8563,
+    "run_id": "41232809460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8561: https://github.com/shubhodeep1/coding-workflows/pull/8563",
+  "timestamps": {
+    "created_at": "2026-10-31T20:31:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
