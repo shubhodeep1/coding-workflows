@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:864-874 | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_support_ref_branch` may return an empty string when the compare call returns an unexpected status.\n  WHY: The caller could proceed with an empty string and target the wrong branch; qwen_qwen3_7-plus and z-ai_glm-5_2 reviewed this concern and concluded the caller retains the default `stable` target.\n- scripts/editor_git_credentials.sh:132-135 | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Creating the marker file is not atomic with subsequent content writes, so interruption can leave an empty marker and skip credential cleanup.\n  WHY: The environment could be left with credentials stripped from the origin URL but not restored; qwen_qwen3_7-plus and z-ai_glm-5_2 reviewed this concern and concluded credentials are not stripped until after the marker is populated.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:864-874 | confidence=3\n  PROBLEM: The _support_ref_branch function may return an empty string when the compare call returns an unexpected status (e.g., neither behind/identical nor ahead/diverged).\n  WHY: The caller (lines 878-886) proceeds with an empty string, which might lead to incorrect fallback logic or targeting the wrong branch when comparison is inconclusive.\n- scripts/editor_git_credentials.sh:132-135 | confidence=4\n  PROBLEM: The creation of the marker file using (umask 077 && : > \"${marker}\") is not atomic with subsequent content writes.\n  WHY: An interruption between these operations leaves an empty marker. The restore function interprets an empty marker as \"nothing to restore\" and skips credential cleanup, stranding the environment in a hidden-credential state (credentials stripped from origin URL, but not restored) for subsequent workflow steps.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a6bea46005f878f7f94354434e4b1ad1797918881eaf24d739729d90b0d9e7e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37358079247",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37358079247",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005190628_9de7053c30",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37358079247"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T19:06:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

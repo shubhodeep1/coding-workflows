@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply verified recommendations from analysis/workflow-optimization-2026-09-25.md\",\"issues\":[{\"id\":\"gh-helpers-log-redaction\",\"title\":\"gh_helpers.sh: stop logging request-body arguments and raw invalid-JSON responses (SEC-001, SEC-002)\",\"priority\":1},{\"id\":\"merge-probe-unknown-siblings\",\"title\":\"Orchestrator merge probe: treat a failed sibling-PR lookup as unknown, not as no siblings (BUG-003)\",\"priority\":1},{\"id\":\"reviewer-attempt-result-line\",\"title\":\"review_run_reviewers.sh: emit one bounded REVIEWER_ATTEMPT_RESULT line per reviewer attempt with distinct failure classes\",\"priority\":2},{\"id\":\"prompt-bytes-first-diff\",\"title\":\"tests/test_assemble_prompt.py: report the first differing offset when assembled and legacy prompt bytes differ\",\"priority\":3},{\"id\":\"report-and-remove-source-doc\",\"title\":\"Record verdicts for analysis/workflow-optimization-2026-09-25.md and remove the source doc\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"gh-helpers-log-redaction\",\"to\":\"report-and-remove-source-doc\"},{\"from\":\"merge-probe-unknown-siblings\",\"to\":\"report-and-remove-source-doc\"},{\"from\":\"reviewer-attempt-result-line\",\"to\":\"report-and-remove-source-doc\"},{\"from\":\"prompt-bytes-first-diff\",\"to\":\"report-and-remove-source-doc\"}]}",
+  "fingerprint": "4f7b301db3e654ce875d0f3abe114731b72fe6a0f81d0c3e96ddfc56a2a446e5",
+  "lineage": {
+    "issue_number": 8094,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40154003459",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40154003459",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261025023250_5427326a53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8094,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40154003459"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply verified recommendations from analysis/workflow-optimization-2026-09-25.md' into 5 issues (tracking #8094)",
+  "timestamps": {
+    "created_at": "2026-10-25T02:32:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: I checked the finding against the source and it is a false positive for the template. `workflow-templates/ai-update-workflows.yml:58` gates the job on `vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false'`, which follows the Q49 decision that unset means on. `tests/test_update_workflows_template_gate.py:166` pins that gate exactly. The integrity risk the finding describes is already handled: before any fetched code runs, the updater verifies the release's signed sync manifest (Sigstore attestation, release commit, file hashes). It then delivers through an `auto/update-workflows-*` pull request, and a `verify` job enables auto-merge only after checking every changed file against the attested manifest (header lines 7-20). The header (lines 38-41) already says to set the variable to `'false'` to stop the job. Option B would silently stop wrapper and security updates for every consumer that relies on the default. Option C adds a second identifier for something the existing variable already does.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - workflow-templates/ai-update-workflows.yml (gate at line 58, opt-out header lines 31-41)\n    - tests/test_update_workflows_template_gate.py (`test_template_stays_backward_compatible`, line 166, asserts the exact `if:` string)\n    - changelog.d/<issue-number>-updater-hold-false-positive.md (new fragment)\n  steps:\n    - State in the plan that finding `updater-security-hold-reverted-default-on` (line 58, A08) is a false positive for the template. The default-on gate is the deliberate Q49 behaviour. Updates are protected by the signed sync manifest, the PR delivery and the `verify` job, not by a default-off hold.\n    - Leave line 58 (`!= 'false'`) and every identifier unchanged.\n    - Small edit to the header comment, lines 38-41 only. Say plainly that the job runs by default, and that a repository wanting to hold updates must set `AI_WORKFLOW_AUTO_UPDATE_ENABLED` to exactly `'false'`. Note that unset and any other value both mean the job runs. Keep the sentence \"The gate lives here, so a sync of this file cannot erase the hold.\" Change nothing outside the comment block.\n    - In `tests/test_update_workflows_template_gate.py`, add one test that reads the template header and checks two things: it contains the literal `AI_WORKFLOW_AUTO_UPDATE_ENABLED` and the literal `'false'` in the opt-out paragraph, and the job `if:` still equals `${{ vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false' }}`. Reuse the module's existing template loader and do not change existing tests.\n    - Add a changelog fragment that records the false-positive verdict and the clearer opt-out comment.\n    - Do not edit README.md or agents.md. They are outside the heal scope marker (`workflow-templates/ai-update-workflows.yml`, `tests/**`, `changelog.d/*.md`), and their wording already matches the default-on behaviour.\n  replaces_acceptance_criterion: \"Fix the source of the high finding\" is replaced by \"record the finding as a false positive, keep the gate, make the opt-out explicit in the comment and pin both gate and comment with a test\".\n  equivalence_argument: The finding implies that an unset variable lets unreviewed upstream code into the consumer. In fact every update is attested, hash-checked and delivered as a pull request that only the `verify` job can auto-merge, so the default-on gate does not weaken integrity. A consumer that wants a hold gets it by setting `'false'`, and a sync cannot remove that because the gate lives in this file. The new test fails if either the gate or the opt-out documentation regresses.\n  reversibility: Only a comment, a test and a changelog fragment change. If a maintainer later wants opt-in, option B is a one-line `if:` change plus updates to the tests and docs. Until then, binance-blessings can keep its hold by setting `AI_WORKFLOW_AUTO_UPDATE_ENABLED=false` in its repository variables.",
+  "fingerprint": "19f318eb02b5b6a1528d48b34fc3b6c4b14116b1a2cadf2963a9b53e5b1f96d0",
+  "lineage": {
+    "issue_number": 8117,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40176416733",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40176416733",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8117"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261025083508_7cc28908d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8117,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40176416733"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8117",
+  "timestamps": {
+    "created_at": "2026-10-25T08:35:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

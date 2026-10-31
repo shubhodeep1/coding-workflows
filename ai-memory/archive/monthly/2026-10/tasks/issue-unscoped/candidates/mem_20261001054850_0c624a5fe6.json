@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the PR description's testing details to match the shipped test invocation and measured results: 20 pytest files plus `tests/test_session_start_extract_repo_slug.py` (21 total), with the re-measured pass count and runtime.\n  expected_change_site: PR description body, Testing section\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: The PR body still reports 18 pytest files and \"1352 passed, 1 skipped (36 s)\"; `.github/workflows/mark-stable.yml:434-455` and `.github/workflows/test-and-mark-stable.yml:4289-4310` run 20 pytest files plus `tests/test_session_start_extract_repo_slug.py`; the changelog fragment reports 21 files; the Claude session comment reports 1384 passed, 1 skipped at 39.4 s.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: The PR description states the new step runs \"the 18 pytest files from the ci.yml Claude steps\" and reports the pre-autofix local run result (\"1352 passed, 1 skipped (36 s)\"). The implementation now runs 20 pytest files (plus test_session_start_extract_repo_slug.py for 21 total) after the round-1 autofix added test_audit_plans_command.py and test_ingest_implement_plan_lessons.py.\n  Expected change site: PR description body\n  Evidence of absence: The PR description (untrusted input block) still reads \"18 pytest files\" and \"1352 passed, 1 skipped (36 s)\". The changelog fragment and the Claude session comment correctly document the current count (21 files, 1384 passed, 39.4 s), but the PR body is stale.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR description's \"Testing (local)\" section must describe the implementation that the PR diff actually ships \u2014 the 20-file pytest invocation plus the standalone script test, and the local pass-count / wall-clock from a run of that exact invocation.\n  Expected change site: PR description body (the \"Testing (local)\" paragraph that currently reports \"18 pytest files\" and \"1352 passed, 1 skipped (36 s)\").\n  Evidence of absence: The PR body text still says \"running the 18 pytest files from the ci.yml Claude steps plus tests/test_session_start_extract_repo_slug.py\" and reports the pre-autofix run (\"1352 passed, 1 skipped (36 s)\"). After round 1's autofix (`a9c54ce`), both `mark-stable.yml:434-453` and `test-and-mark-stable.yml:4289-4308` now invoke 20 pytest files (the two added `tests/test_audit_plans_command.py` and `tests/test_ingest_implement_plan_lessons.py` round out the list at the tail). The matching changelog fragment (`changelog.d/5889-release-gates-claude-assets.md:9`) was updated in the same commit to \"21 (20 pytest files plus tests/test_session_start_extract_repo_slug.py)\" and the implementation note cites a re-measured run of 1384 passed, 1 skipped at 39.4 s \u2014 but the PR description was not refreshed alongside it. This leaves a TASK COMPLETENESS gap because the PR description is part of the shipped intent (it documents the change for reviewers and the changelog), and the inline summary is the only place readers see the pre-fix numbers.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The PR description\u2019s testing details should match the release-gate tests and results being delivered.\n  Expected change site: PR description, Testing section.\n  Evidence of absence: The current workflow steps run 20 pytest files plus `tests/test_session_start_extract_repo_slug.py` (`.github/workflows/mark-stable.yml:434-455` and `.github/workflows/test-and-mark-stable.yml:4289-4310`). The PR description still says 18 pytest files and reports the earlier result of 1352 passed, 1 skipped. Those details do not describe the final gate command.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The PR description says \"running the 18 pytest files from the ci.yml Claude steps plus tests/test_session_start_extract_repo_slug.py\" and reports \"1352 passed, 1 skipped (36 s)\"; synchronize these claims with the shipped implementation.\n  Expected change site: PR description\n  Evidence of absence: The implementation runs 20 pytest files plus tests/test_session_start_extract_repo_slug.py (21 total), and the changelog fragment reflects that count. The Claude session comment reports \"1384 passed, 39.4 s\". The PR body still says \"18 pytest files\" and \"1352 passed, 1 skipped (36 s)\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The PR description states \"running the 18 pytest files from the ci.yml Claude steps plus tests/test_session_start_extract_repo_slug.py\" and reports \"The new gate step's exact commands: 1352 passed, 1 skipped (36 s)\".\n  Expected change site: PR description (GitHub PR body, not a repository file)\n  Evidence of absence: After the autofix commit a9c54ce, the release gates now run 20 pytest files (the original 18 plus tests/test_audit_plans_command.py and tests/test_ingest_implement_plan_lessons.py), and the changelog fragment correctly says \"21 (20 pytest files plus ...)\" and \"about 40 seconds\". The PR body still says \"18 pytest files\" and \"1352 passed, 1 skipped (36 s)\", which no longer matches the shipped implementation. The Claude session that owns this PR should update the PR description via the GitHub API to say 20 pytest files and reflect the re-measured pass count.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "69796fc87558e70a63af115e5636a8ea26a9dbc0def73f34df64b1f910a9b3b1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5889,
+    "run_id": "36819865246",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36819865246",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001054850_0c624a5fe6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5889,
+    "run_id": "36819865246"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T05:48:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

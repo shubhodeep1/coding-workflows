@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should this fix be planned and implemented against? The failing test exists only on PR #6653's head branch.\nChoices:\nA. `ai/issue-6631`, the head branch of PR #6653. The fix lands on the PR, so its CI re-runs with the corrected test. (RECOMMENDED)\nB. The default branch (`main`). **Note:** the test is not on `main`, so this gives a no-op implementation unless PR #6653 merges first.\nC. Fix nothing here: close this issue and let PR #6653's own review/autofix loop repair the test from the failing CI check-run it already reads.",
+  "fingerprint": "f726909d373bddb9fbcf41a9a162919c0321c41f1835326393a5f9ff5d62e5c8",
+  "lineage": {
+    "issue_number": 7014,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38015039340",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38015039340",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010020028_0cf4c005a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7014,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38015039340"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7014 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T02:00:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

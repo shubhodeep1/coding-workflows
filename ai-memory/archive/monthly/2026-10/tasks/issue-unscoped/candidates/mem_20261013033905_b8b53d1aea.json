@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:891-908, 966-970, 1006-1026, line ~951 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Re-grant can resume an issue with a pending protected-path handoff before the pending-handoff check holds it.\n  WHY: If the current grant accepts the rejected paths, the re-grant path posts a resume command before the handoff check, bypassing the handoff\u2019s hold behavior.\n- scripts/unblock_judge.sh:894-899 | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The merged-fix-up arm incorrectly relies on the exit code of `unblock_try_regrant` to determine if a re-grant attempt was successful.\n  WHY: The reviewer reports that `unblock_try_regrant` always returns 0, so an actuation failure reaches `return 0` and skips the pending operator-handoff and protected-handoff checks.\n- scripts/unblock_actions.py:614-615 | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `PROTECTED_HANDOFF_VERDICTS` is referenced in `followup_handoff_ops` but is not defined in the module.\n  WHY: Any call to `followup_handoff_ops` will raise a `NameError` at runtime, causing the handoff action to crash.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:894-899 | confidence=5\n  PROBLEM: The merged-fix-up arm incorrectly relies on the exit code of `unblock_try_regrant` to determine if a re-grant attempt was successful.\n  WHY: `unblock_try_regrant` always returns 0, regardless of success or failure. The arm enters the `if unblock_try_regrant` body in both cases. When the attempt fails (e.g. actuation failure), the code proceeds to check `UNBLOCK_REGRANT_RESULT`, finds it is `failed`, and executes `return 0`, which terminates the arm entirely. This skips the pending operator-handoff check and the protected handoff check, leaving the issue blocked without creating a handoff comment or notifying an operator.\n- scripts/unblock_actions.py:614-615 | confidence=5\n  PROBLEM: `PROTECTED_HANDOFF_VERDICTS` is referenced in `followup_handoff_ops` but is not defined in the module.\n  WHY: Any call to `followup_handoff_ops` will raise a `NameError` at runtime, causing the handoff action to crash.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:891-904, 966-970; the pending-handoff check is at 1006-1026. | severity=MAJOR | confidence=5\n  PROBLEM: A pending operator handoff does not reliably hold the issue. The merged-fix-up path calls `unblock_try_regrant` before checking `.handoff_pending`; after the fix-up wait is marked done, later runs also reach the deterministic re-grant at lines 968-970 before the hold check.\n  WHY: If the current grant accepts the rejected paths while the issue remains `scope-blocked`, `unblock_try_regrant` runs `regrant_ops`, which invokes `reset_ops` and posts a resume command (`scripts/unblock_actions.py:831, 437-441`). The issue resumes without the person clearing the block, contrary to the handoff\u2019s hold behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh:891-908 (the `if unblock_try_regrant; then` block before the `if jq -e '.handoff_pending == true'` check) | severity=MAJOR | confidence=5\n  PROBLEM: The merged-fix-up arm tries `unblock_try_regrant` before checking whether a protected-path handoff is already pending. When the current guard now grants the rejected paths, `unblock_try_regrant` succeeds, posts the resume command, and returns \u2014 bypassing the pending-handoff check at line 905.\n  WHY: After a handoff is recorded (the hold marker `<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff run=<r> -->` is posted and the operator is paged), a later judge run can see that the grant now passes. The regrant path resumes the issue and marks the fix-up wait done, but the handoff marker is not cleared. The operator sees a stale handoff marker and acts on an already-resolved issue. The test `test_judge_merged_fixup_with_a_pending_hold_marks_the_wait_done` disables regrant (`UNBLOCK_JUDGE_REGRANT_ENABLED=\"false\"`), so it does not cover the case where both a pending handoff and a passing grant coexist. The existing deterministic regrant exit outside the fix-up wait (line ~951) also resumes before the handoff check, compounding the bypass.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b760efec9a21d24298e80b2da9db9b1d928797e54a16e52626815946c9393195",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7290,
+    "run_id": "38333195646",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38333195646",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013033905_b8b53d1aea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7290,
+    "run_id": "38333195646"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T03:39:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan\n\n**Planning ref:** `396b633fb0278de3c7d48dd9a179ac76b7a2e019` on `ai/issue-5144`; this matches the issue\u2019s integration-branch metadata. The auto-answer confirms there were no clarification questions.\n\n**Automation and wiring:** Extend the existing review scripts; add no script or workflow. `.github/workflows/internal-review.yml` invokes `review_autofix.yml` on `pull_request: synchronize` and `workflow_dispatch`, which already runs \u201cApply fixes with editor model.\u201d No supervisor, database gate, or future-removal registry entry is needed.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/review_untrusted_sandbox.sh`  \nScope-mode justification: Preserve the existing transfer guard and complete its diagnostic path rather than merely copying an unbounded stderr file. The additional bounded-reason handling is expected to cost \u226430 LOC and \u226410 minutes over that shortcut, with no dependency or external interface. This follows \u00a76\u2019s Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed priorities.\n\n### Findings and files likely to change\n\nThe failed run reports an incomplete sandbox transfer, but does not expose the rejection reason. The editable-install error is best-effort and does not establish the transfer cause. Locally, `review_untrusted_sandbox.sh` sets `review_sandbox_transfer_failed` before transfer; `review_apply_fixes.sh:2150\u20132152` exits on that marker before archiving attempt stderr at line 2535. `review_untrusted_workspace.py:217` reports only the exception type. Thus **lost diagnostics are verified; the underlying rejection is not**. ([github.com](https://github.com/shubhodeep1/coding-workflows/actions/runs/37183635297))\n\n- `scripts/review_untrusted_workspace.py`: Have `main()` add a fixed, path-free reason code for recognized transfer `ValueError`s, retaining the existing error prefix and exception type. Use a generic code for other exceptions; never print exception text or file paths.\n- `scripts/review_untrusted_sandbox.sh`: Capture the trusted transfer helper\u2019s diagnostic in a per-attempt file under `RUNTIME_DIR`. Reset it before transfer. Keep the marker-before-transfer and marker-removal-on-success behavior unchanged.\n- `scripts/review_apply_fixes.sh`: Before the marker-triggered exit, read only a validated, bounded reason from that file; emit it to the existing step-stderr evidence path and archive it with `editor_attempt_<n>.err`. If absent or malformed, report `unknown` and still exit nonzero.\n- `tests/test_review_autofix_review_pipeline_contract.py`: Extend the existing isolation tests rather than adding a test script.\n\n**Modules/data affected:** Only transient transfer diagnostics and existing editor failure evidence; no persisted schema, label, or state transition changes.\n\n**API/interface changes:** No external API or new environment variable. Preserve existing helper invocation, log prefix, marker, and exit behavior.\n\n**Data flow:** Trusted transfer helper \u2192 bounded reason file outside the sandbox \u2192 editor marker handler \u2192 existing `editor_stage_stderr.txt` and attempt-error evidence \u2192 failure report.\n\n## Decisions\n\n### D1 \u2014 Keep transfer rejection fail-closed\n- **Chosen:** Surface a trusted, bounded rejection reason before the existing nonzero exit; investigate the specific rejected condition separately once identified.\n- **Alternatives considered:** Retry or permit the transfer; dump all editor stderr; attribute the failure to the editable-install warning.\n- **Why:** None establishes that host writes are safe, and raw model stderr can contain forged diagnostics or sensitive material.\n\n## Security considerations\n\nThe disposable workspace is untrusted; the transfer helper and host runtime directory are the trust boundary. A model-created unsafe path or symlink, an oversized result, and a concurrent host-file change must continue to reject transfer without retrying partial writes. Read diagnostics only from the trusted helper\u2019s file, validate their format and length, and expose no paths, file contents, credentials, or raw exception messages. There is no new endpoint or authorization surface.\n\n## Risks and edge cases\n\n- A killed transfer may leave the marker but no diagnostic: report `unknown`, retain the failure.\n- A stale diagnostic from an earlier attempt must not be attributed to the current attempt.\n- The logged rejection may be legitimate. Change transfer validation only if the newly surfaced reason supports a reproducible erroneous-rejection case; do not weaken the guard speculatively.\n- No conflict was found between the issue\u2019s cited file paths and this checkout. `scripts/gh_helpers.sh` has a pre-existing worktree modification and is outside scope.\n\n## Testing and verification\n\nReproduce rejected transfers using the existing temporary host/workspace fixture: unsafe result path or symlink, and changed host baseline. Assert the specific safe reason reaches archived attempt stderr and the existing failure-evidence path; assert the marker still forces failure and host contents remain protected. Cover missing, malformed, forged, and stale diagnostics, plus successful-transfer cleanup. Run the focused pytest module and applicable pinned CI checks; do not treat an unpinned global validator as authoritative.\n\n**Pre-execution self-check:** The matching ref, existing invocation path, reusable helpers, test location, and fail-closed behavior are identified. No required input is missing.\n\nPLAN_SELF_CHECK: WARNING: The original transfer rejection reason was not retained, so a validation-rule correction cannot yet be justified.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2bfbc7a129d14285338e9302a1f58b0a28c97c5b23084b642f4357f6dec5cb9a",
+  "lineage": {
+    "issue_number": 6181,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37185362978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37185362978",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6181"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261004072538_f28eb5ef2a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6181,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37185362978"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6181",
+  "timestamps": {
+    "created_at": "2026-10-04T07:25:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

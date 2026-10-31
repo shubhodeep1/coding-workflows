@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:2947-2962 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `consumer-app-defect)` arm (line 2950, `_open_issue \"${SELF_REPO}\" \"${HEAD_BRANCH:-}\"`) passes the raw HEAD_BRANCH, so a release run on `promote-candidate` still files its heal issue with `Target branch: promote-candidate`. The new retarget exists only in the `workflow-defect|inconclusive)` arm (lines 2851-2858).\n  WHY: The pipeline-only ruleset refuses the merge, which reproduces the `merge_failed` loop this PR is meant to fix, and the new test covers only DIAG_WORKFLOW_DEFECT. Reviewers rated this MAJOR; it is mapped to high here, and confidence is the highest stated (4).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"a failed `workflow_run` on `promote-candidate` in this repo now targets the default branch\" (PR description, \"Change\" section; the README and changelog make the same claim for a failed release run)\n  expected_change_site: scripts/workflow_failure_heal_intake.sh, `consumer-app-defect)` arm (lines 2947-2962)\n  confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The retarget block at lines 2851-2858 lives only in the `workflow-defect|inconclusive)` arm, line 2950 still passes the un-retargeted `${HEAD_BRANCH:-}` to `_open_issue`, and tests/test_workflow_failure_heal.py:2226-2241 parametrizes only on DIAG_WORKFLOW_DEFECT. Either extend the fix to this arm or narrow the README/changelog wording.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh:2950 (`consumer-app-defect)` arm; retarget at 2851-2858) | severity=MAJOR | confidence=3\n  PROBLEM: The retarget covers only the `workflow-defect|inconclusive` arm. The `consumer-app-defect` arm passes the raw HEAD_BRANCH to `_open_issue` when ISSUE_NUMBER is empty.\n  WHY: A release run on `promote-candidate` still files a heal issue targeting the pipeline-only mirror, so the PR is unmergeable. The new test covers only DIAG_WORKFLOW_DEFECT. Suggested fix: apply the same mapping to `${PROVENANCE_DEFAULT_BRANCH:-main}` and log `target_branch_retarget`.\n- HARDENING: scripts/workflow_failure_heal_intake.sh line 217, `HEAL_PIPELINE_MIRROR_BRANCH=\"promote-candidate\"` is hardcoded. Suggested fix: allow an env override via `WORKFLOW_HEAL_PIPELINE_MIRROR_BRANCH`. HARDENING_RISK_SCORE: 1\n- TASK COMPLETENESS: NONE. Changing the base of existing PR #8221 is listed under \"Not in this PR\".\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_intake.sh:2947-2962 (specifically line 2950) | severity=MAJOR | confidence=4\n  PROBLEM: The `consumer-app-defect)` arm opens the heal issue with the raw `${HEAD_BRANCH:-}`, which equals `promote-candidate` for a release run. The retarget (lines 2851-2858) fires only in the `workflow-defect|inconclusive)` arm. Only `engine_fallback` remaps to workflow-defect (lines 2632-2635).\n  WHY: The ruleset refuses every PR against `promote-candidate`, reproducing the `merge_failed` loop from #8217 / PR #8221.\n- TASK_GAP:\n  Requirement: \"a failed `workflow_run` on `promote-candidate` in this repo now targets the default branch\" (PR description) and the README claim for failed release runs.\n  Expected change site: scripts/workflow_failure_heal_intake.sh, `consumer-app-defect)` arm around lines 2947-2962.\n  Evidence of absence: The retarget block at lines 2851-2858 is only in the `workflow-defect|inconclusive)` arm. Line 2950 is un-retargeted, and tests/test_workflow_failure_heal.py:2226-2241 covers only DIAG_WORKFLOW_DEFECT. The README and changelog promise broader coverage than the implementation, while the agents.md fragment uses the narrower wording.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"a failed `workflow_run` on `promote-candidate` in this repo now targets the default branch.\"\n  Expected change site: `scripts/workflow_failure_heal_intake.sh`, routing for `consumer-app-defect` when a release run has no `ISSUE_NUMBER`.\n  Evidence of absence: The retarget is added only under `workflow-defect|inconclusive` (lines 2845-2858). The unchanged `consumer-app-defect` route passes `${HEAD_BRANCH:-}` to `_open_issue` (lines 2947-2951), so a `promote-candidate` failure classified that way still targets the pipeline-only branch.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal_intake.sh:2950 (interacting with the retarget at 2851-2858; arm at lines 2947-2951) | severity=MAJOR | confidence=4\n  PROBLEM: The retarget lives only in the `workflow-defect|inconclusive)` arm. The `consumer-app-defect)` arm never touches `TARGET_BRANCH` and, with `-z \"${ISSUE_NUMBER}\"`, calls `_open_issue \"${SELF_REPO}\" \"${HEAD_BRANCH:-}\"` with the raw head branch.\n  WHY: The heal issue still targets `promote-candidate`, so the `merge_failed` loop recurs. The test at tests/test_workflow_failure_heal.py:2228-2241 runs only with DIAG_WORKFLOW_DEFECT.\n- TASK_GAP:\n  Requirement: PR description, \"a failed `workflow_run` on `promote-candidate` in this repo now targets the default branch \u2026 logs `target_branch_retarget from=promote-candidate to=<default> reason=pipeline_mirror_branch` and `target_branch_source=pipeline_mirror_branch`.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh, the `consumer-app-defect)` case arm (lines 2947-2951).\n  Evidence of absence: The retarget logic exists only in the `workflow-defect|inconclusive)` arm (lines 2851-2858). No hunk applies it to the `consumer-app-defect` arm's `_open_issue` call, and the test covers only the workflow-defect classification.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- HARDENING: scripts/workflow_failure_heal_intake.sh lines 2851-2858. `HEAL_MIRROR_RETARGET_BRANCH` can equal `HEAL_PIPELINE_MIRROR_BRANCH` if the default branch is misreported as the mirror, which makes the retarget a silent no-op that still logs `reason=pipeline_mirror_branch`. Suggested fix: guard the retarget with an inequality check or log a warning. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "62140223ad5413fca93813e4ecca3db49cbe3e52117be4feac7e01fef3e86cd5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8231,
+    "run_id": "40596595823",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40596595823",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027230139_044988c593",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8231,
+    "run_id": "40596595823"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T23:01:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

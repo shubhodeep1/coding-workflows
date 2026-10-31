@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- shellcheck_py-0.11.0.1-py2.py3-none-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl:entire file | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: An unreferenced vendored Python wheel was committed at the repository root.\n  WHY: The binary has no stated use, will be shipped to consumer repositories, and cannot be reviewed for provenance or supply-chain safety; minimax_minimax-m3 and qwen_qwen3_7-plus rated this BLOCKER, while google_gemini-3_1-flash-lite did not state a severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- shellcheck_py-0.11.0.1-py2.py3-none-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl:Entire binary file\n  PROBLEM: Accidental commitment of a vendored Python binary wheel.\n  WHY: This is a large, unreviewable binary artifact that serves no stated purpose in the repository, inflates the repository size, and introduces supply chain security risks when synced to consumer repositories.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- shellcheck_py-0.11.0.1-py2.py3-none-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl:entire file (new file at the repository root, binary blob, 0 bytes of textual diff content)\n  PROBLEM: A vendored Python wheel for the third-party `shellcheck_py` package was committed at the repository root. The PR description states the change is scoped to README trimming and explicitly says \"README.md itself is unchanged\", and the diff hunk summary lists the same five source/test/fragment files plus this wheel. No reference to this wheel exists in any source file, test, workflow, requirements manifest, or `pyproject.toml`. It is not mentioned in the PR description, the changelog fragment, or the agents.d fragment.\n  WHY: The `@stable` sync ships the entire repository tree to consumer repos via `update_workflows.yml`; this wheel would be replicated into every consumer even though nothing in this repo or any consumer pipeline imports it. As a binary blob that cannot be code-reviewed for provenance, its inclusion in a workflow-template repository raises supply-chain concern (the file name is a real PyPI release, but a deliberate swap would be invisible in a binary diff). The PR's stated scope is README trimming \u2014 a vendored dependency unrelated to that scope is a clear change-set defect.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- shellcheck_py-0.11.0.1-py2.py3-none-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl:entire file (binary, 0 bytes of diff text)\n  PROBLEM: A Python wheel binary was committed at the repository root but is not referenced by any repository code, mentioned in the PR description, or declared as a dependency in any manifest.\n  WHY: This is an accidentally committed vendored binary artifact. It will inflate the repository, sync to every consumer repository on the next @stable release (via workflow-templates/ai-update-workflows.yml), and cannot be reviewed for provenance or supply-chain safety. The PR description only mentions changes to the two README trimmers, agents.d/ and changelog.d/ fragments, and tests \u2014 no shellcheck dependency or binary is referenced.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "f79067f32f0788c17a576b91761a0062b99ccb6190f1d916039eabec53fa0df1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7173,
+    "run_id": "38135417152",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38135417152",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011115210_0945c4b393",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7173,
+    "run_id": "38135417152"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T11:52:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

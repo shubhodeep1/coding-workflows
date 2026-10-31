@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:287-315 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: If `scripts/claude_twin_sync.py` is deleted after rollout, the bootstrap fallback can run a later PR\u2019s permissive copy and allow protected-path edits to pass.\n  WHY: The guard only checks `.claude/` paths, so the deletion can pass and reactivate the untrusted fallback; severity differed between BLOCKER and MAJOR, and the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run the guard from an immutable, protected base commit in an isolated checkout; fail closed if its provenance cannot be verified.\" (Issue #5608, recommendation.)\n  expected_change_site: `.github/workflows/ci.yml` bootstrap fallback (lines 312-315)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  EVIDENCE: `.github/workflows/ci.yml` falls through to the PR checkout's copy when a trusted commit lacks the script; `scripts/claude_twin_sync.py:414` only examines `.claude/` paths; no test covers the post-rollout deletion scenario (`test_ci_step_bootstrap_warns_and_runs_the_checkout_copy` only tests the pre-rollout case).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml: lines 312-315 (bootstrap fallback) | severity=high | confidence=5\n  PROBLEM: The bootstrap fallback can run a later PR\u2019s permissive guard copy after `scripts/claude_twin_sync.py` is deleted from the base.\n  WHY: The guard only checks `.claude/` paths, so the deletion can pass and enable the untrusted fallback on subsequent PRs.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml: lines 312-315 (bootstrap fallback `twin_guard_script=\"scripts/claude_twin_sync.py\"`) and the candidate loop at lines 292-311 | severity=critical | confidence=5\n  PROBLEM: The bootstrap fallback can run a later PR\u2019s permissive guard copy after `scripts/claude_twin_sync.py` is deleted from the base.\n  WHY: The guard only diffs `.claude/` paths, so the deletion can pass and a subsequent PR can use the fallback to bypass the guard.\n- .github/workflows/ci.yml: lines 287-290 and 292-311 | severity=critical | confidence=4\n  PROBLEM: The bootstrap fallback is not time-gated and cannot distinguish a script that never existed from one deleted after rollout.\n  WHY: When the trusted commit lacks the script, the fallback remains available after #4804 merges.\n- TASK_GAP\n  Requirement: \"Run the guard from an immutable, protected base commit in an isolated checkout; fail closed if its provenance cannot be verified.\" (Issue #5608, recommendation.)\n  Expected change site: `.github/workflows/ci.yml` lines 287-315, the trusted guard-script selection and bootstrap fallback.\n  Evidence of absence: The step falls through to the PR checkout's copy when a trusted commit resolves and is readable but does not carry `scripts/claude_twin_sync.py`; the code does not enforce the time boundary the docs describe.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml: Lines 312-315; the fallback selects `scripts/claude_twin_sync.py` from the checkout whenever no trusted candidate contains it. The guard in `scripts/claude_twin_sync.py:414-415` checks only changes under `.claude/`. | severity=high | confidence=5\n  PROBLEM: Deleting the guard script after rollout makes the untrusted-checkout fallback available again.\n  WHY: The deletion is outside `.claude/`, so it can pass the existing guard; a later PR can supply a permissive script and change a protected hook and its twin.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/ci.yml: lines 312-315 (the bootstrap fallback `twin_guard_script=\"scripts/claude_twin_sync.py\"`) | severity=high | confidence=4\n  PROBLEM: Deleting `scripts/claude_twin_sync.py` after rollout can reactivate the bootstrap fallback and allow a later PR\u2019s permissive copy to pass protected-path edits.\n  WHY: `check_not_ahead` at line 414 (`git diff ... -- .claude/`) does not flag the deletion, and the workflow does not enforce the documented pre-#4804 boundary.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/ci.yml: lines 312-315 (the bootstrap fallback `twin_guard_script=\"scripts/claude_twin_sync.py\"`) | severity=high | confidence=4\n  PROBLEM: Deleting `scripts/claude_twin_sync.py` after rollout can reactivate the bootstrap fallback for subsequent PRs.\n  WHY: The guard only diffs `-- .claude`, so the deletion can pass and a later PR can supply permissive checkout content.\n- .github/workflows/ci.yml: lines 312-315 (the bootstrap fallback) | severity=high | confidence=4\n  PROBLEM: The fallback runs untrusted checkout content without a gate limiting it to the pre-#4804 window.\n  WHY: The code fires whenever no trusted candidate carries the script, including after a post-rollout deletion.\n- TASK_GAP\n  Requirement: \"Run the guard from an immutable, protected base commit in an isolated checkout; fail closed if its provenance cannot be verified.\" (Issue #5608, recommendation)\n  Expected change site: `.github/workflows/ci.yml` bootstrap fallback (lines 312-315)\n  Evidence of absence: The bootstrap fallback runs the checkout's copy instead of failing closed when no trusted commit carries the script; the `check` command at scripts/claude_twin_sync.py:414 only examines `.claude/` paths; no test covers the post-rollout deletion scenario (test_ci_step_bootstrap_warns_and_runs_the_checkout_copy only tests the pre-rollout case).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9aba35edd4ffcfb5869163844594104d965beddb971ca93691d34194d27749ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5653,
+    "run_id": "36797186494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36797186494",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001005353_53bfb0e020",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5653,
+    "run_id": "36797186494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T00:53:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

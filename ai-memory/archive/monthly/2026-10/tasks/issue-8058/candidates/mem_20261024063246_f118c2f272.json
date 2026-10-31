@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a data-only edit to a smoke-test canary file.\n\n## Data structures affected\n`tests/e2e_smoke_canary_b.txt` should hold exactly two lines:\n```\nstatus: ok\ndecompose-run: 40068500779\n```\nLine 2 currently reads `decompose-run: 25567947079`, according to the issue. I did not open the file during planning; the implementer should check its current content before editing.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the run ID in place\n- Chosen: rewrite the file so it holds exactly the two required lines, ending with a single trailing newline.\n- Alternatives considered: appending a new line, which breaks the two-line rule; also changing other canary files, which the issue forbids.\n- Why: the acceptance criteria require exactly two lines and no change to any other file.\n\n## Security considerations\n- No trust boundary, endpoint, money state or credential is touched. This is a static test fixture.\n- Abuse cases: none. The values are fixed literals from the issue.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: the issue names one file and its exact content. Nothing else needs to change, so the scope stays as written.\n\n## Risks and edge cases\n- A stray extra line or a missing trailing newline could fail a strict line check. Write exactly two lines, each ending in `\\n`, with no blank line after.\n- The merge-train or resolver could reintroduce the old run ID from another branch. The fixed content here is authoritative.\n\n## Testing considerations\n- Check that `cat tests/e2e_smoke_canary_b.txt` prints exactly the two lines and that `wc -l` reports 2.\n- `git diff --stat` must show only this file.\n- No changelog fragment: this is a test fixture with no behaviour change.\n\n## Pre-execution self-check\nThe planning ref matches the integration branch (mismatch line reads `false`). The scope is one file and the target content is fully specified.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "47f274623c03d6f37638b3663716940b09e91d700cbc139dcc1f621d9bd66bf8",
+  "lineage": {
+    "issue_number": 8058,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40070016868",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40070016868",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8058"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261024063246_f118c2f272",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8058,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40070016868"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8058",
+  "timestamps": {
+    "created_at": "2026-10-24T06:32:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

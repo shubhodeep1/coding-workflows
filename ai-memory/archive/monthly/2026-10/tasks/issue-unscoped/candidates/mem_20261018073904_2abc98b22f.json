@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6256-6267,23580-23716 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The integration-branch tip checked in external_finalize_delivery_check is not rechecked or bound to the completion `.status = \"complete\"` write, so a commit landing in between can be stranded.\n  WHY: Severity disagreement: openai_gpt-6-luna and google_gemini-3_1-flash-lite rated MAJOR (confidence 4), minimax_minimax-m3 rated NIT (confidence 2), and anthropic_claude-sonnet-5_5 (confidence 2) and qwen_qwen3_7-plus examined and declined to carry it forward as a millisecond-window speculative race; the highest severity is used.\n- scripts/orchestrate_poll_process.sh:(trailing `if [ \"${EXTFIN_DELIVERY_OUTCOME}\" != \"drift\" ]` guard after the case block) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The guard is dead code, because every other case arm ends in `continue`, so the condition is always true.\n  WHY: The reviewer rated it NIT and said it is structurally harmless.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:23574-23716 (tip not bound to completion write) | confidence=2\n  PROBLEM: This is the pass-1 finding that the checked tip is not bound to the completion write. The reviewer examined it and did not carry it forward.\n  WHY: The window is only a local `git rev-list` plus string operations after a fresh fetch, so the reviewer judged the risk speculative and accepted it as residual.\n(All other categories reported NONE. HARDENING_RISK_SCORE: 1.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:23580-23716 | severity=high (stated as MAJOR) | confidence=4\n  PROBLEM: Race condition between the tip check and the completion state write.\n  WHY: The external_finalize_delivery_check tip is not atomically bound to the later `mv` that marks the project `complete`, so a concurrent push can strand fixes.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:(drift jq filter and completion arm) | severity=low (stated as NIT) | confidence=2\n  PROBLEM: A new security-fix PR can land after the tip fetch and before the `status = \"complete\"` write, so the completion records a stale tip.\n  WHY: The delivered, delivered_by_content and branch_deleted arms go straight to the completion write with no re-check, and the next tick skips the project.\n- scripts/orchestrate_poll_process.sh:(trailing `if [ \"${EXTFIN_DELIVERY_OUTCOME}\" != \"drift\" ]` guard) | severity=low (stated as NIT) | confidence=3\n  PROBLEM: The guard is dead code, because every other case arm ends in `continue`.\n  WHY: The reviewer said it is structurally harmless and listed it only for completeness.\n- scripts/orchestrate_poll_process.sh:(external_finalize_delivery_check then jq `.status = \"complete\"`) | severity=low (stated as NIT) | confidence=2\n  PROBLEM: The tip is read once and the completion write happens several git calls later in the same tick, with no second compare.\n  WHY: It reproduces the original incident at a smaller scale.\n- TASK_GAP (closed by the reviewer):\n  Requirement: \"The completion comment and the tracking-issue security-pass block never claim a passed audit for a SHA that was not delivered to the default branch.\"\n  Expected change site: the drift-hold branch in the external-finalize arm of `scripts/orchestrate_poll_process.sh`\n  Evidence of absence: The reviewer found all four pieces present and the gap closed. | SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n- HARDENING_SUGGESTIONS:\n  - Re-run the tip equality check before the `.status = \"complete\"` write (about 8 lines). HARDENING_RISK_SCORE: 3.\n  - Drop the dead guard (about 1 line). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:6256-6267, 23580-23581, 23673-23680 | severity=high (stated as MAJOR) | confidence=4\n  PROBLEM: The delivery result is based on one fetched integration-branch tip that is not rechecked or bound to the completion state write.\n  WHY: A security-fix PR can advance the branch after the fetch records `delivered` but before the completion write, so the project is marked complete and later ticks skip it, leaving the new commit undelivered.\n(HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:23574-23716 (tip fetch vs completion write)\n  PROBLEM: The reviewer examined the TOCTOU race flagged by openai_gpt-6-luna and did not carry it forward as a finding.\n  WHY: The window is milliseconds, the pattern is used elsewhere in the poller, and re-verification would cost an extra API call.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5b42513aa40ae46629cb046011e41286d850d532ad3e94f90fff2f2ddd4cf68c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7613,
+    "run_id": "39107199618",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39107199618",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018073904_2abc98b22f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7613,
+    "run_id": "39107199618"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T07:39:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

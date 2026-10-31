@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_autofix_report.sh:171-194 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: A malformed non-empty `STREAK_AUTHOR_LOGIN` is cleared by regex validation only after the `gh api user` fallback has been skipped, disabling author filtering and reducing streak recovery to counting only this run.\n  WHY: The highest severity is high; severity disagreed (Gemini: MAJOR, Qwen: NIT; DeepSeek and MiniMax did not state severity). All reviewers identify the fallback occurring before validation as the cause.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement failure-streak counting that trusts only the pipeline's own comments.\n  expected_change_site: scripts/workflow_failure_heal.py, specifically the autofix-failure-streak command processing logic\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The provided diff only changes `scripts/workflow_failure_heal_autofix_report.sh` to resolve the pipeline login and pass it to the Python helper; the helper must utilize `--author-login` to filter comments during iteration, or forged comments can inflate the streak.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/workflow_failure_heal_autofix_report.sh\n  Location: lines 180-194 (STREAK_AUTHOR_LOGIN resolution block)\n  Issue: The `gh api user` fallback at line 184 is gated on STREAK_AUTHOR_LOGIN being empty, which runs BEFORE the regex format validation at line 192. If a caller passes a non-empty but malformed AUTOFIX_STREAK_AUTHOR_LOGIN that fails the regex, the gh api user fallback is skipped and the script falls back to counting only this run even when GH_TOKEN would have produced a valid login.\n  Suggested minimal fix: Move the `gh api user` call to after the regex validation, gated on STREAK_AUTHOR_LOGIN being empty after the regex strips an invalid value.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_autofix_report.sh: lines 180-194 | severity=MAJOR | confidence=5\n  PROBLEM: The logic to fall back to the pipeline login using `gh api user` is bypassed when `AUTOFIX_STREAK_AUTHOR_LOGIN` (provided by the gate) is set to a malformed value.\n  WHY: The shell script checks if `STREAK_AUTHOR_LOGIN` is empty at line 180, and if it is, attempts the `gh api user` fallback at line 184. However, if `AUTOFIX_STREAK_AUTHOR_LOGIN` is provided by the gate but fails the regex validation at line 192, it is cleared to `\"\"` at line 194. Because the fallback at line 184 was skipped (the variable was not empty at that point), a corrupted or malformed gate output silently disables the author filtering for that run, resetting the failure streak count to this run only instead of retrieving the correct pipeline identity.\n- Requirement: Implement failure-streak counting that trusts only the pipeline's own comments.\n  Expected change site: scripts/workflow_failure_heal.py, specifically the autofix-failure-streak command processing logic.\n  Evidence of absence: The provided diff only changes `scripts/workflow_failure_heal_autofix_report.sh` to resolve the pipeline login and pass it to the Python helper. If the Python helper itself (`scripts/workflow_failure_heal.py`) does not utilize the provided `--author-login` argument to filter comments *during iteration*, the streak will be inflated by forged comments regardless of the shell script's filtering.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/workflow_failure_heal_autofix_report.sh\n  Location: STREAK_AUTHOR_LOGIN resolution block (around lines 171-194 in the current ref, between `COMMENTS_FILE=...` and the `STREAK_ARGS=(--comments-json ...)` line)\n  Issue: The `gh api user` fallback is gated on `[ -z \"${STREAK_AUTHOR_LOGIN}\" ]` BEFORE the regex validation at the bottom of the block. When `AUTOFIX_STREAK_AUTHOR_LOGIN` (or `AUTOFIX_FAILURE_MARKER_AUTHOR`) is set to a non-empty value that fails the `^[A-Za-z0-9-]{1,39}(\\[bot\\])?$` check \u2014 for example a corrupted gate output, a debug value with stray characters, or a misconfigured consumer \u2014 the script skips the `gh api user` fallback even when `GH_TOKEN` could have produced a valid login. The script then falls into the `streak_author_login_unavailable` warn path and counts only this run, silently disabling real streak recovery from a transient gate-output or env-value failure. This is fail-closed (not a security defect), but the order means a single transient corruption permanently demotes the run for that PR.\n  Suggested minimal fix: Sanitize and validate `STREAK_AUTHOR_LOGIN` from the two env vars first, then attempt `gh api user` only if the validated value is still empty. After the API call, run the same sanitize + regex check on the API-returned value before using it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_autofix_report.sh: lines 180-194 | severity=NIT | confidence=3\n  PROBLEM: The `gh api user` fallback at line 184 is gated on `[ -z \"${STREAK_AUTHOR_LOGIN}\" ]` BEFORE the regex validation at line 192. If `AUTOFIX_STREAK_AUTHOR_LOGIN` contains a malformed value (e.g., from a corrupted gate output), the fallback is bypassed, the regex strips it to empty, and the script falls back to counting only this run \u2014 even when `GH_TOKEN` is set and would provide a valid login.\n  WHY: A malformed env-var value silently disables recovery. The current behavior is fail-closed (secure), but the ordering means a corrupted gate output prevents the script from attempting a fresh login lookup. The fix is to move the `gh api user` call after the regex validation, gated on `STREAK_AUTHOR_LOGIN` being empty after the regex strips an invalid value.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3e16ac0faa2ecab1869ca51cf986798ddd88751f5a6738ad5f1a7ddce230fc0e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7051,
+    "run_id": "38048776926",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38048776926",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010125934_07d6308e3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7051,
+    "run_id": "38048776926"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T12:59:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

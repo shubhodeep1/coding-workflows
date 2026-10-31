@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1545-1565 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `failed_open` is set by any earlier `[` or `{` that fails JSON parsing, including bracketed prose, and then prevents the parser from accepting a later valid standalone empty findings array.\n  WHY: This can reject a legitimate clean audit and trigger an unnecessary Codex fallback; severity is high because minimax_minimax-m3 rated it MAJOR while the other reviewers rated it NIT, and google_gemini-3_1-flash-lite considered the persistent flag correct for its intended purpose.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A rejected reply also prints SECURITY_AUDIT_CLAUDE_REJECTED and its first and last 300 characters (printable ASCII, whitespace collapsed; GitHub, OpenRouter, sk-, AWS, Google, Slack and private-key credentials are redacted before the excerpt is cut).\"\n  expected_change_site: scripts/security_audit.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `security_audit_log_rejected_claude_reply` redacts the full excerpt source before slicing it; the reviewer describes a partial-token boundary concern but states that full-string redaction makes the implementation correct, so no missing implementation is demonstrated.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/security_audit.sh:security_audit_try_claude Python parser, `failed_open = True` in the `except (ValueError, RecursionError)` branch of the `raw_decode` loop, and `and not failed_open` in the empty-array `elif` | severity=NIT | confidence=4\n  PROBLEM: A failed parse of any earlier `[` or `{`, including bracketed prose, sets `failed_open` and causes a later valid clean-audit `[]` to be rejected.\n  WHY: This triggers a codex rerun and `SECURITY_AUDIT_CLAUDE_REJECTED` for a legitimate clean audit; the fallback is safe, and non-empty findings arrays are unaffected.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/security_audit.sh:lines 1548-1563 (parser scan loop) | severity=NIT | confidence=4\n  PROBLEM: The `failed_open` flag, once set to `True` due to a parse failure of an earlier bracketed item, is never reset during the scan.\n  WHY: The reviewer considers this correct for the intended purpose: earlier bracketed text that fails JSON parsing means a later standalone `[]` cannot be definitively trusted as the clean-audit result.\n- TASK_GAP\n  Requirement: \"A rejected reply also prints SECURITY_AUDIT_CLAUDE_REJECTED and its first and last 300 characters (printable ASCII, whitespace collapsed; GitHub, OpenRouter, sk-, AWS, Google, Slack and private-key credentials are redacted before the excerpt is cut).\"\n  Expected change site: scripts/security_audit.sh\n  Evidence of absence: The implementation in security_audit_log_rejected_claude_reply correctly redacts the excerpt source before it is sliced (`redacted_source = redact(excerpt_source)` and `redacted_source[:300]`). However, if a redaction pattern matches a partial token at the boundary (e.g., the first 300 characters end in `ghp_`), the regex `(github_pat_|gh[pousr]_)[A-Za-z0-9_]+` will not match the full token, potentially leaving parts of the credential unredacted in the first excerpt if not careful. The logic is robust because `redact` is called on the full string before slicing, but if the full string is too large to redact fully, the implementation is correct in this respect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh:1545-1565 (raw_decode scan loop with failed_open flag) | severity=MAJOR | confidence=4\n  PROBLEM: `failed_open` is set whenever any `[` or `{` opener fails to parse, including invalid-but-closed array/object syntax in prose, so a valid clean-audit `[]` later in the reply is rejected.\n  WHY: The audit unnecessarily falls back to codex with `malformed_output`; the guard was added to reject an empty array nested in a cut-off reply, but this case is not covered by the new tests.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh:1551-1560, `failed_open` is set after any `raw_decode` failure and prevents accepting a later empty array | severity=NIT | confidence=5\n  PROBLEM: Bracketed prose before a valid empty findings array sets `failed_open`, causing the parser to reject the Claude reply.\n  WHY: The audit unnecessarily falls back to Codex instead of accepting Claude\u2019s clean result.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/security_audit.sh:security_audit_try_claude Python parser, the `failed_open` flag (lines 1546, 1552, 1560 in the raw_decode scan loop) | severity=NIT | confidence=4\n  PROBLEM: Any earlier `[` or `{` in bracketed prose that fails JSON parsing sets `failed_open` and permanently disables acceptance of a later standalone empty findings array.\n  WHY: A valid clean result is rejected with `malformed_output`, causing a Codex fallback and rejected-reply log; the fallback is safe, so this is a cost/noise regression rather than a correctness hole.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "db422749c32ee59846f419954071634818e425d277c9379b4eefd17ea9b73829",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7155,
+    "run_id": "38127864467",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38127864467",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011102955_c84f2ace7f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7155,
+    "run_id": "38127864467"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T10:29:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_permission_prompts.py:test_mixed_log_files_only_the_real_pattern | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The assertion expects the filed key for the \"rm\" PermissionRequest pattern to be \"sess-1.jsonl:1\", but the correct key is \"sess-1.jsonl:2\".\n  WHY: Line 1 is the \"ls\" outage record, which should not be filed; line 2 is the \"rm\" real record.\n- .github/workflows/review_autofix.yml:4375-4412 | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The required \"Run reviewer models\" check failed on this PR head three times and hit the identical-failure cap, leaving the review blocked.\n  WHY: A nonzero reviewer-helper exit is propagated, but the supplied evidence does not establish the underlying cause or connect it to this PR's changes; severity differed (BLOCKER vs MAJOR), so the highest severity is retained.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_permission_prompts.py | severity=high | confidence=5\n  PROBLEM: The filed key for the \"rm\" PermissionRequest pattern is asserted as \"sess-1.jsonl:1\" but the correct key is \"sess-1.jsonl:2\".\n  WHY: The test will fail with an AssertionError comparing [\"sess-1.jsonl:2\"] (actual filed state for the \"rm\" signature) against [\"sess-1.jsonl:1\"] (expected in the test). Line 1 is the \"ls\" outage record; line 2 is the \"rm\" PermissionRequest real record.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml | severity=high | confidence=3\n  PROBLEM: The required review check failed on the current head, and the supplied log tail does not show the reviewer failure's cause.\n  WHY: Run 36748664406 reports \"Run reviewer models\" failed. The available evidence does not attribute this failure to a change in this PR, so the cause is likely in the workflow infrastructure (reviewer model API, container setup) rather than in the PR's code.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml | severity=critical | confidence=5\n  PROBLEM: The supplied CI context confirms the required reviewer check failed three times on this PR head, then hit the identical-failure cap.\n  WHY: A nonzero reviewer-helper exit is propagated, leaving the required review check failed and the PR blocked. The failure is confirmed; its root cause is not established by the supplied evidence.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b3325c2d9eb01dd6dc7133b308a38774e8d7cd4d183a98d827967518b698dd7e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5028,
+    "run_id": "36794198846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794198846",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001003443_0305e495c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5028,
+    "run_id": "36794198846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T00:34:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

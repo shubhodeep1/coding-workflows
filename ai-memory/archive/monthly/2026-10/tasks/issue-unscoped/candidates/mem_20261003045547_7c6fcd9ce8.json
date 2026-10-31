@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:176-313 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: Validation runs can be attributed to a tracking issue whose project ref was not actually validated because the workflow does not bind `tracking_issue` to `target_ref`.\n  WHY: The run-name marker derives from `tracking_issue` and the poller trusts it for attribution, while an authorized but unrelated `target_ref` can be validated; all reviewers rate this MAJOR, with confidence 3 from deepseek_deepseek-v4-pro and 4 from minimax_minimax-m3 and openai_gpt-6-luna.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The orchestrator no longer marks a project validated because of another project's validation run\" (PR title and lead). The fix must ensure a successful validation run credits a project only when it actually validated that project's ref, not merely when its run-name carries the project's tracking number.\n  expected_change_site: .github/workflows/validate.yml, \"Authorize explicit validation target\" step (lines 176-238)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No diff hunk in .github/workflows/validate.yml. The reusable validate.yml is not in PR CHANGED FILES at all, but this PR changes what its `[tracking:N]` run-name means, so the binding invariant the new attribution mechanism now relies on must be enforced there. The new tests in tests/test_orchestrate_poll_process.py cover the poller's marker-based selection but do not exercise the target_ref / tracking_issue mismatch path that the new attribution now trusts.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/validate.yml:176-313 | severity=MAJOR | confidence=3\n  PROBLEM: The validate workflow authorizes the target_ref branch independently of the tracking_issue input, allowing a manual workflow_dispatch to mark an unrelated authorized branch's validation run with another project's tracking marker.\n  WHY: The poller trusts `[tracking:N]` in the run name for attribution, but the authorization step verifies the target_ref branch identity and PR author trust without cross-checking tracking_issue against the project associated with that branch.\n- scripts/orchestrate_poll_process.sh:11487-11532 | severity=MAJOR | confidence=3\n  PROBLEM: `get_last_validation_run_info` trusts the `[tracking:N]` run-name marker to attribute validation runs even though the validate workflow does not ensure that marker matches the project associated with the validated branch.\n  WHY: The poller's own dispatch passes consistent values, but a manual workflow_dispatch with mismatched tracking_issue and target_ref can make the poller credit a project for another project's validation.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/validate.yml:176-238 (\"Authorize explicit validation target\"), combined with .github/workflows/internal-validate.yml:31-35, workflow-templates/ai-validate.yml:28-32, and scripts/orchestrate_poll_process.sh:11505-11508 | severity=MAJOR | confidence=4\n  PROBLEM: This PR makes `tracking_issue` the authoritative attribution signal \u2014 `get_last_validation_run_info` credits a successful run to whichever project's `TRACKING_NUM` matches the `[tracking:N]` marker in `display_title`, but `tracking_issue` and `target_ref` are independent workflow inputs and the authorization step never checks that the target belongs to the project named by tracking_issue.\n  WHY: A dispatch with `tracking_issue=<active_project_N>` and `target_ref=<some_other_authorized_branch>` produces a run named `AI Validate [tracking:N]` while validating an unrelated ref; if it succeeds after the project's last dispatch, the fallback can advance project N through its security pass on unproven evidence.\n- Requirement: \"The orchestrator no longer marks a project validated because of another project's validation run\" (PR title and lead). The fix must ensure a successful validation run credits a project only when it actually validated that project's ref, not merely when its run-name carries the project's tracking number.\n  Expected change site: .github/workflows/validate.yml, \"Authorize explicit validation target\" step (lines 176-238). The step should reject any `target_ref` whose PR is not in the project named by `inputs.tracking_issue`, or \u2014 when `target_ref` is empty \u2014 should refuse to accept a `tracking_issue` that differs from the integration ref the tracking issue resolves to. Either guard prevents `[tracking:N]` from being authoritative without a corresponding target binding.\n  Evidence of absence: No diff hunk in .github/workflows/validate.yml. The reusable validate.yml is not in PR CHANGED FILES at all, but this PR changes what its `[tracking:N]` run-name means, so the binding invariant the new attribution mechanism now relies on must be enforced there. The new tests in tests/test_orchestrate_poll_process.py cover the poller's marker-based selection but do not exercise the target_ref / tracking_issue mismatch path that the new attribution now trusts.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/internal-validate.yml; .github/workflows/validate.yml | severity=MAJOR | confidence=4\n  PROBLEM: The attribution marker can identify a tracking issue different from the project branch actually validated.\n  WHY: A workflow dispatch can supply tracking issue N and an authorized `target_ref` belonging to another project; the resulting successful run is marked for N, and the poller\u2019s fallback trusts that marker, so it can accept validation of the other project\u2019s branch as validation for N.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3f0104113ac6e68354fb6164cac634f8feb1b2dac83f68353904d025d1b318cb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4590,
+    "run_id": "37097312606",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37097312606",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003045547_7c6fcd9ce8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4590,
+    "run_id": "37097312606"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T04:55:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

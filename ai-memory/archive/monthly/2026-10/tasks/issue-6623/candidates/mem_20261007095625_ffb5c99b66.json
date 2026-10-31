@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch and approach should this fix use?\nChoices:\nA. Change the target branch to `main` and add the generic poller recovery there. That is where `orchestrate_poll.yml` and `review_autofix.yml` get their scripts. PR #6147 is then recovered by the poller after this lands. (RECOMMENDED)\nB. Keep `ai/issue-5152` and unblock only PR #6147: bring `main` into the branch and accept `main`'s retirement of `.claude/scripts/check_in_status.py`. If the PR's edits to that file still matter, move them to the file that replaces it. No poller change.\nC. Keep `ai/issue-5152` and put the poller change there, as the issue is written.\n**Note:** with C the fix cannot run until PR #6147 merges, and that PR is blocked by this same conflict. C also adds poller changes to a branch that already conflicts with `main`.\nQ2: When a conflicted path is host-only, listed in the trusted retired-file manifest, and missing on the current base, what should recovery do?\nChoices:\nA. Use the existing `close_and_reissue` path: open a replacement issue against the current base from the original issue's requirements, and close the original PR only after the replacement exists. (RECOMMENDED)\nB. Resolve the conflict deterministically in `scripts/review_conflict_prepare.sh` by accepting the base's deletion of the retired path, the same way the manifest-union shortcut works. Commit `[ai-merge-resolve]` and keep the PR open. The PR's edits to the retired file are dropped.\nC. Don't recover automatically: label the linked issue `ai:review-blocked`, post one comment naming the retired path, and stop the stall poller from re-dispatching that head.\n**Note:** B requires changing the conflict-prep stage instead of `orchestrate_poll_process.sh`, so the issue's list of affected files would change.\nQ3: Which issues should this recovery cover?\nChoices:\nA. Both orchestrator-managed issues (`execute_stall_recovery_action`) and standalone issues (`run_standalone_stall_recovery`). Both already have a `close_and_reissue` branch. (RECOMMENDED)\nB. Orchestrator-managed issues only.\nC. Standalone issues only.",
+  "fingerprint": "d116f3db8e758b1f177a21bfc29d8ec71fe1cf8fd9e1684ed585acf951e3954c",
+  "lineage": {
+    "issue_number": 6623,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37603347543",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37603347543",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007095625_ffb5c99b66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6623,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37603347543"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6623 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T09:56:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

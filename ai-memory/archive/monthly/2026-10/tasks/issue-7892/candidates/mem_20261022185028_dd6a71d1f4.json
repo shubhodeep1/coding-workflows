@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) A specific pipeline phase (clarify, plan, implement, review/autofix, orchestrate, validate, heal). Please name the phase and the workflow or script. (RECOMMENDED)\nB) Documentation (README.md, agents.md fragments, docs/)\nC) Consumer workflow templates (workflow-templates/)\nD) Something else. Please name the file or feature.\nQ2: What does \"better\" mean for that part?\nChoices:\nA) Fix a specific bug or failure. Please link the failing run, PR or issue, or quote the error. (RECOMMENDED)\nB) Add a specific new behaviour or option. Please describe the expected behaviour.\nC) Improve performance or cost (runtime, API calls, tokens). Please name the metric and the target.\nD) Improve clarity or maintainability, with no change in behaviour. Please name the files.\nQ3: What should be true when this issue is done?\nChoices:\nA) State the observable acceptance condition, such as a log line, a label outcome, a passing test or a changed output. (RECOMMENDED)\nB) No specific condition. Close this issue and open a more specific one instead.",
+  "fingerprint": "7dce2f891762b7794e2b254a9eb4ca97b3c463952437d95f188cf00d6f04c6ba",
+  "lineage": {
+    "issue_number": 7892,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39833899833",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39833899833",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261022185028_dd6a71d1f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7892,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39833899833"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7892 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-22T18:50:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

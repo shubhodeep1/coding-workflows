@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/7434-claude-pool-module-pin.md:2-4 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fragment re-adds the CLAUDE_POOL_MODULE_PIN registry bullet and LOG_PREFIX.name line that are already folded into agents.md (agents.md:3741 and agents.md:4074).\n  WHY: The assembler does not deduplicate, so the next release carries duplicate and inconsistent registry entries. The fragment is also outside the frozen heal scope. Severity disagreement: sonnet and qwen said MAJOR, luna said NIT. The highest is used, and MAJOR is mapped to high.\n- changelog.d/7434-plan-claude-pool-token-esm.md:2 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fragment duplicates the #7434 changelog entry already present at CHANGELOG.md:2732.\n  WHY: The next changelog assembly publishes the #7434 entry twice, with differing wording. Severity disagreement: sonnet and qwen said MAJOR, luna said NIT. The highest is used, and MAJOR is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `.github/actions/claude-pool-token/package.json` containing exactly `{\"type\":\"commonjs\"}`\", and \"Check that `.github/actions/install-claude` and any other node-runtime action under `.github/actions/` don't have the same exposure.\"\n  expected_change_site: .github/actions/claude-pool-token/package.json; .github/actions/install-claude/\n  confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  EVIDENCE: The package.json already exists from #7432. install-claude is a composite action.yml with no .js files, so it has no exposure. The check is not documented in the PR. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/7434-claude-pool-module-pin.md:2-4 and changelog.d/7434-plan-claude-pool-token-esm.md:2 | severity=MAJOR | confidence=4\n  PROBLEM: Both fragments were already folded into the base (agents.md:3741, agents.md:4074, CHANGELOG.md:2732), but the PR adds them again. The agents.d fragment is also outside the frozen heal scope.\n  WHY: The next release appends a second CLAUDE_POOL_MODULE_PIN bullet, a second LOG_PREFIX.name line and a second #7434 changelog entry, and the wording of the two #7434 entries contradicts. Suggested fix: drop both fragments.\n- TASK_GAP: Requirement: \"Add `.github/actions/claude-pool-token/package.json` containing exactly `{\"type\":\"commonjs\"}`\", and \"Check that `.github/actions/install-claude` and any other node-runtime action don't have the same exposure.\"\n  Expected change site: .github/actions/claude-pool-token/package.json\n  Evidence of absence: none. The file already exists from #7432. The install-claude check is not documented, but that action has no .js files. | severity=NIT | confidence=2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/7434-claude-pool-module-pin.md:2 | severity=NIT | confidence=5\n  PROBLEM: The pending fragment adds a second CLAUDE_POOL_MODULE_PIN registry entry after #7434 was already folded into agents.md (agents.md:3741, LOG_PREFIX.name at agents.md:4074). The two entries differ: the existing one describes plan.yml, the fragment describes plan.yml and clarify.yml.\n  WHY: The next agents assembly appends the fragment without removing the existing entry, producing duplicate and inconsistent registry documentation.\n- changelog.d/7434-plan-claude-pool-token-esm.md:2 | severity=NIT | confidence=5\n  PROBLEM: The pending fragment duplicates the #7434 changelog entry already folded into CHANGELOG.md:2732.\n  WHY: The next changelog assembly appends the fragment, publishing the #7434 plan entry twice.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7434-claude-pool-module-pin.md:2-4 | severity=MAJOR | confidence=5\n  PROBLEM: The CLAUDE_POOL_MODULE_PIN log prefix entry already exists in the base at agents.md:3741, so the fragment creates a duplicate.\n  WHY: scripts/assemble_agents.py appends without deduplication, so the next release has two bullets and two LOG_PREFIX.name lines. The fragment text also differs (plan.yml and clarify.yml vs. plan.yml only).\n- changelog.d/7434-plan-claude-pool-token-esm.md:2 | severity=MAJOR | confidence=5\n  PROBLEM: The #7434 changelog entry already exists at CHANGELOG.md:2732, so the fragment creates a duplicate.\n  WHY: scripts/assemble_changelog.py appends without deduplication, so the next release has two #7434 entries. The fragment adds \"(#7476 adds the same step to clarify)\".\n- TASK_GAP: Requirement: \"Check that `.github/actions/install-claude` and any other node-runtime action under `.github/actions/` don't have the same exposure. Any action whose `.js` files use `require` without their own `package.json` needs the same file.\"\n  Expected change site: .github/actions/install-claude/ and other action directories\n  Evidence of absence: The PR does not document this check. install-claude contains only action.yml, and claude-pool-token already has package.json from #7432. The requirement is implicitly satisfied but not documented. | severity=NIT | confidence=3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d7d7e16eeae0842ac8dbe8c8e84979e66eeb4ee5722406ef474e769eafb067ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7481,
+    "run_id": "38877407263",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38877407263",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016091946_e1487022da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7481,
+    "run_id": "38877407263"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T09:19:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

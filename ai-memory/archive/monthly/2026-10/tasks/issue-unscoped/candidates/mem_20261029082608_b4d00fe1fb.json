@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/8287-memory-branch-single-branch-clone.md:Entire file | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Redundant changelog fragment for a fix already present on the main branch.\n  WHY: It will lead to duplicated and potentially inaccurate entries for the same fix in the generated CHANGELOG.md during the next release, as the fix was already documented on main. (Source severity was MAJOR; mapped to high.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/8287-memory-branch-single-branch-clone.md:Entire file | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: Redundant changelog fragment for a fix already present on the main branch.\n  WHY: This will lead to duplicated and potentially inaccurate entries for the same fix in the generated CHANGELOG.md during the next release, as the fix was already documented on main.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===",
+  "fingerprint": "0f0035a0f5908fa2665593af2acfa7618fcc57ffb2419a576466cb5c5137c58a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8328,
+    "run_id": "40831427249",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40831427249",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029082608_b4d00fe1fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8328,
+    "run_id": "40831427249"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T08:26:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

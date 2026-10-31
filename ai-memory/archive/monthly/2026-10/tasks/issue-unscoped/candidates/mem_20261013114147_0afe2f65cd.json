@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_isolated_run.sh:43-58 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The base-image pre-seed runs unconditionally before `sandbox_image.sh` tries to pull the prebuilt GHCR image, delaying that pull when mirrors are slow or unavailable.\n  WHY: The mirror attempts can add up to 600 seconds before the prebuilt image pull is attempted; severity was MAJOR for four reviewers and NIT for qwen_qwen3_7-plus.\n- .github/workflows/ci.yml:588-590 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The new CI step invokes the full `tests/test_clarify_sandbox_base_image_preseed.py` suite even though existing CI steps already invoke it.\n  WHY: Repeating the fake-Docker subprocess tests adds CI time without extra coverage, and the new test locks in the duplicate invocation.\n- scripts/clarify_isolated_run.sh:43-58 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The helper is invoked again inside every `clarify_image_build` call even when the dedicated workflow step has already seeded the image.\n  WHY: Each call still spawns a bash subprocess and runs `docker image inspect`, including on retries when the image is already present.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/clarify_isolated_run.sh:48-49 | severity=MAJOR | confidence=4\n  PROBLEM: The mirror pre-seed runs unconditionally before `sandbox_image.sh build` tries the prebuilt GHCR image.\n  WHY: When mirrors are slow or unreachable, seeding can delay an available prebuilt image pull by up to 10 minutes, and `clarify.yml` already runs the helper in its own step.\n- .github/workflows/ci.yml:588-590 | severity=NIT | confidence=4\n  PROBLEM: The new invocation of `tests/test_clarify_sandbox_base_image_preseed.py` duplicates existing CI invocations.\n  WHY: Repeating the fake-Docker subprocess tests adds wall time without extra coverage, and the new test locks in the duplication.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/clarify_isolated_run.sh:45-52 | severity=MAJOR | confidence=5\n  PROBLEM: The pre-seed script runs on every build before `sandbox_image.sh` attempts to pull the prebuilt GHCR image.\n  WHY: This can add up to 600 seconds of delay even when the prebuilt image pull would succeed immediately.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/clarify_isolated_run.sh:43-58 | severity=MAJOR | confidence=4\n  PROBLEM: The pre-seed helper runs before `sandbox_image.sh build` tries the prebuilt GHCR image, even though pre-seeding is only useful for the local-build fallback.\n  WHY: Mirror timeouts can delay the GHCR pull by up to 600 seconds; if the pre-seed times out and the pull fails, the local build proceeds without the pre-seeded image.\n- .github/workflows/ci.yml:588-590 | severity=NIT | confidence=4\n  PROBLEM: The PR adds another invocation of `tests/test_clarify_sandbox_base_image_preseed.py` despite three existing CI invocations.\n  WHY: The same subprocess-based fake-Docker suite runs four times, repeating work without extra coverage, and `test_ci_runs_this_file` locks in the duplicate.\n- .github/workflows/clarify.yml:933-947 and scripts/clarify_isolated_run.sh:43-58 | severity=NIT | confidence=3\n  PROBLEM: The pre-seed runs in the dedicated workflow step and again inside every `clarify_image_build` invocation.\n  WHY: Each helper call still adds a bash fork and `docker image inspect` round-trip, including on Claude and Codex retries when the image is already present.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_isolated_run.sh:48-49 | severity=MAJOR | confidence=5\n  PROBLEM: Pre-seeding waits on both mirrors before trying to pull the complete prebuilt GHCR image.\n  WHY: If both mirror pulls time out while GHCR is available, the call waits up to 600 seconds before using an image that does not need the Dockerfile base.\n- .github/workflows/ci.yml:589-590 | severity=NIT | confidence=5\n  PROBLEM: The new invocation repeats the full pre-seed test suite despite existing invocations in the same job.\n  WHY: CI repeats fake-Docker subprocess tests without adding coverage, increasing job time.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/clarify_isolated_run.sh:45-52 | severity=NIT | confidence=4\n  PROBLEM: The base-image pre-seed runs before `sandbox_image.sh` attempts the prebuilt GHCR image pull.\n  WHY: Slow or unavailable mirrors can delay an available prebuilt image by up to 600 seconds, wasting time because pre-seeding is needed only for the local-build fallback.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "85977dbf3b7202c38a073125b022a9f9772a1b28b74130d5126d48f9f57f9c87",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7225,
+    "run_id": "38389914728",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38389914728",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013114147_0afe2f65cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7225,
+    "run_id": "38389914728"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T11:41:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:232-235 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The implementation retries using isolated OpenCode when Claude is unavailable, contrary to the PR description\u2019s promise that the caller runs its unchanged Codex command.\n  WHY: This is a mismatch between the stated deliverable and the implementation; the isolated OpenCode fallback is documented elsewhere as a security restriction.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cIt returns 75 when the role is on codex or Claude is unavailable, and the caller then runs its unchanged codex command.\u201d\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, `poller_judge_isolated` and its poller-judge call sites\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_2]\n  EVIDENCE: When Claude is unavailable, `poller_judge_isolated` retries via `_poller_rb_judge_sandbox_attempt codex` at lines 232\u2013235. That path runs isolated OpenCode, not the unchanged Codex command promised in the PR description. The PR documents this as an intentional security restriction, so this identifies a mismatch with the stated deliverable rather than recommending a host-side fallback. The PR also documents the isolated OpenCode fallback as an intentional security restriction, so this is a mismatch with the stated deliverable, not a recommendation to restore host-side execution. The PR description states poller judges fall back to the \"unchanged codex command\" on exit 75, but poller_judge_isolated retries via _poller_rb_judge_sandbox_attempt codex (isolated OpenCode), never host Codex. This is a deliberate, documented security hardening (changelog.d/6357-rb-judge-sandbox-fail-closed.md, changelog.d/6358-poller-judges-isolated-sandbox.md, agents.md:96-102) that supersedes the stale PR-description wording. The implementation is complete and correct; only the PR description's wording is stale. Not a code gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:232-235 | severity=low | confidence=5\n  PROBLEM: The code retries using isolated OpenCode when Claude is unavailable. The PR description explicitly promised \"The caller then runs its unchanged codex command.\"\n  WHY: This is a discrepancy between the stated deliverable and the implementation. The current implementation deliberately uses isolated OpenCode as the fallback, which is documented elsewhere as a security restriction (no host Fallback). The report is on the mismatch between documentation and reality.\n\n- TASK_GAP\n  Requirement: \"It returns 75 when the role is on codex or Claude is unavailable, and the caller then runs its unchanged codex command.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `poller_judge_isolated` and its poller-judge call sites.\n  Evidence of absence: When Claude is unavailable, `poller_judge_isolated` retries via `_poller_rb_judge_sandbox_attempt codex` at lines 232\u2013235. That path runs isolated OpenCode, not the unchanged Codex command promised in the PR description. The PR documents this as an intentional security restriction, so this identifies a mismatch with the stated deliverable rather than recommending a host-side fallback.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cIt returns 75 when the role is on codex or Claude is unavailable, and the caller then runs its unchanged codex command.\u201d\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `poller_judge_isolated` and its poller-judge call sites.\n  Evidence of absence: When Claude is unavailable, `poller_judge_isolated` retries `_poller_rb_judge_sandbox_attempt codex` (lines 232\u2013235). That path runs isolated OpenCode, not the unchanged Codex command described for the poller judges. The PR also documents the isolated OpenCode fallback as an intentional security restriction, so this is a mismatch with the stated deliverable, not a recommendation to restore host-side execution.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: \"It returns 75 when the role is on codex or Claude is unavailable, and the caller then runs its unchanged codex command.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, poller_judge_isolated and poller-judge call sites.\n  Evidence of absence: The PR description states poller judges fall back to the \"unchanged codex command\" on exit 75, but poller_judge_isolated retries via _poller_rb_judge_sandbox_attempt codex (isolated OpenCode), never host Codex. This is a deliberate, documented security hardening (changelog.d/6357-rb-judge-sandbox-fail-closed.md, changelog.d/6358-poller-judges-isolated-sandbox.md, agents.md:96-102) that supersedes the stale PR-description wording. The implementation is complete and correct; only the PR description's wording is stale. Not a code gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2b8e263ca66eab832eb4df0b3b0638e963874ad0a2ef05fd1c469634ec1c74e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37352089026",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37352089026",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005181109_b2616a4e10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37352089026"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T18:11:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7765,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7765\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7769\",\"pr_number\":7769,\"branch\":\"ai/issue-7765\",\"run_id\":\"39531159262\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39531159262\",\"changed_files\":[\".claude/commands/investigate-issue.md\",\".claude/commands/validate-consumer-issue.md\",\".github/workflows/orchestrate_poll.yml\",\"agents.d/7765-implements-marker.md\",\"changelog.d/7765-implements-marker.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_linked_pr_implementation_guard.py\",\"tests/test_stall_retired_conflict_reissue.py\",\"workflow-templates/.claude/commands/investigate-issue.md\",\"workflow-templates/.claude/commands/validate-consumer-issue.md\"]}",
+  "fingerprint": "8ba8fd64a9b8c380268f4256a59a5a2be4d26e95aadb2ad4348ae4c321504265",
+  "lineage": {
+    "issue_number": 7765,
+    "parent_ids": [],
+    "pr_number": 7769,
+    "run_id": "39531159262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39531159262",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7769"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261021023511_972e545257",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7765,
+    "level": "run",
+    "pr_number": 7769,
+    "run_id": "39531159262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7765: https://github.com/shubhodeep1/coding-workflows/pull/7769",
+  "timestamps": {
+    "created_at": "2026-10-21T02:35:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

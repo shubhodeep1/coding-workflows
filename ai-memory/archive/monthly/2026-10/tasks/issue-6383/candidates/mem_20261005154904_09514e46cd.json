@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6383,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6383\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6386\",\"pr_number\":6386,\"branch\":\"ai/issue-6383\",\"run_id\":\"37333611054\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37333611054\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".claude/hooks/pr_merge_status_guard.py\",\"changelog.d/6383-merged-pr-guard-redirect-chain.md\",\"tests/test_pr_merge_status_guard.py\",\"workflow-templates/.claude/hooks/pr_merge_status_guard.py\"]}",
+  "fingerprint": "d73ef18feb09b8ac3f72dd6c1abd5eb9aa8b4077d385dc1d4f9ab61da441b6a0",
+  "lineage": {
+    "issue_number": 6383,
+    "parent_ids": [],
+    "pr_number": 6386,
+    "run_id": "37333611054",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37333611054",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6386"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005154904_09514e46cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6383,
+    "level": "run",
+    "pr_number": 6386,
+    "run_id": "37333611054"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6383: https://github.com/shubhodeep1/coding-workflows/pull/6386",
+  "timestamps": {
+    "created_at": "2026-10-05T15:49:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

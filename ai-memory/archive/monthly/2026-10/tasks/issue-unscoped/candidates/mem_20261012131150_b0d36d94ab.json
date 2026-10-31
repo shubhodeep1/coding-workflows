@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/unblock_judge.yml:142-163 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The judge workflow does not pass `AUTO_MERGE_REQUIRED_CI_CHECK` to the judge process, so consumer repositories that configure the named check resolve it as disabled and cannot satisfy the new success condition.\n  WHY: Configured consumers reissue merged CI-failure issues instead of superseding them; severity varied from NIT to BLOCKER to MAJOR, with BLOCKER the highest.\n- .github/workflows/ci.yml:284-285 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The static-checks job failed when downloading the pinned actionlint archive returned HTTP 504.\n  WHY: The failed download aborted the job before later static checks ran; reviewers describe this as a transient external error, not a defect caused by the PR.\n- scripts/unblock_judge.sh:620-630; scripts/pr_checks_lib.sh:243-260 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The named-check state can accept a successful same-named check-run from another workflow because it is not bound to a run from `AUTO_MERGE_WAIT_WORKFLOWS`.\n  WHY: An unrelated successful check could make a merged PR appear to have passed CI when the actual CI check is absent, causing the original issue to be closed as superseded.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"before reissuing a CI-failure issue, detect when its owning PR has merged with passing checks\" (linked issue #7032), including the named CI check configured through `AUTO_MERGE_REQUIRED_CI_CHECK`\n  expected_change_site: `.github/workflows/unblock_judge.yml`, the env block in the \"Judge the blocked item\" step (lines 142-163)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The workflow env block does not forward `AUTO_MERGE_REQUIRED_CI_CHECK`; `scripts/pr_checks_lib.sh` (line 441-474) reads it and defaults to `none` for consumer repositories (lines 446-453); `scripts/unblock_judge.sh:630` requires the check state to be `success`; `review_autofix.yml:2281` already forwards the variable.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/unblock_judge.yml:142-163 | severity=low | confidence=5\n  PROBLEM: The judge process does not receive a repository's `AUTO_MERGE_REQUIRED_CI_CHECK` variable, so consumer repositories resolve it to `none`.\n  WHY: Consumers that configure the variable get a disabled check state and cannot use the superseded path; the judge falls back to reissue.\n- .github/workflows/ci.yml | severity=low | confidence=5\n  PROBLEM: The actionlint release archive download failed with HTTP 504.\n  WHY: The failed download aborted the step before later static checks ran; the reviewer says this is transient and unrelated to the changed files.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/unblock_judge.yml | severity=critical | confidence=5\n  PROBLEM: The reusable workflow does not export `AUTO_MERGE_REQUIRED_CI_CHECK`, so consumer repositories use the default `none`.\n  WHY: Consumer CI-failure issues are reissued instead of closed as superseded because the named check cannot be verified.\n- .github/workflows/ci.yml | severity=low | confidence=5\n  PROBLEM: The static-checks job failed due to a transient HTTP 504 while downloading the actionlint archive.\n  WHY: The pipeline aborted, leaving validation incomplete.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: \"before reissuing a CI-failure issue, detect when its owning PR has merged with passing checks\" (linked issue #7032); \"Merged into the default branch, or into the issue's declared integration branch, with the shared required-checks gate ... and the named CI check (`AUTO_MERGE_REQUIRED_CI_CHECK`) run and passed there\" (`changelog.d/7032-unblock-reissue-ci-owner.md:5`); \"with no named check configured (`disabled`, the consumer default) the issue is never superseded\" (`agents.d/7032-unblock-reissue-ci-owner.md:15`).\nExpected change site: `.github/workflows/unblock_judge.yml`, the env block in the \"Judge the blocked item\" step (lines 142-163).\nEvidence of absence: The workflow env block does not forward `AUTO_MERGE_REQUIRED_CI_CHECK`; `scripts/pr_checks_lib.sh` (line 441-474) reads the variable and defaults the name to `none` for repositories other than `shubhodeep1/coding-workflows` (lines 446-453); `scripts/unblock_judge.sh:630` requires a successful check state; `review_autofix.yml:2281` already forwards the variable.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `.github/workflows/unblock_judge.yml:142-163`; `scripts/unblock_judge.sh:630`; `scripts/pr_checks_lib.sh:427-457` | severity=high | confidence=5\n  PROBLEM: Consumer repositories that configure `AUTO_MERGE_REQUIRED_CI_CHECK` do not pass it to the judge process, so the check state resolves to `disabled`.\n  WHY: A merged CI-failure issue in a consumer is reissued even when its configured CI check passed.\n- `scripts/unblock_judge.sh:620-630`; `scripts/pr_checks_lib.sh:243-260` | severity=high | confidence=4\n  PROBLEM: A same-named check from another workflow can satisfy `PR_CHECKS_LAST_CI_STATE=success` because the check-run is not bound to a run from `AUTO_MERGE_WAIT_WORKFLOWS`.\n  WHY: An unrelated successful same-name check can make the merged PR appear to have passed CI when the actual CI check is absent, causing the original issue to be closed as superseded.\n- `.github/workflows/ci.yml` | severity=low | confidence=5\n  PROBLEM: The pinned actionlint download returned HTTP 504 and exited immediately.\n  WHY: The run stopped before later static checks completed, leaving those validations unverified; the reviewer says the external download error was not caused by the PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nNo task was provided. Send the task or issue to execute.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "12511c68f10739fd0d19e700eee1d71f0795156d16620e1fe4acfb6f78105d8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7040,
+    "run_id": "38250387713",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38250387713",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012131150_b0d36d94ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7040,
+    "run_id": "38250387713"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T13:11:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

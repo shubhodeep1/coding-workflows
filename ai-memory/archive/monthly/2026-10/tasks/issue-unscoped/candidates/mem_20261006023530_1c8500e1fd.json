@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_conflict_resolve_sandbox_only.py:165-176 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `test_unsafe_failure_stops_instead_of_retrying` expectations for `transfer_failed` and `transfer_unknown` require `reason=sandbox_transfer_failed` in stderr, but the script emits `reason=unsafe_file` for `transfer_failed` and no reason suffix for `transfer_unknown`.\n  WHY: The stderr assertion fails for both modes; severity is critical per qwen_qwen3_7-plus's BLOCKER rating, higher than the MAJOR ratings from the other reviewers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_conflict_resolve_sandbox_only.py:169-176 | severity=MAJOR | confidence=5\n  PROBLEM: The `test_unsafe_failure_stops_instead_of_retrying` expectations for `transfer_failed` and `transfer_unknown` require `reason=sandbox_transfer_failed` in stderr, but the script does not emit that string for either mode.\n  WHY: For `transfer_failed`, stderr contains `reason=unsafe_file`; for `transfer_unknown`, stderr has no reason suffix. The persisted-reason assertion expects `sandbox_transfer_failed`, so changing the stderr expectation alone would break that check.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_conflict_resolve_sandbox_only.py: test_unsafe_failure_stops_instead_of_retrying test cases for transfer_failed and transfer_unknown modes | severity=MAJOR | confidence=5\n  PROBLEM: The test expectations require `reason=sandbox_transfer_failed` in stderr, but `scripts/review_conflict_resolve.sh` does not print that reason string to stderr.\n  WHY: The test suite has incorrect failure expectations for sandbox transfer errors, which can mask issues where failure reasons are not correctly persisted or reported.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_conflict_resolve_sandbox_only.py: lines 165-176 (the expected_error dict in test_unsafe_failure_stops_instead_of_retrying, specifically the \"transfer_failed\" and \"transfer_unknown\" entries) | severity=MAJOR | confidence=5\n  PROBLEM: The expected stderr substrings for `transfer_failed` and `transfer_unknown` do not match what `scripts/review_conflict_resolve.sh` emits.\n  WHY: `transfer_failed` emits `reason=unsafe_file`, while `transfer_unknown` emits no reason suffix; the assertion fails for both modes. The persisted `sandbox_transfer_failed` reason is written to a file, not stderr.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_conflict_resolve_sandbox_only.py: 172-173 | severity=BLOCKER | confidence=5\n  PROBLEM: The test expects `reason=sandbox_transfer_failed` in stderr for both `transfer_failed` and `transfer_unknown` modes, but the script emits different messages.\n  WHY: `transfer_failed` emits `reason=unsafe_file`; `transfer_unknown` emits no reason suffix, so the assertion fails for both modes.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_review_conflict_resolve_sandbox_only.py: lines 172-173, `test_unsafe_failure_stops_instead_of_retrying` \u2014 `expected_error` dict entries for `transfer_failed` and `transfer_unknown` | severity=MAJOR | confidence=5\n  PROBLEM: The expected stderr substring `\"reason=sandbox_transfer_failed\"` does not match what the script emits for either mode.\n  WHY: `transfer_failed` emits `reason=unsafe_file`, while `transfer_unknown` emits no reason suffix; `_resolver_fail_closed` does not print its reason argument to stderr.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "de5de09c03f1f853f786eeacf0d9b61469750a3cdf4c4fc16b48d96cdfa591b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6411,
+    "run_id": "37402165565",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37402165565",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006023530_1c8500e1fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6411,
+    "run_id": "37402165565"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T02:35:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

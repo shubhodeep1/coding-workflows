@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:866-871 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `dispatch_review` operation executes `gh workflow run` using an unvalidated PR number extracted from the verdict JSON input.\n  WHY: An unvalidated or malformed PR number can lead to invalid input for `gh workflow run`, causing dispatch failures or triggering incorrect workflows if the input is improperly crafted.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement the unblock judge for every human-only stop (replace-claude-sessions Phase 7), including sufficient test coverage for the complex verdict flows.\n  expected_change_site: tests/test_unblock_judge.py\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test suite in tests/test_unblock_judge.py does not contain explicit, exercised test cases covering the full logic for the `descope` and `operator_step` verdict handlers. These are central verdict flows in the new unblock judge Phase 7 implementation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:866-871 | severity=critical | confidence=4\n  PROBLEM: The `dispatch_review` operation executes `gh workflow run` using an unvalidated PR number extracted from the verdict JSON input.\n  WHY: An unvalidated or malformed PR number can lead to invalid input for `gh workflow run`, causing dispatch failures or triggering incorrect workflows if the input is improperly crafted.\n- Requirement: Implement the unblock judge for every human-only stop (replace-claude-sessions Phase 7), including sufficient test coverage for the complex verdict flows.\n  Expected change site: tests/test_unblock_judge.py\n  Evidence of absence: The test suite in tests/test_unblock_judge.py does not contain explicit, exercised test cases covering the full logic for the `descope` and `operator_step` verdict handlers. These are central verdict flows in the new unblock judge Phase 7 implementation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "846bd3fe28624bd6275c8683bbf55210ab57959ab0608d8bd52628cc38eb12d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37335349915",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37335349915",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005165835_500d7ae3f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37335349915"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T16:58:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

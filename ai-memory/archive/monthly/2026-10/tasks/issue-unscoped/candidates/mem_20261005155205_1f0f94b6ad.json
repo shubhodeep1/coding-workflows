@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:113 (read_regular at lines 92\u201395) | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: readme_trimmed delegates symlink rejection to read_regular, which raises \u201cunsafe file type or size\u201d for a symlink, causing main to report reason=unsafe_file instead of reason=symlink_path.\n  WHY: The finding asserts that both symlink cases in test_symlink_never_reads_target fail, while deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, and z-ai_glm-5_2 report that checked_path rejects symlinks before read_regular and main maps the error to reason=symlink_path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_workspace.py: read_regular() | HARDENING_RISK_SCORE=1\n  PROBLEM: The reader could be more explicitly diagnostic about the difference between a symlink and other non-regular file types.\n  WHY: Suggested distinguishing S_ISLNK in the read logic to provide clearer rejection reasons, though the current behavior of rejecting all non-regular files as unsafe is already secure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_untrusted_workspace.py:113 (read_regular at lines 92\u201395) | severity=MAJOR | confidence=5\n  PROBLEM: readme_trimmed delegates symlink rejection to read_regular, which raises \u201cunsafe file type or size\u201d for a symlink. main maps that error to reason=unsafe_file, not reason=symlink_path.\n  WHY: Both cases in test_symlink_never_reads_target expect reason=symlink_path, so tests/test_review_static_context_readme.py fails for both symlink targets and blocks the test suite.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9fcef0c91e5555a6e989287d9a8b8d0d2bc4356bc17792bdbb08c42321f7b418",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6135,
+    "run_id": "37329986799",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37329986799",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005155205_1f0f94b6ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6135,
+    "run_id": "37329986799"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T15:52:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

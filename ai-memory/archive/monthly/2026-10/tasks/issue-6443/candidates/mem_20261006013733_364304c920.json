@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: C\n\nRATIONALE:\nQ1: The exploit works because `_cmd_scope_allowlist` (`scripts/workflow_failure_heal_evidence.py:1622-1630`) runs `extract_files_touched` over the whole issue body. That means a `files_touched:` block inside pasted evidence becomes the allowlist. Never reading the issue body for heal-evidence runs closes that hole, and taking entries from the approved plan keeps heal fixes running without a new intake format. B only filters the body by its layout, which is easy to get wrong. C would scope-block every existing open heal issue and most fixes that also need tests or changelog fragments.\nQ2: Option C contains all of A's concrete-file rules (no trailing `/`, no extensionless last segment, no globs, no `.git` segment, no non-printable characters or surrounding whitespace, same as `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`). It also stops a plan built from untrusted evidence from listing the files that enforce the lock: `scripts/files_touched_scope_guard.py`, `scripts/workflow_failure_heal_evidence.py`, `scripts/implement_commit_changes.sh`, `.github/ai/`, `.claude/hooks/`. That follows the recommendation to \"reject \u2026 protected-path entries\". B was rejected because it would block most legitimate workflow-defect fixes, which live under `scripts/` and `.github/`.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered choices. Notes for the planner:\n- Q1/A: in `_cmd_scope_allowlist`, drop the `extract_files_touched(issue_text)` branch for this command. The source becomes `plan` or `none`. An empty allowlist after filtering keeps today's fail-closed behaviour: implement's heal-evidence path blocks empty allowlists and logs `HEAL_EVIDENCE_SCOPE_LOCK`. `--issue-body-file` stays a required flag for caller compatibility (\u00a710) but is not read.\n- Q2/C: apply the A filters, then a separate rejection list for the guard files. The list matches each file exactly and treats `.github/ai/` and `.claude/hooks/` as prefixes, with paths normalised before comparison and without regard to letter case. Rejected entries are dropped, and if no entries remain the run fails closed.\n- Regression tests go in `tests/test_heal_evidence_editor_isolation.py` or `tests/test_implement_post_codex_recovery.py`:\n  - an issue body with a fenced `files_touched:\\n- scripts/` block yields no `scripts/` entry;\n  - a plan listing `scripts/` or `scripts/files_touched_scope_guard.py` gets those entries removed;\n  - a plan listing exact file paths keeps them.\n\nReversibility: if a heal fix legitimately has to edit a guard file, it is scope-blocked (`ai:scope-blocked`) and a human clears it. Reverting this change restores the previous behaviour.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone.",
+  "fingerprint": "4fe7628ad96cb6f57b55979d483566276273b0ed2e004e14f95f41435e4af136",
+  "lineage": {
+    "issue_number": 6443,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37399349953",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37399349953",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6443"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006013733_364304c920",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6443,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37399349953"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6443",
+  "timestamps": {
+    "created_at": "2026-10-06T01:37:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

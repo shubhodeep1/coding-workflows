@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description states \"Fixing this in the action rather than in each caller covers all four callers and leaves the cache key unchanged.\"\n  expected_change_site: PR description body\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The changelog lists five callers, including `claude-engine-smoke.yml`, but the PR description still says \"all four callers\".\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: PR description states \"Fixing this in the action rather than in each caller covers all four callers and leaves the cache key unchanged.\" Changelog states \"Callers of `install-claude` covered by the fix | 5 (`clarify.yml`, `claude-engine-smoke.yml`, `implement.yml`, `orchestrate_clarify_respond.yml`, `plan.yml`).\"\nExpected change site: PR description body (author-controlled GitHub UI text; cannot be edited via autofix commits).\nEvidence of absence: The autofix correctly counted 5 callers (verified by grep \u2014 `.github/workflows/{clarify,plan,implement,claude-engine-smoke,orchestrate_clarify_respond}.yml` all `uses:` `.github/actions/install-claude`) and updated the changelog in the last run, but the GitHub PR description still reads \"all four callers\". Only `claude-engine-smoke.yml` was added to the changelog; the prose wording is stale.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "e7eb69bcfc2c247ac0bff0f7da8be5769a43a985d3ae83b683cc21bb56f4efb2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6481,
+    "run_id": "37414313648",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37414313648",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006045056_1960f833c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6481,
+    "run_id": "37414313648"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T04:50:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

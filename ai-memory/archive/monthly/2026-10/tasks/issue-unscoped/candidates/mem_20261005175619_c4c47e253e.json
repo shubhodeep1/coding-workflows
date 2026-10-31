@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:214-238 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `auto_answer` logic posts the `/answer` comment before ensuring the issue is in the `ai:clarification` phase.\n  WHY: An `ai:blocked` issue must be in the `ai:clarification` phase before it can be answered by the poller; otherwise, the poller will not process the `/answer` command and the issue remains blocked.\n- scripts/unblock_judge.sh:557 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script logs \"actuation failed\" when `unblock_run_ops` returns a non-zero exit status, but it does not proactively check if the project-record write (which occurred earlier) was successful or if the issue was left in an inconsistent state.\n  WHY: If the actuation fails, the item remains blocked, and the project record may not reflect the latest state, potentially causing the poller to retry the same failed action, leading to duplicate fix-up issues or duplicate labels.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When `UNBLOCK_JUDGE_ENABLED=false` turns the judge off.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh (main loop)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `UNBLOCK_JUDGE_ENABLED` check is implemented in `unblock_judge.sh` (the judge itself), but the `orchestrate_poll_process.sh` loop does not actually honor the `UNBLOCK_JUDGE_ENABLED` repo-var to skip the per-project hook logic entirely (it only skips the scan dispatch); it does not explicitly skip the `handle_unblock_judge_project_hooks` call in the main loop (line 18612).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_actions.py:214-238 | severity=high | confidence=4\n  PROBLEM: `auto_answer` logic posts the `/answer` comment before ensuring the issue is in the `ai:clarification` phase.\n  WHY: An `ai:blocked` issue must be in the `ai:clarification` phase before it can be answered by the poller. If the issue remains in `ai:blocked` or any other phase after this logic runs, the poller will not process the `/answer` command, leaving the issue blocked despite the judge's verdict.\n- scripts/unblock_judge.sh:557 | severity=high | confidence=3\n  PROBLEM: The script logs \"actuation failed\" when `unblock_run_ops` returns a non-zero exit status, but it does not proactively check if the project-record write (which occurred earlier) was successful or if the issue was left in an inconsistent state.\n  WHY: If the actuation fails, the item remains blocked, and the project record may not reflect the latest state, potentially causing the poller to retry the same failed action, leading to duplicate fix-up issues or duplicate labels.\n- Requirement: \"When `UNBLOCK_JUDGE_ENABLED=false` turns the judge off.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh` (main loop)\n  Evidence of absence: The `UNBLOCK_JUDGE_ENABLED` check is implemented in `unblock_judge.sh` (the judge itself), but the `orchestrate_poll_process.sh` loop does not actually honor the `UNBLOCK_JUDGE_ENABLED` repo-var to skip the per-project hook logic entirely (it only skips the scan dispatch); it does not explicitly skip the `handle_unblock_judge_project_hooks` call in the main loop (line 18612).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6affe10430dfd042109e360fc099509c9ffce4479cb3a349d1e584e79eb70957",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37340373075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37340373075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005175619_c4c47e253e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37340373075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T17:56:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

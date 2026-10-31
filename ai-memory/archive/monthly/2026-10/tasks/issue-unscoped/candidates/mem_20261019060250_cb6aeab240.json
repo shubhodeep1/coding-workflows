@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/deploy-activate.md:50-56 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The \"Look up before creating\" bullet checks a `pr-<N>.md` log's `- Reference:` line only when the requested PR is external, so a run for this repository's (THIS_REPO's) own PR #N resumes any existing `pr-<N>.md` without that check, even when the log names an external PR.\n  WHY: Under the old rule, external PR logs were written as `pr-<N>.md`, and the new rule leaves them where they are (\"Never rename or move an existing log\"), so the command can resume another project's runbook, skip its `[x]` steps, write this repository's step evidence into the wrong file, or report `Status: LIVE` for a PR that was never activated; all reviewers rated this MAJOR (mapped to high), and confidence ranged from 3 to 5.\n- workflow-templates/.claude/commands/deploy-activate.md:57-63 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The template copy of the \"Look up before creating\" bullet has the same gap: `pr-<N>.md` is checked against its `- Reference:` line only when the requested PR is external, so a legacy external-PR log can be resumed for this repository's PR with the same number.\n  WHY: This is the same clash with legacy logs as in the root copy, and it causes the wrong project to be resumed or reported LIVE; all reviewers rated this MAJOR (mapped to high), and confidence ranged from 3 to 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/commands/deploy-activate.md:53 and workflow-templates/.claude/commands/deploy-activate.md:60 | severity=MAJOR | confidence=3\n  PROBLEM: The \"Look up before creating\" bullet resumes `pr-<N>.md` for an external PR, and `pr-<repo>-<N>.md`, only when the `- Reference:` line names that PR; there is no matching condition for a PR in this repository (`THIS_REPO`), so a legacy external `pr-<N>.md` is resumed through the \"If a log exists, it is the source of truth\" path in Step 1 and the \"Read first (mandatory)\" bullet without its Reference being read.\n  WHY: The command resumes the other project's runbook, skips that log's `[x]` steps, and can report `Status: LIVE` for a PR that was never activated; this is the clash the issue describes (\"the name could also clash with that repo's own PR #37\"), which was possible before this PR and is still uncovered in this direction.\n- HARDENING_SUGGESTION (same location, both copies): add the sentence \"For a PR in this repo, resume `pr-<N>.md` only when its `- Reference:` line does not name a PR in another repository; otherwise stop and ask which log to use.\" Estimate: 1 line per copy, plus 1 assertion in tests/test_deploy_activate_command.py. HARDENING_RISK_SCORE: 3\n- Task completeness: NONE. The reviewer noted that `docs/deploy-activation/README.md` lines 10-11 still document only `pr-<N>.md`, but did not count this as a gap because the file is outside `files_touched` and the issue does not ask for it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/deploy-activate.md:lines 53-56 | severity=MAJOR | confidence=5\n  PROBLEM: The lookup logic only validates the Reference line when the requested PR is external.\n  WHY: If a PR log named pr-N.md exists (e.g., from an old external PR), running /deploy-activate for an internal PR #N will derive the same path (pr-N) and might resume the external project's log, skipping completed steps or reporting the wrong project as LIVE.\n- workflow-templates/.claude/commands/deploy-activate.md:lines 60-63 | severity=MAJOR | confidence=5\n  PROBLEM: The lookup logic only validates the Reference line when the requested PR is external.\n  WHY: Same failure as above, in the template copy.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `.claude/commands/deploy-activate.md:50,53`; `workflow-templates/.claude/commands/deploy-activate.md:57,60` | severity=MAJOR | confidence=5\n  PROBLEM: The lookup checks a `pr-<N>.md` file's `Reference` only when the requested PR is external; for a PR in this repository it can resume any existing log with that slug, even if the log names an external PR.\n  WHY: An external PR log created under the old `pr-<N>` rule is intentionally left in place, so running `/deploy-activate` for a same-numbered PR in this repository selects that path and can resume the external project's progress, skip its completed steps, or report it as LIVE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/commands/deploy-activate.md:line 53, \"Look up before creating\" bullet (same in workflow-templates/.claude/commands/deploy-activate.md line 60) | severity=MAJOR | confidence=5\n  PROBLEM: The lookup validates a `pr-<N>.md` log's `- Reference:` line only when the requested PR is external; for a PR in THIS_REPO it resumes whatever `pr-<N>.md` it finds without checking that the log names THIS_REPO's PR.\n  WHY: Existing logs are not renamed, so a pre-change external log at `docs/deploy-activation/pr-37.md` (e.g. `shubhodeep1/mongo-explorer` PR 37, the incident this PR fixes) is resumed by a later THIS_REPO PR #37 run, which skips that log's completed steps, writes THIS_REPO's step evidence into the wrong project's file, or reports the external project LIVE.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "2b861a42541a99d89b106dce5490c4be812e9157ffd45591e6be651b960744fe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7661,
+    "run_id": "39203031858",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39203031858",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019060250_cb6aeab240",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7661,
+    "run_id": "39203031858"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T06:02:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

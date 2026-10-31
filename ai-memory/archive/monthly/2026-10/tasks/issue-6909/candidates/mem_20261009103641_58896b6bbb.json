@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix target?\nChoices:\nA. PR #6894's head branch `ai/issue-6882`, where the failure happened. Add an `Integration branch: ai/issue-6882` line so the fix lands on that branch. (RECOMMENDED)\nB. The default branch `main`. Only valid if the failing test also fails on `main`.\nC. Whichever branch reproduces the failure: try `ai/issue-6882` first, then `main`.\nQ2: The failing test name cannot be read from the logs. What should the implementation do?\nChoices:\nA. Rebuild the shard-1 test list for group 3 of 4 the same way CI does (the `NR % total == n` split in `.github/workflows/ci.yml` lines 1390-1398), run those tests on the target branch, and make the smallest fix for whatever reproduces. If nothing reproduces, close the issue as a transient runner failure with no code change. (RECOMMENDED)\nB. Do A. In addition, change the orchestrate-poll step in `.github/workflows/ci.yml` to copy each failed shard's `FAIL <test>: <error>` lines into its `::error::` annotation, so future triage can see the test name. Contract tests (`tests/test_ci_poll_test_sharding.py`) would be updated too. Do not change the aggregate `lint` gate or the shard-failure gate.\nC. Make only the diagnostics change described in B, and fix no test.",
+  "fingerprint": "01f7c0cd6243751118096d28fc6a96a3b2e11258ffbaa3f14dad8d70298e6145",
+  "lineage": {
+    "issue_number": 6909,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37917940042",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37917940042",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009103641_58896b6bbb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6909,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37917940042"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6909 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T10:36:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

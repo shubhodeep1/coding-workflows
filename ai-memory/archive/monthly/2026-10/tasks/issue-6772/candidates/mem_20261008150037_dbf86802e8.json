@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The \"start a fresh issue through trusted heal intake\" sentence limits how the unblock judge may re-issue; it does not ask for intake changes. In the repo, `is_heal_route` (`scripts/workflow_failure_heal.py:1595`) sends an issue down the heal-scope preflight (`scripts/implement_heal_preflight.sh`) only when it has the `ai:workflow-heal` label or an `fp` marker, and this re-issue appears to have neither. That leaves it on the ordinary implement path, where the automation-path guard still requires a trusted-author exact `files_touched` grant, so no scope check is bypassed. The plan's `files_touched` must therefore list the `scripts/` resolver files, `tests/**` and a `changelog.d/*.md` fragment, and must not touch the intake, the generation limit or `scripts/unblock_judge.sh`.\nQ2: The live/template parity rule requires `.claude/hooks/**` to be byte-identical to its `workflow-templates/` twin, and hooks are not in `.github/ai/claude_template_divergence.json`. So the cleanly merged template is the only correct content for the live hook, and no model is needed. Do this in `scripts/review_conflict_prepare.sh`, next to the manifest union-merge and before `check-paths`. Apply it only when all of these hold: the conflicted path is under `.claude/hooks/` and is not on the divergence allowlist; the template twin is at index stage 0 after the merge; the twin is a regular, non-symlink file on both sides; the live hook is a regular, non-symlink file on both sides. Then write the merged template bytes and mode to the live path, `git add` it, and log a fixed path-free line. Gate it behind a new helper-defaulted `CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED=true`. In every other case, or with the flag off, keep the existing `sandbox_path_host_only` manual-merge refusal unchanged. The live hook is never sent to the model.\nQ3: Resolving the hook early takes it out of the unmerged set, so the existing `check-paths` and sandbox admission run unchanged on whatever is left. Any other host-only or unsafe path still fails closed. When the hook was the only conflicted path, commit the two-parent `[ai-merge-resolve]` merge in preparation (as the manifest path does). On `orchestrator/project-*` branches, commit only after the integration fingerprint check passes on the merged tree; an unavailable check or a violation fails with `reason=integration_sync`. Regression tests in `tests/` must cover:\n- a clean template with the hook as the only conflict, which is resolved and committed;\n- a conflicted template, which refuses with `sandbox_path_host_only`;\n- a symlinked or missing twin, which refuses;\n- the hook plus an admitted path, where only the admitted path reaches the resolver and the hook stays out of the snapshot;\n- the hook plus another host-only path, which still refuses;\n- the kill switch set to `false`, which restores today's refusal;\n- an integration-sync branch, where the fingerprint gate runs before the commit.\n\nAssumption: I could not read this issue's live labels. If it carries `ai:workflow-heal` or an `fp` marker, the heal preflight will refuse it again. That case needs a fresh intake-filed issue, not a change in this one.",
+  "fingerprint": "f7e4326aa64b1a8a87d8b1fe6807a0a81501fa8899507432f9c1be267fa8a874",
+  "lineage": {
+    "issue_number": 6772,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37795931456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37795931456",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6772"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008150037_dbf86802e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6772,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37795931456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6772",
+  "timestamps": {
+    "created_at": "2026-10-08T15:00:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

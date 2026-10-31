@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_isolated_run.sh together with .github/workflows/clarify.yml, step \"Pre-seed clarify sandbox base image\" | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: In clarify, `clarify_base_image_preseed.sh` can run twice on the same Dockerfile when every mirror is unavailable.\n  WHY: Both runs retry every mirror, potentially adding up to 4 \u00d7 300 s before the model starts, while the changelog says 2 \u00d7 300 s.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Each caller above seeds the base image from a mirror before building.\" (issue #7215, third gap)\n  expected_change_site: scripts/clarify_isolated_run.sh, clarify_image_build, the prebuilt-pull success branch (lines 59-68)\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `sandbox_image.sh build` can fall back to an unseeded local `docker build` after a label mismatch (scripts/sandbox_image.sh:153-160); pre-seed only runs on the fall-through path below line 74; `test_isolated_run_preseeds_when_prebuilt_handoff_builds_locally` (tests/test_clarify_sandbox_base_image_preseed.py:674-720) only covers the failure case.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/clarify_isolated_run.sh together with .github/workflows/clarify.yml, step \"Pre-seed clarify sandbox base image\" | severity=low | confidence=[3]\n  PROBLEM: In clarify only, an outage affecting every mirror makes the helper run twice, because neither run leaves anything for the other to skip.\n  WHY: On that path the worst-case delay before the model starts is 4 \u00d7 300 s for the default two mirrors. The changelog row \"Extra wait before the model starts when the prebuilt image and every mirror fail\" in `changelog.d/7215-clarify-base-image-preseed-all-callers.md` says \"2 \u00d7 300 s\", so it understates the clarify worst case. Other callers are correctly described. The run still proceeds and the helper always exits 0, so nothing breaks. This only affects the already-degraded case where all mirrors fail.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Each caller above seeds the base image from a mirror before building.\" (issue #7215, third gap)\n  Expected change site: scripts/clarify_isolated_run.sh, clarify_image_build, the prebuilt-pull success branch (lines 59-68).\n  Evidence of absence: When the prebuilt pull succeeds (line 59), the function calls `sandbox_image.sh build` and returns the first non-empty image ID (lines 64-66). `sandbox_image.sh build` can fall back to an unseeded local `docker build` after a label mismatch (scripts/sandbox_image.sh:153-160); the local build hits Docker Hub for the Dockerfile's `FROM`. Because the pre-seed is only run on the fall-through path below line 74, a successful local fallback build bypasses the mirror pre-seed entirely. The regression test `test_isolated_run_preseeds_when_prebuilt_handoff_builds_locally` (tests/test_clarify_sandbox_base_image_preseed.py:674-720) only covers the failure case \u2014 its stub `sandbox_image.sh build` fails with 429 and the function falls through to pre-seed. There is no test that proves pre-seed runs when the local fallback build succeeds.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- The last run diff correctly addresses the consensus finding from the previous round. The `sandbox_image.sh ref` failure handler now skips the `ref_failed` log line for both `off` and invalid registry values, matching the helper's own normalization logic. The new regression test covers all four cases (unset, valid, `off`, invalid) and verifies that the local build still succeeds in each case. The agents.d fragment documentation is updated to match. The consensus task gap from GPT-6 Luna (prebuilt hand-off fallback bypassing the mirror pre-seed) was already addressed in the previous autofix round: `clarify_image_build` now captures the output of `sandbox_image.sh build` and only returns when it succeeds with a non-empty image ID; otherwise it falls through to the mirror pre-seed and local build. The test `test_isolated_run_preseeds_when_prebuilt_handoff_builds_locally` covers this path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No task was provided; the message contains only the unattended-system header and an unfilled `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder. It asks for the actual task (issue text, plan, or prompt payload).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3de23b9783d70a61638390556fa49cac4de7efbaf112c952bd432055687e2698",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7225,
+    "run_id": "38403023325",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38403023325",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013134440_e18f4a54ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7225,
+    "run_id": "38403023325"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T13:44:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

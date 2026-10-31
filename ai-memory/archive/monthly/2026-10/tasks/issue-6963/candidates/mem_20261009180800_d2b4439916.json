@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should \"check the commit that PR CI tested\" be done, given that Actions `pull_request` check-runs are reported against the head SHA, not the merge commit?\nChoices:\nA) Keep querying check-runs on the reviewed head SHA, which is where Actions records them. Close the gap by refusing to treat an empty or missing required check as green. The existing merge-base freshness gate (`_pr_base_fresh_for_merge`) still covers a moving base. (RECOMMENDED)\nB) Additionally read the PR's current `merge_commit_sha` and require that the CI workflow run for the head was triggered after the base's latest commit (one extra workflow-runs read). Refuse when it is stale.\nC) Poll check-runs on the `merge_commit_sha` as the issue literally says. **Note:** Actions never registers `pull_request` check-runs there, so this never sees CI and blocks every auto-merge.\nQ2: Which check must exist and succeed before an empty result can stop counting as merge authorization?\nChoices:\nA) At least one check-run whose name is in the resolved required set (branch protection \u222a `ORCH_FINAL_MERGE_REQUIRED_CHECKS`) must exist and have succeeded. Names that never appear (for example `Lint plan-archival completeness` in consumer repos) do not block. (RECOMMENDED)\nB) Add a new variable naming one mandatory CI check, for example `AUTO_MERGE_REQUIRED_CI_CHECK` with default `lint`, matching `RELEASE_CI_GATE_CHECK_NAME`. That check must exist and succeed. An empty value keeps today's behaviour.\nC) Every name in the resolved required set must exist and succeed. **Note:** the default list includes checks that only exist in this repo, so consumer auto-merges would always time out.\nQ3: Which gate gets the stricter \"no check-runs means no merge\" rule?\nChoices:\nA) Only `_pr_wait_for_required_checks`, which covers the review auto-merge paths, `deterministic-skip-merge` and the review-blocked judge's `merge`/terminal `fix`. This is what the cited lines 360-373 cover. If the check never appears, the wait times out and refuses (`outcome=timeout`). (RECOMMENDED)\nB) Both `_pr_wait_for_required_checks` and `_pr_checks_completed`, so the orchestrator's final integration merge and review-blocked merges also refuse an empty result.",
+  "fingerprint": "8b50345cdcf48b5024f6567e5da5f692e2bb948bf464e50fceab946b356ea252",
+  "lineage": {
+    "issue_number": 6963,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37970631621",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37970631621",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009180800_d2b4439916",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6963,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37970631621"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6963 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T18:08:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

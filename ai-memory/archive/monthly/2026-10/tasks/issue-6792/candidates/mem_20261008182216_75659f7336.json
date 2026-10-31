@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The grant check in `scripts/files_touched_scope_guard.py` (`build_automation_grant`, lines 177-206) reads the grant only from the issue body. It trusts the body when the issue's author is the pipeline login or an OWNER, MEMBER or COLLABORATOR. If the body has no `files_touched` block, the grant fails with `no_allowlist` (line 201), which is the failure run 37814109250 hit. A comment, including this answer, can't supply the grant. So the only automated route is to add an exact `files_touched` block to the body, which is option A. This is operator setup, so per the placeholder rule it goes under SETUP REQUIRED rather than ESCALATE. Option B would abandon the pipeline path.\nQ2: The existing flag sets the pattern. `CONFLICT_MANIFEST_UNION_ENABLED` is passed to the conflict-prepare step at `.github/workflows/review_autofix.yml:5835` as `${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}`, and the script also defaults it (`scripts/review_conflict_prepare.sh:264`). Adding the new flag the same way, defaulting to `'false'` in both places, keeps the behaviour off as the issue requires. It also lets an operator turn it on with a repo variable later, with no further change.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered options. For the planner, these notes are binding:\nQ1/Q2:\n  inputs:\n    - scripts/review_conflict_prepare.sh (manifest union block around lines 223-381; the new hook-template resolution sits next to it)\n    - .github/workflows/review_autofix.yml:5835 (the env block of the conflict-prepare step)\n    - tests/test_conflict_manifest_union_contract.py\n    - README.md (variables table, next to the `CONFLICT_MANIFEST_UNION_ENABLED` row)\n    - changelog.d/6772-conflict-hook-template-resolve.md (new)\n  steps:\n    - Add `CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED: ${{ vars.CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED || 'false' }}` directly below line 5835 in `review_autofix.yml`. This is one line, so the workflow-size guard is not at risk; still confirm with `wc -c` that the file stays under 480,000 bytes.\n    - In `review_conflict_prepare.sh`, read `${CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED:-false}`. Resolve a conflicted `.claude/hooks/*` path only when all of these hold:\n      - the flag is `true`;\n      - the path is a regular file;\n      - its `workflow-templates/.claude/hooks/*` twin merged cleanly and is a regular file;\n      - the path is not listed in `.github/ai/claude_template_divergence.json`.\n      The resolution copies the twin's bytes and mode. In every other case keep the existing host-only refusal, and never send the hook to the model.\n    - Add regression tests to `tests/test_conflict_manifest_union_contract.py` for: flag off, flag on and eligible, twin also conflicted, twin a symlink or missing, a listed divergence, and the workflow env default being `'false'`.\n    - Document the flag in README.md and add the changelog fragment. Don't change heal intake or the scope guards.\n  reversibility: The flag defaults to off in both the workflow and the script, so merging changes no behaviour. Removing the repo variable turns the feature off again.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- ISSUE_BODY_FILES_TOUCHED_GRANT (resource: an edit to this issue's body). An operator with write access appends this block exactly as shown to the body of this issue:\n  ```\n  files_touched:\n    - scripts/review_conflict_prepare.sh\n    - .github/workflows/review_autofix.yml\n    - tests/test_conflict_manifest_union_contract.py\n    - README.md\n    - changelog.d/6772-conflict-hook-template-resolve.md\n  ```\n  The operator then removes `ai:scope-blocked` from this issue if it has that label, and confirms that `ALLOW_WORKFLOW_EDITS` is still `true` (the default).\n  Until set: implement's automation-path guard refuses the commit with `no_allowlist`, so nothing is pushed and nothing changes.\n- CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED (repository variable, optional). Set it to `true` once the merged change is on `main`, to turn on deterministic resolution of `.claude/hooks/*` conflicts from their template twins.\n  Until set: the script and workflow default it to `false`, so conflicted hooks keep failing closed with the existing `sandbox_path_host_only` refusal.",
+  "fingerprint": "d42ffaab80efeeda199545f5ff9c6bb9f95c8e842d204304b1920383fd00c1bf",
+  "lineage": {
+    "issue_number": 6792,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37822683784",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37822683784",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6792"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008182216_75659f7336",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6792,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37822683784"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6792",
+  "timestamps": {
+    "created_at": "2026-10-08T18:22:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

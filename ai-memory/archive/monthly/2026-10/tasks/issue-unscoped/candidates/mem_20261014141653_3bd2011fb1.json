@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh:412-421 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `user_manager_route_open` treats a `sudo -n` denial (rc 1, empty output) of `pgrep`, `test -S` or `test -e` as \"no match\". It returns 2 (route closed), and `cmd_selfcheck` passes.\n  WHY: A reachable user manager can be missed when sudo denies the inspection commands, because `require_sudo` only proves `sudo -n true`. The reviewers rated this MAJOR, which is mapped to high here. The reviewers anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash judged it hardening-only, because the restricted-sudoers precondition is not evidenced.\n- scripts/validation_harness_sandbox.sh:412-426 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Three error paths still map to \"route closed\": `sudo -n pgrep` rc 1, `sudo -n test -S` rc 1 and `sudo -n test -e` rc 1. The new tests exercise only the `pgrep` rc 3 and `find` rc 1 cases.\n  WHY: Any of the three unexercised denial paths reads silently as \"no user manager\". The reviewer rated this MAJOR, which is mapped to high here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validation_harness_sandbox.sh:412-416, 419, 421 | severity=MAJOR | confidence=4\n  PROBLEM: The route probe conflates a `sudo -n` denial (rc 1, empty stdout) with pgrep's \"no match\". The `sudo -n test -S` and `sudo -n test -e` gates skip silently on denial, so the function returns 2 and `cmd_selfcheck` passes.\n  WHY: Under sudo denial, a reachable user manager goes undetected. The new test uses a wrapper that returns 3 for `pgrep` and 1 for `find`, so it does not cover this case.\n- scripts/validation_harness_sandbox.sh:412-416 | severity=MAJOR | confidence=4\n  PROBLEM: The fix catches only pgrep's own rc 2 or higher. It still treats sudo's rc 1 as success, so the original bug persists on the sudo-denied path.\n  WHY: Any sudo-denied condition reports the route closed (rc 2), and selfcheck passes.\n- scripts/validation_harness_sandbox.sh:412-426 | severity=MAJOR | confidence=4\n  PROBLEM: Three error paths still map to \"route closed\": `sudo -n pgrep` rc 1, `sudo -n test -S` rc 1 and `sudo -n test -e` rc 1. Only `find` failure maps to fail closed.\n  WHY: The tests exercise only the `pgrep` rc 3 and `find` rc 1 cases, so the three rc 1 paths are unexercised.\n- scripts/validation_harness_sandbox.sh:547, 553, 819 | severity=NONE | confidence=5\n  PROBLEM: The log token `cgroup_mode_unrecognized_using_cgroupfs` and the status reason `user_manager_reachable_from_container` replace the old names. The docs were updated to match, so this is consistent.\n  WHY: This is an informational check with no defect.\n- HARDENING: add `sudo -n true 2>/dev/null || return 1` at the start of `user_manager_route_open` (HARDENING_RISK_SCORE 3).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validation_harness_sandbox.sh:412-416, 418-421 | severity=MAJOR | confidence=4\n  PROBLEM: The route probe treats some `sudo` inspection failures as evidence that no systemd route exists. A `pgrep` rc 1 with empty output is accepted as \"no match\", and failures of `sudo -n test -S` and `sudo -n test -e` skip their checks. `require_sudo` at line 133 verifies only `sudo -n true`.\n  WHY: Command-specific sudo denial returning 1 can miss a running manager or its socket. The probe then returns 2 and `cmd_selfcheck` passes at line 819.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING (not a finding): `scripts/validation_harness_sandbox.sh:410-421` | HARDENING_RISK_SCORE 2. `sudo -n pgrep` and `sudo -n test` exit 1 are ambiguous between \"no match\" and sudo denial. The suggested fix is to probe a known-good inspection at the top of the function and fail closed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0971f5e2042d5492bdd676ae1a8e4e7426324eb2b2fa79f8fc3cffa9ec398fd3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7384,
+    "run_id": "38573651478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38573651478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014141653_3bd2011fb1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7384,
+    "run_id": "38573651478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T14:16:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

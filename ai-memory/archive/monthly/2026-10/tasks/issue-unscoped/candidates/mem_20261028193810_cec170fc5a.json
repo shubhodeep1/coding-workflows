@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.77,
+  "details": "Review and orchestration changes include dedicated head-binding and blocked-state checks. When changing automation that acts on PRs, preserve explicit checks that the reviewed or acted-on head is the expected one, and test blocked or stale states.",
+  "fingerprint": "a289cd82a91a6b93a8d7f0728f3e045e657eb54bc9d28e6101a36fc9398fe4d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40752760153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40752760153",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8244",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8249",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8260",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8262",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8265",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8258",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8259",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8263",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8267"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261028193810_cec170fc5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "PR automation should bind decisions to the intended PR head and guard unsafe workflow transitions.",
+  "timestamps": {
+    "created_at": "2026-10-28T19:38:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

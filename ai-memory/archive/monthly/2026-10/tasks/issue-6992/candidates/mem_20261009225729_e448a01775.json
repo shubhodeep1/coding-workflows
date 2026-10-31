@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Under #6208 the live `.claude/hooks/pr_merge_status_guard.py` is excluded from every editor snapshot and transfer, and the issue itself says to keep automated live-hook writes off. The implement phase therefore cannot make the required change, which rules out B. C would add a flag that nothing reads; agents.md already records that the earlier `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` placeholder was retired for that reason. The unblock judge's `operator_step` verdict has already logged this step in the `ai:operator-step` tracker (`scripts/unblock_actions.py` lines 345-361), so a human only needs to finish it and the pipeline should not produce code.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 (letter decision; this records the operator path so the planner does not invent code work):\n  strategy: operator-only step, no repository edit by the pipeline\n  inputs:\n    - `workflow-templates/.claude/hooks/pr_merge_status_guard.py` on `main` (the source of truth)\n    - `.claude/hooks/pr_merge_status_guard.py` on `main` (live copy, mode 0755; excluded from pipeline editors)\n    - branch `ai/sync-claude-live-copies-held` (exists at 8c8184635771), plus its draft PR if one is open\n    - `tests/test_claude_template_live_parity.py`, `tests/test_pr_merge_status_guard.py`\n  steps:\n    - The plan states that no files change. It does not edit `.claude/**`, `workflow-templates/.claude/**`, parity tests, `.github/ai/claude_template_divergence.json`, or any CI exclusion. It does not add a `PR_MERGE_GUARD_SYNC_UNSET_OPERATOR_STEP` flag, because nothing would read it.\n    - A human finishes the step by doing one of these:\n      - review and merge the held draft PR from `ai/sync-claude-live-copies-held`, after confirming its live hook is byte-identical to the template on current `main`;\n      - in an interactive session, copy the template over the live hook, keep mode 0755, and open a PR.\n    - Before merging, the human runs `tests/test_claude_template_live_parity.py` and `tests/test_pr_merge_status_guard.py` and confirms CI on the PR is green.\n    - After the sync merges and CI on `main` is green, #6828 counts as resolved. The unblock judge's follow-up (or a human) then clears #6828 and the `ai:operator-step` entry keyed `unblock-6828`.\n  replaces_acceptance_criterion: \"implement produces a gated code change\" becomes \"a human-reviewed sync makes the live hook byte-identical to the template on `main` (mode 0755), the parity and hook tests pass, and CI on `main` is green\"\n  equivalence_argument: The issue's stated goal is live/template parity achieved through human review, with automated live-hook writes kept off. The criterion above is that goal exactly. A gated placeholder flag would not move parity forward.\n  reversibility: Nothing in the repository changes, so nothing needs reverting. If a human later prefers C, a flag can be added in a separate issue.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- PR_MERGE_GUARD_SYNC_UNSET_OPERATOR_STEP (operator step, not a code variable): a human syncs `.claude/hooks/pr_merge_status_guard.py` to match `workflow-templates/.claude/hooks/pr_merge_status_guard.py` on `main` with mode 0755, through the held sync PR or an interactive session. Until then the parity test keeps failing and #6828 stays blocked; no pipeline code reads this name.\n\nAssumptions: I did not compare the hook files, because the read-only snapshot omits `.claude/`. The drift is taken from the issue and the planning checkout's finding. I also assumed the held sync branch may contain the hook update; if it doesn't, the interactive-session route applies.",
+  "fingerprint": "48e3ed825ddb452e6f6402fe4037b9bcacf0700910130c946807e3de3d74fcb5",
+  "lineage": {
+    "issue_number": 6992,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38001357986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38001357986",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6992"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009225729_e448a01775",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6992,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38001357986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6992",
+  "timestamps": {
+    "created_at": "2026-10-09T22:57:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5217-5219 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Mistral context-overflow retry path leaves `pass_hard_failures` set from the initial failure, preventing a fallback reviewer\u2019s `skipped_budget` result from requesting `partial_finalize`.\n  WHY: The retry path does not reset or update the variable, so the `[ \"${pass_hard_failures}\" -eq 0 ]` condition remains false.\n- scripts/review_run_reviewers.sh:5443 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The zero-success guard excludes lite-tier reviewers.\n  WHY: A lite-tier pass with zero successful reviewers can exit successfully and mask the failure.\n- tests/test_review_autofix_review_pipeline_contract.py:4681-4686 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The partial-finalize assertion does not expect a partial request when Mistral context-overflow triggers the GPT retry and GPT returns `skipped_budget`.\n  WHY: Both reviewers say this path sets `pass_budget_skipped=1` and requests partial finalize, so the test\u2019s assertion fails for that case.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh:5217-5219 | confidence=4\n  PROBLEM: The pass_hard_failures variable is determined by the initial Mistral pass and is not reset or updated when the retry path for Mistral context overflow is taken.\n  WHY: Even if the fallback (GPT) reviewer returns a retriable skipped_budget status, the condition [ \"${pass_hard_failures}\" -eq 0 ] will evaluate to false because pass_hard_failures remains set to 1 from the initial Mistral failure. This prevents the reviewer from correctly requesting a partial_finalize when it is warranted, breaking the recovery path for lite reviewers.\n- scripts/review_run_reviewers.sh:5443 | confidence=4\n  PROBLEM: The conditional check [ \"${REVIEW_TIER:-}\" != \"lite\" ] excludes lite tier reviewers from the zero-success guard.\n  WHY: The reviewer pass for the lite tier can now fail (or end with zero successful reviewers, contrary to the previous assumption that a lite reviewer must always succeed) and exit successfully without actually finding any issues, effectively masking failures in lite reviews.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_autofix_review_pipeline_contract.py:4653, 4686 | severity=high | confidence=5\n  PROBLEM: The partial-finalize assertion incorrectly expects no partial-finalize request when Mistral reports a context overflow and the GPT retry returns `skipped_budget`.\n  WHY: In the line 4653 case, the context-overflow status triggers the GPT retry. The script sets `pass_budget_skipped=1` for GPT\u2019s `skipped_budget` result and requests partial finalize at `scripts/review_run_reviewers.sh:5215-5222`. But the test\u2019s assertion only expects partial finalize when Mistral was skipped or its health decision was `skip_open`, so this case fails.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_review_pipeline_contract.py:4681 | severity=high | confidence=4\n  PROBLEM: The `partial_request_file.exists()` assertion does not account for the context-overflow retry path. When Mistral fails with a context-overflow error and GPT returns `skipped_budget`, the code sets `pass_budget_skipped=1` and calls `reviewer_request_partial_finalize \"soft_deadline\"`, so the partial request file should exist. But the assertion evaluates to False for that case because `mistral_status` is `\"failed\"` (not `\"skipped_unmapped\"` or `\"skipped_open\"`) and `mistral_health_decision` is empty.\n  WHY: The test case `(\"maximum context length exceeded\", \"mistralai/mistral-small-2603,openai/gpt-6-luna\", \"skipped_budget\", 2, \"\", \"failed\", \"\", 0)` expects `expected_count=2` (both reviewers called), which means GPT is called and returns `skipped_budget`. The code at `scripts/review_run_reviewers.sh:5213` sets `pass_budget_skipped=1`, then at line 5220-5222 calls `reviewer_request_partial_finalize \"soft_deadline\"`. The partial request file should exist, but the assertion expects it not to.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "87e9e17d872d61d50cd748c0de9dbb32db89b2d7fa28ac5cbfc55c1586797cbe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6438,
+    "run_id": "37456132183",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37456132183",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006124828_0f26eb6509",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6438,
+    "run_id": "37456132183"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T12:48:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

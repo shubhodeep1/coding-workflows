@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_live_log_cooldown.py:251-271 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: test_behaviour_schedule_always_failing, test_behaviour_success_resets_counter and test_workflow_step_parses_as_bash use a bare `return` when bash is missing, so pytest reports them as passed without running any assertion.\n  WHY: The tests give false coverage, and the bait-coverage test now uses unittest.SkipTest, so the guards are inconsistent. Severity disagreement: gemini said MAJOR (mapped here to high), minimax said NIT. The highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: agents.md \"agents.md fragments (CLAUDE.md \u00a730)\" \u2014 PRs document behaviour in `agents.d/<issue-or-pr>-<slug>.md`; the PR changes two operator-visible workflow behaviours (the live-log cooldown in test-and-mark-stable.yml and the unlinked-run listing in cancel_on_pr_close.yml) but adds no agents.d fragment.\n  expected_change_site: agents.d/<issue-or-pr>-<slug>.md with an `<!-- agents: section=\"...\" -->` block\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: pr_changed_files.txt lists 9 files and none are under agents.d/, and the only new files are the two changelog.d/wfopt-0922-3-*.md fragments.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (No findings reported.)\n- HARDENING (advisory, HARDENING_RISK_SCORE: 1): tests/test_test_and_mark_stable_live_log_cooldown.py, in test_behaviour_schedule_always_failing, test_behaviour_success_resets_counter and test_workflow_step_parses_as_bash. Each still does a silent `return` when bash is missing. Suggested fix: raise unittest.SkipTest(\"bash is not installed\") (3 lines).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_live_log_cooldown.py:251, 260, 271 | severity=MAJOR | confidence=5\n  PROBLEM: test_behaviour_schedule_always_failing, test_behaviour_success_resets_counter and test_workflow_step_parses_as_bash use silent returns when bash is not found.\n  WHY: The tests exit with success without validating anything when bash is missing, which gives a false sense of coverage.\n- HARDENING (advisory, HARDENING_RISK_SCORE: 1): the skipping behaviour is inconsistent with test_bait_coverage_cooldown_skip_does_not_exclude_run. Suggested fix: raise unittest.SkipTest in each guard (3 lines).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_test_and_mark_stable_live_log_cooldown.py:251-253, 259-261, 268-271 | severity=NIT | confidence=4\n  PROBLEM: Only one of four missing-tool guards was converted to unittest.SkipTest. The other three still use a bare `return`, so the file has two conventions for the same situation.\n  WHY: A bare `return` is a pytest pass, so a regression could ship with CI green when bash is absent. The fix is 3 lines, and main() already catches SkipTest.\n- TASK_GAP: Requirement: agents.md \"agents.md fragments (CLAUDE.md \u00a730)\" \u2014 PRs document behaviour in `agents.d/<issue-or-pr>-<slug>.md`. Expected change site: `agents.d/<issue-or-pr>-<slug>.md` with an `<!-- agents: section=\"...\" -->` block. Evidence of absence: pr_changed_files.txt lists 9 files, none under agents.d/. ISSUE_CONFIDENCE: 3, severity NIT.\n- HARDENING (advisory, HARDENING_RISK_SCORE: 1): lines 252-253, 260-261, 270-271 use a bare `return`. Fix: raise unittest.SkipTest(\"bash is not installed\").\n- The reviewer also found the last-run diff correct and re-verified the workflow gating.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- (No findings reported.)\n- HARDENING (advisory, HARDENING_RISK_SCORE: 1, severity=NIT): tests/test_test_and_mark_stable_live_log_cooldown.py lines 251-271, in test_behaviour_schedule_always_failing, test_behaviour_success_resets_counter and test_workflow_step_parses_as_bash. If bash is unavailable the tests return normally and pytest counts them as passed. Suggested fix: raise unittest.SkipTest in each guard (3 lines).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- (No findings reported.)\n- HARDENING (advisory, HARDENING_RISK_SCORE: 1): tests/test_test_and_mark_stable_live_log_cooldown.py, test_behaviour_schedule_always_failing (~line 199), test_behaviour_success_resets_counter (~line 213) and test_workflow_step_parses_as_bash (~line 222). The tests still use a silent `return` when bash is missing. Suggested fix: raise unittest.SkipTest (3 lines).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (No findings reported.)\n- HARDENING (advisory, HARDENING_RISK_SCORE: 1): tests/test_test_and_mark_stable_live_log_cooldown.py lines 252, 260, ~269. The guard style is inconsistent: these tests silently `return` when bash is missing. Suggested fix: raise unittest.SkipTest (3 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f1f0eee961bb8cd77432cd455c5659bf9ea731667276495c0d27e09c21794d75",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7859,
+    "run_id": "39739802391",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39739802391",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022074703_eef0c064e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7859,
+    "run_id": "39739802391"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-22T07:47:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

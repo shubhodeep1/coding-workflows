@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: fix the flaky `test_broker_limits_threads_before_accepting_a_handler` (from PR #6845 CI triage)\n\nThe fix is a change to one test. The broker in `scripts/dependency_registry_proxy.py` is already correct and stays as it is.\n\nPlanning ref: `git rev-parse HEAD` = `98a26652703faa3ce180af8dd5bb73c1594b124e`, branch `main`. The issue declares no integration branch, so there is no ref mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends test_broker_limits_threads_before_accepting_a_handler\nScope-mode justification: The failure is a race in one test, not a broker bug. When its single slot is taken, `ThreadingUnixServer.process_request` (`scripts/dependency_registry_proxy.py` ~L188-198) logs `reason=busy`, sends `503` and then calls `shutdown_request` without reading the client's data. That is the intended pre-handler rejection. The test (`tests/test_dependency_registry_proxy.py` L94) uses the shared `request()` helper, which sends a CONNECT request before reading. The client can therefore fail in two ways:\n- It gets `BrokenPipeError` on `sendall` if the server has already closed.\n- On Linux AF_UNIX, it gets `ConnectionResetError` on `recv` if the close happens while the client's request is still unread in the server's receive queue.\n\nChanging the one test to connect and read without sending removes both failures, and it tests the property the test is named for. The shared `request()` helper and the other tests that use it are unaffected; the broker reads their requests before replying. Boil the Lake does not widen anything: the complete fix is the same size as the shortcut, and it adds no dependency or interface.\n\n### 1. Files likely to change\n- `tests/test_dependency_registry_proxy.py`: only `test_broker_limits_threads_before_accepting_a_handler` (L74-99).\n- No changelog fragment. CLAUDE.md \u00a720 exempts test-only changes.\n- No workflow change. `ci.yml` L541 already runs this file in the `tests-hooks-and-orchestrator` job.\n\n### 2. Functions or modules to change\n`test_broker_limits_threads_before_accepting_a_handler`:\n- Replace line 94 (`assert b\"503\" in request(path, b\"CONNECT pypi.org:443 HTTP/1.1\\r\\n\\r\\n\")`) with an inline second connection that:\n  - opens `socket.socket(socket.AF_UNIX)` as `second`, sets `second.settimeout(2)` and calls `second.connect(path)`;\n  - sends nothing;\n  - reads until EOF or until 512 bytes have arrived, in a small loop: `chunk = second.recv(512 - len(data))`, stopping on `b\"\"`. A single `recv` could return a partial status line, so it loops.\n  - asserts `data.startswith(b\"HTTP/1.1 503\")`. This is stricter than `b\"503\" in`, and the byte string is the exact one `process_request` sends.\n- Keep `assert len(handler_calls) == 1`. It proves no second handler thread was started.\n- Optional: add a `capfd` parameter and assert `\"reason=busy\"` appears in stderr, matching the log line in the CI evidence. pytest fixtures are injected by name, so this works alongside `tmp_path` and `monkeypatch`.\n- Leave the `finally` cleanup unchanged (release, shutdown, join).\n- Add one comment explaining why the test does not send: the broker closes without reading, and sending would race (`BrokenPipeError` / `ECONNRESET`). It cites the PR #6845 CI run 38082950546.\n\nNew local names (`second`, `data`, `chunk`) do not clash with `first`, `server`, `worker`, the fixtures or module globals.\n\n### 3. Data structures affected\nNone.\n\n### 4. API or interface changes\nNone. The broker code, log prefixes (`DEPENDENCY_PROXY`), env vars and the shared `request()` helper all stay as they are.\n\n## Decisions\n\n### D1 \u2014 Fix the test, not the broker\n- Chosen: change the test so it connects and reads the `503` without sending a request.\n- Alternatives considered: (a) have the broker drain or read the request before closing on the busy path; (b) catch `BrokenPipeError`/`ConnectionResetError` in the test and retry.\n- Why: (a) would make the broker do work for clients it has already rejected, which weakens the \"refuse before accepting a handler\" guarantee and spends a thread or I/O on a busy path the slot cap exists to protect. (b) suppresses the symptom, which \u00a715 forbids. The triage issue also asks for the broker limit to stay as it is.\n\n### D2 \u2014 Read in a loop until EOF instead of a single `recv`\n- Chosen: loop `recv` until EOF or 512 bytes.\n- Alternatives considered: keep the single `client.recv(512)` from `request()`.\n- Why: a stream socket may return a short read. Looping costs about 3 lines and removes a second, smaller source of flakiness.\n\n## Security considerations\n- Trust boundaries: none touched. Only the test changes. The broker's slot limit (`BoundedSemaphore`), the allowlist and the address vetting are unchanged.\n- Authorization / new surfaces: none.\n- External input validation: unchanged. The test still checks that the busy path rejects before any handler runs (`handler_calls == 1`), which is the denial-of-service guard.\n- Abuse cases: a client that floods connections still gets `503` without starting a handler thread, and the updated test asserts exactly that.\n\n## Risks and edge cases\n- If a later broker change starts reading the request before rejecting, the new test still passes, because it only depends on receiving the 503 and EOF.\n- `recv` raising `ConnectionResetError` without a sent request: not expected. The server's receive queue is empty, so Linux AF_UNIX close delivers the queued 503 and then EOF. The 2-second timeout bounds any hang.\n- The CI evidence came from PR #6845's branch (`ai/issue-6834`), but the test has the same shape on `main`, so the fix applies to `main`. No conflict between the issue text and the code was found.\n\n## Testing considerations\n- Run `python -m pytest tests/test_dependency_registry_proxy.py -q`.\n- Run the changed test in a loop to show it is stable, e.g. `for i in $(seq 50); do python -m pytest tests/test_dependency_registry_proxy.py::test_broker_limits_threads_before_accepting_a_handler -q || break; done`.\n- Use `PYTHONDONTWRITEBYTECODE=1` for these runs.\n- Run `ruff check tests/test_dependency_registry_proxy.py` (the repo's lint).\n- CI's `tests-hooks-and-orchestrator` job and the aggregate `lint` job should go green.\n\n## Pre-execution self-check\n- The plan covers the issue's suggested fix and keeps the broker limit unchanged.\n- It is limited to the single test file the issue lists.\n- No new script, workflow, scheduler wiring, supervisor or database work. The \u00a720 automation-bias requirements do not apply.\n- No external inputs are needed.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "81392ca18d639221f0a0e9c88b95acf2aca5200682731b6ef6db2326fe533074",
+  "lineage": {
+    "issue_number": 7103,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38084113094",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38084113094",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7103"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261010203947_c848455622",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7103,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38084113094"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7103",
+  "timestamps": {
+    "created_at": "2026-10-10T20:39:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

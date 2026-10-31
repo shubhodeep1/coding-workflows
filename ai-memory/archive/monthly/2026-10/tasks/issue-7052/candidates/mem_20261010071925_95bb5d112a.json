@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The repo already has a precedent for this kind of case. `agents.md:550` and `changelog.d/6755-merged-pr-guard-shell-wrappers.md` show that #6755's fix to protected files was first recorded as an open note behind the `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` placeholder, which nothing read. When a person landed the fix, the placeholder was retired. Option A does the same for #6831 and stays inside paths the pipeline can write (`agents.md` and `changelog.d/`), so the implementer produces a real change. Option B produces no change, which would likely trip the no-op implementation path (`ai:implementation-failed` and re-issue) instead of closing cleanly. B also leaves the pending protected-file change recorded nowhere in the repo.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - agents.md: the merged-PR guard bullets (the `pr_merge_status_guard.py` paragraphs, including the #6755 note around line 550)\n    - changelog.d/6755-merged-pr-guard-shell-wrappers.md (format and voice precedent)\n    - Issue #6831 (\"Activation gaps after PR #6647\") and its unblock `operator_step` verdict\n  steps:\n    - Next to the existing merged-PR guard bullets in `agents.md`, add a short note. It says #6831's change to `.claude/hooks/pr_merge_status_guard.py` and its `workflow-templates/` twin (and any `CLAUDE.md` part) is pending a trusted operator session, because pipeline editors cannot write `.claude/**` and the isolated workspace hides `CLAUDE.md`. It also says the change is kept off behind the placeholder `PR_MERGE_GUARD_ACTIVATION_UNSET_OPERATOR_STEP`, which nothing reads; that parity tests (`tests/test_claude_template_live_parity.py`) are not bypassed and no validation is reported as passed; and that the note and placeholder are removed when a person lands the change.\n    - Add `changelog.d/<issue-number>-pr-merge-guard-activation-pending.md`, matching the format of the #6755 fragment, saying the #6831 activation is still pending an operator and no setting changes.\n    - Do not edit `.claude/**`, `workflow-templates/.claude/**`, `CLAUDE.md`, or any test, and add no code that reads the placeholder.\n  replaces_acceptance_criterion: \"gate the new behaviour behind PR_MERGE_GUARD_ACTIVATION_UNSET_OPERATOR_STEP\". The pipeline can write no behaviour change here, so the gate is a documented placeholder that nothing reads, the same as the #6755 precedent.\n  equivalence_argument: The protected behaviour stays off, because nothing changes in `.claude/**`. The pending step is recorded in the repo under a named placeholder, so the operator and later sessions can find it and retire it, exactly as #6755 was handled.\n  reversibility: Docs only. Deleting the note and the fragment restores the previous state. No runtime behaviour changes.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- PR_MERGE_GUARD_ACTIVATION_UNSET_OPERATOR_STEP (variable): an operator lands #6831's change to both `pr_merge_status_guard.py` copies (and any `CLAUDE.md` part) in a trusted session, then removes the note and the placeholder. Until then, the code does nothing: no code reads it, the guard keeps its current behaviour, and parity tests stay enforced.",
+  "fingerprint": "b589611763385a377f200d9d31972c127cb17eea8c1287f2f27d78681487acb2",
+  "lineage": {
+    "issue_number": 7052,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38033548811",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38033548811",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7052"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010071925_95bb5d112a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7052,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38033548811"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7052",
+  "timestamps": {
+    "created_at": "2026-10-10T07:19:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

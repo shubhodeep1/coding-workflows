@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Every source-tree file added in a PR must be reflected in the manifest so the workspace materializer and the resolver-union logic agree on the file set.\n  expected_change_site: .ai/.workspace_source_manifest.txt\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: .ai/.workspace_source_manifest.txt is missing changelog.d/6364-triage-routing-metadata-neutralize.md; scripts/workspace_init.sh:339-368 and scripts/review_conflict_prepare.sh:203-234\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR introduces a new changelog fragment at changelog.d/6364-triage-routing-metadata-neutralize.md and the workspace source manifest at .ai/.workspace_source_manifest.txt is a sorted, unique-line inventory of every file in the source tree (per scripts/workspace_init.sh:339-368 which auto-walks the tree and overwrites the manifest, and scripts/review_conflict_prepare.sh:203-234 which uses it for conflict resolution). Every source-tree file added in a PR must be reflected in the manifest so the workspace materializer and the resolver-union logic agree on the file set.\n  Expected change site: .ai/.workspace_source_manifest.txt between the line for changelog.d/6323-check-triage-isolated-diagnosis.md and the line for changelog.d/claude-branch-push-pr-grace-window.md (lexical order: 6323 < 6364 < claude-branch).\n  Evidence of absence: The PR's manifest hunk inserts changelog.d/6323-check-triage-isolated-diagnosis.md (a file that already existed on the base branch \u2014 verified via glob, changelog.d/6323-check-triage-isolated-diagnosis.md is present and was not part of this PR's file set per pr_changed_files.txt). The new changelog file from this PR, changelog.d/6364-triage-routing-metadata-neutralize.md (verified present in the filesystem via glob, and listed in pr_changed_files.txt), is absent from the manifest. After this PR merges, the manifest will list 6323 but not 6364, leaving the source tree and the manifest out of sync until the next workspace_init.sh run regenerates the manifest. The review-conflict manifest-union path in scripts/review_conflict_prepare.sh:203-234 (MANIFEST_UNION_PATH=.ai/.workspace_source_manifest.txt) will compute stale two-sided unions on every PR that conflicts on the manifest until that next materialize, which is exactly the per-run-overhead shape the manifest is meant to avoid.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Hardening suggestion, scripts/check_failure_triage.sh:451: When the neutralized diagnosis contains `&lt;!--`, GitHub's markdown renderer decodes the entity back to `<` outside code fences, which restores a valid `<!-- ... -->` HTML comment in the rendered body. The raw-body parsers used by the orchestrator (resolve_integration_ref.sh, security_dependency.py, orchestrate_lib.py TARGET_BRANCH_LINE_RE) read the raw body, so they are safe; the test only asserts against the raw body. A future tool that consumes the GitHub API's rendered body_html field, or a human reader, would still see the spoofed comment. The fallback path places the evidence inside a code fence, but the model-quotation path concatenates raw model output into the body without a code fence, so the renderer would interpret `&lt;!--` as a comment opener. Suggested minimal fix: After the existing `re.subn(r\"<!--\", \"&lt;!--\", diagnosis)`, also encode the `-->` closer, e.g. add `diagnosis, _ = re.subn(r\"-->\", \"--&gt;\", diagnosis)`. The raw body then never contains the substring `-->` outside the trusted marker section, so a render-side decode cannot form a comment. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "596e3b8166afc935485c12d70e05bc581bb51088f4ca164935a8efe177ae68a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6370,
+    "run_id": "37306619213",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37306619213",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005133339_e5bb901e64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6370,
+    "run_id": "37306619213"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T13:33:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

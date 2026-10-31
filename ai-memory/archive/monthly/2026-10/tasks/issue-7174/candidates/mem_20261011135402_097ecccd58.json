@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: On cron ticks with no open `ai:orchestrator-tracking` issue, what should the new standalone-only poller mode run?\nChoices:\nA) The full `run_standalone_stall_recovery`. This includes the stall judge, redispatches and the automation-path auto-approve recheck. It still obeys `ENABLE_STANDALONE_STALL_RECOVERY` / `ENABLE_STALL_JUDGE` and forwards `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` plus the existing recovery env. The engine and Claude-pool setup for the stall judge must then also run on idle ticks when they are needed. It runs in every repository, not just the source repository. (RECOMMENDED)\nB) Same as A, but only on idle ticks where `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED=true`. Otherwise today's idle-tick behaviour stays unchanged.\nC) Only recheck issues held by `<!-- ai:automation-path-plan-hold:v1 ... -->` and auto-approve those whose grant now covers every listed automation path. No other standalone stall recovery runs on idle ticks.",
+  "fingerprint": "6f231591938d9ac7836cd98459970daefd75e68b997ce0ad8d5446d48b014e47",
+  "lineage": {
+    "issue_number": 7174,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38144642407",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38144642407",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011135402_097ecccd58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7174,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38144642407"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7174 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T13:54:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

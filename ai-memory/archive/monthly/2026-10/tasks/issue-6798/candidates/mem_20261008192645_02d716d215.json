@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should `HEAL_INTAKE_SCOPE_GUARD_ENABLED` do in each state?\nChoices:\nA. Off (the default) keeps today's behaviour: the issue is filed without a marker and implement fails closed later. On makes intake refuse to file when the scope marker is missing or does not match the `ai:workflow-heal-scope:v1` format. A refusal logs a stable `WORKFLOW_HEAL error scope_marker_unverified ...` line, sends a CRITICAL Telegram alert, and exits nonzero. Issues with a valid marker are filed either way. (RECOMMENDED)\nB. Off (the default) refuses to file any heal issue, even one with a valid marker: intake only logs, alerts and exits nonzero. On files only issues with a valid marker and refuses the rest. **Note:** this turns off all heal issue filing until the flag is set to `true`.\nC. No flag: always refuse when the marker is missing or invalid. **Note:** this conflicts with the issue's instruction to keep the new behaviour off until the operator step is done.\nQ2: Which exact paths should go in the `files_touched` grant? An OWNER, MEMBER or COLLABORATOR has to add this list to the issue body before `/approved`. Without it, implement rejects the commit again, and the unblock judge cannot override protected paths. Once the list exists, every changed path must be on it, including tests, docs and the changelog fragment.\nChoices:\nA. `scripts/workflow_failure_heal_intake.sh`, `.github/workflows/workflow-failure-heal-intake.yml` (one added line, `HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false' }}`, so the repo variable can switch the flag), one new test under `tests/`, one `changelog.d/<issue>-heal-intake-scope-guard.md` fragment, `README.md` and `agents.md`. The check happens in the shell script just before `compose-issue`. (RECOMMENDED)\nB. Everything in A plus `scripts/workflow_failure_heal.py`, so `compose-issue` itself fails when the guard is on and the marker is invalid. This guards the check in two places but touches a second protected file.\nC. Same as A but without the workflow YAML line. The flag can then only change in the script's environment default, not from a repo variable. **Note:** an operator could not turn it on without another protected-path change.",
+  "fingerprint": "c00616c5f98a572212a19825d4607ca481d117244b43924b1ed4039f4ab60b60",
+  "lineage": {
+    "issue_number": 6798,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37831230601",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37831230601",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008192645_02d716d215",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6798,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37831230601"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6798 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T19:26:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

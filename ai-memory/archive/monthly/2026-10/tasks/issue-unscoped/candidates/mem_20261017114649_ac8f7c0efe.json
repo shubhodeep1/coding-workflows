@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh:998-1004,1026 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In STAGE_PY, `add` returns a bool while `add_npmrc` returns `str | None`, an inconsistency in return types.\n  WHY: Behavior is currently correct (NIT severity), but the inconsistency is fragile for future maintenance if more staging-only file types are added.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Each extra file staged or skipped logs `VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok|skip reason=... path=`.\"\n  expected_change_site: scripts/validation_harness_sandbox.sh, the STAGE_PY loop over `names` (lines 1018-1026)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The `else` branch that stages regular tracked files (line 1026) does not call `stage_log`, files rejected by `readonly_allowed` without a special admission are silently skipped (lines 994-1001), ordinary and untracked files are added without a stage log (lines 1018-1024). Severity disagreement: MAJOR (gemini) vs NIT (gpt-6-luna). Disputed by minimax_minimax-m3, qwen_qwen3_7-plus and z-ai_glm-5_3-flash, who say the documented contract only covers env-template and .npmrc admissions or drops.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_harness_sandbox.sh:998-1004, 1026 | severity=NIT | confidence=5\n  PROBLEM: In STAGE_PY, the `add` function returns a bool while `add_npmrc` returns `str | None`.\n  WHY: The code behaves correctly because `None` is explicitly checked for `npmrc` and the return value of `add` is ignored in the `else` branch (line 1026), but the return type inconsistency is fragile for future maintenance.\n- TASK_GAP:\n  Requirement: Each extra file staged or skipped logs `VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok|skip reason=... path=`.\n  Expected change site: scripts/validation_harness_sandbox.sh, the STAGE_PY loop over `names` (lines 1026).\n  Evidence of absence: The `else` branch that stages regular tracked files (line 1026) does not call `stage_log`, nor does the loop log regular files staged or skipped in the standard execution path, violating the explicit documentation requirement for logging \"each extra file staged or skipped\".\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Each extra file staged or skipped logs `VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok|skip reason=... path=`.\"\n  Expected change site: `scripts/validation_harness_sandbox.sh`, the `STAGE_PY` loop over `names`.\n  Evidence of absence: At lines 994-1001, files rejected by `readonly_allowed` without a special admission are silently skipped. At lines 1018-1024, ordinary files, including newly staged untracked files, are added without a stage log. Only env templates and `.npmrc` files are logged, so the added untracked validation stub and skipped files such as `.env.local` have no corresponding log.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a601099fde7b4f2f3dbf123edefc9a3e3d137e5ff537ac2f4a83042f0e0ea39e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7557,
+    "run_id": "39028643643",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39028643643",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017114649_ac8f7c0efe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7557,
+    "run_id": "39028643643"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T11:46:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

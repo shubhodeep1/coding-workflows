@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_heal_isolated_editor.py:1256-1267 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: test_repro_rejected_path_behind_a_host_baseline_mismatch_keeps_exit_42 (editor_extra_write=\".github/ai/extra.json\", host_changed_after_snapshot=True) never reaches the new `except ValueError: print(\"out_of_scope\")` branch of cmd_scope in scripts/heal_isolated_implement.sh (lines 621-626), because strict enumerate_workspace (review_untrusted_workspace.py:462) raises \"out of heal scope\" (lines 348-349) before the host-baseline loop (lines 466-469), main() maps it to reason=out_of_heal_scope (line 990), and heal_impl_repro_check exits 42 (scripts/heal_isolated_implement.sh:823-828) without invoking cmd_scope.\n  WHY: The test passes whether or not the branch exists, so a regression to \"unknown\" would turn strict-enumeration failures with other reasons (unsafe_result_path, unsafe_directory, entry_limit, size_limit, unsafe_file) into exit 43 / repro_not_fixed instead of exit 42 / out_of_heal_scope without CI catching it; the `if not ruw.allowed(...)` branch is also untested (anthropic_claude-sonnet-5_5); severity NIT from three reviewers, google_gemini-3_1-flash-lite gave no severity.\n- scripts/heal_isolated_implement.sh:650-686 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: cmd_seed calls `target.parent.mkdir(parents=True, exist_ok=True)` at line 676 before `ruw.checked_path(Path(tree), name)` at line 677, so a symlinked parent directory in the repro-tree would be followed and the file could be created/chmodded outside the tree (O_NOFOLLOW blocks only the final component).\n  WHY: This is reachable only via repository-defined symlinks (e.g. a committed `scripts -> ../shared` link), and snapshot baselines from os.walk(followlinks=False) contain no symlink paths, so it is unlikely to fire; even so, the order of operations is the reverse of what checked_path is meant to enforce.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_heal_isolated_editor.py:test_repro_rejected_path_behind_a_host_baseline_mismatch_keeps_exit_42 | severity=NIT | confidence=4\n  PROBLEM: The test (editor_extra_write=\".github/ai/extra.json\", host_changed_after_snapshot=True) never reaches the new `except ValueError: print(\"out_of_scope\")` branch of cmd_scope in scripts/heal_isolated_implement.sh. transfer() calls strict enumerate_workspace at line 462, before the host-baseline loop at lines 466-469, and it raises ValueError(\"out of heal scope\") at lines 348-349. main() maps that to reason=out_of_heal_scope (line 990), and heal_impl_repro_check exits 42 without running `heal_impl_repro_py_run scope`. The `if not ruw.allowed(...)` branch has no test either and in practice cannot be reached.\n  WHY: The test passes whether or not the branch exists. If the branch regressed to \"unknown\", strict-enumeration failures with other reasons (unsafe_result_path line 352, unsafe_directory line 341, entry_limit, size_limit, unsafe_file) would exit 43 / repro_not_fixed instead of 42 / out_of_heal_scope, and CI would not catch it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_heal_isolated_editor.py:1256-1267 | confidence=4\n  PROBLEM: The test test_repro_rejected_path_behind_a_host_baseline_mismatch_keeps_exit_42 is meant to cover the new `except ValueError` branch in `cmd_scope` (scripts/heal_isolated_implement.sh lines 622-625) but does not reach it.\n  WHY: `ruw.enumerate_workspace` (line 462 in review_untrusted_workspace.py) raises \"out of heal scope\" before the host-baseline loop (lines 466-469), so `heal_impl_repro_check` exits 42 via the `reason=out_of_heal_scope` branch without calling `cmd_scope`, and a regression of that branch to \"unknown\" would not be caught.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_heal_isolated_editor.py:1256-1264 | severity=NIT | confidence=4\n  PROBLEM: The test does not reach the new `except ValueError: print(\"out_of_scope\")` branch at scripts/heal_isolated_implement.sh lines 622-626. With `editor_extra_write=\".github/ai/extra.json\"`, `enumerate_workspace(workspace, None, commands, strict=True)` (review_untrusted_workspace.py:462) raises at line 349, before the baseline loop at lines 466-469. main() maps that to `reason=out_of_heal_scope` (review_untrusted_workspace.py:990), the bash grep at scripts/heal_isolated_implement.sh:823 matches it, and the script exits 42 (line 828) without invoking `cmd_scope`.\n  WHY: If `cmd_scope` regressed back to `print(\"unknown\")`, or the branch were removed, the test would still pass, so CI would not catch the regression of the exit-42-vs-43 mapping that the test name promises.\n- scripts/heal_isolated_implement.sh:650-686 | severity=NIT | confidence=2\n  PROBLEM: cmd_seed calls `target.parent.mkdir(parents=True, exist_ok=True)` at line 676 before validating with `ruw.checked_path(Path(tree), name)` at line 677. A symlinked parent directory in the repro-tree would be followed, and `O_NOFOLLOW` blocks only the final symlink, so the file write and `os.chmod` could land outside the tree.\n  WHY: This needs a repository-defined symlink (e.g. a committed `scripts -> ../shared` link). Snapshot baselines from os.walk(followlinks=False) contain no symlink paths, so it is unlikely to fire, but the order is reversed from what `checked_path` is designed to enforce.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_heal_isolated_editor.py:1256-1264 | severity=NIT | confidence=4\n  PROBLEM: The regression test for a rejected path does not exercise the new strict-enumeration error classifier at scripts/heal_isolated_implement.sh:621-625. Its `.github/ai/extra.json` path is rejected directly as `out_of_heal_scope`, so the caller exits at lines 825-828 without invoking `cmd_scope`.\n  WHY: Strict-enumeration failures with other reasons (e.g. `unsafe workspace result path`) rely on the new `ValueError` handler to keep exit code 42, and the test passes even if that handler regresses.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "96d861d34be810a16cdfad210654b5ce61da730946ead72b325bffcd10596c2a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8487,
+    "run_id": "41139970794",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41139970794",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030230336_48dda2db42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8487,
+    "run_id": "41139970794"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T23:03:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

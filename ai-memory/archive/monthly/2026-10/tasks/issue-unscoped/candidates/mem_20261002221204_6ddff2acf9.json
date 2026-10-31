@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/escalation-judge.md:54 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The judge does not verify that the source issue named in the plan header matches the issue that started the project.\n  WHY: If the plan header is incorrect or tampered with, choosing `close` can close an unrelated issue as not planned; the PR-close checks have no corresponding identity check for the issue close.\n- workflow-templates/.claude/commands/escalation-judge.md:54 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The source issue to close is taken from the mutable plan header without an independent check that it is the issue that started the project.\n  WHY: A tampered or buggy `Source issue:` line could redirect the close to another issue in the same repository; severity disagreement: minimax_minimax-m3 rated this MAJOR and z-ai_glm-5_2 rated it NIT, so the highest severity is used.\n- workflow-templates/.claude/scripts/escalation_ledger.py:287\u2013285 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A stray bullet in the `## Escalations` section that is not a valid `ES-` entry raises `LedgerError` and exits 2.\n  WHY: A future escalation can stop at the ledger check and require a human to clean the section, although the behavior is documented and tested.\n- workflow-templates/.claude/commands/escalation-judge.md:54 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The close notification's templated \u201cleft open\u201d count and source-issue tail have no test that verifies their arithmetic.\n  WHY: The reviewer could not construct a double-count path and identifies this as a documentation/comment gap, not a runtime bug.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/escalation-judge.md:54 | severity=high | confidence=[4]\n  PROBLEM: The source-issue close lacks the ownership checks applied to PR closes and relies only on the issue number named by the plan header.\n  WHY: A plan header rewritten after the project started can redirect the destructive close to another issue; the reviewer rates this MAJOR.\n- workflow-templates/.claude/scripts/escalation_ledger.py:287\u2013285 | severity=low | confidence=[3]\n  PROBLEM: A bullet in `## Escalations` that is not a valid `ES-` entry fails parsing with `LedgerError` and exit 2.\n  WHY: A later escalation could stop at the ledger check and require manual cleanup; the behavior is documented and tested, so the reviewer describes it as a gap rather than a defect.\n- workflow-templates/.claude/commands/escalation-judge.md:54 | severity=low | confidence=[2]\n  PROBLEM: The close notification's templated \u201cleft open\u201d count and source-issue tail are not covered by tests for their arithmetic.\n  WHY: The reviewer found no double-count path and describes this as a documentation/comment gap, not a runtime bug.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/escalation-judge.md:54 | severity=high | confidence=[4]\n  PROBLEM: The judge does not verify that the source issue number and repository match the issue that started the project.\n  WHY: If the plan header is incorrect or tampered with, choosing `close` can close the named issue as not planned even if it is unrelated to the project; the PR-close checks have no corresponding issue identity check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/escalation-judge.md:54 | severity=low | confidence=[3]\n  PROBLEM: The source issue close trusts the mutable plan header without independently checking that the named issue started this project.\n  WHY: A tampered or buggy `Source issue:` line could name a different open issue in the same repository; the reviewer rates this NIT.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "10ba446c87aefed9fb9eb20e8ff6a97f29f38c688a892e57668407e7dd913c18",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "37068247344",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37068247344",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002221204_6ddff2acf9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "37068247344"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T22:12:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

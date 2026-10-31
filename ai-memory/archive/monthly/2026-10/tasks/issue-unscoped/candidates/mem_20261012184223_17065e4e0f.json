@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_wires_every_test_file.py:57-63 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: `tests/test_clarify_sandbox_base_image_preseed.py` is not wired into any workflow while the unwired-test allowlist is empty, causing the CI wiring assertion to fail and blocking the PR from passing CI.\n  WHY: The test-wiring guard finds no workflow reference for the test; reviewers disagreed on severity, with one rating it MAJOR and another BLOCKER.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ci_wires_every_test_file.py (`test_every_test_file_runs_in_a_workflow`, lines 57-63; `UNWIRED_ALLOWLIST = {}` at line 25) | severity=high | confidence=[5]\n  PROBLEM: `tests/test_clarify_sandbox_base_image_preseed.py` is not wired into any workflow while the unwired-test allowlist is empty.\n  WHY: The CI wiring guard fails, causing the required `lint` check to fail and blocking the PR from merging; this is a pre-existing wiring gap.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_wires_every_test_file.py | severity=critical | confidence=[5]\n  PROBLEM: The required `static-checks` CI job fails because `tests/test_clarify_sandbox_base_image_preseed.py` is not wired into any workflow and the unwired-test allowlist is empty.\n  WHY: The test wiring guard asserts that all test files are wired, and this assertion fails, blocking the PR from passing CI.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md:23 | PROBLEM: `tests/test_clarify_sandbox_base_image_preseed.py` is unwired, causing the `static-checks` CI failure; the suggested fix belongs to a different fix lineage and is explicitly out of scope here.\n  WHY: The failure is unrelated to the PR, which does not touch `ci.yml` or the test-wiring allowlist.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "69d759069e1d1dd7cf7cbf9787e58b15b800acd246174ee92d3d6de3bdfe05ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7231,
+    "run_id": "38290280880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38290280880",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012184223_17065e4e0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7231,
+    "run_id": "38290280880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T18:42:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:Multiple removed and added blocks for Validation self-test unit tests | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The refactoring of CI jobs to address the orchestrate-poll timeout causes multiple CI contract test failures, as evidenced by the `Pre-push test gate` failing on `tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_orchestrate_lib.py`, `tests/test_pr_watch_guard.py`, and `tests/test_workflow_checkout_integration_ref_audit.py`.\n  WHY: These contract tests maintain strict invariants on the structure, job steps and job names within `ci.yml`, so moving steps between jobs without updating them breaks CI (source severity=BLOCKER; other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) judged these failures unrelated to the diff and reported no findings).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged ... keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml and associated contract tests\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The refactoring was implemented but is not contract-compliant, as shown by the many CI test failures attributed to this PR; the implementation is incomplete.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:Multiple removed and added blocks for Validation self-test unit tests | severity=BLOCKER | confidence=5\n  PROBLEM: The refactoring of CI jobs to address the orchestrate-poll timeout causes multiple CI contract test failures, as evidenced by the `Pre-push test gate` failing on `tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_orchestrate_lib.py`, `tests/test_pr_watch_guard.py`, and `tests/test_workflow_checkout_integration_ref_audit.py`.\n  WHY: These contract tests maintain strict invariants regarding the structure, job steps, and job names within `ci.yml`. Moving steps between jobs without concurrently updating these contract tests to reflect the new structure causes them to fail, breaking CI stability.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged ... keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml and associated contract tests\n  Evidence of absence: The refactoring was implemented, but it violated the contract-test constraints required by the repository's CI pipeline architecture, as evidenced by the high number of CI test failures caused by this PR. The implementation is incomplete because it is not contract-compliant.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "982b660a327b562da6160277e07fe08b0b511190ff4e04119097ee7ff2d0d149",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8476,
+    "run_id": "41112009242",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41112009242",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030192348_f489a4ce4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8476,
+    "run_id": "41112009242"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T19:23:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

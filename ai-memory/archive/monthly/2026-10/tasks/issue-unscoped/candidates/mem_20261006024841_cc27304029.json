@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:393 | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The self-escalation guard does not require `DUPLICATE_MATCH` to equal `fingerprint`.\n  WHY: A source-key duplicate with coincidentally matching issue number and repo can trigger a false self-escalation instead of limiting escalation to same-fingerprint failures.\n- scripts/workflow_failure_heal_intake.sh:245 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A `filter-log` failure silently truncates the log without diagnosing that filtering failed.\n  WHY: The diagnosis model may miss actionable error content because a corrupted log is treated like an empty log.\n- agents.md:1373,1575 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: `WORKFLOW_HEAL_PHASE_REPORT` is absent from both authoritative structured prefix registries despite appearing in the descriptive list.\n  WHY: Consumers relying on the structured registries will not recognize or categorize these log lines; severity disagreement: deepseek_deepseek-v4-pro rated this MAJOR, while openai_gpt-6-luna rated it NIT.\n- tests/test_workflow_failure_heal.py:199 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `test_stable_log_prefixes_are_registered` does not check `WORKFLOW_HEAL_PHASE_REPORT`.\n  WHY: The test can pass while the prefix is missing from the `agents.md` registries, so CI does not enforce its registration.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A heal issue whose own run fails with its own fingerprint is escalated (ai:workflow-heal-escalated plus a CRITICAL alert) instead of collecting occurrence comments forever.\"\n  expected_change_site: scripts/workflow_failure_heal_intake.sh line 393 (the self-escalation guard inside the duplicate action path)\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The `DUPLICATE_MATCH` variable is computed at line 385 but the condition at line 393 does not gate on it. A source-key duplicate that matches on issue number and repo would fire the escalation path without verifying that the duplicate match reason is `fingerprint`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal_intake.sh:393 | severity=high | confidence=3\n  PROBLEM: The self-escalation condition does not check whether `${DUPLICATE_MATCH}` is `\"fingerprint\"`.\n  WHY: A source-key duplicate that also matches issue number and repo could trigger a false `heal_issue_failed_itself` escalation.\n- scripts/workflow_failure_heal_intake.sh:245 | severity=low | confidence=4\n  PROBLEM: `python3 \"${HEAL_PY}\" filter-log ... || : > \"${FILTERED_LOG}\"` silently truncates the log on filter failure.\n  WHY: A corrupted fetchable job log can produce an empty filtered log without indicating corruption, degrading the operator-facing diagnosis.\n- agents.md:1373 (bullet registry), 1575 (LOG_PREFIX.name registry) | severity=high | confidence=5\n  PROBLEM: `WORKFLOW_HEAL_PHASE_REPORT` is absent from both authoritative prefix registries.\n  WHY: Future tooling relying on the registries could miss phase reports; the registries are documentation-only today, but the contract drift is not caught.\n- tests/test_workflow_failure_heal.py:199 | severity=high | confidence=5\n  PROBLEM: `test_stable_log_prefixes_are_registered` checks only the legacy four-prefix set and omits `WORKFLOW_HEAL_PHASE_REPORT`.\n  WHY: The test passes despite the missing registry entry, leaving the registration gap without CI enforcement.\n- Requirement: \"A heal issue whose own run fails with its own fingerprint is escalated (ai:workflow-heal-escalated plus a CRITICAL alert) instead of collecting occurrence comments forever.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh line 393 (the self-escalation guard inside the duplicate action path)\n  Evidence of absence: The `DUPLICATE_MATCH` variable is computed at line 385 but the condition at line 393 does not gate on it. A source-key duplicate that matches on issue number and repo would fire the escalation path without verifying that the duplicate match reason is `fingerprint`. The requirement calls for escalation on fingerprint match; the code escalates on any duplicate match where issue number and repo coincide.\n  severity=high | confidence=4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md: The prefix registries at lines 1370-1374 and 1572-1576 omit WORKFLOW_HEAL_PHASE_REPORT; the reporter emits it at scripts/workflow_failure_heal_phase_report.sh:53. The parity test at tests/test_workflow_failure_heal.py:197-201 also omits it. | severity=low | confidence=4\n  PROBLEM: The prefix appears in the descriptive list at agents.md:214-216, but not in either structured registry, and the test does not enforce its registration.\n  WHY: Consumers relying on the structured prefix registry will not recognize or categorize the phase reporter\u2019s log lines, leaving the documented log-prefix contract incomplete.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f526cfccc104aacb9dfa54cb14d81b14cce483769343b51896cbe7d28078cd7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6433,
+    "run_id": "37399766188",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37399766188",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006024841_cc27304029",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6433,
+    "run_id": "37399766188"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T02:48:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) The issue \u2192 PR pipeline phases: clarify, plan or implement (`ai-clarify.yml`, plan and implement workflows and their prompts)\nB) Review and autofix (`review_autofix.yml` and its scripts)\nC) The orchestrator: `orchestrate_poll.yml`, `scripts/orchestrate_*` and the stall, heal and integration-sync logic\nD) Validation harness, memory subsystem, or docs (README / agents.md)\nE) Other: name the file, workflow or script (RECOMMENDED)\nQ2: What problem should be fixed, and what is the evidence?\nChoices:\nA) A specific failure or bug: give the run ID, PR or issue number, and the log line or error (RECOMMENDED)\nB) Too slow or too costly (tokens, API calls, run time): give the metric and the target\nC) Poor output quality, such as weak plans, reviews or prompts: give a concrete example\nD) Better usability or docs for operators or consumer repos: say which part is confusing\nQ3: What would show this issue is done?\nChoices:\nA) A measurable result, such as a named test passing, a metric under a threshold, or a failure that no longer happens (RECOMMENDED)\nB) One named behavior change (describe the before and after)\nC) Close this issue and open specific, narrower issues in its place",
+  "fingerprint": "48c0a1d99c10c1d8588d36a59dd23b95070f628de75abca8378393c5fcf0afc9",
+  "lineage": {
+    "issue_number": 8364,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40880129613",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40880129613",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029132133_442b50eec1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8364,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40880129613"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8364 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T13:21:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

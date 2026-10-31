@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which fix should this issue deliver, given that the rejected directory is unknown and the `.claude/commands` guess conflicts with the code?\nChoices:\nA) Diagnostics plus prompt boundary only (RECOMMENDED). Keep the fail-closed transfer, but have `review_untrusted_workspace.py transfer` report the rejected path in its error and in the `reason=` line, so the next failure names the directory. Also tell the editor in `review_apply_fixes.sh` which paths it cannot transfer (dot-dirs other than `.github/workflows` and `.github/actions`, and names containing secret, credential or `.env`). A CI failure in such a path goes into the editor summary as out of scope rather than being edited. Add a contract test for both parts.\nB) Option A plus the full handoff the issue suggests: when a required CI fix touches a path the editor cannot transfer, file or route a trusted branch-targeted implementation or reissue for it (a new handoff in `review_apply_fixes.sh`).\nC) Only the handoff from option B, without improving the transfer diagnostic.\nQ2: Is repairing command/template parity for `.claude/commands/audit-plans.md` on PR #6135's branch part of this issue? This issue targets `stable`; that file lives on a different branch.\nChoices:\nA) No. Fix only the shared workflow code on `stable`; PR #6135's own parity failure and its `ai:security-pass-failed` gate are handled on that PR separately (RECOMMENDED)\nB) Yes. Also include a branch-targeted parity repair for PR #6135 in this change.\nQ3: When the editor's sandbox produces a result in a forbidden path, should the run still fail the step?\nChoices:\nA) Yes. Keep failing the whole transfer (current behaviour, as the issue requires). Only the diagnostic and the editor guidance change (RECOMMENDED)\nB) No. Drop forbidden newly created directories with a warning and transfer the rest. **Note:** this weakens the fail-closed boundary that the issue's fix constraints forbid changing, and does not fit Q1:B's handoff.",
+  "fingerprint": "3f3113d915edd2833eaaaad83aae12a4973df9a67ebf9a52a39f51bf62005c70",
+  "lineage": {
+    "issue_number": 6316,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37271026300",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37271026300",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005061833_eb1f0fcb35",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6316,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37271026300"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6316 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T06:18:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

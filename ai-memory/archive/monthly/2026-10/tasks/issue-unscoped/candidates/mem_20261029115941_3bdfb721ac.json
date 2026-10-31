@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_codex_step_extraction.py:33-39, 141-145 (also prompts/mode-plan.txt:39, prompts/_templates/mode-plan.txt:32, scripts/run_plan_codex.sh:80) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The autofix reflowed the pinned \"Keep the section to those bullets\" rule into one line and rewrote the test assertions and hash/byte/line pins to match, which the issue forbade. It also changed the inline fallback in scripts/run_plan_codex.sh.\n  WHY: The pins and the assertion were edited together, so the test no longer guards the pinned rule's format. Severity is MAJOR in all three sources. minimax_minimax-m3 reported no findings and said these edits are not in the current PR's changed set.\n- changelog.d/8339-plan-files-section-placeholder-rule.md:2 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The last run edited issue #8339's changelog fragment (\"read\" -> \"reads\"), a file outside this issue's affected-files list.\n  WHY: Editing another change's fragment pollutes the diff and can cause conflicts. The source rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Give back one line in prompts/mode-plan.txt without changing the pinned text or the meaning. The lowest-risk place is the lessons_learned_record.v1 bullet at lines 19-21.\"\n  expected_change_site: prompts/mode-plan.txt and prompts/_templates/mode-plan.txt\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The last run reflowed the forbidden pinned rule block instead of the requested `lessons_learned_record.v1` bullet. minimax_minimax-m3 and z-ai_glm-5_3-flash state that the bullet was reflowed in both files and that prompts/mode-plan.txt is now 249 lines.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_plan_codex_step_extraction.py:33-39, 141-142 | severity=MAJOR | confidence=5\n  PROBLEM: The last run reflowed a pinned rule block (\"Keep the section to those bullets...\") into a single line and updated the test assertions (hashes, byte counts, line counts) to match. The issue explicitly forbade changing this pinned block and run_plan_codex.sh.\n  WHY: The test assertions now pass because they were updated to match the incorrect change, defeating the test's purpose as a pinning gate for the rule's format.\n- TASK_GAP\n  Requirement: \"Give back one line in prompts/mode-plan.txt without changing the pinned text or the meaning. The lowest-risk place is the lessons_learned_record.v1 bullet at lines 19-21.\"\n  Expected change site: prompts/mode-plan.txt and prompts/_templates/mode-plan.txt\n  Evidence of absence: The last run reflowed the forbidden pinned rule block instead of reflowing the requested `lessons_learned_record.v1` bullet.\n  severity=MAJOR | confidence=5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_plan_codex_step_extraction.py:141-145; prompts/mode-plan.txt:39; prompts/_templates/mode-plan.txt:32; scripts/run_plan_codex.sh:80 | severity=MAJOR | confidence=5\n  PROBLEM: The autofix reflowed the protected \"Keep the section to those bullets\" rule into one line and changed the test assertion to accept that reflow. It also changed the inline fallback although the task said it did not need to change.\n  WHY: The test now accepts the formatting the issue required preserving, so CI no longer guards that contract across the prompt copies and inline fallback.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_plan_codex_step_extraction.py:33-39, 141-142 | severity=MAJOR | confidence=5\n  PROBLEM: The last run reflowed the pinned two-line rule into a single line in prompts/mode-plan.txt:39, prompts/_templates/mode-plan.txt:32 and scripts/run_plan_codex.sh:80, then rewrote the test's rule assertion to a one-line string. It also updated the pins (PRE_EXTRACTION_PROMPT_BYTES 17_147 -> 17_144, LINES 261 -> 260). It replaced the historical comment so that it claims \"Issue #8339 added the one-line ... rule\", which misrecords what #8339 shipped (a two-line rule).\n  WHY: Issue #8354 says not to \"shorten or reflow the two rule blocks that test_plan_codex_step_extraction.py pins\" and that \"scripts/run_plan_codex.sh does not need to change\". The lessons-bullet reflow already met the budget, and editing the pins with the assertion defeats the drift detection.\n- changelog.d/8339-plan-files-section-placeholder-rule.md:2 | severity=NIT | confidence=4\n  PROBLEM: The last run edited issue #8339's changelog fragment (\"read\" -> \"reads\"), a file belonging to a different change. Issue #8354's affected-files list names only prompts/mode-plan.txt and prompts/_templates/mode-plan.txt.\n  WHY: No runtime failure, but editing another PR's fragment pollutes the diff and can force a conflict resolution cycle.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "91d1fbfdccfb0b9bfe366b8e9214a7ab78f254975defd1989e656f1ed74d1f2a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8356,
+    "run_id": "40860752733",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40860752733",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029115941_3bdfb721ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8356,
+    "run_id": "40860752733"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T11:59:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

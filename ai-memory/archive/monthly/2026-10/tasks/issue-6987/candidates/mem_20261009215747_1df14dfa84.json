@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the `files_touched` allowlist be supplied, given this issue's body only lists it inside a sentence and the parser cannot read it?\nChoices:\nA) A trusted account (or the pipeline) edits this issue's body before implementation to add the block on its own lines, outside code fences: a line `files_touched:` followed by one `- <path>` line for each of the six listed files. Implementation then continues on this issue. (RECOMMENDED)\nB) Close this issue and have the unblock judge or a trusted account open a replacement with the standalone block. All other metadata stays the same: the `waiver-suppresses-distinct-nearby-finding` marker, the `ai:security` label, `Integration branch: claude/replace-claude-sessions-phase-7` and `Depends on: #6539`.\nC) Go ahead without the block and treat the plan's file list as the scope. **Note:** this will most likely be rejected the same way #6814 was, and the guard must not be bypassed.",
+  "fingerprint": "eea3e075f54cdb545b5ef8c2a4c9031a9527b3465a9f18fa720542346461f043",
+  "lineage": {
+    "issue_number": 6987,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37995976241",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37995976241",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009215747_1df14dfa84",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6987,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37995976241"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6987 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T21:57:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

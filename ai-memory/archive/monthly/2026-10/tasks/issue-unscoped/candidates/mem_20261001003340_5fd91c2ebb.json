@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py: 537, 552-593 (post-diff line numbers, 549-590 in the new hunk) | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The tests must assert that the filtered ledger is posted, since otherwise the hand-off round could exit successfully without posting.\n  WHY: The restored singleton assertion and the new end-to-end test cover this side effect; the reviewer identifies no runtime defect.\n- tests/test_review_autofix_claude_fixer_mode.py: 552-593 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new test's stdout marker assertions cannot be verified against the working-tree handoff script, which does not emit those markers.\n  WHY: The reviewer says the project branch's script must support the markers, but considers the test logic internally consistent.\n- tests/test_review_autofix_claude_fixer_mode.py: 558-590 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new test does not assert a negative case where the pre-#5582 filter or an unconditional `disproof_check` would demote the finding.\n  WHY: The reviewer considers the test sufficient as a lock-in regression test and notes that a separate existing test covers the symmetric positive case; this is not a runtime defect.\n- tests/test_review_autofix_claude_fixer_mode.py: 552-590 (the `test_handoff_issue_5582_votes_quoting_the_defect_still_hand_off` test) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test does not exercise the verifier branch where a rejecter's quoted path is absent from the source files.\n  WHY: The test covers evidence verified against a real source line, not the distinct missing-path error branch; the reviewer considers this a coverage gap, not a runtime defect.\n- .github/workflows/review_autofix.yml: 4375, 4401-4412 (`Run reviewer models`; the step exits with `reviewers_rc`) | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `Run reviewer models` step failed, and repeated identical failures reached the cap.\n  WHY: The failed review job blocks another same-head attempt through the cap; the supplied log tail does not identify a cause in the changed files.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_claude_fixer_mode.py: 537, 552-593 (post-diff line numbers, 549-590 in the new hunk) | severity=low | confidence=4\n  PROBLEM: The new end-to-end test and modified singleton test pass `posts` through the result tuple; assertions must cover that the post call was made on the post-filter ledger.\n  WHY: Without checking the post side effect, a skipped post could go undetected; the restored singleton assertion and new test cover it, so this is not a runtime defect.\n- tests/test_review_autofix_claude_fixer_mode.py: 552-593 | severity=low | confidence=3\n  PROBLEM: The new test asserts stdout markers that the working-tree copy of `scripts/review_autofix_step_claude_fixer_handoff.sh` does not emit.\n  WHY: The reviewer cannot verify the project branch's markers directly, but says the assertions and test logic are internally consistent; this is a documentation/review concern, not a runtime defect.\n- tests/test_review_autofix_claude_fixer_mode.py: 558-590 | severity=low | confidence=3\n  PROBLEM: The new test lacks a negative-case assertion that the pre-#5582 filter or an unconditional `disproof_check` would demote the finding.\n  WHY: The reviewer considers the test sufficient as a lock-in regression test and notes the existing singleton test covers the symmetric positive case; this is not a runtime defect.\n- tests/test_review_autofix_claude_fixer_mode.py: 552-590 (the `test_handoff_issue_5582_votes_quoting_the_defect_still_hand_off` test) | severity=low | confidence=3\n  PROBLEM: The test does not cover the verifier branch where a rejecter quotes a path absent from the source files.\n  WHY: The test covers evidence verified against a real quoted source line, not the missing-path branch; this is a coverage gap, not a runtime defect.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml: 4375, 4401-4412 (`Run reviewer models`; the step exits with `reviewers_rc`) | severity=high | confidence=5\n  PROBLEM: The supplied check-run context reports this step failed, and PR comments report repeated failures that reached the identical-failure cap.\n  WHY: The review job exits unsuccessfully, leaving the review check failed and preventing another same-head attempt through the cap; the supplied log tail does not contain the reviewer-stage error or identify a cause in the changed files.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "00c55c30188b0c98cabe88f71d0c9fb0e41618cfd1ecf5a478cc1c368abb192b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5741,
+    "run_id": "36794089014",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794089014",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001003340_5fd91c2ebb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5741,
+    "run_id": "36794089014"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T00:33:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

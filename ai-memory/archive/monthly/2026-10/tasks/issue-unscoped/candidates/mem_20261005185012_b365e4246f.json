@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:135-177 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The shallow-clone recovery only unshallows when `git cat-file -e` fails, so an extension commit present in shallow history with an incomplete parent chain can fail the `merge-base --is-ancestor` check and remain uncounted.\n  WHY: The fail-closed behavior holds the security gate, but may block a valid extension; both reviewers rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_single_issue_security_pass.sh:132-184 | severity=low | confidence=3\n  PROBLEM: The shallow-clone recovery (`fetch --no-tags --unshallow origin ...`) is gated on `git cat-file -e \"${extension_sha}^{commit}\"` failing (PR diff lines 155-167). When the commit object IS present in shallow history but its parent chain is truncated, `cat-file -e` succeeds and the unshallow is never triggered, so the subsequent `merge-base --is-ancestor` walks an incomplete commit graph and the function returns 1 (unverifiable) \u2014 the gate then holds.\n  WHY: In a CI shallow clone with depth less than the PR's full depth (e.g. fetch-depth: 100 on a long-running integration PR with the audit checkout at the audited head), the judge fix commit's ancestors can be above the shallow boundary even when the fix commit object itself is in the shallow history. The function's defensive `case \"${extension_ancestor_rc}\" in ... *) return 1 ;;` correctly returns unverifiable, but the symmetric fetch-on-miss recovery from `review_autofix_step_detect_merge_conflicts.sh:88-101` and `review_autofix_step_merge_topology_gate.sh:68-82` is absent here. The audit-gate hold is fail-closed (the correct safety posture), but it can block a valid extension that was actually pushed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_single_issue_security_pass.sh:135-177 | severity=low | confidence=3\n  PROBLEM: The shallow-clone unshallow fetch only triggers when `git cat-file -e` fails, but not when `git merge-base --is-ancestor` fails due to incomplete history. If an extension commit exists locally but the ancestor chain to `audited_head` is incomplete in a shallow clone, the merge-base check fails and the extension is not counted, even though it may be a valid ancestor.\n  WHY: In a shallow clone CI environment, an extension commit may be present locally (cat-file succeeds) but the path to the audited head may not be complete. The code skips the unshallow fetch, calls merge-base which fails with rc=1, and the extension is not counted. This causes the security gate to hold even for a valid judge fix. The fail-safe behavior (not counting unverified extensions) is correct, but the edge case could block valid merges in shallow clones.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cf7ec522dee3a31904ce1bfd06d3a1bf4af71a7d85ae3f1ec39db8cbc7fa72ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6377,
+    "run_id": "37352983485",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37352983485",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005185012_b365e4246f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6377,
+    "run_id": "37352983485"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T18:50:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

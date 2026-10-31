@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which side is correct for a low or medium `keep_fixing` finding once `MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` is reached?\nChoices:\nA) Keep `main`'s documented behaviour from #6729: convert it to an advisory follow-up. Do not change the poller or the test. Explain in the PR that the failure happened only at head `bef7079`, which still had #6539's \"convert to fail\" rule, and that the existing `test_security_pass_cap_converts_low_keep_fixing_to_advisory` already guards against it coming back. Rewrite the conclusion of `docs/triage/pr-6611-ci-shard-1.md` to name this cause. (RECOMMENDED)\nB) Follow the issue's suggestion: change `test_security_pass_cap_converts_low_keep_fixing_to_advisory` to expect `ai:security-pass-failed` with no waiver, and change the poller back to \"convert to fail\" so the two agree. **Note:** this reverses #6729 and the agents.md contract, and it terminalizes projects that have only low or medium findings left.\nC) Make no repository change at all, including the triage note. The issue can close as superseded.\nQ2: If Q1 is A, what should the PR do for acceptance criterion 2 (regression test)?\nChoices:\nA) Treat the existing test (`tests/test_orchestrate_poll_process.py:6490`) and its neighbours at 6426, 6469 and 6551 as the regression coverage, and only state that in the PR and the triage note. (RECOMMENDED)\nB) Also add a test that checks the comment at `orchestrate_poll_process.sh:2246-2254` and the cap conversion text (`converted to advisory follow-up`, line 7411) stay in place.",
+  "fingerprint": "e309a7cb29f35518a54ee3be100b28825d1e93a2b0fc142c3507125cabf87f3f",
+  "lineage": {
+    "issue_number": 7300,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38336156596",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38336156596",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013022428_9402427dc7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7300,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38336156596"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7300 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T02:24:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

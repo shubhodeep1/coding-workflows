@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  expected_change_site: PR description\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: PR description contains only automated implementation text and issue references, not the plan-unavailability assumption or provisional identifiers used; `.github/workflows/update_workflows.yml` lines 107-120 records the code-comment half, but the PR-body half remains unmet.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  Expected change site: PR description (GitHub metadata, outside editor workspace)\n  Evidence of absence: PR description contains \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6960\" and \"Refs #6902\" but does not record the plan-unavailability assumption. The code comment in update_workflows.yml lines 107-120 records it; the PR-body half of the requirement remains unmet. Deferred through four prior editor rounds because no repository file change can address it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  Expected change site: PR description (GitHub metadata)\n  Evidence of absence: The PR description contains only automated text and no explicit statement recording the assumption that the plan could not be read from the implementation sandbox and that provisional identifiers (`UPDATER_VERIFY_RELEASE_MANIFEST`, `release-manifest.v1.json`, `UPDATER_MANIFEST_VERIFY`) are used. While the code comment requirement is satisfied, the PR body requirement remains unmet.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  Expected change site: PR description (GitHub-side metadata for PR #6961)\n  Evidence of absence: The PR title and description inlined in the review context read \"AI implementation for issue #6960\" / \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6960 / Refs #6902\". Neither the unavailability of the authoritative plan (docs/plans/safeguarded-consumer-updater-plan.md on branch claude/elegant-mendel-5pli2i-safeguarded-updater-plan) nor the list of provisional identifiers used (UPDATER_VERIFY_RELEASE_MANIFEST, release-manifest.v1.json, UPDATER_MANIFEST_VERIFY) is recorded there. The code-comment half of this requirement is satisfied at .github/workflows/update_workflows.yml lines 107-120. The PR-body half has been deferred across multiple editor rounds because the PR description is outside the editor's workspace; a human or tool with GitHub metadata access needs to add the documented text to the PR description. Two cross-pass reviewers (openai_gpt-6-luna, qwen_qwen3_7-plus) flagged this with confidence 5.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cIf the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\u201d\n  Expected change site: PR description.\n  Evidence of absence: The code comment in `.github/workflows/update_workflows.yml` records the assumption, but the PR description contains only the automated implementation text and issue references. It does not state that the plan was unavailable or that provisional names were used.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3a8ef6567497b4c117bc52c375fe7d1af824f5f41c780f48e7e73ed88c8a4679",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6961,
+    "run_id": "37996825773",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37996825773",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009221520_ee8a082973",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6961,
+    "run_id": "37996825773"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T22:15:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

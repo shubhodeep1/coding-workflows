@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/python-mongo-repo-checks/tests/40_repo_checks.sh.j2:133 and workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2:156 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The `2>&1 | tee \"${test_log}\" | sed -u 's/^/# /'` pipeline emits output only on newlines, so a command that prints carriage-return progress or partial lines without a newline produces no log growth.\n  WHY: The idle watchdog can kill a command that is still running once `validation_timeout` passes. Severity disagreement: luna said MAJOR, while sonnet gave it only as a hardening suggestion with risk score 1. The highest is used. Suggested fix: pass the stream through `tr '\\r' '\\n'` before `sed`.\n- scripts/validate_driver.sh:1014-1020 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In `run_single_test`, when `tee` fails and the test also failed, `exit_code` keeps the test's status. This may hide a log-write error, and the warning may fire unnecessarily.\n  WHY: The source rated it NIT. Its own text says the current behavior is acceptable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: `tee` exit-status handling in the streaming pipeline, as applied to `scripts/validate_driver.sh` and `scripts/validate_process.sh`\n  expected_change_site: workflow-templates/validation-harness/python-mongo-repo-checks/tests/40_repo_checks.sh.j2 (~line 134) and workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2 (~line 157)\n  confidence=3\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: Both templates read only `PIPESTATUS[0]`, and neither has a `PIPESTATUS[1]` reference. A late `tee` failure would leave a truncated log while `status` stays 0.\n- requirement: The new `tests/test_validation_streaming_output.py` should be wired into CI the same way as `tests/test_validate_driver_credential_scrub.py`\n  expected_change_site: .github/workflows/test-and-mark-stable.yml (~line 5096) and .github/workflows/mark-stable.yml (~line 578)\n  confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The new test appears only in `ci.yml` (line 1140). Neither release gate's pytest command lists it. The source marked this optional and a NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/validation-harness/python-mongo-repo-checks/tests/40_repo_checks.sh.j2 and workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2 (the `... | tee \"${test_log}\" | sed -u 's/^/# /'` pipeline in the per-command loop) | HARDENING_RISK_SCORE=1\n  PROBLEM: `sed` emits a line only when it sees a newline. A command whose output has no newline, such as a progress bar using carriage returns, shows no progress to the idle watchdog.\n  WHY: The earlier autofix summaries deferred this because the templates are outside the editor sandbox. Suggested fix: add `tr '\\r' '\\n'` before `sed`, about 1 line per template.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validate_driver.sh:1014-1020 (run_single_test) | severity=NIT | confidence=3\n  PROBLEM: If `tee` fails and the test also failed, `exit_code` keeps the test's status. The warning may fire unnecessarily.\n  WHY: The precedence between a test error and a log-write error could be refined so disk issues take priority. The source concedes this is acceptable behavior.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/validation-harness/python-mongo-repo-checks/tests/40_repo_checks.sh.j2 (line 133) and workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2 (line 156) | severity=MAJOR | confidence=4\n  PROBLEM: `sed -u` still works on newline-delimited records, so output ending in carriage returns or lacking a newline stays buffered until a newline or EOF.\n  WHY: A long-running `custom_tests` command that prints `\\r` progress and then stays silent longer than `validation_timeout` is terminated by the idle watchdog.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP: Requirement: `tests/test_validation_streaming_output.py` should be wired into the release gates as well as `ci.yml`\n  Expected change site: .github/workflows/test-and-mark-stable.yml line ~5096 and .github/workflows/mark-stable.yml line ~578\n  Evidence of absence: `grep` finds `test_validation_streaming_output` only in `ci.yml` line 1140. The source marked it optional.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP: Requirement: `tee` exit-status handling in the streaming pipeline\n  Expected change site: workflow-templates/validation-harness/python-mongo-repo-checks/tests/40_repo_checks.sh.j2 around line 134 and workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2 around line 157\n  Evidence of absence: Both templates read only `PIPESTATUS[0]`, with no `PIPESTATUS[1]` reference. A `tee` failure would leave an incomplete log with `status` 0.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d0a5c91d5a00217f43f3c53be1d8956ccd4c8d84061682491c56c2cee3f6a395",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7868,
+    "run_id": "39757479855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39757479855",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022100303_32c3b52a56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7868,
+    "run_id": "39757479855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-22T10:03:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

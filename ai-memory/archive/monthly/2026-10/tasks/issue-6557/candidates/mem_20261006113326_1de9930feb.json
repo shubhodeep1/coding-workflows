@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6557,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6557\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6563\",\"pr_number\":6563,\"branch\":\"ai/issue-6557\",\"run_id\":\"37455028995\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37455028995\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6557-unblock-close-terminal-only.md\",\"prompts/mode-judge-unblock.txt\",\"scripts/unblock_judge.sh\",\"scripts/unblock_ledger.py\",\"tests/test_unblock_judge.py\"]}",
+  "fingerprint": "44e689b13647e37a677ee6a0c5578cf4077919274e5894ae630542b965f4a1f1",
+  "lineage": {
+    "issue_number": 6557,
+    "parent_ids": [],
+    "pr_number": 6563,
+    "run_id": "37455028995",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37455028995",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6563"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006113326_1de9930feb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6557,
+    "level": "run",
+    "pr_number": 6563,
+    "run_id": "37455028995"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6557: https://github.com/shubhodeep1/coding-workflows/pull/6563",
+  "timestamps": {
+    "created_at": "2026-10-06T11:33:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

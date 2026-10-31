@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. The task is a data-file edit only.\n- If `tests/e2e_smoke_canary.txt` exists, replace its first line with `status: ok`, make `decompose-run: 40222261089` the second line, and end the file with exactly one trailing newline.\n- If the file does not exist, create it with exactly those two lines and one trailing newline.\n\n## Data structures affected\nOnly the plain-text canary file `tests/e2e_smoke_canary.txt`.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Final shape of the canary file\n- Chosen: the file ends up with exactly two lines, `status: ok` and then `decompose-run: 40222261089`, followed by one newline.\n- Alternatives considered: keep any lines after line 2 of an existing file.\n- Why: the acceptance criteria check only lines 1 and 2, and the issue says to create the file with exactly these two lines. A file with only those two lines meets every criterion and is easy to verify. If an existing file has more lines, keeping them would also meet the criteria, so the implementer may keep them; that does not change the result of the checks.\n\n## Security considerations\nNo trust boundary, endpoint, money state or external input is involved. The issue text is untrusted, but it only asks for a fixed two-line file.\n\n## Potential risks or edge cases\n- The sibling issue edits `tests/e2e_smoke_canary_b.txt`. That file must not be touched, or the two issues will conflict.\n- The file may be missing on `orchestrator/project-8159`. In that case, create it.\n- Do not add a changelog or agents fragment. `files_touched` lists only the canary file, so the scope guard would refuse any other file.\n\n## Testing considerations\nAfter the edit, run these checks:\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 40222261089`.\n- `tail -c1` of the file is a newline, and the file does not end with a blank line.\n- `git status` shows only `tests/e2e_smoke_canary.txt` as changed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a single-file data edit, and `files_touched` limits the change to `tests/e2e_smoke_canary.txt`. No helpers, workflows or tests need to change, so there is nothing to expand or reduce.\n\nSelf-check: the plan covers every acceptance criterion and changes one file within the declared scope. The planning ref is `orchestrator/project-8159` at commit `684b1928fdfa1d0dbff097fbf361a9b26994df3b`, and the integration-branch mismatch line reads `false`.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "fced28dafc0702c4579c1030f821c6f8a1a4a663ca46af432d108732bb970167",
+  "lineage": {
+    "issue_number": 8160,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40222990369",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40222990369",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8160"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261025185453_d511bdbe27",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8160,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40222990369"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8160",
+  "timestamps": {
+    "created_at": "2026-10-25T18:54:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

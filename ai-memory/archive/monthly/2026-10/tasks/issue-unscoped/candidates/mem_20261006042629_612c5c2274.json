@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge_security_pass.sh:311-313 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `hold_reason` is not initialized before being read when `sed` fails to match.\n  WHY: If the gate output lacks `hold_reason=`, the value may be empty or retain a previous loop iteration's value.\n- scripts/review_rb_judge_security_pass.sh:343-345 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: This condition assumes `hold_reason` was captured correctly.\n  WHY: If it was not captured, `RB_SECURITY_HOLD_REASON` may become `gate_failed` even when the actual reason was `label_write_failed`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge_security_pass.sh:311-313 | severity=low | confidence=4\n  PROBLEM: The variable `hold_reason` is used before assignment if `sed` fails to match.\n  WHY: If the `gate_out` file is empty or does not contain `hold_reason=`, `hold_reason` will be empty. While the later `[[ \"${hold_reason}\" =~ ^[a-z_]+$ ]] || hold_reason=\"unknown\"` handles it by defaulting to `unknown`, `hold_reason` itself should be initialized to an empty string or explicitly handled before use to avoid potential pollution from previous loop iterations in the shell.\n- scripts/review_rb_judge_security_pass.sh:343-345 | severity=high | confidence=4\n  PROBLEM: The condition `if [ \"${hold}\" = \"true\" ] && [ \"${hold_reason}\" = \"label_write_failed\" ]; then` assumes `hold_reason` is populated correctly.\n  WHY: If `hold_reason` was not captured correctly, `hold_reason` might be empty, resulting in `RB_SECURITY_HOLD_REASON` being set to `gate_failed` even when the actual reason might have been `label_write_failed`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4ead3be1cf447c5c952041443762ff5841a4c015f2d8679ef5eec66b545e69bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6462,
+    "run_id": "37408867830",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37408867830",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006042629_612c5c2274",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6462,
+    "run_id": "37408867830"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T04:26:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: With `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED=true`, what should happen when the routing data can't be verified? That covers a failed PR fetch or invalid JSON, empty `head.ref`, `head.repo.full_name` or `state`, a non-open PR, a fork head, or a head ref that isn't a valid branch name.\nChoices:\nA) Don't file the triage issue. Log `CHECK_TRIAGE skip reason=routing_unverified ...`, send a WARNING to Telegram, and exit 0 so a later re-run can retry. No unrouted issue is filed that would send the fix to the default branch. (RECOMMENDED)\nB) Don't file the issue and exit non-zero with a CRITICAL alert, so the job fails visibly.\nC) File the issue without an `Integration branch:` line (today's behaviour, so the fix routes to the default branch) and log a warning.\nQ2: Should \"mismatched data\" also cover the failing check's head SHA differing from the PR's current `head.sha`, i.e. the branch moved after the check ran?\nChoices:\nA) Yes. Treat a SHA mismatch as unverified and handle it as chosen in Q1. The routed fix would otherwise target a branch whose tip the failing check never ran on. (RECOMMENDED)\nB) No. Only check open state, same-repository head and a valid head ref; still route to the PR head branch after a later push.",
+  "fingerprint": "8ca2bc4fed3268574d0b547e3b0a03cf64e7d0075f055edadd871c2bbfbe91b0",
+  "lineage": {
+    "issue_number": 6773,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37797530442",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37797530442",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008150850_dd600ec658",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6773,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37797530442"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6773 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T15:08:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

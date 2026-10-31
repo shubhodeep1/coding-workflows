@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:4319-4385 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: In `augment_files_touched`, `recorded` and `recorded_initial` are filtered copies of the raw `prepush_augmented_paths` marker. When the raw marker is malformed and an issue's module selection fails (`candidates is None`), the restore puts back the filtered entry, so `recorded != original_marker` is still true. That sets `marker_changed=1`, and `--write-back` rewrites the decomposition and reports `written: true`.\n  WHY: This breaks the documented no-op contract \"Every failure leaves the decomposition unchanged and exits 0\", and the new test `test_augment_files_touched_ignored_marker_with_failed_module_is_noop` only covers a well-formed marker. The only content change is that the malformed marker is cleaned up. All four reviewers rated it NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_lib.py:augment_files_touched, lines 4319-4325 (`recorded_initial` is built from the filtered `recorded` dict), lines 4360-4361 (restore on `candidates is None`), lines 4383-4385 (`original_marker = recorded_raw ...`; `if totals[\"added\"] > 0 or recorded != original_marker:`) | severity=NIT | confidence=4\n  PROBLEM: The restore brings back the parsed copy of the marker entry, not the raw entry. Three marker shapes trigger it: a non-string list element (e.g. `{\"a\": [\"src/one.py\", 5]}`), a non-list value, or a non-dict marker. `validate_decomposition` keeps unknown keys (`data = dict(data)`, line 93). So even when every selection fails, `marker_changed` is set to 1, `${DECOMPOSITION_FILE}` is rewritten and `written: true` is reported.\n  WHY: This contradicts the \"every failure leaves the decomposition unchanged\" statement in the new test and in the agents.d fragment. Only the marker is cleaned up, so `files_touched` and partition results are unaffected.\n- HARDENING (scripts/orchestrate_lib.py, augment_files_touched, around line 4385): compute `marker_malformed = recorded_raw is not None and recorded_raw != recorded_initial` once before the loop. Then write back only when `totals[\"added\"] > 0 or recorded != recorded_initial or (marker_malformed and totals[\"skipped\"] < totals[\"issues\"])`. Estimated 2-3 lines; HARDENING_RISK_SCORE: 1.\n- TASK COMPLETENESS: NONE. Every item in issue #8189 is reported as present: the subcommand with its 50-entry cap, the gated wiring, the shared renderer, the tests, and the changelog.d and agents.d fragments.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_lib.py:4321-4325, 4360-4361, 4383-4385 | severity=NIT | confidence=5\n  PROBLEM: When module selection fails for an issue with a malformed `prepush_augmented_paths` entry, the failure path restores only the filtered marker data, not the original raw value.\n  WHY: For example, `{\"a\": [\"src/one.py\", 7]}` is filtered to `{\"a\": [\"src/one.py\"]}`. Comparing the restored value with `recorded_raw` sets `marker_changed`, so `--write-back` rewrites the decomposition despite the documented no-op-on-failure behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_lib.py:augment_files_touched, lines 4321-4325 (marker parsing), 4360-4361 (restore block), 4383-4385 (marker comparison) | severity=NIT | confidence=5\n  PROBLEM: A malformed marker entry (e.g. `{\"a\": [\"src/one.py\", 5]}`) is filtered out during parsing, so `recorded_initial` never contains it. When module selection fails, the restore uses the filtered form, `recorded != original_marker` (line 4384) sets `marker_changed=1`, and the decomposition is written despite the failure.\n  WHY: This contradicts \"Every failure leaves the decomposition unchanged and exits 0\". The content stays correct, but the write should not happen. `test_augment_files_touched_ignored_marker_with_failed_module_is_noop` uses a well-formed marker, so it does not catch this case.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_lib.py:augment_files_touched, lines 4319-4325 (marker parsing / recorded_initial), 4356-4364 (restore on failed selection), 4383-4385 (marker_changed comparison) | severity=NIT | confidence=4\n  PROBLEM: `recorded` is a filtered copy of the raw marker, while `original_marker` (line 4383) is the unfiltered raw value. Any dropped content (a non-string key, a non-list value, or a non-string element) makes `recorded != original_marker` permanently true. After a failed selection (`candidates is None`), the restore at lines 4360-4361 puts back the filtered form, so line 4385 sets `marker_changed=1` and `cmd_augment_files_touched` writes back with `written: true`.\n  WHY: This contradicts the no-op contract in the agents.d/8189 fragment (line 4). The new test only exercises a well-formed marker. The spurious write also silently drops the malformed marker entries even though every issue was skipped. The reviewer kept it at NIT because the trigger needs malformed model-written JSON.\n- HARDENING (scripts/orchestrate_lib.py, augment_files_touched, line 4385): gate the cleaning comparison with `if totals[\"added\"] > 0 or (recorded != original_marker and totals[\"skipped\"] == 0):`. An alternative is to compare against `recorded_initial`. Optionally, add a test case that uses a malformed-element marker with a failing module. Estimated 1 line; HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "aff8b6344e9fe760fd6f159e7cd355b75daaf0f0398b35ec41712f848d6dad72",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8193,
+    "run_id": "40306174559",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40306174559",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026110824_e33a366968",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8193,
+    "run_id": "40306174559"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T11:08:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

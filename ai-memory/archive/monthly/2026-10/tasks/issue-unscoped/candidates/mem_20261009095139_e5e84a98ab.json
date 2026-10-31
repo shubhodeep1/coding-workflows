@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1679-1683 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: A header-like line inside an open env block can prematurely end redaction, causing that line and subsequent environment entries to be emitted verbatim.\n  WHY: This can leak non-credential-shaped values into diagnosis evidence; severity differs (NIT vs BLOCKER), so the highest severity is used.\n- scripts/workflow_failure_heal.py:1674-1683 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: Inline `env: FOO=bar` definitions are not safely redacted and can pass through verbatim.\n  WHY: The inline form may not open env-block redaction or may end an existing env block and expose its value; severity differs (NIT vs BLOCKER), so the highest severity is used.\n- .github/workflows/ci.yml:1435-1442 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The `orchestrate-poll (3)` CI check failed, but the supplied log tail does not identify the failing test or shard.\n  WHY: The nonzero shard status fails the aggregate check; severity differs (NIT vs MAJOR), so the highest severity is used, while the cause is not established by the visible log.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py | _STEP_HEADER_KEY_RE at line 300, matches `env:` line at line 1679 | severity=low | confidence=2\n  PROBLEM: An inline `env: FOO=bar` line inside an env block ends redaction and is passed through verbatim.\n  WHY: This requires non-standard log input, but the inline value could reach the diagnosis prompt or heal issue.\n- scripts/workflow_failure_heal.py | Lines 1679-1680, the `_STEP_HEADER_KEY_RE` block-end match inside an env block | severity=low | confidence=2\n  PROBLEM: A multiline env value continuation beginning with `with:`, `shell:`, or `env:` can end redaction and leave subsequent lines unredacted.\n  WHY: This is described as unreachable with real runner output and requires non-standard log input.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py | _STEP_ENV_OPEN_RE = re.compile(r\"^env:\\s*$\") | confidence=4\n  PROBLEM: The env-block opener regex does not match inline environment definitions such as `env: FOO=bar`.\n  WHY: The filter may fail to identify the env block, leaving values unredacted in diagnosis logs.\n- .github/workflows/ci.yml | orchestrate-poll (3) | confidence=5\n  PROBLEM: The PR head has a failing CI check because one local orchestrate-poll shard reported failure.\n  WHY: The supplied log tail does not identify the failing test or error, so whether this is related to the changes or intermittent is unclear.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py | _strip_step_env_values, lines 1679-1683 | severity=low | confidence=3\n  PROBLEM: A header-like line inside an open env block ends redaction, and that line and subsequent env entries are appended verbatim.\n  WHY: Non-credential-shaped values can reach diagnosis evidence when such a line occurs in non-standard log input.\n- scripts/workflow_failure_heal.py | _strip_step_env_values, lines 1674-1683 (and the inline `env:` form) | severity=low | confidence=3\n  PROBLEM: An inline `env: FOO=bar` line inside an env block ends redaction and is appended verbatim.\n  WHY: `redact_secrets` does not match arbitrary `KEY=value` text.\n- scripts/workflow_failure_heal.py | _strip_step_env_values, lines 1679-1683 | confidence=3\n  PROBLEM: Hardening suggestion: redact the triggering header-like line's value tail when it exits env mode.\n  WHY: Suggested minimal fix: Replace the existing block with a path that formats the line as `f\"{stamp}{key_prefix} [redacted]\"` and sets `in_env = False`.\n- .github/workflows/ci.yml | orchestrate-poll shard; check-run `orchestrate-poll (3)` on run 37906950686 | severity=low | confidence=2\n  PROBLEM: The PR head has a failing `lint` check caused by one failing `orchestrate-poll` matrix shard.\n  WHY: The visible log tail does not identify a specific failing test or map the failure to the diff.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py | 1679-1682 | severity=critical | confidence=4\n  PROBLEM: While redacting an `env:` block, a line matching `shell:`, `with:`, or `env:` ends redaction; a multiline value containing such a line or an `env: FOO=bar` continuation can be preserved verbatim.\n  WHY: Filtered output reaches diagnosis evidence, and the existing multiline-value fixture does not cover a header-like line followed by sensitive content.\n- .github/workflows/ci.yml | 1435-1442 | severity=high | confidence=5\n  PROBLEM: The PR head's `orchestrate-poll (3)` check failed because at least one local shard returned a nonzero status.\n  WHY: The supplied log tail does not identify the failing shard or test, leaving the failure unresolved.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py | `_strip_step_env_values`, lines ~1679-1682 (`if in_env and _STEP_HEADER_KEY_RE.match(content): in_env = False`) | severity=low | confidence=3\n  PROBLEM: A multiline `env:` value continuation beginning at column 0 with `shell:`, `with:`, or `env:` can prematurely terminate env-block redaction, leaving subsequent entries verbatim.\n  WHY: A non-credential-shaped secret could then survive into the diagnosis prompt and heal issue.\n- .github/workflows/ci.yml (orchestrate-poll shard); check-run `orchestrate-poll (3)` on run 37906950686 | CI job `orchestrate-poll (3)`, log tail ends with `##[error]1 orchestrate-poll shard(s) failed.` | severity=low | confidence=2\n  PROBLEM: The PR head has a failing CI check, but the visible log tail does not identify the failing shard's test or error.\n  WHY: The failure is in a test module the PR does not touch and is likely pre-existing or flaky; the reviewer recommends verifying whether it reproduces on the base branch.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "2ff36255b665a2290f7fa6f0755fc27f398ca2533dd7cf8bf3b9ee56dbe44cc4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6651,
+    "run_id": "37906977372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37906977372",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009095139_e5e84a98ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6651,
+    "run_id": "37906977372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T09:51:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

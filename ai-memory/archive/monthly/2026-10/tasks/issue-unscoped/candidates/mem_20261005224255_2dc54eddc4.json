@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run every host-side Python entry point with isolated imports (`python3 -I`) from trusted support.\"\n  expected_change_site: `.github/workflows/check_failure_triage.yml`, the \"Post check-failure triage issue\" step, and its security contract test\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: line 432 reads `PYTHONDONTWRITEBYTECODE=1 python3 - \"${body_file}\" <<'PY'` and line 458 reads `PYTHONDONTWRITEBYTECODE=1 python3 -c '` without `-I`; the new isolation contract test checks `scripts/check_failure_triage.sh` and `scripts/ai_engine.sh`, but not these workflow-inline invocations; the workflow file is unchanged.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Run every host-side Python entry point with isolated imports (`python3 -I`) from trusted support.\"\n  Expected change site: .github/workflows/check_failure_triage.yml, the \"Post check-failure triage issue\" step (line 432 and line 458).\n  Evidence of absence: Verified against the current ref \u2014 line 432 reads `PYTHONDONTWRITEBYTECODE=1 python3 - \"${body_file}\" <<'PY'` and line 458 reads `PYTHONDONTWRITEBYTECODE=1 python3 -c '`, neither of which carries `-I`. The PR does not modify the workflow file at all (it is not in PR CHANGED FILES). The previous pass of the PR added `-I -B` to every Python invocation across `scripts/check_failure_triage.sh`, `scripts/clarify_isolated_run.sh`, and (in the LAST RUN) `scripts/ai_engine.sh`, so the workflow file is the only host-side Python surface that the \"every host-side Python entry point\" recommendation left untouched. Both invocations run inside a step that `cd \"${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}\"` first and the step's `env:` block does not include `OPENROUTER_API_KEY`, so the literal exploit scenario does not reproduce against these specific lines \u2014 the gap is a defense-in-depth shortfall against the linked issue's stated recommendation, not an active vulnerability.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cRun every host-side Python entry point with isolated imports (`python3 -I`) from trusted support.\u201d\n  Expected change site: `.github/workflows/check_failure_triage.yml`, the `Post check-failure triage issue` step, and its security contract test.\n  Evidence of absence: The workflow still invokes `python3 -` at line 432 and `python3 -c` at line 458 without `-I`. The new isolation contract test checks `scripts/check_failure_triage.sh` and `scripts/ai_engine.sh`, but not these workflow-inline invocations. The step does run from trusted support, so these calls do not reproduce the reported PR-checkout import path; they leave the stated every-entrypoint requirement incomplete.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Run every host-side Python entry point with isolated imports (`python3 -I`) from trusted support.\"\n  Expected change site: `.github/workflows/check_failure_triage.yml` lines 432 and 458\n  Evidence of absence: The workflow file is unchanged. Lines 432 and 458 use `python3 -` and `python3 -c` without `-I`. The editor deferred this as out of scope because the workflow runs from trusted support without `OPENROUTER_API_KEY`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7ced41a56f47be19bc0f53910b16bc23ac6620446e10d438167313656c77bca1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6412,
+    "run_id": "37382459849",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37382459849",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005224255_2dc54eddc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6412,
+    "run_id": "37382459849"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T22:42:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

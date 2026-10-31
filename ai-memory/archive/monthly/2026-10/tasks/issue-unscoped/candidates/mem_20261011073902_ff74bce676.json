@@ -1,0 +1,40 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:9576 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `tr -cd '[:print:]\\n'` filter may strip legitimate non-ASCII UTF-8 characters from the integration judge log.\n  WHY: Stripping those characters could remove important debugging context when the integration judge fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Before cleanup, the function logs `INTEGRATION_JUDGE_INVALID` with the reason and prints the last 20 lines of the judge log in a `::group::`, each line prefixed with `| ` so the model-influenced text cannot act as a workflow command.\" (from PR Description)\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, `invoke_judge_for_integration_conflict`\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implementation escapes `##[` after the `tr` and `cut` commands, making the order of operations brittle; the requirement is technically satisfied.\n- requirement: \"The integration judge prompt now states the 2000-character limit.\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The echo statement stating the limit is outside the `cat <<EOF` block that defines the prompt, so the judge prompt itself is not updated.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:9576 | confidence=2\n  PROBLEM: The use of `tr -cd '[:print:]\\n'` in the integration judge log tailing logic may be overly aggressive if the log file contains characters that are technically printable but non-ASCII, potentially corrupting logs that were intended to be UTF-8. Furthermore, while the sed command prefixes lines with `| `, the `tail` logic itself does not strictly enforce that the final processed output is a valid text stream.\n  WHY: If non-ASCII printable characters are stripped, the judge log may lose important context, hindering debugging when the integration judge fails.\n- Requirement: \"Before cleanup, the function logs `INTEGRATION_JUDGE_INVALID` with the reason and prints the last 20 lines of the judge log in a `::group::`, each line prefixed with `| ` so the model-influenced text cannot act as a workflow command.\" (from PR Description)\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `invoke_judge_for_integration_conflict`\n  Evidence of absence: The implemented logic uses `tr -cd '[:print:]\\n'` which removes non-printable characters. While this aims to neutralize control characters, it may also strip legitimate characters in the judge log. The implementation does not explicitly address the requirement to neutralize `##[` in the log *before* the `tr` command processes it, although the `sed` command provided in the diff handles `##[` escaping *after* the `tr` and `cut` commands. The requirement is satisfied technically, but the implementation is brittle due to the order of operations.\n  ISSUE_CONFIDENCE: 2\n- Requirement: \"The integration judge prompt now states the 2000-character limit.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`\n  Evidence of absence: The implemented diff includes the echo statement: `echo 'Keep \"diagnosis\" and \"resolution_guidance\" at 2000 characters or fewer each; longer answers are rejected.'` but this is NOT actually inside the string passed to the integration judge prompt (the function uses `cat <<EOF` to define the prompt and the echo appears outside that block). The judge prompt itself is NOT updated to state the limit.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "609497016303ed9aba444636b43f4f4383d0b0150e49965dece0c15957467eb6",
+  "injection_suspected": true,
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7143,
+    "run_id": "38114697821",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38114697821",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011073902_ff74bce676",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7143,
+    "run_id": "38114697821"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T07:39:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

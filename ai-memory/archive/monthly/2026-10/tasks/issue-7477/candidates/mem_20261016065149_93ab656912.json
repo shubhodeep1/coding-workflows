@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The heal scope marker (`paths=.github/workflows/plan.yml,tests/**,changelog.d/*.md`) is the only edit set the isolated heal editor may transfer back, so the fix has to stay inside it. Out-of-scope writes would be refused or silently dropped. The behaviour change is fully expressed by `plan.yml`, the tests and a `changelog.d/` fragment. The `clarify.yml` comment edit and the `agents.d/` fragment are documentation only; leaving them out means one slightly stale comment, and nothing breaks. A follow-up issue (option C) or an operator scope re-grant (option B) would add pipeline or human work for no behavioural gain.\nQ2: In `.github/workflows/plan.yml`, the `merged_check_not_passed` arm (lines 1009-1042) already reroutes to the merged PR's `base_ref` and already skips planning with a `reroute_failed` WARNING when that checkout fails. Its guard only fires when `PLAN_SUPERSEDE_RESOLVED_REF` equals `head_ref`. On the new `pr_not_open` path that ref is empty, so the same intent (\"plan against base_ref\", from `scripts/plan_superseded_merged_pr.py` line 345) needs a second trigger: reroute when the ref is empty and `base_ref` differs from the default branch. If the base is the default branch, planning on the default checkout is already the right target.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered. Implementation notes for the planner:\n- **Q1, files:** edit only `.github/workflows/plan.yml`, `tests/test_workflow_checkout_integration_ref_audit.py` (plus any new regression test under `tests/`) and `changelog.d/<issue>-plan-pr-not-open.md`. Do not touch `.github/workflows/clarify.yml` or `agents.d/`. The changelog fragment states that plan now tolerates `pr_not_open`, the same way clarify does.\n- **Q2, refctx step:** expose `pr_not_open=true|false` as an output of the refctx step.\n- **Q2, `merged_check_not_passed` arm:** widen the reroute condition to: (`head_ref` is non-empty AND resolved ref equals `head_ref`) OR (`steps.refctx.outputs.pr_not_open == 'true'` AND resolved ref is empty AND `base_ref` is not `github.event.repository.default_branch`), in both cases with `branch_ok \"${base_ref}\"`. Pass the default branch through `env:`, never inline in `run:`.\n  - Reuse the existing fetch, tar and checkout block, the `PLAN_REROUTED_REF` export and the `reroute_failed` skip/WARNING unchanged.\n  - When `base_ref` is the default branch, keep the current `outcome=plan reason=merged_check_not_passed` path.\n- **Q2, unresolved outcomes:** on the `pr_not_open` path, set `SKIP_PLAN=true` and log `reason=pr_not_open_unresolved` with one WARNING for the helper's `pr_closed_unmerged` outcome and for every unverifiable or other outcome. This follows step 2 of the issue's suggested fix. Add no new GitHub API calls.\n- **Q2, tests:** cover rerouting on a non-default base, planning on a default base, and skipping on `pr_closed_unmerged`.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "c5b8af058c9c4f866487761455f4fa0167d44330e56e9a9868850bb6611750ab",
+  "lineage": {
+    "issue_number": 7477,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38862759417",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38862759417",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7477"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261016065149_93ab656912",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7477,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38862759417"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7477",
+  "timestamps": {
+    "created_at": "2026-10-16T06:51:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

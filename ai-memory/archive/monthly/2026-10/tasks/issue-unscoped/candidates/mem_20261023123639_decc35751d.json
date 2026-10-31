@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1012-1018 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The terminal-target branch of `_resilient_phase_swap` (reached from review_rb_judge.sh:3167 `ai:closed` and review_rb_judge_security_pass.sh:259) builds a full label set from the line-959 GET snapshot and writes it with `PUT`, so a label added concurrently between the GET and the PUT is dropped.\n  WHY: This is the same BUG-001 race the PR fixes in `set_issue_phase_label_resilient` (scripts/label_helpers.sh:266-293). Reviewers rated it MAJOR. anthropic_claude-sonnet-5_5 dropped it as pre-existing and outside the PR diff (disagreement on validity, not severity). minimax_minimax-m3 notes it is pre-existing, outside the changed-file set, and pinned by tests/test_review_rb_judge_label_propagation.py:3089.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Fix BUG-001 (label PUT race) wherever it exists\n  expected_change_site: scripts/review_rb_judge.sh and scripts/review_rb_judge_security_pass.sh\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR modifies only scripts/label_helpers.sh, leaving the stale full-label-set PUT logic in scripts/review_rb_judge.sh and scripts/review_rb_judge_security_pass.sh.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Fix BUG-001 (label PUT race) wherever it exists. The consensus findings indicate that the implementation of stale full-label-set PUT based on a stale GET still exists in scripts/review_rb_judge.sh and scripts/review_rb_judge_security_pass.sh.\n  Expected change site: scripts/review_rb_judge.sh and scripts/review_rb_judge_security_pass.sh\n  Evidence of absence: The PR patch modifies only scripts/label_helpers.sh, leaving the problematic logic in the referenced files as reported in the consensus findings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh:1012-1018 | severity=high | confidence=4\n  PROBLEM: `scripts/review_rb_judge.sh` sources `scripts/label_helpers.sh` but defines its own `_resilient_phase_swap` (line 954), which still does the stale full-label-set `PUT` for terminal targets (`ai:merged` / `ai:closed`). The payload comes from the GET snapshot at line 959, so a label a concurrent writer adds before the PUT is removed.\n  WHY: The PR-close handler (`issue_pr_status.yml`) writes `ai:merged`/`ai:closed` concurrently with the judge's swap, so any non-phase label applied in that window is silently dropped. The reviewer notes this is pre-existing, outside the PR's changed-file set, and pinned by tests/test_review_rb_judge_label_propagation.py:3089. It is reported for an explicit decision.\n- HARDENING (.github/workflows/test-and-mark-stable.yml:366-369) | HARDENING_RISK_SCORE=3\n  PROBLEM: When the checker is missing or symlinked, the preflight exits 0 with only a `::warning::`, so the live E2E jobs start anyway.\n  WHY: Nothing downstream can tell \"gate ran and passed\" from \"gate never ran\". Suggested fix: append a greppable token such as ` reason=checker_unavailable` to the warning (1 line).\n- HARDENING (scripts/label_helpers.sh:289-292) | HARDENING_RISK_SCORE=2\n  PROBLEM: A non-404 failure when removing a stale phase label emits only a free-text `::warning::`, so operators cannot see that the issue now carries two phase labels.\n  WHY: Suggested fix: after the loop, if any removal failed, emit one `::warning::LABEL_REPAIR phase_label_cleanup_incomplete issue=<n> stale=<count>` line (about 4 lines).\n- Overall HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh:1012-1016 | severity=high | confidence=5\n  PROBLEM: The terminal-target path of `_resilient_phase_swap` (called with `ai:closed` at line 3167) builds a full label set from the earlier GET and writes it with `PUT`.\n  WHY: A label added after the GET and before the PUT is removed by the stale replacement. This is the same race the PR fixes in `set_issue_phase_label_resilient`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh:1012-1018 | severity=high | confidence=5\n  PROBLEM: The terminal-target branch of `_resilient_phase_swap` (when `_rps_target` is `ai:merged` or `ai:closed`) computes a full label set from the GET snapshot at line 959 and writes it with `PUT /labels` at line 1015. This is the BUG-001 defect the PR fixes in `scripts/label_helpers.sh:266-293`.\n  WHY: Labels such as `force-review`, `ai:needs-human`, `ai:merge-queued` or `ai:orchestrator-managed` added between the GET at line 959 and the PUT at line 1015 are silently dropped. The non-terminal branch (lines 985-1010) already uses POST+DELETE. The function is called from `scripts/review_rb_judge.sh:2321,2402,3077,3167` and `scripts/review_rb_judge_security_pass.sh:259`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "56518e29a2310fdc47ce88e308592c1496bdf3dcb1595c1e67f01fe0c581f6fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7934,
+    "run_id": "39950474122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39950474122",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023123639_decc35751d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7934,
+    "run_id": "39950474122"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T12:36:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

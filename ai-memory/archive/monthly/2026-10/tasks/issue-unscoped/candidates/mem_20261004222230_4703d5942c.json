@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_unblock_judge.py:607-618, 621-624 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The parameterization requests 13 variants, but `_encoded_key_variants` returns 11.\n  WHY: `variant_index` values 11 and 12 raise `IndexError` at line 624 instead of running the verdict checks, so the test suite fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_unblock_judge.py:607-618, 621 | severity=MAJOR | confidence=5\n  PROBLEM: The parameterization requests 13 variants, but `_encoded_key_variants` returns 11.\n  WHY: The test cases for `variant_index` 11 and 12 raise `IndexError` at line 624 instead of running the verdict checks, so the test suite fails.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "aa91e9c14a86056b1f12b7ea7cf7b0eb9edde219b961cf902e3afaed20715b37",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6229,
+    "run_id": "37238530354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37238530354",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004222230_4703d5942c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6229,
+    "run_id": "37238530354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-04T22:22:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

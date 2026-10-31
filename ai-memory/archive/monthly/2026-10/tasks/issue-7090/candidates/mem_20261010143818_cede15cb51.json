@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: PR #6906 has already merged into `main`, so the branch-repair path's precondition can never be met. How should this fix-up proceed?\nChoices:\nA) Treat the operator step as superseded. Make no code change: #6934's work belongs on `main` now. The plan only re-checks whether the failing `orchestrate-poll` shard still fails on current `main` and fixes it there if it does. If it no longer fails, the plan records that and adds no new code. (RECOMMENDED)\nB) Implement the flag-gated path exactly as written anyway: it is inert because #6906 is not open, and the repo still gains the `CHECK_TRIAGE_BRANCH_REPAIR_ENABLED` switch.\nC) Change the recovery path to add `Target branch: main` (the default branch) to #6934 and then post `/reclarify`, behind the same off-by-default flag.\n**Note:** B and C add runtime code, so they need Q2 answered. With A, Q2 does not apply.\nQ2: If code is added (Q1 = B or C), what may it target, and where does it run?\nChoices:\nA) Make it generic: the check-failure triage path in `scripts/check_failure_triage.sh` derives the PR from the triage issue's own metadata and writes its verified same-repository head as `Target branch:`. It reuses that existing workflow trigger and never hard-codes #6906 or #6934. (RECOMMENDED)\nB) Hard-code #6906 and #6934 in a step of the poller's existing sweep-only tick (`scripts/orchestrate_poll_process.sh`). The step runs once and skips after it posts its marker.\nC) A one-off step in `.github/workflows/check_failure_triage.yml` that is dispatched by hand. This is a manual script under \u00a720.A, which would need an entry in `docs/scripts-pending-removal.md`.\nQ3: For \"fix only the demonstrated failure; require CI to pass\": if the failing shard already passes on the target branch's current head, what should the fix-up issue produce?\nChoices:\nA) No code change: close the fix-up with a comment that cites the passing CI run on the current head. (RECOMMENDED)\nB) Add a regression test that pins the currently passing behaviour, even though nothing fails now.",
+  "fingerprint": "e095565580f5b6c5aa1cdaae7f1cbd64e5de422220e0ed937fb1c426e991817b",
+  "lineage": {
+    "issue_number": 7090,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38060055457",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38060055457",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010143818_cede15cb51",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7090,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38060055457"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7090 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T14:38:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

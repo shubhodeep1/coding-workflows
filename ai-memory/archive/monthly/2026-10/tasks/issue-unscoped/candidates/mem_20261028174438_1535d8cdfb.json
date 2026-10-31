@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1532-1540 | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The moved Node setup step uses `actions/setup-node@v6`, which the reviewer suspects is an unpinned or non-existent tag that differs from the repository's conventions.\n  WHY: If the action version is invalid or unavailable, the job fails to start. (Severity is not stated in the source; medium is assigned by this ledger. The other reviewers noted that `actions/setup-node@v6` was already used by the moved pair.)\n- changelog.d/8268-release-job-steps-to-heal-plan-2.md:11 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog says the next `budget-watch` run opens an issue \"with its step timings\", but `scripts/ci_budget_watch.py` does not include step timings in the issue body.\n  WHY: The text promises behaviour the script lacks, so operators will find only job-level totals. Nothing breaks at runtime. Both reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, selection of the steps and destination job for tests-release-and-log-analysis\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml lines 1532-1540 and changelog.d/8268-release-job-steps-to-heal-plan-2.md line 11 say the steps and destination were chosen by estimated cost, not measured. The changelog says no job is known to have room, and the destination took 15m06s of its 20-minute timeout in an earlier run. The PR does not establish that the moved steps were the slowest or that the destination had the most headroom. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT with confidence 2, because clarify decision AD-1 approved the estimate-based choice and the PR discloses it. The other two rated it MAJOR with confidence 5.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/8268-release-job-steps-to-heal-plan-2.md:last sentence of the second paragraph | severity=NIT | confidence=4\n  PROBLEM: The text misdescribes `scripts/ci_budget_watch.py`: it says the next `budget-watch` run opens an issue \"with its step timings\", but the script does not attach timings, and a repeat finding on an existing issue opens nothing.\n  WHY: Nothing breaks at runtime. The changelog text promises behaviour the script lacks.\n- TASK_GAP (severity=NIT, confidence=2)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, choice of steps and destination job.\n  Evidence of absence: The `ci.yml` comment and the changelog say the steps and destination were chosen by estimated cost, not measured. No job is known to have room, and the destination took 15m06s of 20 minutes in an earlier run. This is not a defect the PR can fix: clarify decision AD-1 approved the choice by estimated cost. The disclosure is in the PR. Job and step names, `timeout-minutes` and the required jobs are unchanged.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1532-1540 | confidence=3\n  PROBLEM: The Node setup step is moved, but the reviewer suspects `actions/setup-node@v6` is an unpinned or non-existent tag, given that other `setup-node` uses are typically versioned by SHA or specific tags.\n  WHY: If the action version is invalid or not available, the job fails to start.\n- TASK_GAP (severity=MAJOR, confidence=5)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, selection of the steps and destination job for tests-release-and-log-analysis.\n  Evidence of absence: .github/workflows/ci.yml lines 1532-1540 and changelog.d/8268-release-job-steps-to-heal-plan-2.md line 11 state that the steps and destination were selected by estimated cost, not measured. The changelog says no job is known to have room and records the target job at 15m06s of its 20-minute timeout in an earlier run. The diff does not establish that the moved steps were the slowest or that the destination had the most headroom.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP (severity=MAJOR, confidence=5)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of the steps and destination job for `tests-release-and-log-analysis`.\n  Evidence of absence: The workflow comment at lines 1532-1540 says the step timings were not read and the steps were chosen by estimated cost. The changelog at line 11 says the destination and steps were picked by estimate and that no job is known to have room. The PR does not establish that the moved steps were the slowest or that `tests-heal-plan-and-validation` had the most headroom.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/8268-release-job-steps-to-heal-plan-2.md:11 | severity=NIT | confidence=4\n  PROBLEM: The claim that the budget-watch issue will carry the destination job's step timings is false. `scripts/ci_budget_watch.py` `issue_body()` (lines 110-134) composes the issue body from only the finding's kind, subject, duration, limit, job name and run URL, and `job_duration_findings()` (lines 87-101) discards the per-step data.\n  WHY: An operator relying on the next budget-watch issue for step timings will find only job-level totals. No CI behavior breaks, so this is a text-accuracy defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9edf65880271a4460ae7202ee98705dd8631d7b3e32bc0ed4d19111acb620e32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8270,
+    "run_id": "40734277004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40734277004",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028174438_1535d8cdfb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8270,
+    "run_id": "40734277004"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T17:44:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

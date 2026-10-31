@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4449-4463 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The one-second floor on PHASE7_POLL_SLEEP overrides the deadline clamp, so the poll loop sleeps past DEADLINE and exits without the final run listing.\n  WHY: When PHASE7_POLL_REMAINING is 1, the clamp sets the sleep to 0 and the floor raises it back to 1, so the loop crosses the deadline. Severity disagreement: google_gemini-3_1-flash-lite rated it MAJOR and openai_gpt-6-luna rated it NIT, so the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:4458-4462 | severity=MAJOR | confidence=5\n  PROBLEM: The one-second floor at lines 4458-4462 can override the deadline clamp, causing the poll loop to sleep longer than the remaining budget and exit without performing the final listing.\n  WHY: When `PHASE7_POLL_REMAINING` is 1, the deadline clamp sets `PHASE7_POLL_SLEEP` to 0. The subsequent floor check `[ \"${PHASE7_POLL_SLEEP}\" -lt 1 ]` sets it to 1. The subsequent `sleep 1` causes the loop to sleep for 1 second, crossing the `DEADLINE`. The loop then breaks without performing the final listing as intended by the logic.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:4449, 4453-4463 | severity=NIT | confidence=5\n  PROBLEM: The one-second floor can override the deadline clamp. `date +%s` provides whole-second timestamps, so when `PHASE7_POLL_REMAINING` is `1`, the actual time left can be less than one second. The clamp sets the sleep to `0`, then the floor changes it to `1`.\n  WHY: The step sleeps past `DEADLINE` and exits the loop without the final run listing. This violates the requirement not to sleep past the deadline and the diagnostic's claim that it wakes in time for one last listing.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c7a37a48548b4af5e1fd0422d879967ef84c0ed3b3657753bfb07defd7c19ad1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7734,
+    "run_id": "39408226522",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39408226522",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020104526_dfb11dde35",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7734,
+    "run_id": "39408226522"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T10:45:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

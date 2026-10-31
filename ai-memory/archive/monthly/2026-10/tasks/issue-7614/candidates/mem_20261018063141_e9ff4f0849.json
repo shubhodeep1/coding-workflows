@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply workflow-optimization-2026-09-21-2 recommendations (verified subset)\",\"issues\":[{\"id\":\"memory-fail-open-telemetry\",\"title\":\"AI memory: add exit_code, duration_ms and stderr_category to record-run-event / record-candidate fail-open telemetry\",\"priority\":2},{\"id\":\"promote-gate-failure-linkage\",\"title\":\"Promote cycle: name the failed job and step of a failed smoke-gate child run in PROMOTE_CYCLE_FAILED\",\"priority\":3},{\"id\":\"reviewer-usage-missing-reason\",\"title\":\"Review panel: add usage_missing_reason to the reviewer 'INFO: openrouter usage' line\",\"priority\":3},{\"id\":\"reviewer-pass2-shadow-decision\",\"title\":\"Review panel: shadow-log an adaptive second-pass decision (REVIEWER_PASS2_SHADOW), no behaviour change\",\"priority\":4},{\"id\":\"report-and-source-cleanup\",\"title\":\"Record verdicts for workflow-optimization-2026-09-21-2 and delete the processed source doc\",\"priority\":6}],\"dependency_edges\":[{\"from\":\"reviewer-usage-missing-reason\",\"to\":\"reviewer-pass2-shadow-decision\"},{\"from\":\"memory-fail-open-telemetry\",\"to\":\"report-and-source-cleanup\"},{\"from\":\"promote-gate-failure-linkage\",\"to\":\"report-and-source-cleanup\"},{\"from\":\"reviewer-usage-missing-reason\",\"to\":\"report-and-source-cleanup\"},{\"from\":\"reviewer-pass2-shadow-decision\",\"to\":\"report-and-source-cleanup\"}]}",
+  "fingerprint": "9ea5610e0b68fca1b83958e9fb7740511f9480a6eae78970ffc0a8fd78db9cd8",
+  "lineage": {
+    "issue_number": 7614,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39103633900",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39103633900",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261018063141_e9ff4f0849",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7614,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39103633900"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply workflow-optimization-2026-09-21-2 recommendations (verified subset)' into 5 issues (tracking #7614)",
+  "timestamps": {
+    "created_at": "2026-10-18T06:31:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

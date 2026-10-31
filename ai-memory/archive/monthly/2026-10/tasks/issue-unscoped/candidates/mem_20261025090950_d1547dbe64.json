@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:825-853 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The removed `_safe_gh_jq` branch in `_gh_cmd_log_summary` was reachable through `gh_retry _safe_gh_jq <endpoint> \u2026`, so the failure summary now prints only `_safe_gh_jq (flags: \u2026)` and drops the endpoint and PR number.\n  WHY: Failed API calls from the most common `gh_retry _safe_gh_jq` callers no longer say which endpoint failed, and no test covers this shape. Severity disagreement: MAJOR (sonnet, minimax), NIT (luna, glm); highest used. qwen_qwen3_7-plus judged the branch dead and made no finding.\n- scripts/orchestrate_poll_process.sh:1812-1817 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: Removing `2>/dev/null` from `gh_retry gh pr list` in `_merge_probe_refresh` sends gh stderr and `::error::` annotations to the poller log.\n  WHY: This is log noise and `::error::` annotations during API outages, and it departs from the file's convention. There is no functional regression. All three rated it NIT. qwen_qwen3_7-plus judged the removal intentional and safe.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/gh_helpers.sh:834-838 (`_gh_cmd_log_summary`, removed `_safe_gh_jq` branch) | severity=MAJOR | confidence=5\n  PROBLEM: The last run removed the `_safe_gh_jq` branch as unreachable, but `gh_retry _safe_gh_jq <endpoint> \u2026` is the main call shape across the repo. Examples are scripts/pr_checks_lib.sh lines 166, 256, 283, 577, 821, 844, 884, 948, 997, 999, 1057 and 1074, scripts/review_conflict_prepare.sh:1273, and scripts/implement_diagnose_post_codex_failure.sh lines 171 and 260. The summary now prints only `_safe_gh_jq (flags: \u2026)`.\n  WHY: The `gh_retry` failure messages no longer identify the failing API call, and no test covers the shape. Restoring the branch and adding a test for `gh_retry _safe_gh_jq repos/o/r/pulls/1` would fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:1812 | severity=NIT | confidence=3\n  PROBLEM: Removing 2>/dev/null from the gh pr list command in _merge_probe_refresh writes raw gh stderr into the poller log on any GitHub API error.\n  WHY: This adds log noise during API outages and may trigger ##[error] annotations in CI logs.\n- HARDENING: scripts/review_run_reviewers.sh `reviewer_attempt_result_failure_class()` classifies failures with grep -Eiq on stderr, which depends on the exact output format. Suggested fix: parse structured error output if the tools provide it (5-10 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh:825-853 | severity=MAJOR | confidence=5\n  PROBLEM: With the `_safe_gh_jq` branch gone, `_gh_cmd_log_summary` never calls `_gh_api_endpoint` for `gh_retry _safe_gh_jq \u2026`. The output becomes `_safe_gh_jq (flags: --jq)` and the endpoint is lost. Roughly 60+ call sites use this shape, in scripts/pr_checks_lib.sh, scripts/orchestrate_poll_process.sh, scripts/review_rb_judge.sh, scripts/review_conflict_prepare.sh, scripts/workflow_retro_fanout.sh and scripts/implement_diagnose_post_codex_failure.sh.\n  WHY: Operators can no longer see which endpoint failed, which contradicts the promise in changelog.d/8095-gh-helpers-log-redaction.md. tests/test_gh_retry_stdout_isolation.py only covers the direct `_safe_gh_jq` mktemp path, so the regression slipped through.\n- scripts/orchestrate_poll_process.sh:1812-1817 | severity=NIT | confidence=4\n  PROBLEM: `_merge_probe_refresh()` is the only `gh_retry` call in the file that no longer redirects stderr with `2>/dev/null`. Other examples keep it, at lines 22045, 46, 162, 179 and 26903.\n  WHY: `::error::` annotations and raw gh stderr now reach the step log for every probed branch on each tick. This is cosmetic noise, not a functional regression, since the explicit \"Sibling PR lookup \u2026 unavailable\" message already exists.\n- HARDENING: NONE. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/gh_helpers.sh:835-851 (`_gh_cmd_log_summary()`; caller scripts/pr_checks_lib.sh:256) | severity=NIT | confidence=5\n  PROBLEM: The summary no longer recognizes `_safe_gh_jq` as a wrapped `gh api` call, so the endpoint is an undisplayed positional argument.\n  WHY: A failed `gh_retry _safe_gh_jq` request omits the endpoint and PR number, which makes the failing request harder to identify.\n- HARDENING: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/gh_helpers.sh:825-849 (`_gh_cmd_log_summary()`) | severity=NIT | confidence=5\n  PROBLEM: The removed `_safe_gh_jq` branch was live for the ~100 call sites that wrap `_safe_gh_jq` in `gh_retry`, such as scripts/orchestrate_poll_process.sh:2265, scripts/pr_checks_lib.sh:256 and 283, and scripts/review_rb_judge.sh:1071. It was dead only for the `_safe_gh_jq` mktemp-failure message, whose call site passes `gh api \"$@\"` at scripts/gh_helpers.sh:1346. The summary is now `_safe_gh_jq (flags: --jq)` with no endpoint. `_gh_cmd_bucket()` at scripts/gh_helpers.sh:663-664 still special-cases the same shape.\n  WHY: During an API outage the exhausted-retry `::error::` lines no longer identify which endpoint failed. This is a log-only regression with no state or control-flow change.\n- scripts/orchestrate_poll_process.sh:1817 (`_merge_probe_refresh()`) | severity=NIT | confidence=3\n  PROBLEM: The `2>/dev/null` was removed from the probe's `gh_retry gh pr list` call, while sibling call sites keep it, at lines 47, 163, 4629, 22045 and 27530. tests/test_merge_probe.py stubs `gh_retry() { \"$@\"; }`, so it never reproduces the annotation.\n  WHY: An extended outage produces repeating `::error::` annotations per branch per tick, with no functional failure. The change is undocumented in changelog.d/8096-merge-probe-unknown-siblings.md. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f10d53dc8c8a1b4788e35c59a5bd564c5835e3228702c94220c4f3524f3b0d0f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8099,
+    "run_id": "40176607133",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40176607133",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025090950_d1547dbe64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8099,
+    "run_id": "40176607133"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T09:09:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

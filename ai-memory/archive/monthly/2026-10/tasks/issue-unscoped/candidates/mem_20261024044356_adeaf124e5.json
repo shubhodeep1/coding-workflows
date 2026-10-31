@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CHANGELOG.md:1582-1585 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The merge conflict resolution left the block \"Status and conclusion polling continue during the pause ... the bait-coverage check.\" twice in a row in the live-log cooldown paragraph of CHANGELOG.md.\n  WHY: CHANGELOG.md is permanent release-note prose synced to consumer repos, and the source fragment `changelog.d/wfopt-0922-3-release-live-log-cooldown.md` was deleted, so the duplication cannot be repaired later. Severity differs between reviewers (MAJOR vs BLOCKER), so the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  expected_change_site: CHANGELOG.md line 1582 (conflict resolution at lines 1582-1585)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: CHANGELOG.md line 1582 holds duplicated text instead of a clean merge, because the conflict resolution concatenated both sides. The reviewers rated this MAJOR to BLOCKER. Another reviewer (z-ai_glm-5_3-flash) reported the same defect only as a correctness finding and not as a task gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CHANGELOG.md:1582 | severity=MAJOR | confidence=5\n  PROBLEM: The paragraph starting \"Status and conclusion polling continue during the pause\" holds the same block of sentences twice in a row, because the autofix run added the fragment's newer text after the old paragraph instead of replacing it.\n  WHY: Nothing breaks at runtime, but the doubled prose ships in the permanent release notes synced to consumer repos. The `changelog.d/wfopt-0922-3-release-live-log-cooldown.md` fragment was deleted in the same run, so a later fold cannot fix it. The fix is to delete the first copy and keep the version ending with the \"During the pause that check logs `reason=live_log_cooldown` ...\" text.\n- TASK_GAP:\n  Requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  Expected change site: CHANGELOG.md line 1582\n  Evidence of absence: The conflicting fragments are resolved and folded into `CHANGELOG.md` and `agents.md`. The doubled paragraph in `CHANGELOG.md` is the only defect, and it is the same one reported above.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CHANGELOG.md:1582-1585 | severity=MAJOR | confidence=5\n  PROBLEM: The merge conflict resolution duplicated the first three sentences of the live-log cooldown entry in CHANGELOG.md.\n  WHY: This is not a runtime failure, but the public-facing changelog, which is synced to consumer repositories, shows duplicated content to operators.\n- TASK_GAP:\n  Requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  Expected change site: CHANGELOG.md\n  Evidence of absence: The merge conflict in CHANGELOG.md was resolved incorrectly, leaving duplicated text instead of a clean merge of the stable content into main.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- CHANGELOG.md:1582 | severity=BLOCKER | confidence=5\n  PROBLEM: The paragraph contains the three-sentence block \"Status and conclusion polling continue during the pause ... the bait-coverage check.\" twice in succession.\n  WHY: CHANGELOG.md is the permanent release note shipped to consumer repos. The duplicated prose is nonsensical and confuses readers, because the conflict resolution concatenated both sides instead of merging them.\n- TASK_GAP:\n  Requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  Expected change site: CHANGELOG.md (merge conflict resolution at lines 1582-1585)\n  Evidence of absence: The merge conflict was resolved incorrectly. Line 1582 contains duplicated text instead of a proper merge, because the resolution concatenated both sides.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CHANGELOG.md:1582 | severity=MAJOR | confidence=5\n  PROBLEM: The folded live-log-cooldown paragraph contains the three-sentence block \"Status and conclusion polling continue during the pause ... the bait-coverage check.\" twice back to back. The last run pasted the fragment's newer paragraph after the old paragraph's first three sentences instead of replacing it.\n  WHY: Nothing crashes, but this is permanent release-note prose. The fragment `changelog.d/wfopt-0922-3-release-live-log-cooldown.md` is deleted, so no later fold can regenerate the correct paragraph. The fix is to delete one copy of the block so line 1582 matches the fragment's paragraph.\n- HARDENING_SUGGESTION: CHANGELOG.md line 1582. Reduce the line to the fragment's exact paragraph, with the three-sentence block once, followed by the \"During the pause ...\" and \"Once the watched run ...\" sentences. Estimated change: 1 line. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2ba29785ccc56f478c6027cf8dd888df90bfdea7095aa25db248b1957e6dd1d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8045,
+    "run_id": "40062075374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40062075374",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024044356_adeaf124e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8045,
+    "run_id": "40062075374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T04:43:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

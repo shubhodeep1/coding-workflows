@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/escalation-judge.md:Step 8 close notification, line 54 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: After a failed `mcp__github__get_me` read, the notification's count of PRs left open can include PRs that are already merged or closed.\n  WHY: Reviewers agree the count may be inflated, but disagree on whether PR state reads precede the failed `get_me` read: some say no PR states are read, while another says the procedure has already identified which PRs remain open.\n- workflow-templates/.claude/commands/escalation-judge.md:Step 8 `close`, the state-read failure handling and final `PushNotification` clause. | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The close notification does not account for a source issue left open after its state read fails twice, and may give an unreliable count for a PR whose state could not be read.\n  WHY: The operator may receive a \u201cclosed as not planned\u201d notification without being told that the source issue remains open or that a PR's state is unresolved; the report has those details, but the notification does not direct the operator to that unresolved state.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/commands/escalation-judge.md:Step 8 close notification, line 54 | severity=NIT | confidence=3\n  PROBLEM: After a failed get_me read, the notification counts every PR in the log as left open, although some may already be merged or closed.\n  WHY: The initial count may mislead the operator; the report is intended to provide the actual picture.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/escalation-judge.md:Step 8 close path, notification clause: \"adding `; <k> PRs left open for a human, see the report` when any PR the log names is still open: one the check refused, one whose close failed, or all of them after a failed `mcp__github__get_me` read\" | severity=NIT | confidence=4\n  PROBLEM: The notification's `<k>` count is ambiguous after a failed `mcp__github__get_me` read because \u201call of them\u201d could mean all logged PRs or only those still open.\n  WHY: If the log has 10 PRs and 5 are already merged or closed, the operator may see a count of 10 instead of 5; the suggested clarification is \u201call of them that are still open after a failed `mcp__github__get_me` read\u201d or \u201call non-merged/closed PRs after a failed `mcp__github__get_me` read\u201d.\n- Note: The commit message for afb2964d states \"Review round 1\" but the actual round is 18, as documented in the progress log (\"Review round 18 (head 1e623fe...\"). This is a minor documentation error in the commit message only and does not affect the code changes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/commands/escalation-judge.md:Step 8 `close`, the state-read failure handling and final `PushNotification` clause. | severity=NIT | confidence=4\n  PROBLEM: If a PR or source-issue state read fails twice, the notification does not account for the source issue left open, and its PR count may not reliably include a PR whose state could not be read.\n  WHY: The judge can report the project as \u201cclosed as not planned\u201d without indicating that the source issue remains open, or provide an inaccurate count of PRs left open; the report has details, but the notification does not direct the operator to that unresolved state.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/escalation-judge.md:Step 8 `close` \u2014 the PushNotification clause: \"adding `; <k> PRs left open for a human, see the report` when any PR the log names is still open: ... or all of them after a failed `mcp__github__get_me` read\" | severity=NIT | confidence=3\n  PROBLEM: After a failed `get_me` read, the notification counts every logged PR as left open, although some may already have merged or been closed.\n  WHY: The judge skips per-PR state reads, so the report lists PRs without state information and the operator must check each one manually.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3315169c0ee978fa99e69a94751eeada011f620b0644868c86bad3a5721a844e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "37054232474",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37054232474",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002195918_77c1d2d7d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "37054232474"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T19:59:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

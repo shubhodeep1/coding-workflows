@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The draft must remain a draft and must not be merged before the phase 1 PR is opened and merged into the project branch.\n  expected_change_site: PR #5773 draft/merge state\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `docs/implement-plan/issue-5773-provider-outage-wait-and-resume.md` records `Status: IN_PROGRESS`, `Stage: phase 1/1`, `Activation: not started`, and `Final PR: pending`; none of the 25+ files listed under \"Files & Modules\" (Implementation Steps 1\u201312) appear in the diff; the PR body says \"Until then it stays a draft, and the review workflow skips it\".\n- requirement: The next code-bearing push must re-run the gate under a recovered rate-limit window.\n  expected_change_site: `review / gate` re-dispatch on the next `synchronize` or `workflow_dispatch`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `docs/plans/issue-5773-provider-outage-wait-and-resume-plan.md`; the `review / gate` job failed on its first `gh api` call due to a transient API rate limit, and `review-claude-branch-push / codex-agent (claude-branch-review)` is `incomplete` / `in_progress`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: docs/implement-plan/issue-5773-provider-outage-wait-and-resume.md\n  Line or code reference: PR body \u2014 `pr_is_draft: true` in the review / gate inputs\n  Problem: The PR is the project integration PR (project branch `claude/implement-plan-issue-5773-provider-outage-wait-and-resume`, \"carries every reviewed phase of the plan and merges into `main` only after all stages have passed\"). The two files in this diff are the plan (`docs/plans/issue-5773-provider-outage-wait-and-resume-plan.md`) and the progress log (`docs/implement-plan/issue-5773-provider-outage-wait-and-resume.md`). The progress log records `Status: IN_PROGRESS`, `Stage: phase 1/1`, `Activation: not started`, and `Final PR: pending`, with every `## Conformance`, `## Security pass`, `## Validation`, `## Completion`, `## Activation` section empty. None of the 25+ files listed under \"Files & Modules\" (Implementation Steps 1\u201312) appear in the diff. The PR body explicitly says \"Until then it stays a draft, and the review workflow skips it\", which is consistent with a planning-only draft, but the planner must not flip the PR out of draft or merge it before the phase 1 PR is opened and merged into the project branch \u2014 the `fix / Fixes` keyword against #5773 in the body would auto-close the source issue on merge, so this draft must remain a draft.\n  Why it fails at runtime: Merging this draft prematurely would close issue #5773 before the implementation lands (Plan \u00a7Risks also depends on a one-alert-per-outage design that requires the marker issue to be opened; closing the source early would leave the code without a tracked issue). The plan's Phase 1 scope already covers the entire surface (Implementation Steps 1\u201312) as a single phase, so the actual code-bearing PRs will arrive as subsequent project-branch PRs.\n  Severity: MAJOR\n  ISSUE_CONFIDENCE: 4\n- File: docs/plans/issue-5773-provider-outage-wait-and-resume-plan.md\n  Line or code reference: PR check-run context \u2014 `failed[0].name: review / gate`, `details_url: \u2026/actions/runs/36813513286/job/110213492615`, `log_tail` ending with `gh: API rate limit exceeded for user ID 11442166 \u2026 (HTTP 403)`\n  Problem: The review / gate job failed on its first `gh api` call (a transient API rate limit against the GH_PAT account) before it could verify the workflow support ref. The companion check `review-claude-branch-push / codex-agent (claude-branch-review)` is `incomplete` / `in_progress`. Because the PR is a draft, the standard review/auto-merge tail is skipped; nevertheless the gate failure should re-run cleanly once the rate-limit window resets so the next dispatch on the same head can verify support and progress. The gate is expected to fail open / re-dispatch on the next `synchronize` (or `workflow_dispatch`) once the API quota refills.\n  Why it fails at runtime: A persistently failing gate prevents the head from being marked mergeable by the review workflow. The plan itself does not need to change here \u2014 the failure is infrastructure, not plan logic \u2014 but the planning reviewer should note that the next code-bearing push must re-run the gate under a recovered rate-limit window.\n  Severity: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f70b55c1df49abbdbf5cdea3b5277dd4e53ad22daeba2736c1e18b6b5ba89b76",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36813511084",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36813511084",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001042129_eb2efeb985",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36813511084"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T04:21:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

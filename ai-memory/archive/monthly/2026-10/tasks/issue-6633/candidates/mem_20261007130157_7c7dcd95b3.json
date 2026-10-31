@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6633,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6633\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6655\",\"pr_number\":6655,\"branch\":\"ai/issue-6633\",\"run_id\":\"37621444454\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37621444454\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/ai/label_contract.v1.json\",\".github/workflows/clarify.yml\",\".github/workflows/internal-clarify.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/review_autofix_sweep.yml\",\"README.md\",\"agents.md\",\"changelog.d/6633-provider-outage-auto-resume.md\",\"docs/INVENTORY.md\",\"scripts/ai_engine.sh\",\"scripts/provider_outage.py\",\"scripts/review_autofix_step_assemble_failure_evidence.sh\",\"scripts/review_autofix_step_claude_pool_capacity.sh\",\"scripts/review_autofix_step_failure_comment.sh\",\"scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh\",\"scripts/review_autofix_step_provider_outage_record.sh\",\"scripts/stage_workflow_support.sh\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_autofix_report.sh\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/review_autofix_step_scripts.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_phase_wrapper_predicate_contract.py\",\"tests/test_provider_outage.py\",\"tests/test_review_autofix_phase_transition_contract.py\",\"tests/test_review_autofix_provider_outage_contract.py\",\"tests/test_review_semble_contract.py\",\"tests/test_security_audit_workflow_contract.py\",\"workflow-templates/ai-clarify.yml\",\"workflow-templates/ai-review.yml\"]}",
+  "fingerprint": "949788e63aab700abe856989a71f7cdc2c82cd49fb8a707a11991ea7ac9a49e4",
+  "lineage": {
+    "issue_number": 6633,
+    "parent_ids": [],
+    "pr_number": 6655,
+    "run_id": "37621444454",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37621444454",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6655"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261007130157_7c7dcd95b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6633,
+    "level": "run",
+    "pr_number": 6655,
+    "run_id": "37621444454"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6633: https://github.com/shubhodeep1/coding-workflows/pull/6655",
+  "timestamps": {
+    "created_at": "2026-10-07T13:01:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply workflow-optimization-2026-09-23-3 recommendations (verified subset)\",\"issues\":[{\"id\":\"review-push-transient-retry\",\"title\":\"Review autofix: bounded retry of transient push failures in 'Push all pending commits'\",\"priority\":2},{\"id\":\"editor-attempt-result-log\",\"title\":\"Review editor: emit sanitized EDITOR_ATTEMPT_RESULT line per attempt\",\"priority\":3},{\"id\":\"drift-audit-profile-aware\",\"title\":\"Consumer drift audit: do not report wrappers outside the consumer's WORKFLOW_PROFILE as missing\",\"priority\":3},{\"id\":\"report-and-retire-source-doc\",\"title\":\"Record verdicts for workflow-optimization-2026-09-23-3 and retire the source doc\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"review-push-transient-retry\",\"to\":\"report-and-retire-source-doc\"},{\"from\":\"editor-attempt-result-log\",\"to\":\"report-and-retire-source-doc\"},{\"from\":\"drift-audit-profile-aware\",\"to\":\"report-and-retire-source-doc\"},{\"from\":\"review-push-transient-retry\",\"to\":\"drift-audit-profile-aware\"},{\"from\":\"review-push-transient-retry\",\"to\":\"editor-attempt-result-log\"},{\"from\":\"drift-audit-profile-aware\",\"to\":\"editor-attempt-result-log\"}]}",
+  "fingerprint": "91124b6b7a4a6ff82827226d54e3983eaac46628f5c7ddd00eef0ab89d96eb33",
+  "lineage": {
+    "issue_number": 7973,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39959256809",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39959256809",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261023132414_01be54c04b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7973,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39959256809"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply workflow-optimization-2026-09-23-3 recommendations (verified subset)' into 4 issues (tracking #7973)",
+  "timestamps": {
+    "created_at": "2026-10-23T13:24:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

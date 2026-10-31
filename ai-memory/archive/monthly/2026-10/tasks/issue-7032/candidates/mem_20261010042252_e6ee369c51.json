@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: DERIVE_FROM_REPO\nQ3: A\nQ4: A\n\nRATIONALE:\nQ1: The unblock judge's `reissue` branch in `scripts/unblock_actions.py` (lines 366-409) is the path that made the #6789 \u2192 #6801 \u2192 #6813 chain, which you can see from the \"Re-issue of #N:\" titles it builds on line 367. Changing the review-blocked judge and poller paths too would widen the scope with no evidence they caused this, so they stay as they are.\nQ2: Option A on its own would miss the actual failure. The unblock reissue body (line 368) holds only \"Re-issued by the unblock judge from #N\", the specification and the reason. It has no labels unless the issue is a security finding (line 387). It also drops the triage `**Pull request:**` line (`scripts/check_failure_triage.sh:627`) and the `<!-- check-failure-triage:pr=N -->` marker (line 620). So #6801 and #6813 would not be recognised. The repo already has a durable PR marker, so detection should use it, and the reissue should copy it forward.\nQ3: When the owning PR has merged and its checks passed, a replacement issue is pure waste: #6813 is exactly that case, because GitHub reports PR #6786 merged into `main` at 2026-10-09T00:18:52Z. If the PR or check read fails, we fall back to today's reissue so a GitHub outage cannot wrongly close real work. This matches the repo's fail-open rule for lookups that are not about security.\nQ4: The branch must come from the verified PR API head ref. Model-written text cannot be trusted, and the existing `INTEGRATION_BRANCH_LINE_RE` (line 78) only matches a line-anchored entry, so a branch named inside a sentence is silently ignored. That is the defect the issue describes. The base ref is never written to the line.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/check_failure_triage.sh:133 (`MARKER_PREFIX=\"check-failure-triage:\"`), :620 (`<!-- check-failure-triage:pr=N -->`), :627 (`- **Pull request:** <url> (\\`<head_ref>\\`)`)\n    - scripts/unblock_actions.py:366-409 (`reissue` verdict body construction)\n    - labels `ai:check-triage`, `ai:check-triage-escalated`\n  steps:\n    - Treat an item as a CI-failure issue when it carries `ai:check-triage` or `ai:check-triage-escalated`, OR its body has exactly one line-anchored `<!-- check-failure-triage:pr=<digits> -->` marker. Read the body from the item context the judge already fetched; do not add an API call for it.\n    - Take the owning PR number from that marker. If the marker is missing, fall back to the `**Pull request:**` line's `/pull/<digits>` URL, accepted only when the URL's repository equals the current repository. More than one distinct PR number means unknown: skip the merged-PR check and reissue as today.\n    - Confirm the PR with one `GET repos/<repo>/pulls/<n>` read: the head repository must equal the base repository, and the number must match. On mismatch or a failed read, skip the check (the reissue goes ahead as today).\n    - When a CI-failure issue is reissued, put the `<!-- check-failure-triage:pr=<n> -->` marker line on its own line at the top of the new body, so later reissues in the chain stay recognisable. Copy it only when the PR was verified as above.\n    - Add regression tests in the existing unblock-actions test module: (a) a reissued body with no label but with the copied marker is recognised; (b) a mismatched-repo URL is ignored; (c) conflicting PR numbers lead to the normal reissue.\n  replaces_acceptance_criterion: \"Detect CI-failure issues\" is defined as label OR the durable triage PR marker, not label alone.\n  equivalence_argument: Every triage issue carries both the label and the marker from `check_failure_triage.sh`. Copying the marker forward keeps that identity through reissues, which strip labels and body metadata today. So this is a strict superset of option A's coverage and reaches the #6813 case.\n  reversibility: Removing the marker-based branch restores label-only detection. The copied marker is an inert HTML comment in issue bodies.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None.\n\nAdditional binding notes for the planner:\n- Q3: \"checks passed\" means the required check-runs on the PR's merged head SHA are completed and green, judged by the shared `_pr_checks_completed` / required-set logic in `scripts/pr_checks_lib.sh` (or the same filter applied in Python, without a second definition of the required set). A merge into a branch other than the default branch counts as merged only if that branch is the issue's declared integration branch; otherwise reissue as today.\n- Q3: the superseded path closes the original with reason `not_planned`, posts one comment naming PR #<n> and its merged head SHA, and logs a stable line. Use a new key under the existing `UNBLOCK_JUDGE` prefix (`op=reissue outcome=superseded pr=<n> head=<sha>`) rather than a new prefix.\n- Q4: write a standalone `- Integration branch: \\`<head_ref>\\`` line only when the PR is open, its head is in the same repository, and the head ref exists. Add a regression test showing that a body mentioning \"Integration branch: foo\" inside a sentence is not parsed by `INTEGRATION_BRANCH_LINE_RE`, while the reissue emits the standalone line. Add a merged-PR test asserting no `create_issue` op is produced.\n- Scope: recording #6813 as superseded needs no code change and is out of scope for this issue.",
+  "fingerprint": "735c576da39bfe7eebc76147dca5f09ae161483bec9a0eae167a840be04ec2f4",
+  "lineage": {
+    "issue_number": 7032,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38023210791",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38023210791",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7032"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010042252_e6ee369c51",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7032,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38023210791"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7032",
+  "timestamps": {
+    "created_at": "2026-10-10T04:22:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

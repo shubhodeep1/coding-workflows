@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:263-268 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A successful check-run from an unrelated workflow can mark a cancelled or failed required check-run with the same name as superseded.\n  WHY: The reviewer rates this BLOCKER; no other reviewer reported this line range.\n- scripts/pr_checks_lib.sh:312-360 | severity=critical | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: A newer same-name check-run from another workflow can supersede a cancelled required CI check-run, causing the gate to pass without a successful required CI run.\n  WHY: Supersession is based on check name rather than workflow identity, and the gate can discard the cancelled required run; severity ranges from NIT to BLOCKER, so the highest reported severity is used.\n- scripts/orchestrate_poll_process.sh:ready-to-merge loop at line 23310 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: In `*` mode, a cancelled advisory check-run that is newest for its name blocks the sub-issue PR merge, with no alert or recovery action beyond a log line.\n  WHY: The reviewer notes this follows the documented BUG-001 change, is not a new defect, and clears when the job is re-run or a new head is pushed.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The gate must treat a cancelled required check-run as a settled failure unless a newer run of the same name exists, to ensure that orchestrator wave merges do not proceed if a required check-run was cancelled.\n  expected_change_site: scripts/pr_checks_lib.sh\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `_mark_superseded` (lines 263-268 and 324-340) groups check-runs strictly by `name` without workflow identity; the requirement for the check to be part of the same workflow is not implemented.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/pr_checks_lib.sh: `_mark_superseded` at lines 312 and 339, and its use in the required-set filter at lines 352-360 (`.conclusion != \"cancelled\" or (._superseded | not)`) | severity=MAJOR | confidence=3\n  PROBLEM: A cancelled required check is dropped whenever any later check-run with the same name exists on the head, whichever workflow produced it.\n  WHY: The final-merge gate and review-blocked judge call `_pr_checks_completed` without `PR_CHECKS_CI_RUN_IDS`, so an unrelated successful run can allow a merge without a successful required check.\n- scripts/orchestrate_poll_process.sh: ready-to-merge loop at line 23310, `if _pr_checks_completed \"${RTM_PR}\" \"${_rtm_head_sha}\"` (two-argument legacy `*` mode) | severity=NIT | confidence=2\n  PROBLEM: In `*` mode every check-run counts, so a cancelled advisory check-run that is newest of its name blocks the sub-issue PR merge.\n  WHY: The reviewer says this is by design, is not a new defect, and clears when the job is re-run or a new head is pushed.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh: lines 263-268 | severity=BLOCKER | confidence=4\n  PROBLEM: A successful \"lint\" check-run from an unrelated workflow will incorrectly mark a cancelled or failed \"lint\" check-run from the required CI workflow as \"superseded\".\n  WHY: This can cause the gate to ignore the failure and permit the merge when it should block.\n- scripts/pr_checks_lib.sh: lines 324-340 | severity=MAJOR | confidence=4\n  PROBLEM: The legacy `_pr_checks_completed` filter does not distinguish between different workflows that share a job name.\n  WHY: A newer successful same-name run from an unrelated workflow can cause the filter to ignore an older failed or cancelled required CI run, potentially allowing merges on branches without branch protection.\n- Requirement: The gate must treat a cancelled required check-run as a settled failure unless a newer run of the same name exists, to ensure that orchestrator wave merges do not proceed if a required check-run was cancelled.\n  Expected change site: scripts/pr_checks_lib.sh\n  Evidence of absence: The logic in `_mark_superseded` (lines 263-268 and 324-340) groups check-runs strictly by `name` without workflow identity, allowing unrelated workflow runs to satisfy the merge gate requirements for the required CI workflow. The requirement for the check to be part of the same workflow is not implemented.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh: Lines 339, 352-360; `_mark_superseded` groups runs by `.name` only, and the required-check filter then ignores a cancelled run when `_superseded` is true. | severity=MAJOR | confidence=4\n  PROBLEM: A newer successful check-run from a different workflow can supersede a cancelled required check with the same name.\n  WHY: The cancelled CI run is discarded and the unrelated success satisfies the gate, allowing the PR to merge without the required CI run succeeding.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/pr_checks_lib.sh: `_mark_superseded` definition at line ~312, used in legacy `*` mode at lines 308-327 and required-set mode at lines 336-360 | severity=NIT | confidence=3\n  PROBLEM: The `_mark_superseded` jq function groups check-runs by `.name` only and marks every older run of the same name as `_superseded`, so a cancelled required check-run from workflow A can be superseded by a newer successful check-run with the same name from unrelated workflow B.\n  WHY: The `_is_pending` filter drops the cancellation and the gate returns 0 despite the required CI check never succeeding; the CI side channel already applies a bound-run constraint. The reviewer notes that aligning the main gate would require extracting workflow identity from `details_url`, which is fragile.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a26a052a0f43c80f65c8f417b94af38a1a271e2d418314cebe79b12ff64068e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38322458105",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38322458105",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012235213_9f60191c4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38322458105"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T23:52:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

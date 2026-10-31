@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/implement-plan-claude.md:460-462 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The Rules summary retains stale intervention-cap wording and omits escalation-judge grants from the conformance, security, and validation caps.\n  WHY: A stage following the summary can ask a human at a base cap or stop without applying a granted round; severity differed from low to high, and high is reported.\n- workflow-templates/.claude/commands/implement-plan-claude.md:460-462 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The Rules summary retains stale intervention-cap wording and omits escalation-judge grants from the conformance, security, and validation caps.\n  WHY: A stage following the summary can ask a human at a base cap or stop without applying a granted round; severity differed from low to high, and high is reported.\n- .claude/commands/implement-plan-claude.md:463 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The Rules summary says the judge never repeats a choice for the same failure, incorrectly treating `close` as unavailable when previously recorded.\n  WHY: When the same failure recurs after a project is reopened, the judge may treat `close` as unavailable despite the ledger allowing it.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/implement-plan-claude.md:460 | severity=low | confidence=4\n  PROBLEM: The Rules summary says \"At most 3 interventions per PR before asking.\" The intervention procedure routes the next stop to the escalation judge with fingerprint-scoped grants, not to a human Q/A.\n  WHY: A stage reading this summary may stop for a human Q/A at the base cap instead of taking the escalation stop and handing the checker an escalation wait.\n- .claude/commands/implement-plan-claude.md:461 | severity=low | confidence=4\n  PROBLEM: The conformance cap summary omits the escalation judge grants included in Step 8's cap text.\n  WHY: A stage applying the summary may enforce the base cap of 3 without adding the grant count, firing an escalation stop that the judge already settled.\n- .claude/commands/implement-plan-claude.md:462 | severity=low | confidence=4\n  PROBLEM: The security and validation cap summaries omit the escalation judge grants included in Steps 9 and 10.\n  WHY: The summary's cap values can contradict the procedure's grant-aware counting, causing a budget round to be wasted.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/commands/implement-plan-claude.md:460 | severity=low | confidence=4\n  PROBLEM: The summary rule still states \"At most 3 interventions per PR before asking.\", retaining the legacy directive to stop and ask a human and omitting cap grants.\n  WHY: An interactive stage session reading the Rules section can stop to ask a human at the 3-intervention cap rather than accounting for granted rounds and taking escalation stop intervention-cap to hand off to the escalation judge.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/implement-plan-claude.md:460-462 | severity=high | confidence=5\n  PROBLEM: The Rules bullet on interventions still says \"At most 3 interventions per PR before asking.\" The conformance, security, and validation cap summaries immediately below it also omit the escalation-judge grants that the procedure requires.\n  WHY: A stage following the Rules stops for a human at the base cap or treats a granted round as not adding a round, contradicting the \u00a728.G contract.\n- workflow-templates/.claude/commands/implement-plan-claude.md:460-462 | severity=high | confidence=5\n  PROBLEM: The Rules summary in the twin retains stale cap text; the same applies to the conformance, security, and validation cap summaries.\n  WHY: A stage that reads the Rules stops at a base cap even though the ledger's grants would allow another round.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/implement-plan-claude.md:460-462 | severity=low | confidence=4\n  PROBLEM: The summary still says the intervention cap is \u201cbefore asking\u201d and presents the conformance, security, and validation caps as fixed at 3, 5, and 3.\n  WHY: A stage following this summary can ask a human at the base cap or stop without applying a granted round, bypassing the judge flow described elsewhere in the command.\n- .claude/commands/implement-plan-claude.md:463 | severity=low | confidence=4\n  PROBLEM: \u201cNever repeats a choice for the same failure\u201d incorrectly includes `close`, which the judge command and ledger explicitly keep available even when previously recorded.\n  WHY: When the same failure recurs after a project is reopened, the judge may treat `close` as unavailable despite the ledger allowing it, contradicting the documented menu.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:460 | severity=low | confidence=4\n  PROBLEM: The summary says \"At most 3 interventions per PR before asking\" but step 7 (line 55) was updated to say \"Cap: **3 interventions per PR** (plus any rounds the [escalation judge](#escalations) granted); on the next blocked stage do not push again: it is escalation stop `intervention-cap`\". The Rules summary still implies a human ask at the base cap.\n  WHY: A stage reading the Rules summary could stop for a human at 3 interventions instead of applying fingerprint-scoped grants and routing to the escalation judge.\n- workflow-templates/.claude/commands/implement-plan-claude.md:461 | severity=low | confidence=4\n  PROBLEM: The summary says \"At most 3 conformance runs per project\" without mentioning the escalation judge's granted rounds.\n  WHY: A stage reading the Rules summary could treat the conformance cap as fixed at 3, ignoring granted rounds from the judge.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/implement-plan-claude.md:460\n  PROBLEM: The summary still says \"At most 3 interventions per PR before asking.\" The detailed procedure routes past the cap to escalation stop `intervention-cap` and counts granted rounds.\n  WHY: A stage reading only the summary could stop for a human at the base cap instead of routing to the escalation judge.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "34ade4cd050ed9008c2e8f1ed18be0b30a4582718811a52a7bf4b2bb899cd6a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "37070690990",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37070690990",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002223145_8c01bc0f29",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "37070690990"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T22:31:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

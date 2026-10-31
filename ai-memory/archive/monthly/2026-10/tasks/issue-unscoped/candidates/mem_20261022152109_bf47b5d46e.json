@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/promote_main_cycle.sh:419-448,719-724 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: require_stable_branch_ancestor calls code_changes_between, which overwrites CODE_CHANGES_OUT, so the \"Code changes since stable\" log prints the branch-vs-tip file list instead of the tag-vs-tip list.\n  WHY: Only the diagnostic log is wrong and the skip decisions are correct. Severity disagreement: Gemini said MAJOR, the others said NIT, so the highest is used.\n- scripts/orchestrate_poll_process.sh:13918-13923,14216-14228 | severity=medium | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: A successful compare with an empty or unrecognised status is normalised to \"unknown\", and the gate's `*)` arm then records stable_not_ancestor and lets the final merge proceed.\n  WHY: An unreadable compare should take the bounded hold (stable_branch_compare_unavailable). Reviewers rated it NIT, and Gemini raised it only as a hardening suggestion. Severity is listed as medium by the conservative-highest rule, and the reviewers' stated severity is NIT.\n- scripts/promote_main_cycle.sh:722,847-852 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: In an unpinned cycle the stable-branch ancestry check runs once at line 722 and is not rechecked before dispatch, because the post-freeze check only runs when pin_mode is true.\n  WHY: If stable moves to a non-ancestor during the interval, the gate is still dispatched and the workflow's final ancestry check refuses the candidate, so the release-gate run the change meant to prevent still happens.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:comprehensive_stable_branch_compare_status (compare_status normalisation) and the `*)` arm in comprehensive_promotion_gate_before_final_merge | severity=NIT | confidence=3\n  PROBLEM: A compare that succeeds with an empty or unrecognised status is printed as unknown with exit 0, and the gate's `*)` arm records stable_not_ancestor.\n  WHY: This abandons the promotion instead of taking the bounded hold. Returning 2 for any status outside ahead, behind, diverged and identical would fix it.\n- scripts/promote_main_cycle.sh:419-448,722-724 | severity=NIT | confidence=4\n  PROBLEM: When the stable branch is at a third SHA, code_changes_between overwrites CODE_CHANGES_OUT before the \"Code changes since stable\" log.\n  WHY: Only the diagnostic log is wrong. Saving and restoring CODE_CHANGES_OUT would fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/promote_main_cycle.sh:719-722 | severity=MAJOR | confidence=4\n  PROBLEM: CODE_CHANGES_OUT is overwritten before it is used for logging.\n  WHY: The log reports changes from the stable-branch comparison rather than the promotion-tag comparison, which misleads operators.\n- scripts/orchestrate_poll_process.sh:13918-13923 (hardening suggestion) | HARDENING_RISK_SCORE=1\n  PROBLEM: Loose status normalisation defaults to unknown, which causes a stable_not_ancestor deferral instead of a safer bounded hold.\n  WHY: Suggested fix is to return 2 for unknown statuses (`*) return 2 ;;`), about 1 line.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:13918-13923,14216-14220 | severity=NIT | confidence=4\n  PROBLEM: An empty or unrecognised compare status is printed as unknown and treated as stable_not_ancestor, which defers the promotion with no bounded retry.\n  WHY: The hold path for COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS should apply to an unreadable compare, while stable_not_ancestor should be reserved for a successful non-ancestor comparison.\n- scripts/promote_main_cycle.sh:419-448,722-724 | severity=NIT | confidence=4\n  PROBLEM: require_stable_branch_ancestor's code_changes_between call overwrites CODE_CHANGES_OUT when branch_sha != known_base.\n  WHY: The log prints files for branch_sha...main_tip under the \"Code changes since stable tag\" banner. The decision is correct and only the diagnostic is wrong.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/promote_main_cycle.sh:438,722-724 | severity=NIT | confidence=5\n  PROBLEM: require_stable_branch_ancestor calls code_changes_between, which overwrites CODE_CHANGES_OUT, so the \"Code changes since stable\" output lists changes since the branch tip rather than the stable tag.\n  WHY: Operators get an incorrect list of changes attributed to the stable tag.\n- scripts/promote_main_cycle.sh:722,847-852 | severity=NIT | confidence=4\n  PROBLEM: The ancestry check immediately before dispatch runs only when pin_mode is true. In an unpinned cycle the check at line 722 has no recheck before dispatch.\n  WHY: If stable moves to a non-ancestor, the cycle still dispatches a gate and promotion that the workflow's final ancestry check refuses.\n- scripts/orchestrate_poll_process.sh:13918-13923,14216-14228 | severity=NIT | confidence=4\n  PROBLEM: A successful compare with a missing or unrecognised status becomes unknown and is treated as proof that stable is not an ancestor.\n  WHY: The gate records stable_not_ancestor, releases the freeze and lets the final merge proceed instead of using the bounded hold.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/promote_main_cycle.sh:438,722-724 | severity=NIT | confidence=4\n  PROBLEM: code_changes_between \"${branch_sha}\" \"${head}\" overwrites CODE_CHANGES_OUT, so the \"Code changes since stable\" log prints the wrong file list when the branch is at a third SHA.\n  WHY: The decision logic is correct and only the diagnostic output is misleading.\n- scripts/orchestrate_poll_process.sh:13918-13923,14216-14220 | severity=NIT | confidence=4\n  PROBLEM: A successful compare with an empty or unrecognised status is normalised to unknown, and the gate treats it as stable_not_ancestor and abandons the promotion.\n  WHY: The read did not prove the branch is not an ancestor, and the bounded hold path would be more appropriate. This is a hardening issue because GitHub's documented values make the scenario unlikely.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "889135984dddb7031bd15d5c8d6d365c5c41d65a8f8545e560865cc9a76f6e8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7889,
+    "run_id": "39800256892",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39800256892",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022152109_bf47b5d46e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7889,
+    "run_id": "39800256892"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-22T15:21:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

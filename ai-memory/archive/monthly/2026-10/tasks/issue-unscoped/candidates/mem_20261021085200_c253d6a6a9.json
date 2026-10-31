@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_promote_main_cycle.py:55-64 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `MOCK_GH` `api` handler checks the `/git/refs/tags/promote-cycle-frozen` path twice. The first block (lines 55-60) answers every non-DELETE method, including `GET`, with `respond({})`. That makes the second block (lines 61-64) unreachable, so a GET of the freeze tag always succeeds with `{}` and never returns the exists or 404 response.\n  WHY: `pin_freeze` (scripts/promote_main_cycle.sh:546) takes the stale-tag cleanup path on every pinned run, so `tag_deletes` counts come out 1 higher than expected. The reviewer says 8 tests fail as a result: lines 870, 880, 917, 925, 934, 942, 952 and 960. The `elif ! is_http_404` branch (line 562) and the `frozen_at` age parse (lines 549-554) are never exercised, and `test_pinned_cycle_deletes_a_stale_tag_before_freezing` (line 888) passes for the wrong reason. The reviewer labelled this severity BLOCKER, mapped here to high.\n- scripts/promote_main_cycle.sh:538-584 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: None outstanding. The reviewer checked the stale-tag cleanup (lines 538-566) and the ref-create race handling (lines 573-584) in `pin_freeze`.\n  WHY: The \"already exists\" race calls `skip_cycle cycle_in_flight` before `PIN_TAG_CREATED` is set, so the EXIT trap cannot delete a tag another cycle owns. A ref-create failure that is not a race deletes the ref before falling back to an unpinned cycle. `comprehensive_release_cycle_freeze` is called only on terminal states. The reviewer labelled this severity NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"For a pinned marker, skip `comprehensive_untested_commits_json` and read the tag and the branch instead (2 calls).\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, `comprehensive_promotion_gate_before_final_merge` and `comprehensive_stable_tag_commit`\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The pinned gate reads the annotated tag through `comprehensive_stable_tag_commit`, which makes a tag-ref GET and a tag-object GET, and then makes another GET for the `promote-candidate` branch. That is three API calls, not the specified two. Source severity: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_promote_main_cycle.py:lines 55-64 (the `MOCK_GH` `api` handler for `/git/refs/tags/promote-cycle-frozen`), consumed by scripts/promote_main_cycle.sh:546 (`pin_freeze`) | severity=BLOCKER | confidence=4\n  PROBLEM: The handler checks the freeze-tag ref twice. The first block (lines 55-60) answers every method other than DELETE, including GET, with `respond({})`. The second block (lines 61-64), which returns the exists or 404 response, is unreachable.\n  WHY: The stale-tag cleanup in `pin_freeze` runs on every pinned run, so 8 tests fail on the `tag_deletes` count: lines 870, 880, 917, 925, 934, 942, 952 and 960. The `elif ! is_http_404` branch (line 562) and the age parse (lines 549-554) are never exercised. The test at line 888 passes for the wrong reason. Suggested fix: merge the two blocks so that a GET reaches the exists/404 logic, and return `message` from the `/git/tags/` handler (lines 94-95).\n- scripts/promote_main_cycle.sh:`pin_freeze`, lines 538-566 (stale-tag cleanup) and 573-584 (ref-create race) | severity=NIT | confidence=3\n  PROBLEM: None outstanding.\n  WHY: The reviewer verified two things. First, the race path calls `skip_cycle cycle_in_flight` before `PIN_TAG_CREATED` is set (`skip_cycle` is at lines 169-176). Second, `comprehensive_release_cycle_freeze` runs only on terminal states (scripts/orchestrate_poll_process.sh:14064, 14074, 14104, 14125, 14173, 14199, 14217, 14228, 14240, 14381, 14470). On the bounded-hold path (14099-14106), it runs only after the hold cap has expired.\n- HARDENING: tests/test_promote_main_cycle.py:MOCK_GH handler, lines 94-95 (`if \"/git/tags/\" in path`). The handler omits `message`, so a regression in the age computation in `pin_freeze` (scripts/promote_main_cycle.sh:549-554) would not be caught. Suggested fix: return `\"message\": state.get(\"tag_message\", \"\")` and add one case that asserts the `age=<n>s` log. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cFor a pinned marker, skip `comprehensive_untested_commits_json` and read the tag and the branch instead (2 calls).\u201d\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `comprehensive_promotion_gate_before_final_merge` and `comprehensive_stable_tag_commit`\n  Evidence of absence: The pinned gate makes a tag-ref GET and a tag-object GET through `comprehensive_stable_tag_commit`, then a third GET for the `promote-candidate` branch. That is three calls, not two.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7768aea1d79efe5e91112778faacb245dcf4d484114b5a9836c79a62cb7b9cfd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7777,
+    "run_id": "39566684727",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39566684727",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021085200_c253d6a6a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7777,
+    "run_id": "39566684727"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-21T08:52:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

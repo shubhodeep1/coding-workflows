@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this issue handle gap 1 (`_AI_ENGINE_EXIT_REFUSED` missing from `scripts/ai_engine.sh` on main)?\nChoices:\nA. Fix only gap 2 here. Gap 1 is closed when project #6664 merges #6667 through its own pipeline. The PR records this as an expected dependency hold and changes nothing in `scripts/ai_engine.sh` or `scripts/pr_dependency.py`. (RECOMMENDED)\nB. Also port #6667's `_AI_ENGINE_EXIT_REFUSED` capacity-class change (`scripts/ai_engine.sh` and its callers) from `orchestrator/project-6664` onto main in this issue. This risks duplicating and conflicting with the open integration branch.\nC. Fix only gap 2, and also comment on #6667 / tracking issue #6664 to say that the follow-up tracks are waiting on its merge. No code change for gap 1.",
+  "fingerprint": "ffd1aafbf5383513247400ef598b46623421342533d8bc8f4c10c616281c4d59",
+  "lineage": {
+    "issue_number": 7328,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38471076112",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38471076112",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013213458_f5d22a8f78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7328,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38471076112"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7328 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T21:34:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

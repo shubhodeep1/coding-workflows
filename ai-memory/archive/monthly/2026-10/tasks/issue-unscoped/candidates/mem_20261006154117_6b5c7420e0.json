@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:87 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The assertion is reported to search for the literal `PR #$6536`, which does not match the judge source's `PR #${PR_NUMBER}`.\n  WHY: Three reviewers say this makes the test fail and blocks the pipeline; deepseek_deepseek-v4-pro and qwen_qwen3_7-plus report the current test uses `${{PR_NUMBER}}` and matches the judge source.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_review_pipeline_contract.py:87 | severity=critical | confidence=5\n  PROBLEM: The assertion is reported to search for the literal `PR #$6536`, while the judge script uses `PR #${PR_NUMBER}`.\n  WHY: The substring check is reported to fail consistently, blocking the review pipeline.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_review_pipeline_contract.py:87 | severity=critical | confidence=5\n  PROBLEM: The assertion is reported to search for the literal `PR #$6536`, while the judge source contains `PR #${PR_NUMBER}`.\n  WHY: The substring check is reported to fail on every run; if the manual-merge status call were removed, it would still fail and provide false confidence.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_review_autofix_review_pipeline_contract.py:87 | severity=critical | confidence=5\n  PROBLEM: The assertion is reported to search for the literal `PR #$6536`, while the judge source contains `PR #${PR_NUMBER}`.\n  WHY: The substring is reported to be absent, causing the test to raise `AssertionError` and block the pipeline; editor summaries reportedly confirm full pytest did not run because PyYAML was missing.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6e4cca9e1f22bf09e75fb57d2835588b88bb4633cfda14ba162527efab3d65d1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6536,
+    "run_id": "37482114288",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37482114288",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006154117_6b5c7420e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6536,
+    "run_id": "37482114288"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T15:41:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

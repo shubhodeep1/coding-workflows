@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: C\n\nRATIONALE:\nQ1: The extra `SECURITY_JUDGE` call site exists only on PR #7314's head branch (`ai/issue-7295`). This checkout has one call, at `scripts/orchestrate_poll_process.sh:7371`, and the test at `tests/test_orchestrator_judges_claude_engine.py:672-673` expects exactly that one, so the default branch passes. This is the PR's own failure, and agents.md (check-failure triage) says a PR-specific failure belongs to that PR's review/autofix loop: a fix elsewhere can't repair it.\n\nI ruled out the other two options:\n- **A** needs a `Target branch: ai/issue-7295` line in this issue's body, which I can't add. Routing that would do it automatically is off: `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` and `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED` both default to `'false'` in the workflows. Without the line, A would plan against the default branch, where the change can't apply (the question's own note says so). Picking A without the line would just loop.\n- **B** would loosen a contract test on `main` to fit a change `main` doesn't have, and PR #7314 would stay red anyway.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - tests/test_orchestrator_judges_claude_engine.py:672-673 (`SECURITY_JUDGE` expected call-site string; single-occurrence expectation)\n    - scripts/orchestrate_poll_process.sh:7371 (the one `SECURITY_JUDGE` call site on the default branch)\n    - GITHUB FACTS: PR #7314 is open with head `ai/issue-7295` @ a1bc63d19214 and base `orchestrator/project-6664`; CI run 38383099239 failed on that head\n  steps:\n    - Don't plan or implement any change on the default branch for this issue.\n    - Close this triage issue as not planned, saying the failure is specific to PR #7314 and belongs to that PR's review/autofix loop.\n    - In PR #7314's review/autofix loop, update `test_each_judge_uses_sandbox_without_host_fallback` on `ai/issue-7295`:\n      - expect both mutually exclusive `SECURITY_JUDGE` call sites (the audit-worktree branch and its `else` fallback);\n      - raise the total `poller_claude_judge` call-site count to match;\n      - assert that the worktree call stays inside its directory-switch branch and that neither path starts a host agent.\n  replaces_acceptance_criterion: \"Fix lands through this triage issue's own clarify\u2192plan\u2192implement PR\" becomes \"Fix lands on PR #7314's head branch through its existing review/autofix loop\"\n  equivalence_argument: The failing test only fails where the second call site exists, which is PR #7314's head. Fixing it there lands the same test change and turns that PR's CI green. A default-branch fix couldn't do either.\n  reversibility: An operator can reopen this issue and add `Target branch: ai/issue-7295`, or turn on `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED` / `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED`, then `/reclarify` to route the fix through this issue to the PR's branch (option A).",
+  "fingerprint": "3e44bd37c1bb9c598d9cc61744b16f49bec8a7fd18cb4eab3777121ade7ace78",
+  "lineage": {
+    "issue_number": 7316,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38385724909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38385724909",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7316"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261013105643_f39fe9f1ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7316,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38385724909"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7316",
+  "timestamps": {
+    "created_at": "2026-10-13T10:56:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

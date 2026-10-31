@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py: test_numeric_push_refspec_before_redirect_is_checked parametrize list, entries at indices 4 and 10, and entries at indices 5 and 11 | severity=low | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Duplicate parametrized entries repeat the same two cases, causing pytest to run identical cases twice without adding coverage.\n  WHY: The duplicate cases waste CI cycles; both reviewers identify the same pairs of byte-identical entries.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_pr_merge_status_guard.py: test_numeric_push_refspec_before_redirect_is_checked parametrize list, entries at indices 4 and 10, and entries at indices 5 and 11 | severity=low | confidence=5\n  PROBLEM: Duplicate parametrize entries. `(\"2\", \"git push origin ''2>/dev/null\")` appears at both index 4 and index 10, and `(\"2\", 'git push origin \"\"2>/dev/null')` appears at both index 5 and index 11.\n  WHY: pytest runs the same test case twice, wasting CI cycles. Not a logic bug but redundant test coverage that should be deduplicated.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_pr_merge_status_guard.py: test_numeric_push_refspec_before_redirect_is_checked parametrize list, entries at indices 10-11 | severity=low | confidence=5\n  PROBLEM: Duplicate parametrize entries. `(\"2\", \"git push origin ''2>/dev/null\")` (index 10) duplicates index 4, and `(\"2\", 'git push origin \"\"2>/dev/null')` (index 11) duplicates index 5. Both pairs are byte-identical (same refspec, same command string).\n  WHY: pytest runs the identical case twice per duplicate pair, wasting CI cycles and inflating the parametrize id space with no additional coverage. The duplicates are in the same parametrize list the last run appended to (index 1 was added this run), so they interact with the modified list.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e9ee9d9ab633885c593692efe5a27a7de0522f1f13d6a4f0c3b8dc734cd27674",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6271,
+    "run_id": "37298697324",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37298697324",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005115852_7b4c445dff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6271,
+    "run_id": "37298697324"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T11:58:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

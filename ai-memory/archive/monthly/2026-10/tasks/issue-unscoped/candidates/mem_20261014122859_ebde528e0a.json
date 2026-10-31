@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/7355-dead-values-cleanup.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The clause \"`last_rebuild_at=none` means no earlier rebuild was recorded\" is inaccurate, because `_check_branch_rebuild_threshold` clears `BRANCH_REBUILD_LAST_REBUILD_AT` at scripts/orchestrate_poll_process.sh:11464 and sets it only at :11536, so early skip reasons log `none` without the audit being read.\n  WHY: Operators reading the contractual log registry would wrongly conclude that no rebuild was ever recorded; all three reviewers rated it NIT with no severity disagreement, and the fix is to reword the clause.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/7355-dead-values-cleanup.md:2 | severity=NIT | confidence=4\n  PROBLEM: The clause \"`last_rebuild_at=none` means no earlier rebuild was recorded\" is inaccurate. `_check_branch_rebuild_threshold` in scripts/orchestrate_poll_process.sh clears `BRANCH_REBUILD_LAST_REBUILD_AT` at line 11464 and sets it only at line 11536, after the earlier skip reasons: `disabled` (11468), `unsupported_branch` (11476), `missing_escalated_at` (11482), `invalid_current_time` (11493), `invalid_escalated_at` (11499), `threshold_not_met` (11506), `audit_unavailable` (11518), `invalid_audit_timestamp` (11530).\n  WHY: All of those early exits leave the value empty, so the log prints `last_rebuild_at=none` even though the audit was never read. The log line is correct and only the documented meaning is wrong. The fix is to reword the clause to say that `none` means no earlier rebuild timestamp was read.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/7355-dead-values-cleanup.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment says `last_rebuild_at=none` means \"no earlier rebuild was recorded,\" which is not always established by the check. `_check_branch_rebuild_threshold` clears `BRANCH_REBUILD_LAST_REBUILD_AT` at `scripts/orchestrate_poll_process.sh:11464` and can return before reading the audit, such as for `threshold_not_met` at lines 11504-11507.\n  WHY: On an early return, the log emits `none` even if the audit contains a prior rebuild timestamp. Operators may wrongly conclude that no earlier rebuild was recorded, when its timestamp was only not read.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7355-dead-values-cleanup.md:2 | severity=NIT | confidence=4\n  PROBLEM: The phrase \"`last_rebuild_at=none` means no earlier rebuild was recorded\" is misleading. `BRANCH_REBUILD_LAST_REBUILD_AT` is cleared at scripts/orchestrate_poll_process.sh:11464 and set only at :11536 after the audit is read. For every earlier skip reason (disabled, unsupported_branch, missing_escalated_at, invalid_current_time, invalid_escalated_at, threshold_not_met, audit_unavailable), the audit is never consulted, so the log shows `none` because the audit was not read.\n  WHY: Operators reading the contractual log documentation would wrongly conclude that no rebuild was ever recorded when they see `last_rebuild_at=none` for an early skip. The wording should clarify that `none` means the audit was not consulted or no timestamp was found.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "10190c7d01012654b0e414c7161859d2c226c50d881c36ed801497ecb0e6a004",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7378,
+    "run_id": "38561317202",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38561317202",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014122859_ebde528e0a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7378,
+    "run_id": "38561317202"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T12:28:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

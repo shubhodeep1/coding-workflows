@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:1576-1582 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: When a re-asked verdict fails validation for a reason other than sandbox_incompatible (for example a verdict not in `allowed`, or malformed JSON), the loop breaks at `[[ \"${validate_err}\" == sandbox_incompatible:* ]] || break` before the `refused_after_reask` check, so `op=instruction_sandbox_check outcome=refused_after_reask` is never logged.\n  WHY: The impact is limited to logs, because the `invalid_verdict` wait marker is still posted, but log analysis that pairs each `reasked` with a `refused_after_reask` will see re-asks that never closed; the source rated this NIT, mapped here to low, and noted that it depends on how strictly the spec's \"second failure\" is read.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_judge.sh:unblock_main validation loop, lines 1576-1582: `[[ \"${validate_err}\" == sandbox_incompatible:* ]] || break` comes before the `if [ \"${sandbox_reasked}\" = \"true\" ] ... outcome=refused_after_reask` check | severity=NIT | confidence=2\n  PROBLEM: If the first verdict is refused as sandbox_incompatible and the re-asked answer then fails validation for a different reason (for example a verdict that is not in `allowed`, or malformed JSON), the loop breaks and never logs `op=instruction_sandbox_check outcome=refused_after_reask`, leaving only the `outcome=reasked` line and the generic `invalid_verdict` line. The issue says \"On a second failure, log op=instruction_sandbox_check outcome=refused_after_reask reason=<id> and fall through to the existing invalid_verdict handling\".\n  WHY: Only the logs are affected, since the `invalid_verdict` wait marker is still posted, but log analysis that pairs `reasked` with `refused_after_reask` will see re-asks that never closed. The fix is to also log `outcome=refused_after_reask` with a reason such as `other` when `sandbox_reasked=true` and the error is not sandbox_incompatible. Whether this counts depends on how strictly \"second failure\" is read in the spec.\n  HARDENING_SUGGESTION: scripts/unblock_judge.sh lines 1576-1577 (validation loop). Before `[[ ... ]] || break`, add `if [ \"${sandbox_reasked}\" = \"true\" ] && [[ \"${validate_err}\" != sandbox_incompatible:* ]]; then unblock_log \"... op=instruction_sandbox_check outcome=refused_after_reask reason=other\"; fi`. Estimated lines changed: 3. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "72ca92522844443a6cec5d38cf9a7c8c08791492c79fe9997b8579519410d142",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7744,
+    "run_id": "39515418638",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39515418638",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020235653_55bfe3a11f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7744,
+    "run_id": "39515418638"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-20T23:56:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The bounded check this issue asks for already exists. Both `release` jobs already run `bash scripts/release_ci_gate.sh \"${GATE_REPO}\" \"${RELEASE_TESTED_SHA}\"` (`test-and-mark-stable.yml:6356`, `mark-stable.yml:696`), from #6797, which is closed. The weakness that remains is in the \"Verify CI passed on source branch\" steps of both `validate` jobs (`test-and-mark-stable.yml:6241-6283`, `mark-stable.yml:~600-634`). They still read the combined status from `commits/<sha>/status` and continue when it is empty or pending. Option A fixes exactly that by reusing the existing gate, instead of writing a second one as option C would.\nQ2: The issue's default-off flag would stop every stable release (auto-release and the promote cycle) and add no protection, because the release jobs already fail closed on CI. A default-on kill switch keeps current releases running and still gives an operator a way to stop tag writes. Under \u00a72 and \u00a76 that is the lower-risk reading. It is reversible by changing one default.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/test-and-mark-stable.yml (validate step \"Verify CI passed on source branch\", lines ~6241-6283; release gate call at ~6356)\n    - .github/workflows/mark-stable.yml (validate step at ~600-634; release gate call at ~696)\n    - scripts/release_ci_gate.sh (existing bounded `ci.yml` / `lint` check-run gate, with `RELEASE_CI_GATE_WAIT_SECS` and `RELEASE_CI_GATE_POLL_SECS`)\n  steps:\n    - In both `validate` jobs, replace the `commits/${SHA}/status` lookup with a call to `scripts/release_ci_gate.sh \"${{ github.repository }}\" \"$(git rev-parse HEAD)\"`. Pass every `${{ }}` value through `env:` first.\n    - The new check must require a successful newest `ci.yml` run for that exact SHA. It must fail closed when the run is missing, failed, cancelled, timed out, or unreadable. Keep the step `name:` unchanged.\n    - When `inputs.gate_only` is true in `test-and-mark-stable.yml`, report a gate failure as `::warning::` and exit 0 instead of failing the step. `mark-stable.yml` has no `gate_only`, so there it always fails closed.\n    - Grant `checks: read` and `actions: read` to the `validate` jobs if they don't already have them, so the gate works with `github.token`.\n    - Add contract tests (e.g. extend the existing release-gate tests, or add `tests/test_release_validate_ci_gate.py`). They should check that neither `validate` job calls `commits/.*/status`, that both call `release_ci_gate.sh`, and that `gate_only` is warning-only.\n    - Add a changelog fragment `changelog.d/7029-release-validate-ci-gate.md`.\n  replaces_acceptance_criterion: \"replace both status-based CI gates with a bounded check of the newest ci.yml run\" becomes \"replace the two remaining status-based checks (in the validate jobs), reusing the existing bounded gate\".\n  equivalence_argument: The release jobs already meet the criterion. After this change, no status-based gate is left in either workflow, so the intent of finding #6548 is fully met.\n  reversibility: Small revert of two step bodies. The legacy status check is preserved in git history.\nQ2:\n  strategy: reframe\n  inputs:\n    - .github/workflows/test-and-mark-stable.yml (`release` job tag/release writes)\n    - .github/workflows/mark-stable.yml (`release` job tag/release writes)\n    - README.md variables table\n  steps:\n    - In both `release` jobs, add `RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}` to `env:`. Any shell that reads it must also default it to `true` (\u00a78).\n    - When the value is not `true` (case-insensitive), skip the tag push and release-creation steps with `::warning::RELEASE_TAGGING_ENABLED=false \u2014 skipping tag writes`. The CI gate and validation still run.\n    - Add a README row: `RELEASE_TAGGING_ENABLED`, default `true`, a kill switch for stable tag writes in both release workflows.\n    - Add a contract test that both release jobs carry the guard with the `true` default and that tag writes are conditioned on it.\n  replaces_acceptance_criterion: \"default-off RELEASE_TAGGING_ENABLED guard\" becomes \"default-on kill switch\".\n  equivalence_argument: The default-off flag was meant to keep unvalidated behaviour off. Tag writes are already protected by the fail-closed gate, and Q1 removes the last status-based check. Defaulting off would only pause releases and would make `auto-release-stable.yml` and the promote cycle fail silently, with no added security.\n  reversibility: An operator can set the repo variable `RELEASE_TAGGING_ENABLED=false` to stop tagging right away. If a person wants the issue's literal default-off, they change the `'true'` fallback to `'false'` in two `env:` lines.",
+  "fingerprint": "f5785e5bf3dc971065848954783f9591d29ce6125295e7999d9f4fda8743677c",
+  "lineage": {
+    "issue_number": 7029,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38022475837",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38022475837",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7029"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010040948_5353855b14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7029,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38022475837"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7029",
+  "timestamps": {
+    "created_at": "2026-10-10T04:09:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

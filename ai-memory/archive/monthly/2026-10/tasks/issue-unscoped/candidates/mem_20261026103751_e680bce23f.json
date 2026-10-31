@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/8191-unblock-reissue-check-triage-noop-fixup.md; agents.d/8191-unblock-reissue-check-triage-noop-fixup.md:changelog line 4; agents fragment line 3 (second bullet) | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog and agents fragment claim this PR fixes re-issues dropping `ai:check-triage`, but the base code already carried the label in both `close_and_reissue` arms. The diff only renames the jq key, reorders blocks and adds `ensure_label_exists 'ai:check-triage'`.\n  WHY: No runtime failure results, but the release notes and fragment misattribute existing behavior to this PR. All three reviewers rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stall recovery dropped `ai:check-triage` from the re-issue... That code created #223 with `ai:clarification` and `ai:orchestrator-managed` only.\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh` in both `close_and_reissue` cases\n  confidence=3\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The base branch already carries `ai:check-triage` in both re-issue arms (removed lines 18803-18806 and 23254-23261). The PR only refactors this code, so the described bug fix is absent. Severity was stated as NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/8191-unblock-reissue-check-triage-noop-fixup.md (second bullet of agents.d/8191-unblock-reissue-check-triage-noop-fixup.md has the same claim) | severity=NIT | confidence=3\n  PROBLEM: The base already passed `--label ai:check-triage` in both re-issue arms, and the standalone arm already fell back to `labels_json`. The `scripts/orchestrate_poll_process.sh` hunks only rename the jq key `triage` to `check_triage`, move the label block after the heal block, and add `ensure_label_exists 'ai:check-triage'`. The changelog and fragment describe this as the fix for the dropped label, which the diff does not show.\n  WHY: No runtime failure. The label is still attached on both paths and `ensure_label_exists` is idempotent. Only the release notes and the agents fragment misstate what changed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/8191-unblock-reissue-check-triage-noop-fixup.md; agents.d/8191-unblock-reissue-check-triage-noop-fixup.md:changelog line 4; agents fragment line 3 | severity=NIT | confidence=4\n  PROBLEM: These documents say this PR fixes re-issues dropping `ai:check-triage`. The pre-change code already read that label and passed it to both re-issue paths. `tests/test_stall_reissue_lineage_labels.py:133-141` already tested the behavior for both paths. The PR refactors that logic but does not introduce the claimed fix.\n  WHY: No runtime failure is introduced. The release note and architecture fragment inaccurately attribute existing behavior to this PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Stall recovery dropped `ai:check-triage` from the re-issue... That code created #223 with `ai:clarification` and `ai:orchestrator-managed` only.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh` in both `close_and_reissue` cases\n  Evidence of absence: The base branch already carries `ai:check-triage` in both re-issue arms. The diff shows the base had `if [ \"${orig_issue_is_triage}\" = true ]; then _reissue_lineage_label_args+=(--label \"ai:check-triage\"); fi` in the managed case (lines 18803-18806 removed) and similar code in the standalone case (lines 23254-23261 removed). The PR renames `orig_issue_is_triage` to `orig_issue_is_check_triage`, adds `ensure_label_exists 'ai:check-triage'`, and moves the block after the heal block, but the label carry-over already existed. The PR description claims to fix a dropped-label bug that the base branch had already fixed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/8191-unblock-reissue-check-triage-noop-fixup.md (same claim in agents.d/8191-unblock-reissue-check-triage-noop-fixup.md, second bullet) | severity=NIT | confidence=4\n  PROBLEM: The fragments state this PR introduced the `ai:check-triage` carry-over on a re-issue, but the base branch already had it. The PR diff removes `_reissue_lineage_label_args+=(--label \"ai:check-triage\")` (managed arm) and `_std_reissue_lineage_label_args` with the `labels_json` fallback (standalone arm) as pre-existing lines, and tests/test_stall_reissue_lineage_labels.py:3-11 already documents and pins the btc_sweeper#209\u2192#223 `label_missing` regression. The actual change is a refactor (jq key `triage` renamed to `check_triage`, block moved after the heal block, one added `ensure_label_exists 'ai:check-triage'`) plus a duplicate new test file for behaviour the older test already covers.\n  WHY: Nothing breaks at runtime (`ensure_label_exists` is cached per process and CI is green). The release notes and the agents fragment give a wrong account of what changed, so a future reader auditing the #223 fix will look in the wrong commit.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7afff59d5e9239ae820edbfda666b25e21759ae53a257e5cdb6f33f3811d2aa2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8191,
+    "run_id": "40301474877",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40301474877",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026103751_e680bce23f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8191,
+    "run_id": "40301474877"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T10:37:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

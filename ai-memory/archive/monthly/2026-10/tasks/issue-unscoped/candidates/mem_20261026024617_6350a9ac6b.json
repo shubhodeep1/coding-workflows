@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"All 13 consumers are synced to v1.40.2 (`5596e7520ef4`). Each has a successful `ai-update-workflows.yml` run, the current pin, and no open updater PR.\"\n  expected_change_site: docs/deploy-activation/issue-6902.md, step 11 atlas-bridge.gd verification entry (line 80)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: docs/deploy-activation/issue-6902.md lines 76-79 record \"no open auto/update-workflows-* PR\" for the other 12 consumers, but line 80 records only the atlas-bridge.gd run and pin and has no open-PR check. Severity NIT. z-ai_glm-5_3-flash noted the same gap as a non-finding note and said the prior autofix run deferred it as TASK_GAP_DEFERRED.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP (TASK COMPLETENESS / INTENT GAPS) | severity=NIT | confidence=4\n  Requirement: All 13 consumers are synced to v1.40.2 (5596e7520ef4). Each has a successful ai-update-workflows.yml run, the current pin, and no open updater PR.\n  Expected change site: docs/deploy-activation/issue-6902.md, step 11 verification detail for atlas-bridge.gd (~line 80).\n  Evidence of absence: The atlas-bridge.gd verification detail documents the successful updater run and the correct pin but not the \"no open updater PR\" check. The other 12 consumers explicitly record \"no open auto/update-workflows-* PR\".\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (TASK COMPLETENESS / INTENT GAPS) | severity=NIT | confidence=4\n  Requirement: PR description states \"All 13 consumers are synced to v1.40.2 (`5596e7520ef4`). Each has a successful `ai-update-workflows.yml` run, the current pin, and no open updater PR.\" Step 11's \"2026-10-26 check\" bullet applies this criterion to the 12 consumers it lists.\n  Expected change site: docs/deploy-activation/issue-6902.md, step 11 atlas-bridge.gd follow-up bullet (the \"done 2026-10-26\" line).\n  Evidence of absence: The 12-consumer bullet records run status, pin, and \"no open `auto/update-workflows-*` PR\" for each repo. The atlas-bridge.gd follow-up records run status (run 40254086692 `completed/success`) and pin only, and no open-PR check for atlas-bridge.gd appears anywhere in the file. The previous autofix run's editor summary raised the same gap and deferred it as `TASK_GAP_DEFERRED` because the sandbox has no network or `gh`. Cross-pollination flagged it with confidence 4 (openai_gpt-6-luna, z-ai_glm-5_3-flash). The LAST RUN DIFF did not touch line 80. The three edits (step 8 heading, step 10 \"Next (done, see the next bullet)\", step 11 heading) are accurate against the file body.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP (TASK COMPLETENESS / INTENT GAPS) | severity=NIT | confidence=4\n  Requirement: \"All 13 consumers are synced to v1.40.2 (`5596e7520ef4`). Each has a successful `ai-update-workflows.yml` run, the current pin, and no open updater PR.\"\n  Expected change site: `docs/deploy-activation/issue-6902.md`, step 11's atlas-bridge.gd verification entry.\n  Evidence of absence: Lines 76\u201379 record the no-open-updater-PR check for the other 12 consumers. Line 80 records atlas-bridge.gd's successful run and current pin, but not whether it has an open `auto/update-workflows-*` PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNotes: The reviewer checked the last-run diff (3 wording edits) and found it accurate. It found no inconsistency in the tick arithmetic: 37 ticked, 14 held, and the 50-entry secondary-refs list partitions exactly. Its TASK COMPLETENESS section was \"NONE\", but a note says the atlas-bridge.gd \"no open `auto/update-workflows-*` PR\" check on line 80 is still unrecorded while lines 76-79 record it for the other 12 consumers. The prior autofix run deferred this as TASK_GAP_DEFERRED because it cannot be verified in the sandbox. The operator-side remediation is `gh pr list -R shubhodeep1/atlas-bridge.gd --state open --search \"head:auto/update-workflows-\"`, then append the result to line 80. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9bb689223d4c12dfb6a4db8ed9c429467be5f582cbdb471d079e1a7854932c0c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8172,
+    "run_id": "40259759387",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40259759387",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026024617_6350a9ac6b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8172,
+    "run_id": "40259759387"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T02:46:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

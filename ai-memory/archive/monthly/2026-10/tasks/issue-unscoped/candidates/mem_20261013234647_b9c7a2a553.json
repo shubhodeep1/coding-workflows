@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/settings.json:130-140 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The live `.claude/settings.json` is missing the pre-push affected-tests hook registered in the workflow template, leaving the live and template settings out of sync.\n  WHY: CI run 38464517558 confirms the byte-identity checks fail, causing the affected test jobs and aggregate `lint` check to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR must land without breaking CI and keep the live `.claude/` files identical to their `workflow-templates/.claude/` counterparts, including the pre-push affected test gate.\n  expected_change_site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: Glob finds `.claude/hooks/prepush_affected_tests.py` only under `workflow-templates/.claude/hooks/`; the `pr_changed_files` list shows neither the live settings update nor the hook script; CI run 38464517558 reports failures in `test_template_copies_are_identical` and `test_session_start_extract_repo_slug.py`; the PR diff includes `workflow-templates/.claude/settings.json:140-149` but not the corresponding live files.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/.claude/settings.json (template) versus .claude/settings.json (live copy) | severity=high | confidence=5\n  PROBLEM: The template registers the pre-push affected-tests hook, but the live `.claude/settings.json` does not register it, and `.claude/hooks/prepush_affected_tests.py` does not exist in the live tree.\n  WHY: CI run 38464517558 fails the byte-identity checks, failing `tests-hooks-and-orchestrator` and `tests-release-and-log-analysis` and the aggregate `lint` check.\n\n- TASK_GAP\n  Requirement: The PR must pass CI and keep the live `.claude/` files identical to their `workflow-templates/.claude/` twins.\n  Expected change site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py`.\n  Evidence of absence: Glob finds the hook script only at `workflow-templates/.claude/hooks/prepush_affected_tests.py`. The CI failures cited above fail on the missing live copies.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The PR must land without breaking CI. The live `.claude/` copies must mirror `workflow-templates/.claude/` by fully implementing the pre-push affected test gate.\n  Expected change site: .claude/settings.json and .claude/hooks/prepush_affected_tests.py\n  Evidence of absence: The pr_changed_files list shows that neither the missing .claude/settings.json update nor the new hook script prepush_affected_tests.py was added to the live directory. The three failed check-runs (lint, tests-hooks-and-orchestrator, tests-release-and-log-analysis) trace directly to this gap.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR must land without breaking CI; the live .claude/settings.json and .claude/hooks/prepush_affected_tests.py must mirror their workflow-templates/.claude/ counterparts. The live hook registration and the hook script are missing.\n  Expected change site: .claude/settings.json (add the prepush_affected_tests.py PreToolUse Bash hook entry, byte-identical to workflow-templates/.claude/settings.json) and .claude/hooks/prepush_affected_tests.py (a byte-identical copy of the template hook, with the same executable bit).\n  Evidence of absence: CI run 38464517558 fails on the merge head with three check-runs: lint (aggregate), tests-hooks-and-orchestrator (failing at tests/test_pr_merge_status_guard.py::test_template_copies_are_identical, line 2451), and tests-release-and-log-analysis (failing at tests/test_session_start_extract_repo_slug.py). Both failing tests check that the live and template copies of .claude/settings.json are byte-identical, and the diff is exactly the new PreToolUse hook entry (the live copy is missing the registration and the hook script does not exist). The PR diff includes workflow-templates/.claude/settings.json:140-149 (the template) but does not include the corresponding live .claude/settings.json or .claude/hooks/prepush_affected_tests.py updates.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/settings.json:130-140 | severity=high | confidence=5\n  PROBLEM: The live and template Claude settings are out of sync on the current ref.\n  WHY: CI run 38464517558 confirms `test_template_copies_are_identical` fails on this mismatch, and `test_session_start_extract_repo_slug.py` also fails.\n\n(No task gaps reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/settings.json (live copy) | severity=high | confidence=5\n  PROBLEM: The live `.claude/settings.json` does not register the `prepush_affected_tests.py` PreToolUse Bash hook that the latest sync of `main` added to the template, and `.claude/hooks/prepush_affected_tests.py` does not exist in the live tree.\n  WHY: CI confirms the byte-identity checks fail at `tests/test_pr_merge_status_guard.py:2451` (`test_template_copies_are_identical`) and `tests/test_session_start_extract_repo_slug.py`, which fail the `tests-hooks-and-orchestrator` and `tests-release-and-log-analysis` jobs, which in turn fail the aggregate `lint` check.\n\n- TASK_GAP\n  Requirement: The PR description states \"Apply workflow-optimization-2026-09-16 recommendations (verified subset)\" and the analysis report (`analysis/recommendation-processing-report.md`) shows the recommendations were processed and applied. The PR must land without breaking CI.\n  Expected change site: `.claude/settings.json` (live copy, add the prepush_affected_tests.py hook registration byte-identical to `workflow-templates/.claude/settings.json:140-149`) and `.claude/hooks/prepush_affected_tests.py` (live copy, byte-identical to the template hook with the same executable bit).\n  Evidence of absence: The `pr_changed_files.txt` list shows no changes to `.claude/settings.json` or `.claude/hooks/prepush_affected_tests.py`. The CI failures in `test_template_copies_are_identical` and `test_session_start_extract_repo_slug.py` trace directly to this gap.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f6e281e93297956d09bc2511402c3deed85f26afedaa0e83a3d9f7c0bae12fbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38484708896",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38484708896",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013234647_b9c7a2a553",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38484708896"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T23:46:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:290-340 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fence stripper does not remove indented Markdown code blocks, while marker parsing accepts leading whitespace, so an example marker in an indented code block is incorrectly read as lineage metadata.\n  WHY: A source issue quoting a generation-3 marker can set the generation to 4, exceed the default cap of 3, and escalate the PR instead of starting a new lineage at generation 1.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/check_failure_triage.sh:319-320 | severity=high | confidence=[4]\n  PROBLEM: The sed patterns and grep accept arbitrary leading whitespace, but the fence-stripping Python code does not remove CommonMark indented code blocks, so an indented marker can be extracted as lineage metadata.\n  WHY: An indented numeric marker can exceed the default cap of 3 and escalate the PR; an indented non-numeric marker can fail the run with `parent_generation_missing_or_malformed`. None of the six CheckFailureTriageLineageTests covers indented code blocks.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/check_failure_triage.sh: the Python heredoc at lines 290-340 (the fence stripper) and the two `sed` patterns `^[[:space:]]*<!-- ${MARKER_PREFIX}gen=...` / `^[[:space:]]*<!-- ${MARKER_PREFIX}root=...` | severity=high | confidence=[5]\n  PROBLEM: The Markdown fence stripper handles fenced blocks but not indented code blocks, while the sed patterns allow leading whitespace, so an indented marker is matched.\n  WHY: An indented generation-3 marker can set `PGEN=3`, `GEN=4`, trip the default lineage cap of 3, and escalate the PR instead of starting a generation-1 triage issue; the test for markers inside fenced blocks does not cover four-space indentation.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh: 303, 319 | severity=high | confidence=[5]\n  PROBLEM: The fence stripper does not recognize a marker indented by four spaces as code, while the marker parser accepts arbitrary leading whitespace, so a source issue's indented marker is read as lineage metadata.\n  WHY: The script sets generation 4 instead of starting a new lineage at generation 1; with the documented default cap of 3, it escalates the PR and stops triage.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/check_failure_triage.sh:319-320 (PGEN and PROOT sed patterns) | severity=high | confidence=[5]\n  PROBLEM: The sed pattern accepts whitespace-indented markers, so a marker inside an indented Markdown code block is treated as lineage metadata; the fence stripper handles fenced blocks but not CommonMark indented code blocks.\n  WHY: An indented generation-3 example can set `PGEN=3` and, with the default cap of 3, escalate the PR instead of starting a new lineage at generation 1.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "1872e8328bb43c6e0d43fe827bb1c6ee0dfb787e10499e33663e038c35c7d108",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6678,
+    "run_id": "37658658722",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37658658722",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007175613_8139ce1699",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6678,
+    "run_id": "37658658722"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T17:56:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

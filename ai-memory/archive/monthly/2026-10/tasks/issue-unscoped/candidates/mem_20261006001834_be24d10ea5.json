@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- File: .claude/hooks/gh_api_write_guard.py\n  Line: 1254 (and similar lines)\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The manual shell parser used by the hook is brittle and may misclassify unsafe Bash commands as safe.\n  WHY: Complex quoting, expansions, or unexpected character combinations could let a write-capable or malicious command bypass the security boundary.\n- File: scripts/claude_engine.py\n  Line: 1722\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `cmd_read_snapshot` may pass `None` as the workdir when invoked with `--source`, causing `Path(args.workdir)` to raise a `TypeError`.\n  WHY: The `else` branch passes `args.workdir` to `read_snapshot` without checking whether it is `None`.\n- File: scripts/claude_read_snapshot.py\n  Line: 147\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `snapshot()` may treat a nonexistent path as an empty directory instead of raising a descriptive error.\n  WHY: `os.walk` yields no entries for a nonexistent path, which can produce a silently empty snapshot for an incorrect workdir.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace eleven more roles to run on Claude by default (Phase 5d).\n  expected_change_site: .github/ai/claude_engine.json\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description explicitly lists 13 roles: VALIDATE, VALIDATE_SELF_HEAL, VALIDATION_REFRESH, SECURITY_AUDIT, CHECK_TRIAGE, WORKFLOW_HEAL, LOG_ANALYSIS, LOG_AUDIT, RETRO, SUMMARISER, BEHAVIOURAL_SMOKE, MATERIALITY, LOG_SUMMARY. The provided diff for `.github/ai/claude_engine.json` appears to only explicitly update a subset of these to `engine: claude` and `profile: read`, while others (e.g., `VALIDATE`, `VALIDATION_REFRESH`) remain on `codex` or are not mapped in the JSON patch provided. The implementation of this requirement appears incomplete based on the provided diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/gh_api_write_guard.py, Line: 1254 (and similar lines)\n  Problem: The manual shell-parser (`read_bash_denial` in `scripts/claude_engine.py` which this hook logic is derived from) is brittle and uses manual character-by-character parsing to identify unsafe Bash commands.\n  Why it fails at runtime: Manual parsing for Bash is notoriously susceptible to bypasses, especially with complex quoting, expansions, or unexpected character combinations. If an attacker manages to construct a Bash command that this parser considers `safe` but that the shell interprets as a write-capable or malicious operation, the security boundary is bypassed.\n  ISSUE_CONFIDENCE: 3\n- scripts/claude_engine.py, Line: 1722\n  Problem: `cmd_read_snapshot` assumes `args.workdir` is always provided. If a user invokes this with `--source` instead, `args.workdir` will be `None`, and `Path(args.workdir)` will raise a `TypeError`.\n  Why it fails at runtime: The `cmd_read_snapshot` function is designed to handle either `--workdir` or `--source`, but it does not check if `args.workdir` is `None` before passing it to `read_snapshot` in the `else` branch.\n  ISSUE_CONFIDENCE: 4\n- scripts/claude_read_snapshot.py, Line: 147\n  Problem: `os.walk` yields no entries for a nonexistent path, which `snapshot()` treats as an empty directory instead of raising a descriptive error.\n  Why it fails at runtime: This can lead to a silently empty snapshot if the user provides an incorrect workdir path, rather than failing the snapshot process early as expected when the requested path is invalid.\n  ISSUE_CONFIDENCE: 3\n- TASK_GAP\n  Requirement: Replace eleven more roles to run on Claude by default (Phase 5d).\n  Expected change site: .github/ai/claude_engine.json\n  Evidence of absence: The PR description explicitly lists 13 roles: VALIDATE, VALIDATE_SELF_HEAL, VALIDATION_REFRESH, SECURITY_AUDIT, CHECK_TRIAGE, WORKFLOW_HEAL, LOG_ANALYSIS, LOG_AUDIT, RETRO, SUMMARISER, BEHAVIOURAL_SMOKE, MATERIALITY, LOG_SUMMARY. The provided diff for `.github/ai/claude_engine.json` appears to only explicitly update a subset of these to `engine: claude` and `profile: read`, while others (e.g., `VALIDATE`, `VALIDATION_REFRESH`) remain on `codex` or are not mapped in the JSON patch provided. The implementation of this requirement appears incomplete based on the provided diff.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/check_failure_triage.sh\n  Location: lines 340-344 (the new `triage_claude_rc -eq 86` block)\n  Issue: The exit 86 path for trusted support tampering lacks an inline comment explaining why this is a fail-closed path with no codex fallback, while the surrounding code already explains exit 75's codex fallback. A future maintainer who does not know the security contract for exit 86 might try to \"fix\" it by falling back to codex.\n  Suggested minimal fix: Add a one-line comment above the `if [ \"${triage_claude_rc}\" -eq 86 ]` block, e.g. `# 86 = AI_ENGINE_SUPPORT_LOCK outcome=tampered: trust broken, refuse the codex path`.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b5bed1b41f220d7b68f2ca2bf591c8f17dea9576b0002a507f46d4504e411923",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37391208140",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37391208140",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006001834_be24d10ea5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37391208140"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T00:18:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

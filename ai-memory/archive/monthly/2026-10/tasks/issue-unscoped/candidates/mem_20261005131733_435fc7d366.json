@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_anthropic_relay.py:103-198 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Rejection responses can be written without first setting a one-second socket timeout when the bounded body-drain path is skipped.\n  WHY: These rejection paths may use an unbounded or stale socket timeout, allowing a slow client to stall the relay beyond the documented one-second bound.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_anthropic_relay.py:103-105, 194-198 | PROBLEM: Rejection responses from `do_GET`, `do_CONNECT`, and `do_POST` paths that skip the bounded drain are written under the default infinite socket timeout because `_reject` does not set `settimeout(1)`.\n  WHY: These rejection writes are not bounded by the one-second timeout used inside `do_POST`'s bounded drain path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/claude_anthropic_relay.py:103-106 in Relay._reject | PROBLEM: Rejections occurring when body draining is bypassed write the HTTP error response under the inherited socket timeout rather than an explicitly bounded one-second deadline.\n  WHY: The one-second socket timeout is reset inside `do_POST` only when the bounded body drain executes.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_anthropic_relay.py, Relay.do_POST rejection branch (lines 108-152 in the merged file) | PROBLEM: When validation fails before the bounded-body drain, the rejection response is written under whatever socket timeout was previously set.\n  WHY: A stuck or slow client can stall the single-threaded relay longer than one second.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_anthropic_relay.py, lines 125-149 in Relay.do_POST | severity=MAJOR | confidence=4\n  PROBLEM: The one-second socket timeout reset is nested inside the bounded-body-drain conditional block, so rejections that skip the drain path call `_reject(400)` without resetting the timeout first.\n  WHY: A request with `Content-Length: 99999999` or invalid forwarded headers can use the default socket timeout for the rejection response, contradicting the documented behavior.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_anthropic_relay.py, Relay._reject / do_POST rejection paths where draining is skipped (lines ~125-151) | PROBLEM: Rejections taken when draining is skipped write the 400 response under whatever socket timeout was previously set, which may be unbounded or stale.\n  WHY: The one-second socket timeout is reset only when the bounded body drain executes.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d677795e20ca03c5cfff4e8fdd808622adf2536abd1b2c674286f593ba23f48a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6288,
+    "run_id": "37306112188",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37306112188",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005131733_435fc7d366",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6288,
+    "run_id": "37306112188"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T13:17:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

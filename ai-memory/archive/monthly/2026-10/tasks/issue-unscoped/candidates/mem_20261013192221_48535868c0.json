@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:673-676 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The sandbox test was added to static-checks instead of the CI test job, causing the test-wiring guard to fail.\n  WHY: Gemini reports this placement as the wiring failure; qwen_qwen3_7-plus explicitly disputes that claim, stating the step is in the tests-hooks-and-orchestrator job.\n- .github/workflows/ci.yml:676 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The sandbox test module is run redundantly in the CI job, increasing runtime without adding coverage.\n  WHY: The reviewers report it is already invoked at lines 588, 594, and 641; qwen_qwen3_7-plus also cites line 963.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: In tests/test_pr_base_freshness_gate.py, make the review-gate assertion inspect the workflow with its sourced step-script body expanded, using the existing expanded_review_autofix_text() helper.\n  expected_change_site: tests/test_pr_base_freshness_gate.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The LAST RUN DIFF added an import of expanded_review_autofix_text but did not use it to expand the workflow body for assertions, leaving the stale contract assertion unchanged.\n- requirement: Add the sandbox test to the existing Prebuilt sandbox image tests step (lines 640-644) if it exists in the CI-tested tree.\n  expected_change_site: .github/workflows/ci.yml (test job)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test was added to static-checks (lines 673-676 in the diff) instead of the appropriate CI test job, leading to the wiring failure.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:673-676 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The test tests/test_clarify_sandbox_base_image_preseed.py was added to the Prebuilt sandbox image tests step in the static-checks job.\n  WHY: The CI failure triage identified this as a test-wiring failure because the wiring guard expects this test in a CI test job, not static-checks.\n- .github/workflows/ci.yml:676 | severity=NIT | confidence=[5]\n  PROBLEM: The test module tests/test_clarify_sandbox_base_image_preseed.py is being added to a step where it might already be run or redundant if it's run as part of the full test module.\n  WHY: This adds redundancy to the CI process and might cause issues if run multiple times.\n- TASK_GAP\n  Requirement: In tests/test_pr_base_freshness_gate.py, make the review-gate assertion inspect the workflow with its sourced step-script body expanded, using the existing expanded_review_autofix_text() helper.\n  Expected change site: tests/test_pr_base_freshness_gate.py\n  Evidence of absence: The LAST RUN DIFF shows that the code was added to import expanded_review_autofix_text, but it was never used to expand the workflow body for assertions in the test, leaving the stale contract assertion unchanged as the triage report predicted.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Add the sandbox test to the existing Prebuilt sandbox image tests step (lines 640-644) if it exists in the CI-tested tree.\n  Expected change site: .github/workflows/ci.yml (test job)\n  Evidence of absence: The test was added to static-checks (lines 673-676 in the diff) instead of the appropriate CI test job as requested by the triage report, leading to the wiring failure.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:676 | severity=NIT | confidence=[5]\n  PROBLEM: This adds another run of tests/test_clarify_sandbox_base_image_preseed.py, which is already invoked at lines 588, 594, and 641 in the same CI job.\n  WHY: Each CI run executes the full test module an additional time without adding coverage, unnecessarily increasing CI runtime.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/ci.yml:676 | severity=NIT | confidence=[5]\n  PROBLEM: The test `tests/test_clarify_sandbox_base_image_preseed.py` is added to the \"Prebuilt sandbox image tests\" step, but it already runs in at least four other steps in the same job (lines 588, 594, 641, 963).\n  WHY: The test module executes multiple times per CI run without adding coverage, increasing CI duration. The test-wiring guard only requires the test to be named anywhere in the workflow, so the addition at line 676 is redundant.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1e183307619f3ec287922953caf0d40406892962b4197ca1b0fff585e6b50ef7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7242,
+    "run_id": "38451207353",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38451207353",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013192221_48535868c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7242,
+    "run_id": "38451207353"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T19:22:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the already-resolved check run for `ai:check-triage` issues?\nChoices:\nA) In `clarify.yml`'s \"Decide clarify route\" step, before any questions or `/answer` are posted, using the same gate pattern as the security-dependency hold. A resolved issue is closed there and never reaches plan or implement. (RECOMMENDED)\nB) In `plan.yml` only, after clarification has already run.\nC) Option A plus a recheck in `implement.yml` just before implementation starts, so an issue whose PR merged after clarify is also caught.\nD) A poller sweep in `orchestrate_poll.yml` that checks every open `ai:check-triage` issue on each tick, in addition to option A.\nQ2: What evidence should count as \"the reported failure was corrected on main\"?\nChoices:\nA) The check with the exact same name, including the matrix shard (for example `orchestrate-poll (3)`), finished with `success` on a push to the default branch, on a commit that includes the linked PR's merge commit. If that cannot be read, the issue goes down the normal fix path. (RECOMMENDED)\nB) The same check passed on the linked PR's final head before it merged.\nC) Any successful CI run on the default branch after the linked PR merged.\nQ3: How should a verified-resolved triage issue be closed?\nChoices:\nA) Post one trusted evidence comment ending in a `<!-- ai:check-triage-resolved:v1 issue=<n> pr=<m> sha=<s> -->` marker that later runs use to skip repeat work. Then add `ai:closed` and close the issue as completed. Do not touch the merged PR. (RECOMMENDED)\nB) Same as A, but close the issue as \"not planned\".\nC) Post the evidence comment and a label, but leave the issue open for a human to close.\nQ4: When resolution cannot be verified, where should the failing shard's traceback come from?\nChoices:\nA) The gate reads the failing job's log through the check run already linked in the issue, extracts the traceback with the same failing-test shapes the heal intake uses, and posts it as a trusted comment for the planner. The issue then continues through the normal path. (RECOMMENDED)\nB) Change `scripts/check_failure_triage.sh` to capture the shard traceback when it files the issue, so new issues already contain it.\nC) Both A and B.",
+  "fingerprint": "aa4b48014dcd00e0b78ec3efe6c246924020dc3c26dc8979a3699f0f6698c459",
+  "lineage": {
+    "issue_number": 7095,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38066118979",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38066118979",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010160919_34c03acc5f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7095,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38066118979"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7095 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T16:09:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

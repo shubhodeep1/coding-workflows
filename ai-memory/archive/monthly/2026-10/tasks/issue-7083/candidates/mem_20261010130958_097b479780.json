@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the failing test and traceback be obtained, given the implementer cannot download run 37935105340's logs or run the jq-dependent shard in its sandbox?\nChoices:\nA) Treat the PR's own GitHub CI as the reproduction. The implementer reconstructs the group-3 / shard-1 test selection from `ci.yml`'s `NR % total == n` split and fixes only a defect it can show from code reading. Review autofix's check-run collector (`CHECK_RUNS_LOG_TAIL_BYTES`) then feeds the real `orchestrate-poll (3)` failure log into the editor loop, and the PR must not merge until that check is green. (RECOMMENDED)\nB) In this issue, first add `jq` to the isolated sandbox image (`scripts/codex_isolated_exec.sh` and the mirrored defaults in `scripts/sandbox_images_publish.sh`), then reproduce the shard locally in a follow-up run.\nC) Put the failing test name and traceback from run 37935105340 into this issue before planning. The plan fixes exactly that test.\n**Note:** B widens scope into automation-path sandbox infrastructure, and the changed image only takes effect after it merges, so this issue's own implement run still could not use it.\nQ2: Does current `main` already have a CI run where `orchestrate-poll (3)` and `lint` both passed?\nChoices:\nA) Yes. Record that run ID and its result in the issue, and close this issue as superseded with no code change. (RECOMMENDED if a passing run exists)\nB) No. `orchestrate-poll (3)` still fails on `main`. Go ahead with a fix for a demonstrated test or poller defect, as in Q1.\nC) Unknown. Proceed as in B, and let the PR's CI decide. If the shard passes and there is no demonstrated defect, the PR contains only the recorded evidence.\n**Note:** with A, the implement phase cannot close issues itself. A no-change run is reported as a no-op, and closing it as superseded happens through that handling, not through a commit.",
+  "fingerprint": "f6867d7cd17d356ab38fe3b1d855169963d51d1b14acf8fded9ff8f05d30a711",
+  "lineage": {
+    "issue_number": 7083,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38054400270",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38054400270",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010130958_097b479780",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7083,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38054400270"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7083 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T13:09:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

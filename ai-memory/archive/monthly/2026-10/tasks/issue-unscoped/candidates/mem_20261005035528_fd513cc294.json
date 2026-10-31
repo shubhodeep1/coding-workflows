@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:lines 457-460 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The \u201cMerged-PR commit guard hook tests\u201d step fails, leaving `tests-hooks-and-orchestrator` and the aggregate `lint` check red.\n  WHY: The captured log reports 5 test failures and 172 passes, but does not identify the failing cases; the reviewer reports the failure is outside this PR\u2019s changed files and not attributable to the audit-plans changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Sync the live /audit-plans command to its workflow-templates twin\" and \"copies the twin byte for byte\"\n  expected_change_site: .claude/commands/audit-plans.md\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Not absent: `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md` are byte-identical across all 135 lines; the deliverable is met.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Sync the live /audit-plans command to its workflow-templates twin\" and \"copies the twin byte for byte\" \u2014 the deliverable is byte equality between .claude/commands/audit-plans.md and workflow-templates/.claude/commands/audit-plans.md so that tests/test_audit_plans_command.py::test_template_parity passes on main again.\n  Expected change site: .claude/commands/audit-plans.md\n  Evidence of absence: not absent. Both files are now byte-identical across all 135 lines (the four wording hunks land on lines 1, 29, 32, 103, 126, 127 \u2014 exactly matching the templates twin, including the surrounding unchanged context). The PR also adds a changelog fragment at changelog.d/6291-sync-live-audit-plans.md following the \u00a720 fragment convention (section marker `<!-- changelog: fixed -->`, headline bullet, lead paragraph, audience closing). The deliverable is met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:lines 457-460, the \u201cMerged-PR commit guard hook tests\u201d step | severity=BLOCKER | confidence=5\n  PROBLEM: The supplied check-run log reports 5 test failures and 172 passes in the `tests-hooks-and-orchestrator` job. This step runs `tests/test_pr_merge_status_guard.py`; the failing cases are not identified in the captured log and are outside this PR\u2019s changed files.\n  WHY: The pytest step exits nonzero, leaving `tests-hooks-and-orchestrator` failed and the aggregate `lint` check red. The failure is not attributable to the audit-plans changes based on the available evidence.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ebf138144cb54b2795aa8749bd2f460eb2e77e5130885a107c72041f808cca53",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6291,
+    "run_id": "37259252539",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37259252539",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005035528_fd513cc294",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6291,
+    "run_id": "37259252539"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T03:55:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:7440-7460 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The SUPERSEDED header treats a cancelled smoke test plus any newer run of the workflow as proof that the newer run cancelled this run's e2e-smoke-test, without checking that the newer run shares the `e2e-smoke-test-<test_repo>` concurrency group or caused the cancellation.\n  WHY: A manual cancel, or a newer run with a different `test_repo`, produces a wrong-cause header that misdirects triage (message accuracy only, since nothing was released either way). All four reviewers rated this NIT, which is mapped to low. Confidence ranged from 3 to 4.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:~7440-7460 | severity=low (NIT) | confidence=3\n  PROBLEM: The SUPERSEDED header treats a cancelled smoke test plus any newer run as proof that the newer run cancelled this run's e2e-smoke-test. The code never checks that the newer run took the concurrency slot.\n  WHY: A manual cancel, or a newer run with a different `test_repo`, produces the same header. The header then names the wrong cause, although \"nothing was released\" remains true.\n- HARDENING (not a defect): add one comment above the new `gh api` call (~7436-7440) saying the notify job makes no other workflow-runs query (\u00a714 audit note). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:7441-7459 (check at 7449, API filter at 7451) | severity=low (NIT) | confidence=4\n  PROBLEM: The SUPERSEDED inference assumes the newer run cancelled this run's e2e-smoke-test, but the code never verifies it. The API call returns any newer run, including runs with a different `inputs.test_repo` (concurrency group at line 519), and a manual cancel also gives `E2E=\"cancelled\"`.\n  WHY: An operator who cancels manually, or whose runs use different `test_repo` values, is told the cause was the newer run and then chases the wrong run.\n- HARDENING (not a defect): add a comment above the `gh api` call (lines 7450-7451) saying it is the only `gh api` in the step (\u00a715 audit note). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml:7450-7458 | severity=low (NIT) | confidence=4\n  PROBLEM: The SUPERSEDED message attributes the cancellation to the newer run, but the code only proves that a newer run exists. It does not verify that the newer run holds the `e2e-smoke-test-<repo>` concurrency slot.\n  WHY: A manual cancel while any newer run exists (for any `test_repo`) gives a \"follow the newer run\" message instead of FAILED. The impact is message accuracy only.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:7440-7460 (lookup at 7450-7451; concurrency group at 518-519) | severity=low (NIT) | confidence=4\n  PROBLEM: The SUPERSEDED header proves only three weaker facts: the smoke test was cancelled, no other gate/validate/release job failed, and a higher-id run exists in the latest 20 runs. It does not check that the newer run shares the concurrency group or cancelled this one. `min` also picks the oldest newer run, which may not be the superseding one.\n  WHY: A manual cancel while any newer dispatch exists (a different `test_repo`, or a `gate_only` run) produces a wrong SUPERSEDED message and misdirects triage. The impact is message accuracy only, and the lookup-error fallback stays FAILED.\n- HARDENING (not a defect): add one comment above the new `gh api` call (lines 7434-7439) saying the notify step reads no other workflow-runs data (\u00a714 audit note). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "258b56d6c0fcf989fe314b3f88953f804c3307bec39a8bd4c3110141f815e0da",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7542,
+    "run_id": "39004512852",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39004512852",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017052555_afd48ed324",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7542,
+    "run_id": "39004512852"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T05:25:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

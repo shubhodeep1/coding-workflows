@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nI checked the default branch and there is nothing to fix there, so this plan makes no code change. That follows the clarify decision (Q1: B).\n\n**Note:** I couldn't run the test locally because PyYAML isn't installed in this sandbox. The claim that it passes on `main` rests on reading the files side by side; `main`'s own CI result is the real evidence.\n\n---\n\n## Implementation plan: no-change item (issue #7329)\n\n**Planning ref:** `main` at `184e769daebca28d687602e8fb7f03b7421cff15`. There is no integration branch metadata, and \"Integration branch mismatch\" reads `unknown`, so the mismatch block does not apply.\n\n**What I checked on `main`:**\n- `.github/workflows/orchestrate_poll.yml` still writes the `standalone_recovery` output, in lines 245\u2013255. The case arm is `1|true|yes|on) standalone_recovery=true ;;`, plus the log line and both `echo ... >> \"$GITHUB_OUTPUT\"` lines.\n- `tests/test_orchestrate_poll_workflow_contract.py`, in `test_standalone_stall_recovery_runs_without_tracking_issues()` (line 225, assertions at lines 231\u2013234), checks exactly those strings. Line 215 checks the matching `standalone_recovery == 'true'` gate, which the workflow uses at lines 288\u2013352.\n\n**Why nothing changes here:**\n- The failure only happens on PR #7288's head `ai/issue-7284`, which replaced `standalone_recovery` with a `has_work` probe.\n- This issue's body has no `Target branch:` or `Integration branch:` line. Without one, `scripts/resolve_integration_ref.sh` routes implementation to `main`.\n- Editing the test on `main` to expect `has_work` (option C) would make `main`'s CI fail.\n- PR #7288's review/autofix loop already gets that PR's failing check-runs as high-priority items, so the fix belongs there.\n\n### Conflicts with the issue text\n- The issue says the workflow sets `has_work` from a standalone-issue probe at `orchestrate_poll.yml:245-316`. That is only true on `ai/issue-7284`. On `main`, those lines set `standalone_recovery`.\n- The \"newer tests\" at `tests/test_orchestrate_poll_workflow_contract.py:481-541` are not on `main` either; the file is shorter there (the `main()` call list ends around line 392).\n- So both line references describe the PR branch, not the planning ref.\n\n## Files likely to change\nNone on the default branch. In particular, `tests/test_orchestrate_poll_workflow_contract.py` and `.github/workflows/orchestrate_poll.yml` are not touched.\n\n## Functions or modules to implement\nNone.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone. The `find_tracking` step's outputs (`has_work`, `standalone_recovery`) stay as they are on `main`.\n\n## Decisions\n\n### D1 \u2014 Do not fix the contract test on the default branch\n- **Chosen:** Treat #7329 as a no-change item. Close it as not planned, superseded by PR #7288's own review/autofix fix. Alternatively, `scripts/check_triage_resolution.py` can close it once PR #7288 merges with CI green.\n- **Alternatives considered:**\n  - (A) Fix it on `ai/issue-7284`. This needs a `Target branch: ai/issue-7284` line in the issue body, which an `/answer` comment cannot add.\n  - (C) Change the test on `main` to expect `has_work`. This would break `main`'s CI, because `main`'s workflow has no `has_work` probe for standalone issues.\n- **Why:** The workflow and test on `main` agree, so `main` has no defect. A failure specific to one PR belongs to that PR's autofix loop (the documented policy, base-branch gate). Any edit here would either be lost or would break the default branch.\n\n## Security considerations\n- No trust boundary, endpoint, workflow permission, secret or external input changes.\n- No money-handling surface is involved.\n- Abuse case considered: routing a fix to the PR head branch based on untrusted issue text. This plan does not do that. Routing would only happen through a verified `Target branch:` line added by an operator.\n\n## Risks and edge cases\n- **PR #7288's loop might not fix the test.** Recovery: an operator adds `Target branch: ai/issue-7284` to this issue's body and posts `/reclarify`, which makes option A possible with no other change. Alternatively, PR #7288's fingerprint cap or heal path escalates it.\n- **PR #7288 could merge with the test still out of step.** It can't merge cleanly: the required `CI / lint` check blocks auto-merge (`_pr_wait_for_required_checks`).\n- **The implement phase could commit an empty change.** The expected result is \"no-op / closed as not planned\". The implementer should not invent edits; if it runs, it should finish with no diff.\n\n## Testing considerations\n- No new tests. The existing `tests/test_orchestrate_poll_workflow_contract.py` keeps passing on `main` through CI's `tests-heal-plan-and-validation` job.\n- I could not run it here, so local results are UNVERIFIED and CI is the authority.\n- On PR #7288, the test must be updated on that branch to check the `has_work` probe and its enable/disable and failure behaviour. That is the PR's own autofix scope, not this issue's.\n\n## Pre-execution self-check\n- The plan follows the Q1: B decision exactly.\n- No default-branch file changes.\n- Every claim about `main` comes from files read on the planning ref.\n- No `BLOCKED:` condition applies.\n\nScope-mode: Hold Scope\nReuse-audit: extends PR #7288's existing review/autofix loop (`scripts/review_apply_fixes.sh`, which gives the editor the failing check-runs) and the check-triage already-resolved gate (`scripts/check_triage_resolution.py`)\nScope-mode justification: The clarified scope is to do nothing on the default branch. On `main`, the workflow and its contract test already agree; the failure exists only on PR #7288's head branch, and that PR's autofix loop is the mechanism that fixes it. Widening scope (option C) would break `main`'s CI. Option A would need routing metadata that only an operator can add to the issue body. Holding scope at \"no change, close as superseded\" is the safest reversible choice under \u00a76 (correctness and safety before speed), and switching to option A later only needs an operator to add one line and post `/reclarify`.\n\nPLAN_SELF_CHECK: WARNING: I could not run the test locally (PyYAML is missing in this sandbox); `main` passing rests on reading the files plus `main`'s CI.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "2aa13eb1ffad907dca67af98c977632427915c956075759c3399bb77cafd119a",
+  "lineage": {
+    "issue_number": 7329,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38474774031",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38474774031",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7329"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261013220928_592c539b14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7329,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38474774031"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7329",
+  "timestamps": {
+    "created_at": "2026-10-13T22:09:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

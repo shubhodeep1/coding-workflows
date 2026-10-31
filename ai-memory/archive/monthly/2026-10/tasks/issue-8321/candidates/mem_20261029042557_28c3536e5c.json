@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8321,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8321\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8326\",\"pr_number\":8326,\"branch\":\"ai/issue-8321\",\"run_id\":\"40811339014\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40811339014\",\"changed_files\":[\"agents.d/8321-review-editor-claude-docs.md\",\"changelog.d/8321-review-editor-claude-docs.md\",\"scripts/review_apply_fixes.sh\",\"scripts/review_autofix_step_post_editor_summary.sh\",\"scripts/review_untrusted_workspace.py\",\"scripts/workflow_failure_heal.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_editor_sandbox_excluded_escalation.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "cfe46a6ca1c8964d0b560e95f554711be5744c48795c87f415afc3973ac944c1",
+  "lineage": {
+    "issue_number": 8321,
+    "parent_ids": [],
+    "pr_number": 8326,
+    "run_id": "40811339014",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40811339014",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8326"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261029042557_28c3536e5c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8321,
+    "level": "run",
+    "pr_number": 8326,
+    "run_id": "40811339014"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8321: https://github.com/shubhodeep1/coding-workflows/pull/8326",
+  "timestamps": {
+    "created_at": "2026-10-29T04:25:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

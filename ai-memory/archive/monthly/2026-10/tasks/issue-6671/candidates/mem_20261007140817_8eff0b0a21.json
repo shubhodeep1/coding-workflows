@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this fix-up issue change in the repository?\nChoices:\nA) No code change. It is only a tracker for the operator step. Close it after recording the step in the `ai:operator-step` issue, and leave #6624 and #6628 blocked until a person commits the live hook and the parity test and required checks pass. (RECOMMENDED)\nB) Add a documentation-only pending-operator note, for example in the \"Live `.claude/` copies and their templates\" section of `agents.md`. It names the missing live `pr_merge_status_guard.py` copy and the resume conditions. Mention `LIVE_MERGED_PR_HOOK_PARITY_UNSET_OPERATOR_STEP` only as a placeholder; no code reads it.\nC) Add a code path behind `LIVE_MERGED_PR_HOOK_PARITY_UNSET_OPERATOR_STEP` (off by default) that reports the missing live hook as \"pending operator\" in the parity test or the sync script, without skipping or relaxing the check. Q2 says which surface.\nD) Add the merged-PR hook to `.github/ai/claude_template_divergence.json` or make the parity test skip it while the flag is set.\n   **Note:** D waives the parity check, which the issue explicitly forbids. It also touches `.github/ai/`, which the editor sandbox does not admit. Picking D will need re-clarification.\nQ2: If Q1 is C, which surface should the flag-gated \"pending operator\" marker change? (Skip this if Q1 is A or B.)\nChoices:\nA) `scripts/sync_claude_live_copies.py`: log a `CLAUDE_LIVE_SYNC pending_operator path=hooks/pr_merge_status_guard.py` line and leave the parity verdict unchanged. (RECOMMENDED)\nB) `tests/test_claude_template_live_parity.py`: when the flag is set, add the pending-operator context to the failure message only, so the test still fails.\nC) Both A and B.",
+  "fingerprint": "323cf9b888f2d897581fc5dcf149f7a82f588cb4d6e7bf252c4159b9960f2d8a",
+  "lineage": {
+    "issue_number": 6671,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37633387405",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37633387405",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007140817_8eff0b0a21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6671,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37633387405"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6671 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T14:08:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

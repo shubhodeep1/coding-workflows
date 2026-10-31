@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `test_security_pass_cap_converts_low_keep_fixing_to_advisory` in `tests/test_orchestrate_poll_process.py` to assert terminalization with `ai:security-pass-failed`, no waiver or advisory follow-up, and capped conversion to `fail`.\n  expected_change_site: `tests/test_orchestrate_poll_process.py` at `test_security_pass_cap_converts_low_keep_fixing_to_advisory` (line 6649)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The PR diff is empty; the test still asserts `status == \"complete\"`, `security_pass_status == \"passed\"`, a recorded waiver, and a created advisory follow-up at lines 6669\u20136693. `scripts/orchestrate_poll_process.sh:7375-7393` converts capped low/medium `keep_fixing` decisions to `accept_with_followup`, contradicting the requested fail expectation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nRequirement: \"Update `test_security_pass_cap_converts_low_keep_fixing_to_advisory` to assert terminalization with `ai:security-pass-failed`, no waiver or follow-up.\"\nExpected change site: `tests/test_orchestrate_poll_process.py:6649`.\nEvidence of absence: the requested change is deliberately absent. Implementing it would contradict the poller at `scripts/orchestrate_poll_process.sh:7375-7393` and the documented rule in `agents.md`.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nRequirement: Update `test_security_pass_cap_converts_low_keep_fixing_to_advisory` in `tests/test_orchestrate_poll_process.py` to assert the low-severity case is terminalized with `ai:security-pass-failed`, creates no waiver or advisory follow-up, and records the capped conversion to `fail`.\nExpected change site: tests/test_orchestrate_poll_process.py at test_security_pass_cap_converts_low_keep_fixing_to_advisory\nEvidence of absence: The PR diff is empty; no changes have been applied to tests/test_orchestrate_poll_process.py.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP_1\n\nRequirement: \"Update `test_security_pass_cap_converts_low_keep_fixing_to_advisory` in `tests/test_orchestrate_poll_process.py` to assert the low-severity case is terminalized with `ai:security-pass-failed`, creates no waiver or advisory follow-up, and records the capped conversion to `fail`. Keep the poller's fail-closed behavior. Confirm against the full shard log or a focused test run before merging.\"\nExpected change site: `tests/test_orchestrate_poll_process.py` at `test_security_pass_cap_converts_low_keep_fixing_to_advisory` (line 6649).\nEvidence of absence: The PR ships with no diff (`original_pr_diff.patch` and `pr_diff.patch` both report `[NO_PR_DIFF_AVAILABLE]`; `pr_changed_files.txt` is `(empty)`). At PR head 6644766 (`ai/issue-6920`) the test still asserts the OPPOSITE of what the issue requires: `latest_state[\"status\"] == \"complete\"` (line 6669), `latest_state[\"security_pass_status\"] == \"passed\"` (line 6670), `len(waived) == 1` with `waived[0][\"finding_id\"] == \"SEC-TEST-1\"` and the `[keep_fixing capped after 2 judge round(s); converted to advisory follow-up]` justification prefix (lines 6674-6680), `len(created) == 1` with `created[0][\"title\"] == \"[security-pass] Advisory: SEC-TEST-1 (low, scripts/example.py:1)\"` (lines 6682-6684), and the explicit guard `\"ai:security-pass-failed\" not in result[\"tracking_labels\"]` (line 6686) plus `\"SECURITY_PASS_CLEAN tracking_issue=192\"` (line 6692). The neighboring test `test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing` (line 6708) already shows the target assertion shape.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: Update `test_security_pass_cap_converts_low_keep_fixing_to_advisory` to assert terminalization with `ai:security-pass-failed`, no waiver or advisory follow-up, and conversion to `fail`, while keeping the poller\u2019s fail-closed behavior.\nExpected change site: `tests/test_orchestrate_poll_process.py`, `test_security_pass_cap_converts_low_keep_fixing_to_advisory`.\nEvidence of absence: The test still asserts successful completion, a recorded waiver, and a created advisory follow-up at lines 6669\u20136693. The PR changed-files list is empty and no PR diff was available. Note: the current poller still converts capped low/medium `keep_fixing` decisions to `accept_with_followup` at `scripts/orchestrate_poll_process.sh:7359\u20137395`, so the requested failure expectation does not match current poller behavior.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP\n\nRequirement: \"Update `test_security_pass_cap_converts_low_keep_fixing_to_advisory` in `tests/test_orchestrate_poll_process.py` to assert the low-severity case is terminalized with `ai:security-pass-failed`, creates no waiver or advisory follow-up, and records the capped conversion to `fail`.\"\nExpected change site: tests/test_orchestrate_poll_process.py at `test_security_pass_cap_converts_low_keep_fixing_to_advisory` (line 6649)\nEvidence of absence: The PR diff is completely empty (`[NO_PR_DIFF_AVAILABLE]` for both `original_pr_diff.patch` and `pr_diff.patch`), and `pr_changed_files.txt` is empty. The test at line 6649 still asserts the old behavior: `status == \"complete\"` (line 6669), `security_pass_status == \"passed\"` (line 6670), a waiver recorded in `security_pass_waived_findings` (lines 6674-6680), and an advisory follow-up created (lines 6681-6685). The test has not been updated to expect terminal failure with `ai:security-pass-failed` label, no waiver, and no advisory follow-up as the linked issue requires.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3c53f1ef8a15701f7158d68fe51b6bd8006ef97f9124da7706ec8adda3215a5a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6928,
+    "run_id": "38157815233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38157815233",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011172157_0710d6f940",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6928,
+    "run_id": "38157815233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T17:21:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

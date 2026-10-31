@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- File: tests/test_review_autofix_review_pipeline_contract.py | Line or code reference: 3749, inside `test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout` | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fixture needs positive check-run IDs so the strict snapshot validator accepts the runs and the test can exercise the retry-stdout-dropping contract.\n  WHY: Without the offset, the first synthetic run has id 0; the strict validator returns `None` and the snapshot becomes `invalid_snapshot`, causing the test to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: tests/test_review_autofix_review_pipeline_contract.py\n  Line or code reference: 3749, inside `test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout`\n  Problem: The one-line last-run change replaces `\"id\": idx` with `\"id\": idx + 1` so the fixture's check-run IDs (now 1..4) satisfy the strict snapshot validator added by the same PR in `scripts/collect_pr_check_runs_context.py::_strict_merge_runs` (which rejects `run_id <= 0`).\n  Why it fails at runtime: Without the offset, the first synthetic run has id 0; the strict validator returns `None` and the snapshot becomes `invalid_snapshot`, causing the test to fail. The fix is the minimum change required for the test to exercise the retry-stdout-dropping contract under the new validator.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "fdfc002b6c1232c503c44277736a87f6433dc2933ae30c48e44dcbd77920e26e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6043,
+    "run_id": "37608616297",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37608616297",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007104832_2b4df569a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6043,
+    "run_id": "37608616297"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T10:48:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

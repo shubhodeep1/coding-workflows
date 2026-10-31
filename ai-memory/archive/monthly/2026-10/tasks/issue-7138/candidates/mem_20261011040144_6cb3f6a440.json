@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The poller already reads run metadata that includes `head_branch`, which shows up 34 times in `scripts/orchestrate_poll_process.sh`. Before this fix, `dispatch_validation_workflow` (lines 12112-12158) added `--ref <integration branch>`. So a validation run whose `head_branch` is not the default branch used the integration branch's stale wrapper copy. Option B would need a log or file read for every candidate. Option C has no per-run evidence and could re-run genuine failures. A one-shot flag per project caps the cost: at most one extra validation dispatch. The flag should also record the default-branch SHA it dispatched from, for auditing.\nQ2: When `mark_validation_failed` sees `raw_status=harness_error` (lines 13185-13220), it already treats the failure as infrastructure. It leaves the recovery counters alone and asks for a manual `/revalidate`. A stale wrapper pin causes exactly that kind of failure. So recovery here amounts to an automatic `/revalidate`, which reuses the existing reset path (around lines 21417-21487). Budget-exhausted `ai:validation-failed` projects (B/C) include genuine test failures, and automatically re-running those would undo a deliberate terminal decision.\nQ3: \u00a78 says new behaviour should get a defaulted env var, and the repo already has an engine-change auto-reset switch (`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE`) that works the same way. A stable log prefix lets operators and workflow-log analysis see each recovery decision.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. All three decisions are lettered options. Notes for the planner:\n- **Dispatch fix.** In `scripts/orchestrate_poll_process.sh`, the validation dispatch call site (about line 13135) should stop passing the integration branch as `--ref`. It should dispatch the default-branch wrapper (no `--ref`, or `--ref <default branch>`). Keep `-f tracking_issue=${TRACKING_NUM}` so `validate.yml` still resolves and checks out the integration branch. Apply the same change to the `internal-validate.yml` fallback.\n- **Recovery trigger.** Recovery fires only when all of these hold:\n  - project `status=failed`\n  - `validation_last_raw_status=harness_error`\n  - the last validation run's `head_branch` is not the default branch\n  - the new state field (for example `validation_stale_pin_recovered_ref`) is not set\n  - the kill switch `VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED` (default `true`) is on\n- **Recovery action.** Perform the existing `/revalidate` reset with counters unchanged and dispatch from the default branch. Record the default-branch SHA in the flag. Initialise the new field in the state-normalisation helpers.\n- **Logging.** Use the stable prefix `VALIDATION_STALE_PIN_RECOVERY` with `tracking_issue= outcome=recovered|skip reason=`. Add it to the agents.md log-prefix list through an `agents.d/` fragment.\n- **Docs and tests.** Add a README row for the env var, a `changelog.d/` fragment, and poller tests covering recover-once, skip after the flag is set, skip when not `harness_error`, and the disabled switch.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "01d78a1d7fe6f144ef95142985d3eeeea52803be10fc2e615866ea3cde5fde0b",
+  "lineage": {
+    "issue_number": 7138,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38109654273",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38109654273",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7138"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261011040144_6cb3f6a440",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7138,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38109654273"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7138",
+  "timestamps": {
+    "created_at": "2026-10-11T04:01:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

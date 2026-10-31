@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_checker_restart.py:297-305, 314-364 | severity=medium | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: A trigger page without pagination metadata defaults to `has_more: false`, so a bare-array listing can be treated as complete and bypass the incomplete-listing guard.\n  WHY: The highest rating was MAJOR (openai_gpt-6-luna), while deepseek_deepseek-v4-pro and qwen_qwen3_7-plus rated it NIT; deepseek_deepseek-v4-pro and qwen_qwen3_7-plus note the documented pickup uses structured responses, while openai_gpt-6-luna describes a truncated or metadata-free input that could omit a pending trigger and lead to restarting a checker.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_checker_restart.py:297-305 and 314-364 | severity=low | confidence=[2]\n  PROBLEM: _load_trigger_page defaults has_more to False when the saved payload is a bare array rather than a dict with pagination metadata. A single bare-array page therefore produces triggers_complete: true, bypassing the incomplete-listing guard that load_trigger_pages is designed to enforce.\n  WHY: In practice the API always returns a dict envelope with has_more/next_cursor/data fields, and the pickup saves the full response. The bare-array path is only reachable when _load_json_value resolves a raw JSON array \u2014 either from a test fixture or from the envelope scan hitting [ before {. Neither scenario occurs in normal pickup operation, so this is a defense-in-depth gap with no demonstrated runtime trigger. The existing test at line 884 exercises this path for load_triggers (single page), and load_trigger_pages inherits the same behavior from _load_trigger_page.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after reaching the slot retryable-failure limit (3).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_checker_restart.py: `_load_trigger_page`, line 300; `load_trigger_pages`, lines 336 and 343\u2013364 | severity=medium | confidence=[4]\n  PROBLEM: A trigger page with no pagination metadata is treated as a complete listing. `_load_trigger_page` defaults missing `has_more` to `False`, and a non-empty single-page input therefore passes `load_trigger_pages` as complete.\n  WHY: The loader accepts bare arrays as trigger input. If such an array is truncated at the pickup\u2019s `limit: 100`, or a page lacks `has_more`, `decide` skips the incomplete-listing guard and can restart a checker whose pending trigger was omitted.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_checker_restart.py: `_load_trigger_page` lines 297-305 | severity=low | confidence=[3]\n  PROBLEM: A bare-array payload (which the function explicitly accepts at line 303: `routines = payload.get(\"data\") if isinstance(payload, dict) else payload`) defaults `has_more` to `False` at line 300. `load_trigger_pages` then treats that page as a complete listing. If a bare array happens to contain exactly 100 items (the `limit: 100` page size), `scan` reports `triggers_complete: true` and `decide` skips the incomplete-list guard, potentially restarting a checker whose pending trigger was omitted from the truncated page.\n  WHY: The documented caller (the pickup) always passes the structured `{data, has_more, next_cursor}` format from the MCP tool, so this path is not exercised in normal operation. But the function explicitly accepts bare arrays as a supported input shape (the ValueError check at line 304 validates them), so a truncated bare array \u2014 from a manual export, an older tool version, or a format change \u2014 would silently bypass the fail-safe the cursor-chain validation was added to provide. The fix is one line: when `payload` is not a dict, set `has_more = True` so the listing is treated as incomplete.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Note on the pass-1 gpt-6-luna finding: it claims a bare-array / metadata-less trigger page is treated as complete because `_load_trigger_page` defaults `has_more` to `False`. This is pre-existing behavior of the original `load_triggers` (the single-page path the pickup used before this PR), and `load_trigger_pages([page])` is explicitly asserted to equal `load_triggers(page)` in the new test. The real `list_triggers` API response is always an object carrying `has_more` and `next_cursor`; a bare array is only reachable via a direct Python call, never from the pickup path the diff changes. Truncation-without-`has_more` is a theoretical precondition not evidenced in the changed code or its callers, so it falls under the anti-rule on theoretical risks and was not promoted.\n\nThe cursor-chain validation in `load_trigger_pages` (scripts/claude_checker_restart.py:328-369) correctly catches an omitted intermediate page: the page after the gap is read with the missing page's `next_cursor`, which the `cursors[index] != next_cursor` check compares against the prior page's cursor. The count-mismatch, empty-paths, last-page-still-`has_more`, and early-termination-of-non-last-page cases are all handled and asserted by the new tests (`test_trigger_pages_join_and_take_has_more_from_the_last_page`, `test_trigger_pages_with_a_page_left_out_between_two_others_are_incomplete`, and the two end-to-end CLI tests). The pickup command file at the current head carries the cursor-passing instructions the test asserts, consistent with the twin-sync commit dd77257.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "990b9da80387bfc975d61259f64a5a67c8e8afdab290dbcd91291df73976f4fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5755,
+    "run_id": "36812753155",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36812753155",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001045635_2cc3f5ec3a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5755,
+    "run_id": "36812753155"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T04:56:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

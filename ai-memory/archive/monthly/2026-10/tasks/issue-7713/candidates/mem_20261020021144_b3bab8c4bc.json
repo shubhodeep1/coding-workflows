@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply workflow-optimization-2026-09-22 recommendations (verified subset)\",\"issues\":[{\"id\":\"memory-push-auth-permanent\",\"title\":\"AI memory: stop retrying memory-branch pushes on permanent credential/permission errors\",\"priority\":2},{\"id\":\"codex-usage-anchored\",\"title\":\"Cost telemetry: anchor Codex token parsing and de-duplicate it across parent/child logs\",\"priority\":2},{\"id\":\"collector-root-failure-class\",\"title\":\"Workflow-log collector: record structured root_failure_class alongside the GitHub failing step\",\"priority\":4},{\"id\":\"release-tag-permanent-rejection\",\"title\":\"Release: stop retrying tag publication on a workflow-scope rejection\",\"priority\":3},{\"id\":\"release-tag-preflight\",\"title\":\"Release: early release-token capability preflight before the long release gate\",\"priority\":4},{\"id\":\"validate-dispatch-notice\",\"title\":\"Review post-merge: downgrade 'no standalone validation dispatched' warning when no issue required validation\",\"priority\":5},{\"id\":\"final-docs-and-report\",\"title\":\"Finalize workflow-optimization-2026-09-22: README thread-reuse scope, delete source doc, append processing report\",\"priority\":8}],\"dependency_edges\":[{\"from\":\"codex-usage-anchored\",\"to\":\"collector-root-failure-class\"},{\"from\":\"release-tag-permanent-rejection\",\"to\":\"release-tag-preflight\"},{\"from\":\"memory-push-auth-permanent\",\"to\":\"final-docs-and-report\"},{\"from\":\"collector-root-failure-class\",\"to\":\"final-docs-and-report\"},{\"from\":\"release-tag-preflight\",\"to\":\"final-docs-and-report\"},{\"from\":\"validate-dispatch-notice\",\"to\":\"final-docs-and-report\"}]}",
+  "fingerprint": "2cf120886e127913f4683fb9faa4fbba35dd03c7392c6b00520666e5ba956196",
+  "lineage": {
+    "issue_number": 7713,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39356373688",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39356373688",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261020021144_b3bab8c4bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7713,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39356373688"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply workflow-optimization-2026-09-22 recommendations (verified subset)' into 7 issues (tracking #7713)",
+  "timestamps": {
+    "created_at": "2026-10-20T02:11:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

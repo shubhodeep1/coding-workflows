@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for #6954: CI fix for PR #6951 (Claude pool health alert contracts)\n\n**Nothing to fix.** PR #6951 has merged into `main`, and both fixes the triage asked for are already on `main`. The plan is to make no changes and close #6954 as already fixed (Q2: A, decision D2 below).\n\nPlanning ref: the planning context records `5ec53f9309289c97f4b88ccbf182380a937c623d` on `main`. This run's checkout is a snapshot of `main` at `5b3bd937942722b17f380e44afd22d92893d5ed9`, so `main` moved between capturing the context and this run. Integration branch metadata is empty, so there is no mismatch.\n\nQ1 was answered A, but the issue body still has no `Integration branch:` line. That no longer matters: the earlier plan's failure-mode note said that if PR #6951 merged first, the conditions should be re-checked on `main`. I did that.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/test_smoke_alert_silencing_contract.py::EXPECTED_STEP_DECLARATIONS\nScope-mode justification: The fix is limited to two existing checks: the `docs/INVENTORY.md` **Scripts** list (checked by `tests/inventory_parity.py`) and the pinned `orchestrate_poll.yml` entry in `EXPECTED_STEP_DECLARATIONS`. Both are already correct on `main` now that PR #6951 has merged. Changing either again would either add a duplicate entry or set the count above the real number of declarations. So the correct scope is no edit: confirm the checks pass and close the issue.\n\nWhat `main` looks like now:\n- `scripts/claude_pool_health_alert.sh` exists.\n- `docs/INVENTORY.md:139` lists `scripts/claude_pool_health_alert.sh`, directly after the `scripts/claude_pool_token.sh` entry at line 138.\n- `tests/test_smoke_alert_silencing_contract.py`: the `\"orchestrate_poll.yml\"` entry is `[...] * 4`, with the comment `# 4 = includes \"Alert on Claude pool accounts at the usage gate\" (#6951).`\n- `.github/workflows/orchestrate_poll.yml` has exactly 4 lines matching `STEP_DECL_RE`, at lines 881, 891, 1058 and 1236, all in the plain `env || vars || 'DEBUG'` form. The pinned count matches.\n- `README.md:2555` refers to the script, and the inventory entry now covers that reference.\n\n1. Files likely to change\n- None. `docs/INVENTORY.md` and `tests/test_smoke_alert_silencing_contract.py` were the two files to fix, and both are already correct on `main`.\n\n2. Functions/modules\n- None.\n\n3. Data structures affected\n- None. `EXPECTED_STEP_DECLARATIONS[\"orchestrate_poll.yml\"]` already has length 4, and the Scripts inventory already has the entry.\n\n4. API/interface changes\n- None.\n\n## Decisions\n\n### D1 \u2014 Re-check on `main`, since PR #6951 has merged\n- Chosen: check both failing conditions against `main`.\n- Alternatives considered: still target `claude/elegant-mendel-5pli2i-claude-pool-health-alert` (Q1: A). That needs an issue-body edit that never happened, and the branch has already merged.\n- Why: the script is now on `main`. That makes `main` the only branch where these checks matter.\n\n### D2 \u2014 No edit; close #6954 as already fixed\n- Chosen: make no file changes and close the issue (Q2: A).\n- Alternatives considered: apply the triage edits anyway (Q2: B).\n- Why: adding the line again would put a duplicate entry in the inventory. Raising the count to 5 would fail the exact-list comparison against the 4 real declarations.\n\n## Security considerations\n- No trust boundaries, endpoints or inputs are touched.\n- The check that `env.ALERT_MSG_LEVEL` is read first stays in place, with the count matching the real declarations. This keeps the smoke-test SILENT setting in force.\n\n5. Risks and edge cases\n- **No-op implement run.** If the implement phase runs, it should produce no diff. Its no-op handling should close the issue rather than mark it failed and re-issue it.\n- **Snapshot gaps in local checks.** In this planning snapshot, `tests/inventory_parity.py` reports 3 FAIL lines. All three are about `.github/workflows/propagate-consumer-secrets.yml`, which the read-only snapshot leaves out because its name contains \"secrets\". None mentions `claude_pool`. The real checkout has that file, so this is a snapshot artifact and not a regression.\n- **The local smoke test was not run.** `pytest` is not installed in the planning sandbox. The pinned count was checked by applying `STEP_DECL_RE` to the workflow directly (4 matches = 4 pinned).\n\n6. Testing\n- `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_smoke_alert_silencing_contract.py -q` should pass.\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py` (the `ci.yml:1403` step) should report no `claude_pool_health_alert` failures.\n- Confirm that `CI / lint` on `main` passes.\n\n7. Pre-execution self-check\nPLAN_SELF_CHECK: WARNING: Already fixed on main by the PR #6951 merge; implement should produce no diff and close #6954 as already fixed.\nPLAN_SELF_CHECK: WARNING: pytest is not installed in the planning sandbox; the smoke-test count was checked with STEP_DECL_RE instead of by running the test.\n\n---\n- Actions taken: read the current `main` state of the script, `docs/INVENTORY.md`, the smoke contract test and `orchestrate_poll.yml`; counted the step-level `ALERT_MSG_LEVEL` declarations; ran `tests/inventory_parity.py` locally.\n- Assumptions: the planning snapshot reflects `main` after PR #6951 merged.\n- Missing context: PR #6951's merge state was inferred from file contents, because `gh` and the remote are unavailable here.\n\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "07f4241ca91acf9fac87fcf83d267049a6bf9914b31c1d301521aa07bf914fc7",
+  "lineage": {
+    "issue_number": 6954,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37958044630",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37958044630",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6954"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261009162552_0b76104ba2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6954,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37958044630"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6954",
+  "timestamps": {
+    "created_at": "2026-10-09T16:25:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

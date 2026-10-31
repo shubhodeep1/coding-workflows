@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_review_blocked_budget.py:456 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The test asserts the obsolete `status=pytest_install_failed` output, but the workflow now emits `status=pytest_unavailable`.\n  WHY: This assertion raises an `AssertionError` and fails the `tests-release-and-log-analysis` CI job, as confirmed by the supplied CI logs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_test_and_mark_stable_review_blocked_budget.py\n  Line or code reference: 456\n  Problem: The existing test `test_phase0a_installs_pytest_before_running_the_hot_poller_test` asserts `'echo \"status=pytest_install_failed\" >> \"$GITHUB_OUTPUT\"' in step`, but the workflow YAML at line 546 now emits `status=pytest_unavailable` instead of `status=pytest_install_failed`.\n  Why it fails at runtime: The `tests-release-and-log-analysis` CI job has already proven this failure. The `pr_check_runs_context.txt` shows `AssertionError` at line 456 because the substring `status=pytest_install_failed` no longer appears in the Phase 0a step. A new test `test_hot_poller_guard_installs_and_verifies_pytest_before_running` at line 670 correctly checks for `status=pytest_unavailable`, but the old test at line 456 was not updated when the workflow's status output was renamed.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: tests/test_test_and_mark_stable_review_blocked_budget.py\n  Line or code reference: 456, test_phase0a_installs_pytest_before_running_the_hot_poller_test\n  Problem: The test still asserts that the workflow emits `status=pytest_install_failed`, but the workflow now emits `status=pytest_unavailable` at `.github/workflows/test-and-mark-stable.yml:546`.\n  Why it fails at runtime: The contract test raises an AssertionError, failing the `tests-release-and-log-analysis` CI job. The supplied CI log confirms this failure.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: tests/test_test_and_mark_stable_review_blocked_budget.py\n  Line or code reference: 456\n  Problem: The existing test `test_phase0a_installs_pytest_before_running_the_hot_poller_test` asserts the old status string `status=pytest_install_failed`, but the updated workflow at `.github/workflows/test-and-mark-stable.yml:546` now emits `status=pytest_unavailable`. The old status string no longer appears anywhere in the workflow.\n  Why it fails at runtime: The assertion at line 456 raises `AssertionError` because the substring is absent from the Phase 0a step. This is the active CI failure in `tests-release-and-log-analysis` (confirmed by the check-run log at the failing test invocation).\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "e098cbc40b207fd9c72fa1b21dacdfa23b9b5833b289eefc697e126253844f70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6679,
+    "run_id": "37649584411",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37649584411",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007163651_3d05bebaa8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6679,
+    "run_id": "37649584411"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T16:36:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_evaluate_gate.sh:1130-1149 | severity=critical | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: If fetching marker comments fails, the gate can route a marked freshness-update head to a docs-only or small-diff skip instead of `freshness_sync`, so the workflow does not invoke the redispatch helper.\n  WHY: The fast path and suppression require a successful marker fetch, while the helper invocation requires `DET_SKIP_REASON=freshness_sync`; severity is disputed (NIT, MAJOR, and BLOCKER), with BLOCKER from google_gemini-3_1-flash-lite taken as the highest.\n- scripts/review_freshness_ci_failed.sh:58-70 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The marker POST makes a single attempt without retry, so a transient API failure skips both the marker and redispatch.\n  WHY: The PR can remain with red CI and no review rerun; severity is disputed (NIT and MAJOR), with MAJOR from google_gemini-3_1-flash-lite taken as the highest.\n- tests/test_review_freshness_ci_failed.py:144-150 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test checks for text patterns but does not exercise the marker-fetch failure path or its interaction with the workflow helper-invocation gate.\n  WHY: The test can pass without detecting the case where a transient API failure leads to a docs-only or small-diff skip and no helper invocation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_autofix_step_evaluate_gate.sh:755, 1131-1137 | severity=low | confidence=3\n  PROBLEM: If a marked head is evaluated when the marker-comment read fails, the fast path and suppression are skipped, so a docs-only or small-diff head receives that generic skip reason.\n  WHY: The workflow only redispatches when `DET_SKIP_REASON = freshness_sync`, so a failed-CI run can leave the head unreviewed. This needs the comment read to fail on the redispatched run after succeeding on the first; the next push or stall poller recovers it.\n- scripts/review_freshness_ci_failed.sh: | severity=low | confidence=3\n  PROBLEM: The marker POST makes a single attempt, and failure logs `marker_failed` without dispatching.\n  WHY: A transient 5xx or secondary rate limit can skip both the marker and redispatch; the helper is a separate `bash` process, so the workflow step's `gh_retry` is not available to it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_evaluate_gate.sh:1131-1137 | severity=critical | confidence=4\n  PROBLEM: The freshness-ci-failed skip suppression logic relies on `gate_marker_fetch_state=\"ok\"`.\n  WHY: If fetching marker comments fails, the logic falls through to the generic docs-only or small-diff skip, refusing the merge because CI still fails without redispatching the review and stranding the PR.\n- scripts/review_freshness_ci_failed.sh:58 | severity=high | confidence=4\n  PROBLEM: The marker POST makes a single attempt without retry logic or `gh_retry`.\n  WHY: A transient 5xx or secondary rate limit logs `marker_failed` and skips the redispatch, leaving red CI with nothing to re-run review.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_evaluate_gate.sh:1130-1131, 1142-1149 | severity=high | confidence=4\n  PROBLEM: If the paginated marker-comments fetch fails, `FRESHNESS_CI_FAILED_SKIP_SUPPRESSED` stays false and the deterministic-skip condition can route a marked freshness-update head to `docs_only` or `small_diff`.\n  WHY: In `.github/workflows/review_autofix.yml:1305`, the helper invocation condition then fails to match, so nothing posts the dispatch and the PR remains with red CI and no automatic review retry.\n- tests/test_review_freshness_ci_failed.py:144-150 | severity=low | confidence=4\n  PROBLEM: The test only asserts that four text patterns exist in `GATE_STEP`; it does not exercise the runtime path where `gate_marker_fetch_state` is not `ok` or the workflow helper-invocation gate.\n  WHY: A transient API failure can lead to a docs-only or small-diff deterministic skip with no helper invocation, and the test does not catch it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_evaluate_gate.sh:754-755, 1131-1147 | severity=high | confidence=4\n  PROBLEM: If the marker-comments fetch fails, the freshness fast path falls through to the generic docs-only or small-diff decision while marker suppression requires `gate_marker_fetch_state=ok`.\n  WHY: A redispatched PR can be marked `docs_only` or `small_diff` instead of `freshness_sync`; `.github/workflows/review_autofix.yml` lines 1305-1307 only invoke the helper for `freshness_sync`, leaving the failed head pending until another review trigger.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_autofix_step_evaluate_gate.sh:754-755, 1131-1137 | severity=high | confidence=4\n  PROBLEM: When marker comments cannot be fetched on the redispatched run, the freshness fast path falls through to a generic docs-only or small-diff skip, and the suppression cannot recognize the marker.\n  WHY: The gate sets `DET_SKIP_REASON` to `docs_only` or `small_diff` instead of `freshness_sync`; the workflow's redispatch helper runs only when `DET_SKIP_REASON=freshness_sync` (review_autofix.yml lines 1305-1307), so it refuses to dispatch a normal review and the marked head remains unreviewed for that run.\n- scripts/review_freshness_ci_failed.sh: | severity=low | confidence=3\n  PROBLEM: The marker POST makes a single attempt without retry.\n  WHY: A transient 5xx or secondary rate limit can log `marker_failed` and skip the dispatch, leaving red CI with nothing to re-run review; the helper is a separate bash process, so the step's inline `gh_retry` wrapper is not available to it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b4778c46fcf343f3e1926e20de44b8f56cf40f903176101cfe8465317c3b852c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7292,
+    "run_id": "38323365547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38323365547",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013003805_2feea42373",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7292,
+    "run_id": "38323365547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T00:38:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

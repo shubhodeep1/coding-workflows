@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1408-1416 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The oversized export applies `hide_claude_md` (setting `CODEX_ISOLATED_HIDE`) before the audit engine is resolved, so a scoped oversized `CLAUDE.md` is filtered out even when the audit runs on Codex.\n  WHY: The Codex launch (line 1847) does not pass `--hide-claude-md`, so `codex_isolated_exec.sh` clears the hide variable and the Codex snapshot includes `CLAUDE.md`. The file is reported as withheld or not inspected while it is actually visible, so an in-scope file is left unaudited and coverage is misreported. Both reviewers rated it MAJOR; it is mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh:1413-1416 | severity=MAJOR | confidence=4\n  PROBLEM: The export filters a scoped oversized `CLAUDE.md` whenever the Claude-specific setting is true, even when the audit runs on Codex.\n  WHY: Codex's launcher clears `CODEX_ISOLATED_HIDE` unless passed `--hide-claude-md`, and the Codex audit invocation does not pass it. The chunks are therefore omitted even though Codex can inspect the file. The audit reports the file as withheld and does not mark coverage partial, silently leaving an in-scope file unaudited.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1408-1416 (also 1847, Codex launch) | severity=MAJOR | confidence=4\n  PROBLEM: The oversized export applies `hide_claude_md` before engine selection (lines 1542-1569). On Codex, the scoped oversized `CLAUDE.md` is filtered out as `filtered_scoped` with reason `hidden`, but the Codex launch at line 1847 does not pass `--hide-claude-md`. Lines 181-186 of `codex_isolated_exec.sh` then unset `CODEX_ISOLATED_HIDE`, so the Codex snapshot includes `CLAUDE.md`.\n  WHY: The coverage note says `CLAUDE.md` was not inspected, but the Codex snapshot includes it and the model could inspect it. The Claude path (line 1605, via `ai_engine.sh` line 546) passes the flag correctly, so only the Codex path is affected.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "97efc4d50ff0003fdc6c7d0763c34d00741077fdf17f7479793f18ea0c2b6998",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7655,
+    "run_id": "39202040913",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39202040913",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019053822_063072ef6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7655,
+    "run_id": "39202040913"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T05:38:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

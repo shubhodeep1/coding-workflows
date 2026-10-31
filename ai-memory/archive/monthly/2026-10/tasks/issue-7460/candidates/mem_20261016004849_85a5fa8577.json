@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan: update `tests/e2e_smoke_canary_b.txt` for orchestrator smoke run 38830172694\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue names one file and two exact lines. The file is already on branch `orchestrator/project-7458` (HEAD `87661edee773fbbc33c58bbee4b07aa315df9239`, which matches the integration branch). It has two lines ending in a newline: `status: ok` and `decompose-run: 25567947079`. Only the run ID on line 2 has to change, so the edit stays minimal and touches nothing else.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a data-only edit: change line 2 to `decompose-run: 38830172694`. Line 1 stays `status: ok`, and the file keeps its final newline and has exactly two lines.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace only line 2 in place\n- Chosen: Change the run ID on line 2 and leave line 1 and the final newline as they are.\n- Alternatives considered: Rewrite the whole file, which gives the same bytes but has a higher risk of whitespace drift.\n- Why: This is the smallest change, and it meets all three acceptance criteria.\n\n## Security considerations\nNo trust boundaries, endpoints, external input, secrets or money state are involved. The only possible problem is an edit to another file, and the acceptance check `git diff --name-only` guards against that.\n\n## Risks and edge cases\n- Do not add a CRLF line ending, trailing spaces or a third line.\n- Do not touch `tests/e2e_smoke_canary.txt` or `tests/e2e_smoke_canary_spec.txt`.\n- No changelog fragment is needed, because this is test fixture data for a smoke run. Adding one would break the acceptance criterion that only one file appears in the diff.\n\n## Testing considerations\nRun these checks after the edit:\n- `head -n1 tests/e2e_smoke_canary_b.txt` should print `status: ok`.\n- `sed -n '2p' tests/e2e_smoke_canary_b.txt` should print `decompose-run: 38830172694`.\n- `wc -l tests/e2e_smoke_canary_b.txt` should report 2.\n- `git diff --name-only` should list only `tests/e2e_smoke_canary_b.txt`.\n\n## Pre-execution self-check\nThe edit is scoped to one existing file, the planning ref matches the integration branch, and the change is verifiable with the acceptance commands.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "86938ec63100dfe1f742a1833f57dc2ac533dbfd10680989db862b114d0b7b3f",
+  "lineage": {
+    "issue_number": 7460,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38830824407",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38830824407",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7460"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261016004849_85a5fa8577",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7460,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38830824407"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7460",
+  "timestamps": {
+    "created_at": "2026-10-16T00:48:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8883-8887 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A one-sided delete/modify conflict for a protected file is accepted without checking the surviving side's contents or requiring deletion authorization.\n  WHY: The integration judge can delete a protected file containing security controls on the modified side, and the verifier accepts the tree for commit and push; severity was reported as MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:8883-8887 | severity=high | confidence=5\n  PROBLEM: When a protected file has a one-sided delete/modify conflict, the new `continue` accepts its deletion without checking the surviving side\u2019s contents or requiring deletion authorization.\n  WHY: The integration judge can choose deletion for a protected file containing security controls on the modified side. The verifier accepts that tree, and `_integration_judge_commit_and_push` commits and pushes it. The regression test at `tests/test_integration_judge_scope_guard.py:188-198` confirms this deletion is accepted.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "5811df961fe52b70495d699cfbc2f9a851ad92cbeb1af4e099cdbb0cac9af978",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6466,
+    "run_id": "37417037699",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37417037699",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006053123_039d032d10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6466,
+    "run_id": "37417037699"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T05:31:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

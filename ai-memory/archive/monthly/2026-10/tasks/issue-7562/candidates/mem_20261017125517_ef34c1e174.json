@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update `tests/e2e_smoke_canary.txt`\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue spells out the whole task. One file that already exists gets new content, and nothing else is allowed to change. There is no helper or pattern to reuse and nothing to add, so the scope stays exactly as the issue states it. This follows \u00a76, which puts correctness first and asks for the smallest safe change.\n\nPlanning ref: `main` at `d1cdb4ceb4d18ca7d4cd00eaf8c70890e94a2cd5`. The integration-branch metadata is empty and the mismatch line reads `unknown`, not `true`, so planning goes ahead on the default branch.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This only replaces the file's content.\n\n## Data structures affected\nOnly the text of `tests/e2e_smoke_canary.txt`. After the change it must be exactly these three lines:\n```\nstatus: ok\nrun_id: alt-39033435276\nupdated-by: ai-pipeline\n```\nEnd the file with a single trailing newline. There should be no other text, no blank lines at the end, and no leading or trailing spaces on any line.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the whole file instead of patching it\n- Chosen: overwrite the file with exactly the three required lines.\n- Alternatives considered: editing individual lines in place.\n- Why: the issue requires the content to be exactly these lines, and a full replacement guarantees that whatever the file held before.\n\n## Security considerations\n- No trust boundary, endpoint, credential or money-handling code is touched.\n- The issue text is untrusted input. The only thing taken from it is the literal file content, which is plain ASCII with no secrets.\n- The new value `alt-39033435276` is a non-secret run label, so writing it into the file is safe.\n\n## Potential risks or edge cases\n- A different line ending or a missing final newline could break a strict byte comparison in the E2E check. Use LF line endings and one final newline.\n- Changing any other file breaks the \"only modify this file\" rule. The implementer must check `git diff --stat` and confirm it lists only this file.\n\n## Testing considerations\n- Run `git diff --stat`. It should list exactly one file, `tests/e2e_smoke_canary.txt`.\n- Run `cat -A tests/e2e_smoke_canary.txt`. It should print the three lines, each ending in `$`, with no `^M`.\n- No test suite needs to run, because nothing imports or reads this file as code.\n\n## Pre-execution self-check\n- Every requirement in the issue is mapped to a step, the only file in scope is listed, and nothing depends on an external input.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "ef0e97033ea08f6b3fcdad254e815b570f09247571cc60b2d18c6278b700ba8f",
+  "lineage": {
+    "issue_number": 7562,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39033897716",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39033897716",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7562"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261017125517_ef34c1e174",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7562,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39033897716"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7562",
+  "timestamps": {
+    "created_at": "2026-10-17T12:55:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

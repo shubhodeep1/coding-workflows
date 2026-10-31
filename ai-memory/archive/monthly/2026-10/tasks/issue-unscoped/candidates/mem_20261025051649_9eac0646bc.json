@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:3984 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: `grep -Fqx` in `reviewer_attempt_result_failure_class` needs the \"OpenCode structured reviewer output contained no text events.\" marker to be a whole line, but line 4525 appends it to the stderr file without checking for a trailing newline, so the marker can be glued onto an unterminated last line and the match fails.\n  WHY: An attempt that hit the no-text-events condition is labelled `ok`, `exit_nonzero` or another class instead of `empty_structured_output`, which only affects the log label. Severity disagreement: sonnet=NIT, gemini=MAJOR, luna=NIT. The highest (MAJOR, mapped to high) is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"One bounded REVIEWER_ATTEMPT_RESULT line per reviewer attempt\" (the issue excludes the Claude pool path but does not exclude attempts stopped because the PR closes)\n  expected_change_site: scripts/review_run_reviewers.sh, execute_reviewer_attempt\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR-closed early return at lines 4258\u20134261 and the post-launch PR-closed return at lines 4538\u20134545 set `REVIEWER_ATTEMPT_OUTCOME=pr_closed` and emit no `REVIEWER_ATTEMPT_RESULT` line, and the agents.d/8097-reviewer-attempt-result.md fragment documents the exception without adding any emission. Severity disagreement: gemini=MAJOR, luna=NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_run_reviewers.sh:3984 (marker appended at line 4525) | severity=NIT | confidence=2\n  PROBLEM: `grep -Fqx` needs the marker to be a whole line, but the marker is appended without checking that `tmp_stderr` ends in a newline, so it can be glued onto an unterminated last line.\n  WHY: The attempt is then labelled `ok` or another class instead of `empty_structured_output`. This only affects the log label, and retry, failback and exit codes are unchanged.\n- HARDENING: change `grep -Fqx` to `grep -Fq` (about 1 line). HARDENING_RISK_SCORE: 1\n- Task completeness: NONE. The PR-closed carve-out is documented in the `agents.d` fragment and the changelog fragment.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh:3984-3987 | severity=MAJOR | confidence=4\n  PROBLEM: The `grep -Fqx` match needs an exact full-line match, but the marker is appended to the stderr file without a preceding newline when the last line was unterminated, so the match can fail.\n  WHY: An attempt that exited 0 with no text events is classified as `exit_nonzero` instead of `empty_structured_output`, which makes the logging inaccurate.\n- TASK_GAP: Requirement: \"One bounded REVIEWER_ATTEMPT_RESULT line per reviewer attempt\"\n  Expected change site: scripts/review_run_reviewers.sh, execute_reviewer_attempt\n  Evidence of absence: The agents.d/8097-reviewer-attempt-result.md documentation covers the PR-closed paths (the pre-launch skip and the watchdog abort), which set `REVIEWER_ATTEMPT_OUTCOME=pr_closed` and print no line. They still do not emit the `REVIEWER_ATTEMPT_RESULT` line the issue's \"every OpenCode reviewer attempt\" guarantee requires.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- HARDENING: The `rate_limit` and `server_error` grep patterns in `reviewer_attempt_result_failure_class` are complex and could miss variants or break if the output format changes. Suggested fix: use a more robust error-code check, or keep the current grep and log when it fails to classify a recognized non-zero exit (about 5 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_run_reviewers.sh:3984 (marker appended at line 4525) | severity=NIT | confidence=3\n  PROBLEM: The classifier needs the no-text marker to occupy a whole line, but the marker is appended directly to the captured stderr file.\n  WHY: If OpenCode writes stderr without a trailing newline, the appended marker joins that output and `grep -Fqx` misses it. With `cmd_rc=0` the function then reports `ok` instead of `empty_structured_output`.\n- TASK_GAP: Requirement: \"One bounded REVIEWER_ATTEMPT_RESULT line per reviewer attempt\"; the issue excludes the Claude pool path but does not exclude attempts stopped because the PR closes.\n  Expected change site: `scripts/review_run_reviewers.sh`, `execute_reviewer_attempt`.\n  Evidence of absence: The PR-closed early return at lines 4258\u20134261 and the post-launch PR-closed return at lines 4538\u20134545 emit no result line. The PR diff documents these exceptions but adds no emissions at either return.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6d972e14a1a009b50dc01e770908bb3b8d8a57bcd559f0f314c0f55a04700809",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8101,
+    "run_id": "40163118004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40163118004",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025051649_9eac0646bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8101,
+    "run_id": "40163118004"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T05:16:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

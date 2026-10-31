@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1105-1106, 5665-5696, 5729, 5769, 6178 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Forced review-blocked judge runs bypass the fingerprint cap but still run conflict detection and the resolver, so an unsupported conflict can fail again before the judge acts.\n  WHY: The three reviewers report that poller recovery can repeat the resolver failure and prevent the judge from running; deepseek_deepseek-v4-pro says the bypass is intentional and bounds the extra failure to one force_rb_judge run after 120 minutes, rather than a deadlock.\n- scripts/review_conflict_prepare.sh:249 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Git index stage pattern may fail to trigger manifest union-merge if stage spacing or ordering differs from the assumed space-joined order.\n  WHY: google_gemini-3_1-flash-lite flags sensitivity to environment-specific spacing or ordering; deepseek_deepseek-v4-pro says the pattern is reproducible with sorted stage output and real-index tests.\n- scripts/review_conflict_resolve.sh:lines 2503-2508 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The Claude resolver path does not remove the check-paths report before invoking Python, unlike the main resolver path.\n  WHY: The report is overwritten by `write_text`, so stale data cannot leak and both paths work; this is a cosmetic inconsistency.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:lines 2503-2508 | severity=low | confidence=2\n  PROBLEM: The Claude resolver path does not remove the check-paths report before invoking Python, unlike the main resolver path.\n  WHY: The report is overwritten by `write_text`, so stale data cannot leak; both paths work and the inconsistency is cosmetic.\n- .github/workflows/review_autofix.yml:lines 1098-1101\n  PROBLEM: The fingerprint cap helper discovery loop does not reset IFS, which could make a future candidate path with glob characters or spaces match incorrectly.\n  WHY: Only one candidate path exists currently; the suggested minimal fix is to set `IFS=''` before the loop or quote `\"${fingerprint_cap_candidate}\"` consistently.\n- .github/workflows/review_autofix.yml:lines 2514-2522\n  PROBLEM: The Telegram alert title always says \"identical failure repeated\", including when the cap is for a non-retryable failure.\n  WHY: The PR comment identifies non-retryable failures, but the Telegram message does not, which could delay operator recognition; the suggested fix is to condition the alert text on `FINGERPRINT_CAP_NON_RETRYABLE`.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:1105-1106, 5665-5696, 5769 | severity=high | confidence=4\n  PROBLEM: Forced judge runs bypass the new fingerprint cap and may repeat failures on the same unsupported conflict.\n  WHY: Stall recovery can dispatch force_rb_judge after the cap labels a linked issue ai:review-blocked; that dispatch bypasses the cap and the resolver can fail again before the judge acts.\n- scripts/review_conflict_prepare.sh:249 | confidence=2\n  PROBLEM: The Git index stage pattern may be sensitive to environment-specific spacing or ordering.\n  WHY: If Git reports stages differently from the assumed space-joined order (`1 2 3` or `2 3`), manifest union-merge may not trigger for a valid content conflict.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:1105-1106, 5729, 5769, 6178 | severity=high | confidence=4\n  PROBLEM: Forced review-blocked judge dispatches bypass the fingerprint cap but still execute conflict detection and the resolver before the judge.\n  WHY: After a non-retryable conflict is capped and the linked issue marked ai:review-blocked, poller recovery can dispatch the forced judge; the resolver fails on the same conflict and the judge step's success() condition prevents the judge from running.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:1105-1106, 5696, 5769 | severity=high | confidence=4\n  PROBLEM: Forced judge runs bypass the fingerprint cap but still execute conflict detection and the resolver, so the judge is never reached for the same unsupported conflict.\n  WHY: The stall poller dispatches force_rb_judge when an issue is stuck at ai:review-blocked; the resolver then fails on the same unsupported conflict, repeating the failure.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "f9b66c5bcfbfa53045ff717e026b1a9f0a27154aedbda58cf0c2dda425f32869",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6614,
+    "run_id": "37595722894",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37595722894",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007085120_dcebbf71a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6614,
+    "run_id": "37595722894"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T08:51:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

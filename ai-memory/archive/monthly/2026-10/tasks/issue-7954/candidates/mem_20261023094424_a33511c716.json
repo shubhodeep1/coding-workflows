@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) None yet: I will edit the issue to describe the problem, the affected workflow, script or file, and the expected result (RECOMMENDED)\nB) Review/autofix pipeline (`review_autofix.yml` and its `scripts/review_*` helpers)\nC) Orchestrator poller (`orchestrate_poll.yml` / `scripts/orchestrate_poll_process.sh`)\nD) Documentation only (README / agents.d fragments)\nE) This is a test issue (for example the E2E clarify negative test) and should be closed without implementation\nQ2: What kind of improvement is wanted?\nChoices:\nA) A specific bug fix, which I will describe with evidence such as a run link, error line or issue number (RECOMMENDED)\nB) A performance or cost reduction with a measurable target\nC) A new feature or behaviour change, which I will specify\nD) Refactor or cleanup with no behaviour change. **Note:** repository rules forbid unscoped refactors, so this choice also needs explicit file targets in Q1.",
+  "fingerprint": "64b350c36676f6958b173aba7de8b9cb0717ee5a9f983ca85059b233fcc20972",
+  "lineage": {
+    "issue_number": 7954,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39932151731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39932151731",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261023094424_a33511c716",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7954,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39932151731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7954 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-23T09:44:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

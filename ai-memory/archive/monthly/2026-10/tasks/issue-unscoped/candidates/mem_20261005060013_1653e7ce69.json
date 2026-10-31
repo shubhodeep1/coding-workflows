@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:285-287 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: Unicode digits are misclassified as file-descriptor syntax, causing a push refspec to be removed and the guard to check the current branch instead of the branch being pushed.\n  WHY: A push such as `git push origin \u0662>/dev/null` can bypass the merged-PR check for branch `\u0662`.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:285-287 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash]\n  PROBLEM: Unicode digits are misclassified as file-descriptor syntax, causing a push refspec to be removed and the guard to check the current branch instead of the branch being pushed.\n  WHY: A push such as `git push origin \u0662>/dev/null` can bypass the merged-PR check for branch `\u0662`.\n- .claude/hooks/pr_merge_status_guard.py:1325-1328 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash]\n  PROBLEM: The warning-prefix check for an unresolvable push refspec is unreachable because the `branch is None` path continues before the check, and `_push_targets()` does not produce the checked warning string.\n  WHY: The dead branch may mislead maintainers into believing warning-based refspec confirmation is active; there is no runtime failure.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:1325-1328 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash]\n  PROBLEM: The warning-prefix check for an unresolvable push refspec is unreachable because the `branch is None` path continues before the check, and `_push_targets()` does not produce the checked warning string.\n  WHY: The dead branch may mislead maintainers into believing warning-based refspec confirmation is active; there is no runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py:285 | severity=high | confidence=[5]\n  PROBLEM: Python `str.isdigit()` and `\\d` in the regex match Unicode digits, so an Arabic-Indic digit before a redirect is treated as a file descriptor and removed from the push segment.\n  WHY: `git push origin \u0662>/dev/null` pushes branch `\u0662`, but the guard checks the current branch instead; if the current branch is the default branch, the push can proceed without checking branch `\u0662`.\n- .claude/hooks/pr_merge_status_guard.py:1325-1328 | severity=low | confidence=[5]\n  PROBLEM: The warning-prefix check is dead code because `_evaluate_bash` continues on `target.branch is None` before reaching it, and the other warning-producing path uses the prefix `\"could not resolve git push options\"`.\n  WHY: No runtime failure occurs, but the unreachable check may mislead maintainers into believing this confirmation prompt is active.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:285 | severity=high | confidence=[5]\n  PROBLEM: `token.isdigit()` and `\\d` both match Unicode digits.\n  WHY: The same bypass path as the root copy applies.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:1325-1328 | severity=low | confidence=[5]\n  PROBLEM: The warning-prefix check can never match.\n  WHY: The same maintainability issue as the root copy applies; there is no runtime failure.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/hooks/pr_merge_status_guard.py:285-287 (and workflow-templates/.claude/hooks/pr_merge_status_guard.py:285-287) | severity=high | confidence=[5]\n  PROBLEM: `token.isdigit()` and regex `\\d` match Unicode numerals, although Bash file-descriptor redirection syntax supports only ASCII digits.\n  WHY: The token is removed from the arguments evaluated by `_push_targets()`, so the guard falls back to checking HEAD rather than the branch being pushed and can permit a push to an already-merged branch.\n- .claude/hooks/pr_merge_status_guard.py:1325-1328 (and workflow-templates/.claude/hooks/pr_merge_status_guard.py:1325-1328) | severity=low | confidence=[5]\n  PROBLEM: The warning check is unreachable because `_push_targets()` never creates a `_GuardTarget` with the checked warning string, and the earlier `if target.branch is None` block intercepts unresolvable destinations.\n  WHY: The branch can never be entered at runtime, leaving dead code that misleads maintainers into believing warning-based refspec confirmation is active.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:285-286, with the token removed at 271-272 and the no-refspec fallback at 489-490 | severity=high | confidence=[5]\n  PROBLEM: The redirect detector treats Unicode decimal digits as file-descriptor numbers, so `\u0662` is removed as a redirect prefix even though Bash treats it as a push refspec.\n  WHY: The parser falls back to checking the current branch instead of branch `\u0662`; when the current branch is the default branch, the guard skips the PR check and allows the push to `\u0662`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "9586f0223bf8df654c2f071b0c08b4e8b546ddfbeca2a57b1f263e1a944c40b1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37267061688",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37267061688",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005060013_1653e7ce69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37267061688"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T06:00:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

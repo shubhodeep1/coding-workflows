@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8347,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8347\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8353\",\"pr_number\":8353,\"branch\":\"ai/issue-8347\",\"run_id\":\"40851557625\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40851557625\",\"changed_files\":[\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/8347-release-gate-queue-allowance.md\",\"tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py\",\"tests/test_validation_refresh_workflow_contract.py\"]}",
+  "fingerprint": "9c20517b0a2e43d306fc0c9f2d5078c60e3bd2baa96851999383ab2c3c707ca1",
+  "lineage": {
+    "issue_number": 8347,
+    "parent_ids": [],
+    "pr_number": 8353,
+    "run_id": "40851557625",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40851557625",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8353"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261029100748_6774ed271b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8347,
+    "level": "run",
+    "pr_number": 8353,
+    "run_id": "40851557625"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8347: https://github.com/shubhodeep1/coding-workflows/pull/8353",
+  "timestamps": {
+    "created_at": "2026-10-29T10:07:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

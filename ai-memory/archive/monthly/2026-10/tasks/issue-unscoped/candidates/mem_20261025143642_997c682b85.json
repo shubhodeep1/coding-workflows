@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention): status: ok / run_id: 40194302853 / updated-by: ai-pipeline. Only modify tests/e2e_smoke_canary.txt.\"\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=[1]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: none \u2014 the reviewer states the requirement IS satisfied (file contains exactly the three required lines with trailing newline; bait lines removed; PR diff touches only this file); recorded as verified-satisfied for traceability, not a defect (source labelled SEVERITY: BLOCKER, ISSUE_CONFIDENCE: 1)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: \"Update its content so it is exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention): status: ok / run_id: 40194302853 / updated-by: ai-pipeline. Only modify tests/e2e_smoke_canary.txt.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none \u2014 the requirement IS satisfied; recorded as verified-satisfied, not a defect.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0d83f8d365e2e52dbde702b4098a1b8eb9d3fcdef795dba7f4b03be9b7c67836",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8146,
+    "run_id": "40200800229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40200800229",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025143642_997c682b85",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8146,
+    "run_id": "40200800229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T14:36:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

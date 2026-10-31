@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_pr_check_runs_context.py:_strict_merge_runs function, specifically the conclusion checks | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The strict merge snapshot validator rejects custom conclusions from third-party checks even when they are semantically successful.\n  WHY: Consumer repositories with custom successful conclusions may have their snapshots marked invalid, blocking auto-merge.\n- scripts/orchestrate_poll_process.sh:render_judge_semble_prefetch_from_query_file | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Failures while building the Semble sandbox may be difficult to diagnose because error handling is spread across scripts and environment variables.\n  WHY: A silent sandbox build failure or malformed index may cause the judge to unexpectedly fall back to the slower non-Semble context path.\n- scripts/build_semble_wrapper.sh:Line 158-160 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: An interrupted Docker indexing attempt may leave a dynamically named container that collides with a subsequent run.\n  WHY: A container name collision may prevent subsequent builds and make Semble unavailable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Apply still-valid recommendations from the September 3 workflow analysis\"\n  expected_change_site: The orchestration or review workflows\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The processed report analysis/recommendation-processing-report.md identifies several recommendations for the orchestrator or review workflows that are not implemented in this PR diff (e.g., some reliability or observability improvements for log triage).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/collect_pr_check_runs_context.py\n  Line or code reference: _strict_merge_runs function, specifically the conclusion checks\n  Problem: The strict merge snapshot validator rejects conclusions that are not strictly success/neutral/skipped or failure/timed_out/action_required/cancelled/stale/startup_failure. While this covers most common conclusions, it may fail on custom conclusions used by third-party checks in consumer repositories that are semantically successful but not in the allowlist.\n  Why it fails at runtime: Consumer repository CI checks with custom conclusions might be incorrectly labeled invalid snapshots, blocking auto-merge for those repositories.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- scripts/orchestrate_poll_process.sh\n  Line or code reference: render_judge_semble_prefetch_from_query_file\n  Problem: The function attempts to build the Semble sandbox on the first judge query by calling scripts/install_semble.sh and scripts/build_semble_wrapper.sh. If these scripts fail (e.g., due to Docker issues on the runner), the function warns and continues without Semble, which is correct, but the error handling is spread across multiple scripts and environment variables that are hard to debug in the workflow logs.\n  Why it fails at runtime: If the sandbox build fails silently or produces a malformed index, the judge may fall back to the slow non-Semble context path unexpectedly.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- scripts/build_semble_wrapper.sh\n  Line or code reference: Line 158-160\n  Problem: The script uses docker run to index the repository in a read-only, network-less sandbox. The image ID used is checked against sha256:..., which is a good security practice. However, the docker container is named dynamically based on the process ID and a random number (semble-index-$$-${RANDOM}). If an earlier build attempt is interrupted, the container might persist and block subsequent runs of the same indexer due to container name collisions.\n  Why it fails at runtime: Subsequent builds might fail to start the container, causing Semble to be unavailable.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"Apply still-valid recommendations from the September 3 workflow analysis\"\n  Expected change site: The orchestration or review workflows to implement any remaining recommendations from the 2026-09-03 analysis report.\n  Evidence of absence: The processed report analysis/recommendation-processing-report.md identifies several recommendations for the orchestrator or review workflows that are not implemented in this PR diff (e.g., some reliability or observability improvements for log triage).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3a018a95cac32ded887654a5a8bd22bcc1887f28e9f590ec415299e48ecd30a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6043,
+    "run_id": "37633342885",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37633342885",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007142238_6e8d4e9151",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6043,
+    "run_id": "37633342885"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T14:22:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

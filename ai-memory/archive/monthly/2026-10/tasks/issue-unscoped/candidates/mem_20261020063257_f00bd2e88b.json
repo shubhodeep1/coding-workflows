@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/release_tag_preflight.sh:159-166 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `git diff --no-renames --name-only` uses Git's default path quoting, so a non-ASCII workflow path is printed quoted and the anchored `grep '^\\.github/workflows/'` misses it.\n  WHY: The preflight can report `result=pass reason=no_workflow_changes` for a classic PAT without `workflow` scope; it fails open and is unrealistic for workflow files. The fix is `-c core.quotepath=off`. Sources cite different line numbers (160, 161, 159-166), and severity is labeled NIT or hardening only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nHARDENING_SUGGESTIONS: scripts/release_tag_preflight.sh, the `git -C \"${git_dir}\" diff --no-renames --name-only` call: non-ASCII paths are quoted under the default `core.quotePath`, so the anchored grep misses them. This fails open. Fix: add `-c core.quotepath=off` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/release_tag_preflight.sh:git -C \"${git_dir}\" diff --no-renames --name-only \"${base_sha}..${head_sha}\" | severity=NIT | confidence=3\n  PROBLEM: Git's default behavior for paths with non-ASCII characters is to print them quoted, which can cause anchored grep patterns to miss files.\n  WHY: If a workflow file path contains non-ASCII characters, the grep check might wrongly report no changes, so the preflight check fails silently.\nHARDENING_SUGGESTIONS: scripts/release_tag_preflight.sh, line 160 (git diff command): add `-c core.quotepath=off` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nHARDENING_SUGGESTIONS: scripts/release_tag_preflight.sh, git diff invocation near the `# --no-renames:` comment: default `core.quotePath=true` quotes non-ASCII paths, so the anchored grep misses them and reports `result=pass reason=no_workflow_changes`. This fails open and is a robustness gap. Fix: pass `-c core.quotepath=off` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/release_tag_preflight.sh:161,166 | severity=NIT | confidence=4\n  PROBLEM: Git's default path quoting can quote the whole pathname when a workflow filename contains non-ASCII characters, and the resulting line does not match the prefix check.\n  WHY: A release that changes a valid workflow file with a non-ASCII filename can report `pass` for a classic PAT lacking `workflow` scope.\nHARDENING_SUGGESTIONS: scripts/release_tag_preflight.sh, line 161: disable path quoting (e.g. `-c core.quotepath=false`) (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "491860faf9ca244983441acef03f7819eb61e945a1f7d4582af64c13640df308",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7727,
+    "run_id": "39379087261",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39379087261",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020063257_f00bd2e88b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7727,
+    "run_id": "39379087261"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T06:32:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

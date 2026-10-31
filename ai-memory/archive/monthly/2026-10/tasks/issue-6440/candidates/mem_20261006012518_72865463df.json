@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which isolation mechanism should the implement editor use?\nChoices:\nA. Reuse the review editor's pattern from `scripts/review_untrusted_sandbox.sh`. The editor runs in a disposable Docker container with `--cap-drop ALL` and `no-new-privileges`, its own process namespace and no credential mounts. Model calls go through the existing host-side broker (`clarify_openrouter_broker.py`), and only validated files are copied back into the checkout before the commit step. (RECOMMENDED)\nB. Run the editor as a separate unprivileged Linux user with `sudo -u`, with no sudo rights and no read access to `RUNNER_TEMP` or the credential files. Because `/proc/<pid>/environ` is only readable by the same user, this blocks the leak, but the workspace has to be writable by that user. The editor would also still see other processes and the network.\nC. Keep the same-user launch and only shrink the window: drop `GH_PAT` and `GH_TOKEN` from the parent step's environment and read them from a file only after the editor exits. **Note:** this does not satisfy the finding's recommendation, because the runner process and other same-user processes still hold the token.\nQ2: Which editor launches are in scope for this issue?\nChoices:\nA. Both editor launches in `implement.yml`: the main Codex/Claude attempt loop (line 2879) and the post-Codex syntax-repair loop (line 4150). Track other phases that launch same-user editors (plan, validate fix-harness/self-heal, implement-diagnose) as follow-up issues. (RECOMMENDED)\nB. Only the cited launch at line 2879.\nC. Every phase that runs a model editor as the same user on the host: implement (both sites), implement-diagnose, plan, and validate generate/fix-harness/self-heal.\nQ3: What should happen when isolation can't be set up, for example on a self-hosted consumer runner without Docker, or if building the image fails?\nChoices:\nA. Fail closed: the implement step fails with `::error::` and the issue goes through the existing implement-failure path. This matches the review editor and clarify, where an isolation failure never falls back to running on the host. (RECOMMENDED)\nB. Fall back to today's same-user launch, with a `::warning::` and a stable log key, so consumer repos without Docker keep working.\nC. Same as B, but behind a new repo variable (default `true` = fail closed) that a consumer can set to allow the fallback.\nQ4: The review sandbox image ships OpenCode, plus the Claude CLI when the engine is `claude`. The implement editor defaults to Claude, and its fallback is the codex CLI (`AI_ENGINE_FALLBACK`). How should the fallback behave inside isolation?\nChoices:\nA. Isolate both engines: add the pinned codex CLI to the sandbox image (or a sibling image), so the Claude path and the codex fallback both run inside the container. (RECOMMENDED)\nB. Isolate only the Claude engine. If Claude is unavailable, fail the attempt instead of falling back to codex on the host. **Note:** if you choose Q3:B, a codex fallback would then run as the same user, which reopens this finding.\nC. Isolate only the Claude engine and keep the codex fallback on the host, documented as a known residual risk.",
+  "fingerprint": "0af2537d4efaf1644f80f5b455f3dc00f0184258b71e224c0a39a26bfd866a67",
+  "lineage": {
+    "issue_number": 6440,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37398500708",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37398500708",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006012518_72865463df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6440,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37398500708"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6440 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T01:25:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

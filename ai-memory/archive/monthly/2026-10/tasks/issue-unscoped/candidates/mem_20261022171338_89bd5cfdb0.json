@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:comprehensive_stable_branch_compare_status() | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Caller parses `stable_cmp` as two space-separated fields, so unexpected whitespace in `compare_status` could corrupt `stable_branch_sha`.\n  WHY: A malformed SHA would fail the 40-hex validation and could hold the merge incorrectly (reviewer rated NIT).\n- scripts/orchestrate_poll_process.sh:comprehensive_stable_branch_compare_status() | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A transient `gh` failure on the final retry returns 2 and triggers the bounded hold.\n  WHY: This is an operational inefficiency only, not a correctness issue; the hold is bounded (reviewer rated NIT).\n- changelog.d/7888-promotion-stable-branch-ancestor.md:paragraph 1 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The \"(unpinned)\" qualifier is inaccurate, because `stable_known_ancestor` is set to `smoke_sha` on both pinned and unpinned verifying paths.\n  WHY: This is documentation drift with no runtime impact (reviewer rated NIT; two entries reported, same root cause).\n- scripts/orchestrate_poll_process.sh:comprehensive_promotion_gate_before_final_merge (`stable_known_ancestor=\"\"` reset in the else branch) | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `stable_known_ancestor=\"\"` reset is redundant, since the variable is already declared empty at the top of the function.\n  WHY: It has no semantic effect, and removing it would only improve clarity (reviewer rated NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:comprehensive_stable_branch_compare_status() | severity=low | confidence=3\n  PROBLEM: Caller parses `stable_cmp` as two space-separated fields, so unexpected whitespace in `compare_status` could corrupt `stable_branch_sha`.\n  WHY: A malformed SHA would fail the 40-hex validation and could hold the merge incorrectly (reviewer rated NIT).\n- scripts/orchestrate_poll_process.sh:comprehensive_stable_branch_compare_status() | severity=low | confidence=2\n  PROBLEM: A transient `gh` failure on the final retry returns 2 and triggers the bounded hold.\n  WHY: This is an operational inefficiency only, not a correctness issue; the hold is bounded (reviewer rated NIT).\n- TASK_GAP (reviewer rated SEVERITY: NONE, confidence=5):\n  Requirement: \"1) In comprehensive_promotion_gate_before_final_merge, in the pending case... compare the stable branch (ref heads/stable, not the stable tag) with promote_sha. Reuse the compare read this function already does for smoke_sha...promote_sha.\"\n  Expected change site: comprehensive_promotion_gate_before_final_merge() in scripts/orchestrate_poll_process.sh\n  Evidence of absence: The implementation correctly passes `smoke_sha` as `known_ancestor_sha` and the function reuses it if `stable_sha == known_ancestor_sha`, so this is not an actual gap.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/7888-promotion-stable-branch-ancestor.md:paragraph 1 | severity=low | confidence=3\n  PROBLEM: The \"(unpinned)\" qualifier is inaccurate, because `stable_known_ancestor` is set to `smoke_sha` on both pinned and unpinned verifying paths.\n  WHY: This is documentation drift with no runtime impact (reviewer rated NIT).\n- changelog.d/7888-promotion-stable-branch-ancestor.md:paragraph 1 | severity=low | confidence=3\n  PROBLEM: Same inaccuracy as above; the reviewer suggests rewording or removing the parenthetical.\n  WHY: This is documentation drift with no runtime impact (reviewer rated NIT).\n- scripts/orchestrate_poll_process.sh:comprehensive_promotion_gate_before_final_merge (`stable_known_ancestor=\"\"` reset in the else branch) | severity=low | confidence=4\n  PROBLEM: The `stable_known_ancestor=\"\"` reset is redundant, since the variable is already declared empty at the top of the function.\n  WHY: It has no semantic effect, and removing it would only improve clarity (reviewer rated NIT).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6c4fd4aa72ca54208df68ef6d5318ae5c9b96d4bab222da85067f9193d0adbbf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7889,
+    "run_id": "39816960064",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39816960064",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022171338_89bd5cfdb0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7889,
+    "run_id": "39816960064"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-22T17:13:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

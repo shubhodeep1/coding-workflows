@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:6291-6330 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: Replacing pytest parametrization with a manual loop combines the high and critical cases into one test, so a failure in the high case prevents the critical case from running independently.\n  WHY: This reduces per-severity test coverage and failure attribution in CI; severity ratings disagree (MAJOR versus NIT), so the highest severity is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py:6328-6330 | severity=NIT | confidence=4\n  PROBLEM: The comment justifying parametrization removal (\"The CI shard runner calls test functions directly, without pytest parametrization\") is inaccurate.\n  WHY: The manual for loop loses per-parameter failure isolation: if the \"high\" severity case regresses, the test fails on the first iteration and the \"critical\" case is never exercised in that CI run.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:6292 | severity=MAJOR | confidence=4\n  PROBLEM: Replacing @pytest.mark.parametrize with a manual loop for security-pass cap tests loses independent failure attribution.\n  WHY: A failure in the \"high\" iteration stops execution before the \"critical\" case is tested, preventing separate failure attribution and potentially leaving the critical-severity branch untested in a CI run.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:lines 6291-6322 (the renamed test_security_pass_cap_never_waives_a_high_finding) | severity=MAJOR | confidence=4\n  PROBLEM: The `@pytest.mark.parametrize(\"severity\", [\"high\", \"critical\"])` decorator was replaced with a manual `for severity in (\"high\", \"critical\"):` loop inside a single test function.\n  WHY: If the first iteration raises an AssertionError, the function exits before the second iteration runs, losing independent per-severity failure reporting and coverage.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_never_waives_a_high_finding (lines 6292-6322) | severity=MAJOR | confidence=4\n  PROBLEM: The `@pytest.mark.parametrize(\"severity\", [\"high\", \"critical\"])` decorator was replaced with a manual `for severity in (\"high\", \"critical\"):` loop.\n  WHY: If the \"high\" severity case regresses, the loop fails on the first iteration and the \"critical\" case is never exercised independently.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "76883f3d1e9063c091318e57a9ed262d37df519395251674cf6a438fdef1c9e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37479523382",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37479523382",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006145351_1527959891",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37479523382"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T14:53:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

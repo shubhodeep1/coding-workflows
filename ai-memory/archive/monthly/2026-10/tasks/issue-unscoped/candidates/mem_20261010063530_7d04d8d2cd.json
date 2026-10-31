@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh: _autofix_review_default_branch_prime (newly added, lines ~1330-1358) and the memo lookup at _autofix_pr_named_review_runs (~1386-1397) | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The default-branch memo is reused by other same-shell callers of `_autofix_pr_named_review_runs`, including callers that did not establish the memo themselves.\n  WHY: The reviewer identifies this as intended cross-caller reuse, not a defect, and reports no runtime failure path.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh\n  Line or code reference: _autofix_review_default_branch_prime (newly added, lines ~1330-1358) and the memo lookup at _autofix_pr_named_review_runs (~1386-1397)\n  Problem: The memo function is invoked by both callers via `declare -F _autofix_review_default_branch_prime >/dev/null && _autofix_review_default_branch_prime` (lines 1603, 1816), and it is also re-invoked at the top of every `_autofix_pr_named_review_runs` call via the `else` branch when no memo is present. The two-callers-in-same-step scenario is the primary motivation. However, any other future caller of `_autofix_pr_named_review_runs` that runs in the same step shell as either of these two callers (and does not itself call the prime) will inherit the memo and consume a value the prime caller established \u2014 which is exactly the intended cross-caller reuse. There is no actual defect here; the call is documented and the design is sound.\n  Why it fails at runtime: This is a NIT, not a defect \u2014 memo reuse across same-shell callers is the design goal. No runtime failure path identified.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "36b6b174477fd72233d1f710c0b7eb41990c1140a4624feeeee94a0ba3fe8f85",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6652,
+    "run_id": "38028626982",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38028626982",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010063530_7d04d8d2cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6652,
+    "run_id": "38028626982"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T06:35:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

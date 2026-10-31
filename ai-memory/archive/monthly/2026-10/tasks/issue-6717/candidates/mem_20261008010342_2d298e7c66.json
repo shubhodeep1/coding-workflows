@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for issue: edit `tests/e2e_smoke_canary.txt` (orchestrator smoke test, run 37709707982)\n\n**Planning ref:** `orchestrator/project-6716` @ `07a145fcb7823b7f028471912207368f1e1ecd21`. This matches the issue's integration branch, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one data file to change, gives exact line contents, and forbids touching anything else. That includes the sibling `tests/e2e_smoke_canary_b.txt`, which another issue owns. No helper, script, workflow or test is involved, so the plan edits the existing file and nothing more.\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary.txt`: the only file to change. It already exists. Its current first lines are:\n  ```\n  status: ok\n  run_id: 26151428977\n  updated-by: ai-pipeline\n  ```\n\nFiles that must not change: `tests/e2e_smoke_canary_b.txt` and `tests/e2e_smoke_canary_spec.txt`.\n\n### 2. What to change\nNo functions or modules are involved. The edit is to the file's text:\n- Line 1 already reads `status: ok`. Leave it as it is.\n- Insert `decompose-run: 37709707982` as a new line 2. The existing lines (`run_id: 26151428977`, `updated-by: ai-pipeline`, and anything after them) move down one line and stay unchanged.\n- Keep the file's existing trailing newline.\n\n### 3. Data structures affected\nNone.\n\n### 4. API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Insert line 2 rather than overwrite it\n- **Chosen:** Insert `decompose-run: 37709707982` as the new line 2 and keep every existing line.\n- **Alternatives considered:** Replace the current line 2 (`run_id: 26151428977`) with the new text.\n- **Why:** The issue says \"put\" the value as the second line and does not ask for anything to be removed. Inserting meets both acceptance criteria and deletes no existing content, which is the conservative reading.\n\n## Security considerations\n- **Trust boundaries:** None are touched. This is a static text fixture.\n- **Authorization:** No endpoints or other surfaces are added.\n- **External input:** None. The value `37709707982` comes from the issue text.\n- **Abuse cases:** Not applicable. No secrets and no money-handling are involved.\n\n### 5. Risks and edge cases\n- If a test pins the exact contents of the canary file, inserting a line could break it. The parallel sibling issue suggests the release gate reads only lines 1\u20132, so this is low risk.\n- The diff must touch only `tests/e2e_smoke_canary.txt`. Do not add a changelog fragment, because the issue forbids changing other files.\n\n### 6. Testing considerations\n- `head -n 1 tests/e2e_smoke_canary.txt` should print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` should print `decompose-run: 37709707982`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`.\n\n### 7. Pre-execution self-check\nThe plan meets all three acceptance criteria, follows the scope limits, and depends on no external input.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2c0383ddf7cd9c4662790daf613fb6e39e6f063f3de8820f0f1e6f4cff6f4c4a",
+  "lineage": {
+    "issue_number": 6717,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37710290736",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37710290736",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6717"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261008010342_2d298e7c66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6717,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37710290736"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6717",
+  "timestamps": {
+    "created_at": "2026-10-08T01:03:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

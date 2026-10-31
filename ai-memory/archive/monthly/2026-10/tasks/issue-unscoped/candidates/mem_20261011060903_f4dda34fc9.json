@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-judge-review-blocked.txt:125-126, 132-135; prompts/_templates/mode-judge-review-blocked.txt:118-119, 125-128 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The judge prompt unconditionally says pending check-runs block `merge_with_followup`, contradicting the shared gate\u2019s allow-all behavior when `ORCH_FINAL_MERGE_REQUIRED_CHECKS` is explicitly empty.\n  WHY: In allow-all mode, `_pr_checks_completed` returns success before evaluating check-runs, so the prompt can cause the judge to refuse a merge the configured gate allows; severity differed from NIT to MAJOR, and the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- prompts/mode-judge-review-blocked.txt (also prompts/_templates/mode-judge-review-blocked.txt)\n  Line or code reference: lines 125-126 and 132-135 in the prompt; lines 118-119 and 125-128 in the template (\"any pending run blocks\" and \"any check-run is pending ...\")\n  Problem: The new wording says any pending check-run blocks `merge_with_followup`. That ignores the documented allow-all setting.\n  Why it fails at runtime: When `ORCH_FINAL_MERGE_REQUIRED_CHECKS` is explicitly empty, `_pr_checks_completed` returns 0 with `PR_CHECKS_LAST_REASON=allow_all` before it looks at any check-runs (`scripts/pr_checks_lib.sh:213-220`). A judge that follows the prompt text could refuse a merge the gate allows, and the PR then stays in `ai:review-blocked`. This only happens when an operator has chosen allow-all, so the impact is narrow. The wording could be qualified with \"unless the required-checks list is explicitly empty (allow-all)\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- prompts/mode-judge-review-blocked.txt\n  Line or code reference: lines 125-126 and 133-134 (same wording in prompts/_templates/mode-judge-review-blocked.txt lines 118-119 and 126-127)\n  Problem: The rewritten `merge_with_followup` rule says \"any pending run blocks\" the merge and that \"a required check blocks unless its newest run is success/neutral/skipped\", without distinguishing the documented `ORCH_FINAL_MERGE_REQUIRED_CHECKS=\"\"` allow-all sentinel.\n  Why it fails at runtime: In allow-all mode, `_pr_checks_completed` returns 0 with `PR_CHECKS_LAST_REASON=allow_all` before evaluating check-runs, so the prompt can make the judge refuse a merge that the configured policy allows, leaving the PR in `ai:review-blocked` and causing the judge to be re-fired on later cycles.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- prompts/mode-judge-review-blocked.txt; prompts/_templates/mode-judge-review-blocked.txt\n  Line or code reference: `mode-judge-review-blocked.txt:125-126, 132-135`; template `:118-119, 125-128`\n  Problem: The prompt says any pending check-run blocks `merge_with_followup`, without accounting for the documented allow-all setting.\n  Why it fails at runtime: When `ORCH_FINAL_MERGE_REQUIRED_CHECKS` is explicitly empty, `_pr_checks_completed` returns success with `PR_CHECKS_LAST_REASON=allow_all` before evaluating check-runs (`scripts/pr_checks_lib.sh:213-219`). The judge is still instructed to reject `merge_with_followup` if any run is pending, so a pending advisory check can prevent that action even though the configured gate allows it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- prompts/mode-judge-review-blocked.txt\n  Line or code reference: lines 125-126, 134-135 (and prompts/_templates/mode-judge-review-blocked.txt lines 118-119, 127-128)\n  Problem: The prompt says \"any pending run blocks\" and \"any check-run is pending\" without accounting for the allow-all sentinel. When `ORCH_FINAL_MERGE_REQUIRED_CHECKS=\"\"` (explicitly empty), `_pr_checks_completed` returns success immediately (`scripts/pr_checks_lib.sh:216-220`, `PR_CHECKS_LAST_REASON=allow_all`), regardless of pending check-runs.\n  Why it fails at runtime: A judge reading this prompt sees a pending advisory check-run in the context and refuses `merge_with_followup`, even though the gate with allow-all would allow the merge. The PR stays in `ai:review-blocked` until the operator intervenes. This requires no branch protection AND `ORCH_FINAL_MERGE_REQUIRED_CHECKS=\"\"` explicitly set, so it's an edge case.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- prompts/mode-judge-review-blocked.txt\n  Line or code reference: lines 125-126 and 133-134 (same wording in prompts/_templates/mode-judge-review-blocked.txt lines 118-119 and 126-127)\n  Problem: The refusal clause says the workflow refuses `merge_with_followup` when \"any check-run is pending\", unconditionally. The shared gate's explicitly-empty sentinel does not behave that way: when `ORCH_FINAL_MERGE_REQUIRED_CHECKS` is set to an empty string, `_pr_checks_completed` returns 0 with `PR_CHECKS_LAST_REASON=allow_all` before evaluating any check-run at all (`scripts/pr_checks_lib.sh:213-219`). In required mode the \"any pending run blocks\" claim is accurate (the required-set jq counts every `status != \"completed\"` run, required or not), so the mismatch is confined to the allow-all operator config.\n  Why it fails at runtime: With that config, a judge reading the prompt refuses a merge the configured gate allows, leaving the PR in `ai:review-blocked` while stall recovery re-fires the judge each cycle. The harm is conservative (over-refusal, no unsafe merge) and only bites under the non-default, explicitly-empty operator setting, so this is precision wording, not a blocker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9d064cce6d08017ab16c34ebc559c0305b9256ccc093777dce923a5be55b510f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7133,
+    "run_id": "38114062478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38114062478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011060903_f4dda34fc9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7133,
+    "run_id": "38114062478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T06:09:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

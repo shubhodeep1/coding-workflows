@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; raw_status=harness_error; summary=Validation failed due to harness error; failure_summary=Validation harness error: In coding-workflows, stop the self-repo trusted-support override from changing what the repo checks test. Keep the security property from #6865: the host executes only verified support copies of validate_process.sh, validate_driver.sh, validation_harness_sandbox.sh and slot_manifest.schema.json. Preferred fix: in scripts/stage_workflow_support.sh (`stage_self_repo_trusted_support_entry` and the loop around lines 1164-1176), stage the trusted copies into the support/r",
+  "fingerprint": "1c1ddcfa078557ca9e66e1b8ac55122e437c3f51e08a5744da7daaf72a8d1084",
+  "lineage": {
+    "issue_number": 7913,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40083109127",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40083109127",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20261024100135_2fc84981da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7913,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40083109127"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-10-24T10:01:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/settings.json (live twin: .claude/settings.json), line 145; tests/test_pr_merge_status_guard.py (line 2451; 2447-2452); tests/test_session_start_extract_repo_slug.py:221-225 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The live and template settings differ around the `prepush_affected_tests.py` hook registration, causing settings parity checks to fail.\n  WHY: With `CLAUDE_PARITY_PR_BASE_SHA` empty, the parity checks fail and CI is blocked; reviewers disagree about which settings copy contains the registration.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Resolve CI failures caused by the drift between .claude/settings.json and workflow-templates/.claude/settings.json\n  expected_change_site: .claude/settings.json or workflow-templates/.claude/settings.json\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The parity check `test_template_copies_are_identical` continues to fail in the latest CI run.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/.claude/settings.json (live twin: .claude/settings.json), line 145 | severity=critical | confidence=5\n  PROBLEM: The template registers `prepush_affected_tests.py`, but the live settings lack a matching entry and `.claude/hooks/prepush_affected_tests.py` does not exist.\n  WHY: With `CLAUDE_PARITY_PR_BASE_SHA` empty, strict parity checks fail, causing CI jobs and the aggregate `lint` check to fail and blocking merge.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_pr_merge_status_guard.py (Line: 2451) | severity=critical | confidence=5\n  PROBLEM: `test_template_copies_are_identical` fails due to drift between `.claude/settings.json` and `workflow-templates/.claude/settings.json`.\n  WHY: The live settings file contains a registration for `prepush_affected_tests.py` which is absent in the template, causing the parity check to fail during CI.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/settings.json; .claude/settings.json; tests/test_pr_merge_status_guard.py:2447-2452; tests/test_session_start_extract_repo_slug.py:221-225 | severity=critical | confidence=5\n  PROBLEM: The template and live settings diverge around the `prepush_affected_tests.py` hook registration, and the registered hook file is absent from the checkout.\n  WHY: The settings-parity checks fail when no pending PR sync applies, and the template directs consumer sessions to execute a hook file that is not present.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dc9eb4d9bb381af013a7232eb09d1d9eb4cd11208bd1223f9392a2cbbad2f7a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38369579097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38369579097",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013084655_deb5903de2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38369579097"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T08:46:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

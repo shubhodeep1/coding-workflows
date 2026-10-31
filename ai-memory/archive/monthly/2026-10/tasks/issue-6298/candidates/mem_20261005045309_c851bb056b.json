@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6298,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6298\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6303\",\"pr_number\":6303,\"branch\":\"ai/issue-6298\",\"run_id\":\"37263565194\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37263565194\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/ci.yml\",\".github/workflows/claude-engine-smoke.yml\",\".github/workflows/implement.yml\",\".github/workflows/orchestrate_poll.yml\",\"README.md\",\"agents.md\",\"changelog.d/6298-claude-read-role-isolation.md\",\"docs/INVENTORY.md\",\"scripts/ai_engine.sh\",\"scripts/claude_engine.py\",\"scripts/claude_read_isolated_run.sh\",\"scripts/claude_read_snapshot.py\",\"scripts/stage_workflow_support.sh\",\"tests/test_ai_engine.py\",\"tests/test_claude_engine.py\",\"tests/test_claude_read_isolated_run.py\"]}",
+  "fingerprint": "3f5372ba76fb32449ee1dbae8912a244298402b48a508b8941182bb95891ea28",
+  "lineage": {
+    "issue_number": 6298,
+    "parent_ids": [],
+    "pr_number": 6303,
+    "run_id": "37263565194",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37263565194",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6303"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005045309_c851bb056b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6298,
+    "level": "run",
+    "pr_number": 6303,
+    "run_id": "37263565194"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6298: https://github.com/shubhodeep1/coding-workflows/pull/6303",
+  "timestamps": {
+    "created_at": "2026-10-05T04:53:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cIf the issue body lacks explicit target-branch metadata, block planning\u201d and \u201cthe branch must be verified and recorded before retrying.\u201d\n  expected_change_site: `.github/workflows/plan.yml`, \u201cCheck-triage target-branch guard.\u201d\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The guard passes `resolver_status=routed` at lines 1211\u20131216, and the last-run test explicitly asserts that this status passes at `tests/test_plan_check_triage_branch_guard.py:240\u2013262`. A routed branch does not require an explicit target-branch line in the issue body, and this change does not record one there.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cIf the issue body lacks explicit target-branch metadata, block planning\u201d and \u201cthe branch must be verified and recorded before retrying.\u201d\nExpected change site: `.github/workflows/plan.yml`, \u201cCheck-triage target-branch guard.\u201d\nEvidence of absence: The guard passes `resolver_status=routed` at lines 1211\u20131216, and the last-run test explicitly asserts that this status passes at `tests/test_plan_check_triage_branch_guard.py:240\u2013262`. A routed branch does not require an explicit target-branch line in the issue body, and this change does not record one there.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nNo task was provided. Send the task or issue content to begin.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0dd8a9b5ef63980b15f96237570fdecfb202840e633598acb89bd47d9215c2eb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7068,
+    "run_id": "38304349550",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38304349550",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012221204_22bae4c98c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7068,
+    "run_id": "38304349550"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-12T22:12:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

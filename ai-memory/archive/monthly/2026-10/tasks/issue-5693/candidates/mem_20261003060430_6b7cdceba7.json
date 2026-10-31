@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan \u2014 issue #5693\n\nPlanning ref: `heads/stable` at `cc262f6ceaeb7e7a26a503a02d26225397640750`; it matches the `stable` integration-branch metadata.\n\nThe clarification answer was `[auto-answered-by-clarify]`; no clarification question remains unanswered. The later comments describe Claude implementation work on a separate project branch, but the terminal-check defect is still present on this planning ref. Verify whether that work has landed on `stable` before implementing a duplicate.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `wait-implement`\u2019s existing issue-title-scoped run lookup  \nScope-mode justification: Keep the change to the requested release gate and its contract tests. A complete issue-scoped terminal decision, rather than another first-page shortcut, is necessary for correctness; this follows the supplied \u00a76 priority order of Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n## Automation and entry point\n\nModify the existing `.github/workflows/test-and-mark-stable.yml` `e2e-smoke-test` job, at its `Phase 3b: Wait for PR creation (implement phase)` step. No new script, scheduler trigger, supervisor, database operation, or future-removal registry entry is needed.\n\n## Files likely to change\n\n- `.github/workflows/test-and-mark-stable.yml` \u2014 terminal decision in `wait-implement`.\n- `tests/test_test_and_mark_stable_plan_polling_guard.py` \u2014 extend the existing stubbed-run regression tests.\n\n## Functions, data structures, and API/interface changes\n\nReuse the step\u2019s `capture_run_id` pagination pattern, `ISSUE_TITLE`, and approval-time `IMPL_CREATED_AFTER` window. Keep the existing first-page query for routine progress reporting. Before emitting `implement_failed`, walk up to ten 100-run pages and consider **only non-skipped Implement runs with the exact issue `display_title`**. Declare completion only after a valid, uncapped walk finds a matching completed run and no matching active run. An unreadable page or full final page leaves the result unknown; continue under the existing inactivity limit. Retain the PR recheck, grace period, output key, and error prefix; append the matching run ID and conclusion for diagnosis. Audit existing reads before adding calls, and reuse a known active run ID for subsequent status reads where safe. GitHub documents the list endpoint\u2019s `created`, `page`, and `per_page` parameters, its 100-per-page maximum, and its 1,000-result search ceiling. ([docs.github.com](https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2026-03-10))\n\nNo persistent data structure or external output name changes. The matching run ID/status/conclusion and walk-completeness result are step-local decision data.\n\n## Decisions\n\n### D1 \u2014 Confirm termination with issue-scoped evidence\n- **Chosen:** Require a complete, issue-scoped run walk before reporting that Implement finished without a PR.\n- **Alternatives considered:** Treat zero active runs in the existing first-page sample as terminal.\n- **Why:** Unrelated completed runs can occupy that sample while this issue\u2019s run remains active on a later page.\n\n### D2 \u2014 Preserve an unknown state\n- **Chosen:** Continue waiting, subject to the existing inactivity timeout, when pagination is unreadable or capped.\n- **Alternatives considered:** Interpret incomplete results as no active run.\n- **Why:** Incomplete evidence cannot justify a terminal failure.\n\n## Security considerations\n\nThis step crosses the GitHub API response trust boundary. Validate the response shape, numeric run IDs, and run status before using them in the terminal decision; match the issue title as data through `jq`, not shell-generated filter code. No new endpoint or authorization surface is exposed. Existing Actions-read credentials remain in use; do not print tokens or unbounded API payloads. Abuse cases include malformed responses, unrelated runs, skipped runs, and enough runs to exhaust pagination.\n\n## Risks and edge cases\n\nA matching run can sit after page one, multiple matching runs can coexist, or a run can appear after an earlier list read. Cover active runs before concluding failure and avoid treating an API indexing delay as proof of completion. Preserve the existing inactivity escalation if evidence remains unknown. **Ref-context note:** comments say PR #5712 merged into a Claude project branch; that is not evidence that its fix is on the checked-out `stable` ref. The supplied failure logs alone also do not establish whether the original Implement run failed.\n\n## Testing considerations\n\nExtend the existing stubbed `wait-implement` tests with unrelated completed runs filling page one and this issue\u2019s active run on page two. Cover all-matching-runs-completed failure with ID/conclusion, skipped and other-title runs, malformed or failed pages, a full tenth page, and the PR recheck. Check that the existing success-capture tests still pass, then run the repository\u2019s pinned CI checks and confirm the workflow remains below 480,000 bytes.\n\n## Pre-execution self-check\n\nThe ref matches the integration metadata; the defect, reuse candidate, affected files, trigger, and test harness were identified on that ref. No repository files were changed during planning.\n\nPLAN_SELF_CHECK: WARNING: Separate-branch Claude work is described in comments; check for an already-landed equivalent before editing `stable`.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8c7daec3c228ac6056055ae8fd9c1e76a25f38707de444b574a18ef03c0a5966",
+  "lineage": {
+    "issue_number": 5693,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37101452380",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37101452380",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5693"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003060430_6b7cdceba7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5693,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37101452380"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #5693",
+  "timestamps": {
+    "created_at": "2026-10-03T06:04:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

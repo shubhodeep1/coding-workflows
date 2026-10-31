@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Linked issue #8204 \"Suggested fix\" item 1 (Diagnostics first): \"In `.github/workflows/security-audit.yml`, step `run_security_audit`, set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT: ${{ runner.temp }}/security_audit_claude_rejected.txt`. Add an `if: failure()` `actions/upload-artifact` step for that file, with a short retention.\"\n  expected_change_site: `.github/workflows/security-audit.yml` (the `run_security_audit` step env block plus a new `if: failure()` upload-artifact step)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: `.github/workflows/security-audit.yml` is not changed in the PR, the changed files (changelog.d/8204-security-audit-bare-empty-array.md, prompts/_templates/mode-security-audit.txt, prompts/mode-security-audit.txt, tests/test_security_audit_prompt_policy.py) contain no workflow change, no `SECURITY_AUDIT_CLAUDE_REJECTED_OUT` is set and no `actions/upload-artifact` step exists in security-audit.yml, scripts/security_audit.sh:1773-1819 still supports the capture path (kept=none when unset), so future rejected replies will again lack a captured artifact (severity MAJOR per all reviewers)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"In `.github/workflows/security-audit.yml`, step `run_security_audit`, set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT: ${{ runner.temp }}/security_audit_claude_rejected.txt`. Add an `if: failure()` `actions/upload-artifact` step for that file, with a short retention.\"\nExpected change site: .github/workflows/security-audit.yml\nEvidence of absence: The file .github/workflows/security-audit.yml is not included in the PR changes. The task explicitly requested this diagnostic artifact upload to address the diagnostic gap in security audit failures.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: From the linked issue's \"Suggested fix\" item 1 (\"Diagnostics first\"): \"In `.github/workflows/security-audit.yml`, step `run_security_audit`, set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT: ${{ runner.temp }}/security_audit_claude_rejected.txt`. Add an `if: failure()` `actions/upload-artifact` step for that file, with a short retention.\"\nExpected change site: `.github/workflows/security-audit.yml` (the `run_security_audit` step)\nEvidence of absence: The PR CHANGED FILES list contains no `workflow-templates/`, `.github/workflows/`, or workflow entry-point paths. The issue's \"Affected files\" section lists `.github/workflows/security-audit.yml` unconditionally, and diagnostic capture is item 1 independent of the chosen candidate fix. Without it, future `malformed_output` / `schema_mismatch` / `missing_output` will again lack a captured reply.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: The linked issue's suggested fix item 1 says to set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT` in `.github/workflows/security-audit.yml` and add an `if: failure()` artifact upload with short retention.\nExpected change site: `.github/workflows/security-audit.yml`, the `run_security_audit` step and a failure artifact-upload step.\nEvidence of absence: `.github/workflows/security-audit.yml` is not changed in the PR; none of the four changed files sets the output path or uploads the rejected reply.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: Linked issue #8204, \"Suggested fix\" item 1 (Diagnostics first): set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT: ${{ runner.temp }}/security_audit_claude_rejected.txt` in step run_security_audit of .github/workflows/security-audit.yml and add an `if: failure()` actions/upload-artifact step with short retention.\nExpected change site: .github/workflows/security-audit.yml, the run_security_audit step env block plus a new if: failure() upload-artifact step.\nEvidence of absence: No workflow change in the PR CHANGED FILES or PR DIFF. grep for SECURITY_AUDIT_CLAUDE_REJECTED_OUT in .github/workflows/ returns no match, and security-audit.yml has no actions/upload-artifact step. scripts/security_audit.sh:1773-1819 still supports the capture path (kept=none when unset), and scripts/orchestrate_poll_process.sh:8978 sets it only for the orchestrator security pass. The PR description cites no deferral.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\nNotes: the new regression test at tests/test_security_audit_prompt_policy.py:155-171 is correctly anchored; prompts/mode-security-audit.txt:39-40 match byte-for-byte; no extractor, fallback-policy, or byte-parity behavior changed.\nHARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b429c5e439ffc1bd064b5d42c37b66f7e299946151633c4dc4f03b2c533cdf67",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8205,
+    "run_id": "40342943445",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40342943445",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026150947_f220ce37ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8205,
+    "run_id": "40342943445"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T15:09:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

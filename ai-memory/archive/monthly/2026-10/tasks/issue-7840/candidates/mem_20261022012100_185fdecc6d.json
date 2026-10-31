@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: issue canary-b (E2E orchestrator smoke test, Refs #7838)\n\nPlanning ref: `orchestrator/project-7838` at `3c36fcf73a6828eb1da8c221da36a0effc185218` (integration branch mismatch: false).\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\n\nNo code. This is a single data-file edit.\n\nThe file already exists on the planning ref. It has two lines:\n- line 1: `status: ok` (already correct, keep it)\n- line 2: `decompose-run: 25567947079` (a value from an earlier run)\n\nThe edit:\n1. Keep line 1 as exactly `status: ok`.\n2. Replace line 2 with `decompose-run: 39703422828`.\n3. Do not add or remove any other content. The file has no other lines today. Keep the trailing newline at the end of line 2.\n\n## Data structures affected\n\nNone.\n\n## API or interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Replace the old decompose-run line instead of inserting a new one\n- Chosen: Overwrite the existing second line (`decompose-run: 25567947079`) with `decompose-run: 39703422828`.\n- Alternatives considered: Insert the new line as line 2 and push the old value down to line 3.\n- Why: The old line is a stale value from a previous smoke run, not unrelated content. Keeping it would leave two `decompose-run:` lines that contradict each other. The issue's acceptance criteria only check lines 1 and 2, and replacing the line is the smallest change that meets them.\n\n## Security considerations\n\n- No trust boundary, endpoint, credential or external input is involved.\n- The only abuse case is editing files outside scope. The implementer must change only `tests/e2e_smoke_canary_b.txt`. `tests/e2e_smoke_canary.txt` belongs to the parallel sibling issue and must not be touched.\n\n## Risks and edge cases\n\n- Conflict noted: the issue says to make the run ID line 2 \"directly after\" line 1 and to \"leave any other existing content alone\". The existing line 2 is a stale `decompose-run:` value, and D1 treats it as the line to replace, not as other content to keep.\n- Use LF line endings and do not add a BOM, so the `head` and `sed` checks match exactly.\n\n## Testing considerations\n\n- `head -n 1 tests/e2e_smoke_canary_b.txt` must print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` must print `decompose-run: 39703422828`.\n- `git diff --stat` must list only `tests/e2e_smoke_canary_b.txt`.\n- No changelog fragment, docs or test changes, as the issue says.\n\n## Pre-execution self-check\n\nThe plan meets every acceptance criterion, changes one file, and needs no external inputs.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue defines an exact edit to one existing file and forbids touching anything else. No helper or code is involved, so the plan changes the existing canary file in place and nothing more.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "62c6c087c9f91e6f1453dd2c1e33814e0b26f379a2ffc33bbebe40c297b9c05e",
+  "lineage": {
+    "issue_number": 7840,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39704249473",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39704249473",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7840"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261022012100_185fdecc6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7840,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39704249473"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7840",
+  "timestamps": {
+    "created_at": "2026-10-22T01:21:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

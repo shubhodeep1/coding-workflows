@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:issue_7251_dependency_gate_marker | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The paginated comment-history read uses bare `gh api` instead of `gh_retry` when available, so transient API failures on long histories can leave the dependency gate unverified and holding #7251.\n  WHY: The hold is the safe failure direction, but unlike the snapshot helper and poller copy, this read does not retry transient errors.\n- tests/test_issue_7251_dependency_wait.py:154-160 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The old assertion counted log-file lines to verify a single API call, although one logged GraphQL query spans multiple lines; the replacement counts GraphQL calls correctly.\n  WHY: The old assertion failed in CI because a single call produced 11 log lines, and the change fixes that assertion.\n- scripts/orchestrate_poll_process.sh:run_issue_7251_dependency_wait, preflight symbol verification | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Symbol verification uses substring matching, so it could falsely succeed if a different symbol contains the required symbol as a substring.\n  WHY: `grep -qF` does not require an exact word match; the reviewer notes this false positive is unlikely.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh | severity=low | confidence=[4]\n  PROBLEM: The paginated read of issue comment history uses bare `gh api --paginate` instead of the `gh_retry` helper used by the snapshot helper.\n  WHY: A transient network error during a long history read (when >100 comments exist) will cause the dependency gate to return \"unverified\" (code 2), leading to the issue being held indefinitely, rather than retrying to determine the actual state.\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=[3]\n  PROBLEM: Symbol verification uses `grep -qF -- \"${symbol}\"` against `engine_text`.\n  WHY: `grep -qF` matches substrings, so it could falsely report success if a different symbol contains the required symbol as a substring (e.g., `_AI_ENGINE_EXIT_REFUSED_FOO` matching `_AI_ENGINE_EXIT_REFUSED`). While unlikely in `ai_engine.sh`, exact word matching (`grep -wqF`) is safer.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_issue_7251_dependency_wait.py:154-160 | severity=low | confidence=[5]\n  PROBLEM: The previous assertion counted log-file lines to verify a single API call. The fake `gh` shell function uses `printf '%s\\n' \"$*\"` to record the call, and `$*` joins positional parameters with the first IFS character (space) while preserving newlines inside each argument. The GraphQL query is a single argument spanning 11 lines, so one call produced 11 log lines and the assertion failed with `11 == 1` in CI. The replacement uses `.count(\"api graphql\") == 1`, which correctly counts GraphQL calls and matches the convention already used by `test_open_holds_and_posts_nothing` and `test_long_history_reads_paginated_comments` in the same file.\n  WHY: Not applicable \u2014 the new assertion is the correct one. The change is the fix.\n- scripts/gh_helpers.sh | severity=low | confidence=[1]\n  PROBLEM: The function falls back to a bare `gh api --paginate` when the snapshot window is exceeded, while the snapshot helper uses `gh_retry` when defined.\n  WHY: A transient error on long comment histories returns rc=2 \u2192 caller treats as \"unverified\" \u2192 clarify and plan keep holding #7251. The safe direction is preserved, but the inconsistency means the long-history read bypasses the \u00a715 retry helper the rest of the file uses.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/gh_helpers.sh | severity=low | confidence=[4]\n  PROBLEM: The long-history read uses bare `gh api` instead of `gh_retry` when available, unlike `issue_7251_dependency_snapshot` which conditionally uses `gh_retry`. The poller's own `_issue_7251_trusted_marker_present` function in `scripts/orchestrate_poll_process.sh:18876` also uses `gh_retry` for the same paginated read.\n  WHY: A transient GitHub API error on issues with more than 100 comments causes the paginated read to fail immediately, turning into `unverified` state and suppressing clarify/plan. The failure direction is safe (hold), but the inconsistency means the helper is less robust than the poller's own copy and less robust than its own snapshot read. With `gh_retry`, transient 429/5xx/network errors would retry with backoff before giving up.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nNo task was provided \u2014 the prompt contains only the unattended-system-instructions header and an unfilled `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder, with no issue, plan, or directive to act on. Nothing has been executed and no files were touched. A task payload is required to proceed (for example: the issue/plan text, the pipeline phase to run, and the target repo/branch).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "850c13b9fe138a4d22498bdc5bc19ae286bb02fbcdaf4b1b4f11b0e38d327290",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7259,
+    "run_id": "38481355781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38481355781",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013232954_557e84e6f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7259,
+    "run_id": "38481355781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T23:29:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

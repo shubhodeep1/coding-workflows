@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: This heal issue's verified scope marker allows only `.github/workflows/ci.yml`, `tests/**` and `changelog.d/*.md`. The heal editor transfers only paths inside that scope, and `scripts/implement_heal_preflight.sh` refuses work with `HEAL_SCOPE_REFUSED` and labels the issue `ai:needs-human`. Option B would therefore stop at the guard. Option C leaves a failure the pipeline can fix today. Option A fixes the in-scope failure and records the size split as separate work, so the guard is never weakened.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - tests/test_workflow_failure_heal.py:3619-3626 (`test_review_autofix_passes_support_sha_to_every_marker_site`). Line 3625 currently asserts `wf.count(\"REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}\") == 2`.\n    - .github/workflows/review_autofix.yml: the three `needs.gate.outputs.review_support_sha` exports cited in the issue (around lines 2141-2145, 2478 and 2810-2813). Read-only reference; do not edit.\n    - changelog.d/<issue-number>-<slug>.md (new fragment, per CLAUDE.md \u00a720)\n  steps:\n    - Read the three export sites in `review_autofix.yml`. Confirm the new one (the deterministic-skip merge step near line 2144) passes the gate's verified support SHA and is not a second copy of a failure-marker site.\n    - Change the assertion at line 3625 from `== 2` to `== 3`. Update the docstring to say the gate SHA also reaches the deterministic-skip merge step, alongside the fingerprint-cap job and the codex-agent job.\n    - Keep the other assertions in that test as they are (`--support-sha` count 5, `autofix-failure-fingerprint` count 4, the `resolve_support` export, and the cap marker format).\n    - Do not touch `tests/test_workflow_file_size_limit.py`. Do not raise, skip or disable the 480,000-byte guard.\n    - Add one changelog fragment describing the test update. It must say that the `review_autofix.yml` size-guard failure (481,287 bytes) is still open and needs a separate change that moves inline `run:` bodies into `scripts/review_autofix_step_*.sh` (agents.md \"Workflow file size limit\").\n    - In the PR body, state that CI stays red on `test_workflow_file_size_limit.py` until that split lands. Name the files the split needs: `.github/workflows/review_autofix.yml`, `scripts/review_autofix_step_*.sh`, `scripts/stage_workflow_support.sh` (`REQUIRED_BOOTSTRAP_SCRIPTS`), `tests/review_autofix_step_scripts.py` and `docs/INVENTORY.md`. Use `Refs`, not an auto-close keyword, for this issue.\n  replaces_acceptance_criterion: \"both failing tests pass\" is narrowed to \"`test_review_autofix_passes_support_sha_to_every_marker_site` passes, and the size-guard failure is documented as remaining work outside this issue's scope\"\n  equivalence_argument: The test fix fully resolves one of the two root causes in the issue. The size-guard fix cannot be delivered inside this issue's heal scope. Scoping it out keeps the guard intact and avoids a run that is certain to latch `ai:needs-human`, whereas Option B would fix neither failure.\n  reversibility: The change is one assertion and one changelog fragment. If a human later chooses B or C, they can revert it or extend it in the split PR without conflict.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- REVIEW_AUTOFIX_SIZE_SPLIT (resource: follow-up issue or interactive session): an operator opens an issue without a heal scope marker, or runs an interactive session, to move the largest inline `run:` bodies of `.github/workflows/review_autofix.yml` (for example \"Generate diff context\") into `scripts/review_autofix_step_*.sh`. Aim for 50,000+ bytes of headroom below the guard. Until that lands, `tests/test_workflow_file_size_limit.py` keeps the `tests-promote-stall-and-review` job, and with it `CI / lint`, red on `main`.",
+  "fingerprint": "60ae7dfbdfd21e787e6c208191f927b31d0b88355e2ec936bc5443a89de4f0dc",
+  "lineage": {
+    "issue_number": 6964,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37973281535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37973281535",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6964"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009183514_852f9ac32b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6964,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37973281535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6964",
+  "timestamps": {
+    "created_at": "2026-10-09T18:35:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

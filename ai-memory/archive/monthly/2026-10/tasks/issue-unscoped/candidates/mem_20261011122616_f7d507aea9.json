@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_phase_skip_gate_telemetry_contract.py:101-117 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The extracted clarify workflow step expands `${CLARIFY_HOST_PYTHON_DIR}` under nounset, but the test does not set that variable, so the subprocess exits before the fallback can run.\n  WHY: The test fails with a non-zero exit status, causing `test_clarify_opened_route_checks_fetched_provenance` and the CI checks that depend on it to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_phase_skip_gate_telemetry_contract.py:101-117 | severity=critical | confidence=5\n  PROBLEM: The test extracts and runs a workflow step from clarify.yml that now references ${CLARIFY_HOST_PYTHON_DIR}, but the test environment does not define this variable.\n  WHY: The workflow step is executed with set -euo pipefail (nounset), so the expansion ${CLARIFY_HOST_PYTHON_DIR} fails immediately because the variable is unset, causing the CI test to exit with a non-zero status.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml:516; tests/test_phase_skip_gate_telemetry_contract.py lines 101-117 | severity=critical | confidence=5\n  PROBLEM: The clarify dependency gate now expands CLARIFY_HOST_PYTHON_DIR, but the test that extracts and runs this workflow step does not set that variable.\n  WHY: The test runs the step under Bash with set -u. Expanding the unset variable terminates the step before the held-verdict fallback can run. CI confirms test_clarify_opened_route_checks_fetched_provenance fails, causing tests-promote-stall-and-review and the aggregate lint check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_phase_skip_gate_telemetry_contract.py:104-117; clarify.yml:516 | severity=critical | confidence=5\n  PROBLEM: The test extracts the \"Decide clarify route\" step body from clarify.yml and runs it in a subprocess, but the step now references `${CLARIFY_HOST_PYTHON_DIR}` at clarify.yml:516. The test env does not set that variable.\n  WHY: Under `set -euo pipefail` (nounset), expanding the unset `CLARIFY_HOST_PYTHON_DIR` aborts the subprocess immediately with exit status 1. CI confirms this: `test_clarify_opened_route_checks_fetched_provenance` raises `subprocess.CalledProcessError`, which fails the `tests-promote-stall-and-review` job and cascades to the aggregate `lint` check. The fix must either set `CLARIFY_HOST_PYTHON_DIR` in the test env and stage a working `security_dependency.py` there, or stub the python3 invocation so the extracted step body can run without the helper.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_phase_skip_gate_telemetry_contract.py:74-122; .github/workflows/clarify.yml:516 | severity=critical | confidence=5\n  PROBLEM: The test extracts the \"Decide clarify route\" step and executes it with `bash -c` without setting `CLARIFY_HOST_PYTHON_DIR` in `env`; the unset-variable expansion aborts the script before the fallback can execute.\n  WHY: CI run 38135817724 (head 2bad88dc) shows `tests-promote-stall-and-review` failing in `test_clarify_opened_route_checks_fetched_provenance` with `CalledProcessError: ... returned non-zero exit status 1`, and the aggregate `lint` job failing with `CI jobs that did not succeed: tests-promote-stall-and-review`. The PR merge gate is red.\n- .github/workflows/clarify.yml:516\n  PROBLEM: If `$GITHUB_ENV` propagation from the staging step ever failed, the route step would abort with a cryptic nounset error instead of taking its documented fail-closed path.\n  WHY: The step hard-expands `${CLARIFY_HOST_PYTHON_DIR}` with no default; suggested minimal fix: Use `${CLARIFY_HOST_PYTHON_DIR:-}/security_dependency.py` so a missing var fails the helper invocation, hits the existing `|| echo '{\"status\":\"held\",...}'` fallback, and yields the held verdict. This hardening does not replace the required test fix.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3203a46efcbc66639bfbd26079676babbb910861851e385315a4e23cb7578997",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7164,
+    "run_id": "38135834547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38135834547",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011122616_f7d507aea9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7164,
+    "run_id": "38135834547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T12:26:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

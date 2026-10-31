@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6504,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6504\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6510\",\"pr_number\":6510,\"branch\":\"ai/issue-6504\",\"run_id\":\"37426712447\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37426712447\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/implement.yml\",\"agents.md\",\"changelog.d/6504-implement-issue-body-github-env-injection.md\",\"tests/test_implement_post_codex_recovery.py\"]}",
+  "fingerprint": "06ac1e64769165d9b137a120c06e5191f7330f73202f00fea55aed643aeac64c",
+  "lineage": {
+    "issue_number": 6504,
+    "parent_ids": [],
+    "pr_number": 6510,
+    "run_id": "37426712447",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37426712447",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6510"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006071837_4183db639c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6504,
+    "level": "run",
+    "pr_number": 6510,
+    "run_id": "37426712447"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6504: https://github.com/shubhodeep1/coding-workflows/pull/6510",
+  "timestamps": {
+    "created_at": "2026-10-06T07:18:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

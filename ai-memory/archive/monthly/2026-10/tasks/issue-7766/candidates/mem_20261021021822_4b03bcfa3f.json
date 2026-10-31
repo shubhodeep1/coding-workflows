@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint: no files touched. I read `ci.yml`, `tests/test_ci_poll_test_sharding.py` and the changelog fragments for #7560, #7575, #7576, #7579, #7677, #7690, #7697 and #7699. Here is the decision.\n\nDECISIONS:\nQ1: DERIVE_FROM_REPO\nQ2: A\n\nRATIONALE:\nQ1: Option A depends on the job timings of run 39526504422. GITHUB FACTS has only that run's overall conclusion, and the plan and implement sandboxes cannot read Actions timings (#7576, #7697 and #7699 each say this). So the target has to come from durations already recorded in the repo. `tests-hooks-and-orchestrator` took 15m52s while it ran this step serially (run 39038112755, #7575), and the step then took about 4.5 minutes (#7579). That leaves about 11.4 minutes, and no step has moved into that job since (#7560's row is the earlier move in). With the step now sharded at about 1.5 to 2 minutes (#7579 estimate), the job would land near 13 to 13.5 minutes, under the 15-minute warning line. Options B, C and D are worse. `tests-heal-plan-and-validation` hit 15m26s (#7690). `tests-release-and-log-analysis` is estimated at 12 to 13 minutes and still unmeasured after taking the promote-cycle step (#7699). Every poll group now carries an extra step: group 0 runs the fast-fail subset and the single-file modules, group 2 runs wiring part 2 and group 3 runs the unblock step (#7690). Each poll group's share of the poll module is about the same as group 1's (about 13.7 minutes), so any of them would cross 15 minutes again.\nQ2: The merge-train step is the only step in group 1 apart from the group's share of the poll module. Moving it removes about 2 minutes, which brings group 1 from 15m42s to about 13.7 minutes. It also leaves the `NR % total` partition and its tests in `tests/test_ci_poll_test_sharding.py` unchanged, as the issue's \"unchanged\" requires. Options B and C change the two-level sharding contract.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml: the `orchestrate-poll` job (line 1949) and the step \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\" (line 2251, guard `if: strategy.job-index == 1` at line 2259, comment block at lines 2230-2250). The `tests-hooks-and-orchestrator` job starts at line 506.\n    - tests/test_ci_poll_test_sharding.py: `MergeTrainStepContractTest` (lines 980-1014), which reads the step through `poll_job_step` and has `test_step_keeps_its_name_job_and_group_guard`.\n    - tests/test_ci_job_split_contract.py, which checks that no step runs in two jobs and that `lint`'s `needs` list is complete.\n    - tests/test_ci_inventory_parity_order_contract.py, which may pin step order.\n    - changelog.d/7575-ci-merge-train-step-to-poll-group.md and changelog.d/7579-ci-merge-train-local-shards.md for the recorded durations.\n  steps:\n    - Move the step \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\" from `orchestrate-poll` to the end of `tests-hooks-and-orchestrator`. Keep its name, its `run:` body and its 3+1 local shards exactly as they are.\n    - Delete only the line `if: strategy.job-index == 1`, because `tests-hooks-and-orchestrator` has no matrix.\n    - Move the comment block above the step along with it. Keep all of its incident history (\u00a724: comments with incident context are not deleted) and add one line: \"Moved back from orchestrate-poll group 1, which took 15m42s of its 20 minutes (run 39526504422, ci-budget issue for orchestrate-poll); sharded since #7579, so the estimated cost here is about 1.5 to 2 minutes.\"\n    - Update `MergeTrainStepContractTest` in tests/test_ci_poll_test_sharding.py:\n      - read the step from the `tests-hooks-and-orchestrator` job instead of through `poll_job_step`;\n      - change `test_step_keeps_its_name_job_and_group_guard` to assert that `tests-hooks-and-orchestrator` is the only job containing the step and that the step has no `if` key;\n      - keep every other assertion (shard judgment, all six modules named literally) as it is.\n    - If tests/test_ci_poll_test_sharding.py requires every non-setup step in the poll job to have a group guard (#7690), check that this still passes once the step is gone.\n    - Run tests/test_ci_job_split_contract.py, tests/test_ci_poll_test_sharding.py, tests/test_ci_inventory_parity_order_contract.py and tests/test_ci_wires_every_test_file.py, and fix any order or ownership pins that name the old location.\n    - Do not change any `timeout-minutes`, do not add a job or matrix group, and do not change `lint`'s `needs`.\n    - Add a changelog fragment `changelog.d/<issue>-ci-merge-train-step-to-hooks-job.md` in the #7690 style. It should say the step's real cost was not measured, give the estimates above, and say the next `budget-watch` run on main checks the result. Write the PR body with `Refs`, not a closing keyword aimed at any tracking issue.\n  replaces_acceptance_criterion: \"Move into the CI job with the most headroom (see the run's step timings)\". It becomes \"move into the job with the most headroom according to the durations recorded in the repo\", because the run's timings cannot be read from the sandbox.\n  equivalence_argument: Removing about 2 minutes takes group 1 under the 15-minute warning line. The receiving job is the one whose recorded duration, with the step's current sharded cost added, stays furthest below that line. The step body, its name and the required `CI / lint` aggregate are unchanged, as the issue asks, and the next `budget-watch` run measures the real result the same way as #7576, #7690 and #7697.\n  reversibility: Moving one step block back and reverting one contract test assertion undoes it. If `budget-watch` later flags `tests-hooks-and-orchestrator`, the step can be moved to whichever job the measured timings show as lightest.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone.",
+  "fingerprint": "5c851a66ead3a9c74128729c92749f0edd634dcb51d0e84ca0e7f7e345a5073f",
+  "lineage": {
+    "issue_number": 7766,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39530968230",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39530968230",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7766"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261021021822_4b03bcfa3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7766,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39530968230"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7766",
+  "timestamps": {
+    "created_at": "2026-10-21T02:18:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

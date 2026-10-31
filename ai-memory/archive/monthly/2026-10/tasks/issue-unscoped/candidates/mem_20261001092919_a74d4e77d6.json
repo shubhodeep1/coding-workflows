@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:2581-2598, 2661-2683 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: At the deadline, a zero-second rate-limit wait can let a completed run end Phase 4b without confirming that the PR is still open.\n  WHY: If the PR closes while its state endpoint remains rate-limited, the run-status read can report completion and allow attempt 2 to proceed without the `pr_closed_during_retry` guard firing.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:2588-2598 and 2661-2683; exercised by tests/test_test_and_mark_stable_review_blocked_budget.py:572-594 | severity=high | confidence=[5]\n  PROBLEM: When a PR-state read is rate-limited at a deadline, the zero-second wait restores RETRY_READ_AFTER_RATE_LIMIT_WAIT and falls through to run polling. The run-status read clears that flag, and a completed run breaks the loop without confirming the PR is open.\n  WHY: If the PR closes while its state endpoint remains rate-limited, but the already-registered review run is readable and completed, Phase 4b proceeds as though the retry succeeded instead of reporting pr_closed_during_retry. The sustained-rate-limit test currently expects success in this unresolved-PR-state path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml:2581-2598 (PR-state rate-limited branch, zero-wait fall-through) | severity=high | confidence=[4]\n  PROBLEM: After a deadline-capped rate-limit wait that sleeps (wait_seconds > 0), the `continue` at line 2593 correctly returns to the loop top for a fresh PR-state read. But when the wait is capped to zero seconds (deadline already reached), `phase4b_wait_out_rate_limit` does not set `RETRY_READ_AFTER_RATE_LIMIT_WAIT` (line 2340-2342 only sets it when `wait_seconds > 0`). The branch falls through to line 2598, restores the owed-read flag, and proceeds to the run-list and run-status reads without re-reading PR state. If the review run completed during the preceding wait and the PR closed in that same window, the run-status read at line 2682 breaks the loop on `completed`, and the step proceeds to attempt 2 without the `pr_closed_during_retry` guard firing.\n  WHY: The loop enters the owed-read iteration (line 2568 condition true because `RETRY_READ_AFTER_RATE_LIMIT_WAIT` was 1 from the prior wait). The PR-state read is still rate-limited. The zero wait clears the flag at line 2586, the helper does not re-set it, and the `continue` at 2593 is not taken. Execution reaches the run reads; a completed run breaks at 2683. Post-loop, `RETRY_RUN_ID` is set and `RETRY_STATUS` is `completed`, so the timeout guard at 2687 is bypassed. Attempt 2 runs against a PR that may have closed during the rate-limit window. The existing test `test_phase4b_rate_limit_until_the_deadline_fails_closed_with_retry_timeout` uses `run_statuses=[\"in_progress\"]` and does not cover a completed run in this zero-wait fall-through; `test_phase4b_pr_closed_during_a_rate_limit_wait_beats_a_completed_run` uses `limited_for=60` (a sleeping wait, not zero), so its `continue` path is different.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a5919e1bd323a8950591c62d53afd38714ee77642076197b9f4123871be1e053",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5874,
+    "run_id": "36837490743",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36837490743",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001092919_a74d4e77d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5874,
+    "run_id": "36837490743"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T09:29:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

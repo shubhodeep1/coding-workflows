@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:542-778 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: After the label_missing hold sets SKIP_PLAN=true, steps such as \"Ensure workflow support source checkout\" (542), \"Stage workflow support files\" (567) and \"Fetch issue metadata\" (755) are not gated on SKIP_PLAN and can still fail the job. minimax_minimax-m3 and z-ai_glm-5_3-flash also list the support checkout steps at 532-565. minimax_minimax-m3 lists more ungated steps from 445 to 735.\n  WHY: A failure in any of these steps fails the plan job, and heal-report (3312-3324) then files the plan_failed report the hold is meant to avoid. Reviewers rated it MAJOR. anthropic_claude-sonnet-5_5 considered this finding and did not report it, because the steps also run on the mirrored pr_not_open path and fail the same way on any plan run.\n- tests/test_workflow_checkout_integration_ref_audit.py:932-953 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: test_plan_steps_after_refctx_skip_on_skip_plan checks only six already-gated steps and none of the ungated support-checkout, staging or metadata steps.\n  WHY: CI will not catch the missing gates, so the \"0 failed plan runs\" promise stays unguarded.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Plan now holds the issue the same way clarify already does, instead of failing the run and filing a `plan_failed` heal report\" (CHANGELOG: \"Plan runs that fail on a `label_missing` refusal | 0\")\n  expected_change_site: .github/workflows/plan.yml post-hold steps between the resolve-integration-ref step and the planning steps, mirroring clarify.yml's gating\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The diff adds `if: env.SKIP_PLAN != 'true'` only to \"Fetch issue comments\" (plan.yml line 846). Eleven earlier steps stay ungated, including \"Ensure workflow support source checkout\" (542), \"Stage workflow support files\" (567) and \"Fetch issue metadata\" (755).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml: setup steps \"Ensure workflow support source checkout\" and \"Fetch issue metadata\" | severity=MAJOR | confidence=4\n  PROBLEM: These setup steps are not gated by SKIP_PLAN=true.\n  WHY: If either step fails after the label_missing hold is determined, the plan job fails and may trigger the plan_failed heal report the hold is meant to prevent.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:164-755 | severity=MAJOR | confidence=4\n  PROBLEM: hold_skip_plan writes SKIP_PLAN=true at line 357, but many later steps are ungated: 445, 454, 467, 478, 521, 532, 542, 556, 567, 735 and 755. A failure in any of them fails the plan job.\n  WHY: heal-report (3312-3324) then files a plan_failed entry, which is the problem the PR is meant to remove. clarify.yml gates every post-hold step.\n- tests/test_workflow_checkout_integration_ref_audit.py:932-953 | severity=MAJOR | confidence=4\n  PROBLEM: test_plan_steps_after_refctx_skip_on_skip_plan iterates only six step names and none of the ungated post-hold steps.\n  WHY: CI will not fail on the missing gates, so the \"0 failed plan runs\" claim is unguarded.\n- TASK_GAP: severity=MAJOR | confidence=4\n  Requirement: \"Plan now holds the issue the same way clarify already does, instead of failing the run and filing a `plan_failed` heal report\" (CHANGELOG: \"Plan runs that fail on a `label_missing` refusal | 0\")\n  Expected change site: every post-hold step in .github/workflows/plan.yml up to the planning steps, mirroring clarify.yml's gating\n  Evidence of absence: The diff adds the gate only to \"Fetch issue comments\" (846). Eleven earlier steps remain ungated, including 542, 567 and 755.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/plan.yml:351-357, 542-553, 755-778 | severity=MAJOR | confidence=4\n  PROBLEM: hold_skip_plan sets SKIP_PLAN=true, but \"Ensure workflow support source checkout\" and \"Fetch issue metadata\" are not gated on it.\n  WHY: A failure in either step fails the plan job, and heal-report (3321-3324) recreates the plan_failed report.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/plan.yml:341-435, 542-553, 755-778 | severity=MAJOR | confidence=4\n  PROBLEM: The hold sets SKIP_PLAN=true and exits 0, but \"Ensure workflow support source checkout\" and \"Fetch issue metadata\" are not gated on it.\n  WHY: Either step can fail the job, and heal-report (3312-3324) then files plan_failed. The test only checks steps after line 840, so it misses this gap.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/plan.yml:351-357, 532, 542-554, 556-565, 567-589, 755-778 | severity=MAJOR | confidence=4\n  PROBLEM: After the hold records SKIP_PLAN=true, the support-source checkouts, \"Ensure workflow support source checkout\", \"Stage workflow support files\" and \"Fetch issue metadata\" still run and can fail the job. The same PR gates \"Fetch issue comments\" at 843.\n  WHY: A job failure triggers heal-report, which files a plan_failed report for an issue that was deliberately held. This contradicts the CHANGELOG's \"0\".\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bd06e547b5afc30e6fb6d4f573ee194d12b5eab55e3d6c9ecaba1c000e98f058",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8169,
+    "run_id": "40241810994",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40241810994",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025231132_7145a6b8b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8169,
+    "run_id": "40241810994"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T23:11:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

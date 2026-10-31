@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move sufficiently large inline run: bodies\u2014such as Generate diff context (.github/workflows/review_autofix.yml:4330-4332)\u2014into workflow-invoked, verified-support scripts until the workflow is well below 480,000 bytes.\"\n  expected_change_site: .github/workflows/review_autofix.yml and scripts/review_autofix_step_*.sh\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The workflow file remains at 481,287 bytes, exceeding the 480,000-byte guard. Inline bodies were not moved.\n- requirement: \"Update test_review_autofix_passes_support_sha_to_every_marker_site to cover all three verified gate-SHA exports without removing one from the workflow.\"\n  expected_change_site: tests/test_workflow_failure_heal.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test still expects two exports, failing the CI run.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move sufficiently large inline run: bodies\u2014such as Generate diff context (.github/workflows/review_autofix.yml:4330-4332)\u2014into workflow-invoked, verified-support scripts until the workflow is well below 480,000 bytes.\"\n  Expected change site: .github/workflows/review_autofix.yml and scripts/review_autofix_step_*.sh\n  Evidence of absence: The workflow file remains at 481,287 bytes, exceeding the 480,000-byte guard. Inline bodies were not moved.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Update test_review_autofix_passes_support_sha_to_every_marker_site to cover all three verified gate-SHA exports without removing one from the workflow.\"\n  Expected change site: tests/test_workflow_failure_heal.py\n  Evidence of absence: The test still expects two exports, failing the CI run.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "9d0e9e533e612dda1572ea20640158a1738f739da297d84e98b6f009303d66d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6966,
+    "run_id": "37988160979",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37988160979",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009205556_f8f6bfcff1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6966,
+    "run_id": "37988160979"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T20:55:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

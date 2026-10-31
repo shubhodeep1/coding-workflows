@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15834-15843 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When the stored-status write fails in `_heal_rejected_merged_state`, the caller does not hold the wave or otherwise prevent the unchanged stored `merged` status from being treated as complete.\n  WHY: Stored terminal status takes precedence over linked-PR state and labels, so the wave can advance with the rejected PR's work unreconciled before the next retry cycle.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:_heal_rejected_merged_state, the stored-status write failure branch (why=state_write_failed), and its caller in the current-wave reconcile loop before check-wave-status | severity=high | confidence=5\n  PROBLEM: When rewriting stored status from \"merged\" to \"in_progress\" fails (the jq or mv in the state-file write fails), MERGED_HEAL_STATE_CHANGED remains false and MERGED_HEAL_LABELS_JSON holds the original labels. The caller sees no state change and proceeds to check-wave-status without setting MERGED_HEAL_WAVE_HOLD.\n  WHY: The state file still has status: \"merged\", so reconcile_wave_issue_status returns \"merged\" from the stored-terminal-status rule, which takes precedence over linked-PR state and labels; the wave can advance with the child's work unreconciled.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/orchestrate_poll_process.sh: lines 15834-15846, 20240-20258, 20320-20327 | severity=high | confidence=5\n  PROBLEM: When updating stored status fails in _heal_rejected_merged_state (why=state_write_failed), MERGED_HEAL_WAVE_HOLD is not set to true, allowing the wave to advance with the stale merged status.\n  WHY: In STATE_FILE, .status remains \"merged\", and reconcile_wave_issue_status returns (\"merged\", \"stored_terminal\") because stored terminal statuses take precedence over linked PR and label state; WAVE_COMPLETE evaluates to true.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: `_heal_rejected_merged_state` stored-status write failure path (around lines 15834-15843) and its current-wave reconcile-loop caller (around lines 20238-20247) | severity=high | confidence=4\n  PROBLEM: On a failed state-file write, the helper returns 0 with `MERGED_HEAL_STATE_CHANGED=\"false\"` and `MERGED_HEAL_LABELS_JSON` unchanged, and never sets `MERGED_HEAL_WAVE_HOLD=\"true\"`.\n  WHY: The subsequent reconcile cycle still reports the child as merged, so the wave can advance this cycle with the rejected PR's work still undone.\n- scripts/orchestrate_poll_process.sh: `_heal_rejected_merged_state` alert-only branch (around lines 15819-15831) | severity=low | confidence=3\n  PROBLEM: The alert-only branch calls `tg_notify` with `|| true`, so a Telegram outage has no log signal at this layer; it also calls `add_healing_note` regardless of whether the issue has project context that warrants a note.\n  WHY: This is a NIT-grade observability gap; the downstream effect is limited to operator diagnosis, not runtime correctness.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: `_heal_rejected_merged_state`, the `state_write_failed` branch, and its current-wave reconcile caller before `check-wave-status` | severity=high | confidence=5\n  PROBLEM: When the helper cannot persist the change from stored status `merged` to `in_progress`, it logs `action=retry` and returns without setting a wave hold.\n  WHY: `reconcile_wave_issue_status` gives stored terminal status precedence over the rejected PR and labels, so it still reports the issue as merged and the wave can advance before the heal retries.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: `_heal_rejected_merged_state`, the stored-status write failure branch (`why=state_write_failed`, approximately lines 15834-15843), and its current-wave caller before `check-wave-status` (approximately lines 20238-20250) | severity=high | confidence=5\n  PROBLEM: When the state-file rewrite fails, the helper returns without setting `MERGED_HEAL_STATE_CHANGED` or modifying `MERGED_HEAL_LABELS_JSON`, and the `elif` branch that sets `MERGED_HEAL_WAVE_HOLD` does not run.\n  WHY: `reconcile_wave_issue_status` gives stored terminal status precedence over linked-PR state and labels, so the child is still reported as merged and the wave can advance despite the rejected PR.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh: _heal_rejected_merged_state, the `why=state_write_failed` branch (returns 0 without setting MERGED_HEAL_WAVE_HOLD), and its caller in the current-wave reconcile loop | severity=high | confidence=5\n  PROBLEM: When the stored-status rewrite (`jq ... mv`) fails inside `_heal_rejected_merged_state`, the function logs `action=retry why=state_write_failed` and returns 0; the stored status remains `merged` and `MERGED_HEAL_LABELS_JSON` is the original labels.\n  WHY: `check-wave-status` gives stored terminal status (`merged`) precedence over linked-PR state and labels, so it reports the issue as merged and the wave can advance with the child's work never done.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a97169d1b2e86420e1b8be76093dcef39c9e95fa074d4d82588b8548628c5f9b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "37044661282",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37044661282",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002183128_946b744c9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "37044661282"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T18:31:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

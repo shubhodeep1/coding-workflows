@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_promote_main_cycle.py:358-411 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: Three failed-run budget tests still use root `README.md` as their docs-only change: `test_no_code_change_since_failed_run_skips` (line 358), `test_failed_run_on_same_tip_is_retried_within_the_default_budget` (line 373) and `test_failed_runs_before_a_code_change_do_not_spend_the_budget` (line 411). The updated `is_code_path` in `scripts/promote_main_cycle.sh:220` now treats root `README.md` as code.\n  WHY: The budget walk now sees a code change, so the expected `PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run ...` and retry log lines never print. CI job `tests-promote-stall-and-review` fails with 3 failed / 116 passed (assertions at tests/test_promote_main_cycle.py:361, :378 and :415), which turns `CI / lint` red. All three reviewers rated this BLOCKER, mapped here to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update the cycle-start classifier test to match.\"\n  expected_change_site: tests/test_promote_main_cycle.py, the failed-run budget tests at lines 358, 373 and 411\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: The diff updates only `test_non_code_changes_do_not_start_a_cycle` (line 235). `test_no_code_change_since_failed_run_skips`, `test_failed_run_on_same_tip_is_retried_within_the_default_budget` and `test_failed_runs_before_a_code_change_do_not_spend_the_budget` still treat root `README.md` as non-code, are unchanged, and fail in CI. Same root cause as the consensus finding. Severity: anthropic_claude-sonnet-5_5 rated MAJOR and google_gemini-3_1-flash-lite rated BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_promote_main_cycle.py:358, 373, 411 | severity=BLOCKER | confidence=5\n  PROBLEM: These retry-budget tests still use root `README.md` as their docs-only change:\n  - line 358, `test_no_code_change_since_failed_run_skips`: `failed_head: _compare([\"README.md\"])`\n  - line 373, `test_failed_run_on_same_tip_is_retried_within_the_default_budget`: `docs_only_head: _compare([\"README.md\"])`\n  - line 411, `test_failed_runs_before_a_code_change_do_not_spend_the_budget`: `recent_head` and `oldest_head` both `_compare([\"README.md\"])`\n\n  `is_code_path` in scripts/promote_main_cycle.sh (first case arm, around line 220) now returns code for root `README.md`. Only `test_non_code_changes_do_not_start_a_cycle` (line 235, now `docs/README.md`) was updated.\n  WHY: The budget walk now sees a code change, so `PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run ... attempts=1 max=1` and the `Retrying the cycle on <TIP>: ...` lines never print. Instead the script dispatches the smoke gate (`PROMOTE_CYCLE_FAILED reason=smoke_gate_timeout`) or takes the plain dispatch path. CI `tests-promote-stall-and-review` fails with 3 failed / 116 passed (assertions at tests/test_promote_main_cycle.py:361, :378, :415), which turns `CI / lint` red.\n  Suggested fix: use `\"docs/README.md\"` in those four `_compare([...])` fixtures. Line 473 (`_compare([\"scripts/x.sh\", \"README.md\"])`) can stay as it is.\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"Update the cycle-start classifier test to match.\" The existing promote-cycle tests must reflect the reclassified files.\n  Expected change site: tests/test_promote_main_cycle.py, the failed-run budget tests at lines 358, 373 and 411.\n  Evidence of absence: Only `test_non_code_changes_do_not_start_a_cycle` (line 235) was updated. The other fixtures that treat root `README.md` as non-code are unchanged and fail in CI. Same root cause as the correctness finding.\n- Notes (informational, not findings):\n  - The new poller tests use the `_commit` helper (tests/test_orchestrate_poll_promote_cycle.py:199-200), which emits `\"parents\": [{\"sha\": \"p\"}]`, so they pass the new `parents` length check.\n  - In `comprehensive_untested_commits_json`, a SHA that is not 40-hex leaves `allowed=\"false\"`, which fails closed. The reviewer finds this acceptable.\n  - No checks were run locally.\n  - HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_promote_main_cycle.py:358, 373, 411 | severity=BLOCKER | confidence=5\n  PROBLEM: Three budget tests use `README.md` as their docs-only example, but `README.md` is now classified as code.\n  WHY: The budget walk now sees a code change, so the expected `PROMOTE_CYCLE_SKIPPED` or retry messages never print and the assertions fail.\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: \"Update the cycle-start classifier test to match.\"\n  Expected change site: tests/test_promote_main_cycle.py, the failed-run budget tests at lines 358, 373, and 411.\n  Evidence of absence: The PR updates `test_non_code_changes_do_not_start_a_cycle` (line 235). `test_no_code_change_since_failed_run_skips`, `test_failed_run_on_same_tip_is_retried_within_the_default_budget` and `test_failed_runs_before_a_code_change_do_not_spend_the_budget` are unchanged and fail in CI.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_promote_main_cycle.py:Lines 358, 373, and 411 | severity=BLOCKER | confidence=5\n  PROBLEM: The failed-run budget fixtures using `_compare([\"README.md\"])` still treat root `README.md` as a non-code-only change, but the updated classifier in `scripts/promote_main_cycle.sh:220` now treats it as code.\n  WHY: The tests take the code-change path instead of the documented no-code-change retry or skip path. CI confirms three failures in `tests-promote-stall-and-review`, which fails the aggregate `CI / lint` check.\n- Task gaps: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- The reviewer did not produce a review. It said the `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder was unfilled and no task was attached, and it asked a clarification question (Q1: A/B/C) instead.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "30740976bd7b27c5a9b2bda3844ad14115a2cb391031336bae47caa9aea00ef9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7668,
+    "run_id": "39205956371",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39205956371",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019061722_987c3c0bd9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7668,
+    "run_id": "39205956371"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T06:17:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

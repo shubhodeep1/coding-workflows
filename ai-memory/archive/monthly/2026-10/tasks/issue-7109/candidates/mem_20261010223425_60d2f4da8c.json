@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: The triage found no defect in the repository, so the useful change is automatic recovery from runner interruptions. Option A depends on someone re-running CI by hand, which goes against \u00a720 (automation bias); the pipeline's implementer cannot do it. Nothing automated does it now either: `scripts/ci_cancelled_rerun.py` `process()` only re-runs runs concluded `cancelled` or `startup_failure`, at lines 239-240, and skips with `other_conclusion` for anything else. So PR #6682's `failure` run stays red, and the auto-merge required-checks wait refuses it with a settled failure. Option B fixes the cause in the mechanism that already exists. It keeps the one-retry-per-head limit (`already_retried`, lines 231-236). Once it lands, the next sweep tick also recovers PR #6682 automatically if the PR still has the same head; option C would only add alerts without unblocking anything.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 (constraints the planner must keep, even though B is a lettered choice):\n  strategy: extend the existing mechanism in `scripts/ci_cancelled_rerun.py` (option B)\n  inputs:\n    - scripts/ci_cancelled_rerun.py (`process()` lines 159-259, `rerun_failed_jobs()` lines 146-156)\n    - tests/test_ci_cancelled_rerun.py (existing contract tests)\n    - .github/workflows/review_autofix_sweep.yml (existing caller; no new workflow or cron)\n    - changelog.d/<issue>-ci-runner-shutdown-rerun.md (new fragment)\n  steps:\n    - In `process()`, when the newest current-head run has conclusion `failure` (and every other existing guard passes: current head, no active run, not a push run, `run_attempt == 1` everywhere), make one extra bounded read of that run's failed jobs. Read their check-run annotations, or the log only if annotations are insufficient. Fetch only for a `failure` candidate, so no new per-PR call is added on other paths. Add a comment above the call naming the listings it reuses and why they are not enough (\u00a714).\n    - Classify as a runner shutdown only when a failed job carries the exact runner messages (\"The runner has received a shutdown signal\" or \"The runner has received a shutdown signal. This can happen when the runner service is stopped\"). Ignore jobs that failed only as a downstream consequence, such as the `lint` aggregate.\n    - The classification must fail closed. If any failed job lacks the signal, or the read fails or returns malformed data, skip with a new reason (`runner_shutdown_unverified` / `other_conclusion`) and never rerun. Real test failures are never re-run.\n    - On a positive classification, call the existing `rerun_failed_jobs()`, which only re-runs failed jobs and never falls back to a full rerun. Log `decision(..., \"rerun\", \"runner_shutdown\")`. Keep the existing `cancelled_ci` reason unchanged (\u00a710).\n    - Keep `CI_CANCELLED_AUTO_RERUN_ENABLED` as the only switch. Add no new env var unless it has a default inside the helper (\u00a78).\n    - Add contract tests in tests/test_ci_cancelled_rerun.py for these cases: a shutdown-annotated `failure` is rerun once; a `failure` without the signal is skipped; a mixed failure (one job with the signal, one genuine) is skipped; a second attempt is skipped as `already_retried`; an unreadable annotation or log is skipped.\n    - Add a changelog fragment, plus an agents.d fragment if the CI auto-rerun description in the README or agents.md changes.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Re-running the job that was interrupted on the same head is equivalent to a human pressing \"Re-run failed jobs\", and the existing per-head retry limit bounds it.\n  reversibility: Setting `CI_CANCELLED_AUTO_RERUN_ENABLED=false` disables it, and reverting the single-file helper change restores the cancelled-only behaviour.",
+  "fingerprint": "7a83275c613fb8344e91fc8c9cb0eab1f74a83d9c45979f7d10f9fcb147606a0",
+  "lineage": {
+    "issue_number": 7109,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38091371170",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38091371170",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7109"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010223425_60d2f4da8c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7109,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38091371170"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7109",
+  "timestamps": {
+    "created_at": "2026-10-10T22:34:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

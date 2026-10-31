@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The cause of the resolver failure can't be confirmed from what's on hand. What should this heal issue cover?\nChoices:\nA) Fix the evidence gap only. Make the resolver's fatal diagnostics reach the failure evidence: either tee or extract the redacted `::error::` lines from resolver stdout into `resolver_stage_stderr.txt`, or have the script also write them to stderr. Add a regression test showing that a post-model rejection (for example a scope-check `exit 1`) fails to appear in `failure_evidence_tail.txt` / `AUTOFIX_FAILURE_FIRST_ERROR` on the reported head and appears with the fix. The real cause is then diagnosed from the next occurrence's evidence. (RECOMMENDED)\nB) Do A now. An operator will also post the complete \"Resolve merge conflicts\" step log of run 38105347561 as an issue comment, and the root cause in `scripts/review_conflict_resolve.sh` will be fixed in the same change.\nC) Do nothing yet. Wait until an operator posts that step log, then fix only the confirmed root cause in `scripts/review_conflict_resolve.sh` without changing evidence capture.\n**Note:** C cannot proceed unattended: the log is not in the issue or the repository, and the implementer has no GitHub access.",
+  "fingerprint": "2bde2e3f5e1c4ddacae0c895482d380da805fc7161c01bdc48b84909f100a170",
+  "lineage": {
+    "issue_number": 7130,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38106470207",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38106470207",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011025555_eec3068ce7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7130,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38106470207"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7130 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T02:55:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

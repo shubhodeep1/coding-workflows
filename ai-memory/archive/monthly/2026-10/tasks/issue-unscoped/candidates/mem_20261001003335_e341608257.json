@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- File: .github/workflows/review_autofix.yml | Line or code reference: `Run reviewer models`, lines 4402 and 4412 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `review / codex-agent` check fails at `Run reviewer models`, and three identical failures triggered the fingerprint cap, preventing another review attempt on the unchanged head.\n  WHY: The supplied log tail does not identify the underlying reviewer failure or establish that it originates in this PR\u2019s changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Observation, not a code finding: The `review / codex-agent` check failed at `Run reviewer models` with the same fingerprint that triggered the identical-failure cap and a hold claim. The supplied log tail contains only environment variables and `actions/cache` cleanup, not reviewer-slot stderr. Three preceding review rounds succeeded; the failing post-autofix head only touches the changelog, one test, and the progress log, so the failure cannot be mapped to a code defect from the provided evidence. The suggested operator-level next step is a branch push or setting `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false`, not a code change.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: `Run reviewer models`, lines 4402 and 4412\n  severity=high | confidence=5\n  PROBLEM: The supplied check-run context shows `review / codex-agent` failed at this step on the PR head. `review_run_reviewers.sh` returned nonzero, and the step propagates that status. Three identical failures then triggered the fingerprint cap, blocking another review attempt on the unchanged head. The provided log tail does not identify the underlying reviewer failure.\n  WHY: The review check fails and cannot make progress on this head; the available evidence does not establish whether the failure originates in this PR\u2019s changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "88b0c05766c416b49709a4dcb75f0ccfb10344635fec38f428692c65cfb5982d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5716,
+    "run_id": "36794098183",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794098183",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001003335_e341608257",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5716,
+    "run_id": "36794098183"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T00:33:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

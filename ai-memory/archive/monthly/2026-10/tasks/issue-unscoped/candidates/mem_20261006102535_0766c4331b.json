@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:4681-4683 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The `partial_request_file.exists()` test assertion may not match the partial-finalize conditions, incorrectly predicting a partial finalize when Mistral fails and GPT is not called.\n  WHY: Qwen rated this BLOCKER and Gemini rated it MAJOR; deepseek_deepseek-v4-pro and z-ai_glm-5_2 disagree, citing the `pass_hard_failures` guard that prevents partial finalize after a hard failure.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement automatic retry for Mistral context overflow with a larger-window reviewer (GPT Luna) while preserving the original failure path for other errors.\n  expected_change_site: scripts/review_run_reviewers.sh\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implemented retry logic only retries if the specific error is context-overflow related and Mistral slot is skipped; the implementation appears to handle the fallback and related scenarios based on the updated regression tests, but complete parity across all PR-description scenarios, particularly when fallback also fails, requires final confirmation by CI.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_review_pipeline_contract.py:4681-4683 | severity=high | confidence=4\n  PROBLEM: The test assertion for `partial_request_file.exists()` relies on conditions that do not match the implemented code's logic.\n  WHY: The review says the assertion does not account for GPT being the reviewer called and includes a health-decision check absent from the retry logic.\n\n- TASK_GAP\n  Requirement: Implement automatic retry for Mistral context overflow with a larger-window reviewer (GPT Luna) while preserving the original failure path for other errors.\n  Expected change site: scripts/review_run_reviewers.sh\n  Evidence of absence: The implemented retry logic only retries if the specific error is context-overflow related and Mistral slot is skipped. The requirement to preserve the original failure path for other errors is satisfied, but the robustness of the fallback specifically regarding the circuit breaker state and partial finalize transition requires verification across all edge cases, particularly when fallback itself also fails. The current implementation appears to handle these cases (based on the updated regression tests), but complete parity with all scenarios described in the PR description needs final confirmation by CI.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n\n- HARDENING SUGGESTION\n  File: scripts/review_run_reviewers.sh\n  Location: line 5195\n  Issue: The `grep` pattern for context overflow might be incomplete or fragile if Mistral changes its error message format.\n  Suggested minimal fix: Expand the grep pattern to include other common context/token overflow message variations or use a more robust detection if possible.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_review_pipeline_contract.py:4681-4683 | severity=critical | confidence=5\n  PROBLEM: The test assertion for `partial_request_file.exists()` uses a condition that does not match the code's partial-finalize logic.\n  WHY: For the specified test case, Mistral fails without context overflow, GPT is not called, and the assertion evaluates to True even though the code does not request partial finalize.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "72bf359d04f106c3f2707565395c8988602834c6749829fa7e0b1243b92af9c7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6438,
+    "run_id": "37440744641",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37440744641",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006102535_0766c4331b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6438,
+    "run_id": "37440744641"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T10:25:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

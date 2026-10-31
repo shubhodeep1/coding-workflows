@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5325-5331 | flagged_by: [minimax_minimax-m3]\n  PROBLEM: If the rejected-output copy fails to open its target, a pre-existing file can survive and be reported as output from the current attempt.\n  WHY: The subsequent file check and size read can report stale bytes, contradicting the agents.md contract that `kept_bytes` is 0 when the copy failed.\n- tests/test_review_pool_reviewer.py:395-414 | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test does not verify the exact `kept_bytes` and `truncated` values or simulate a failed copy.\n  WHY: The LAST RUN DIFF's actual-on-disk-size behavior is not positively verified for successful or failed copies.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_run_reviewers.sh:5325-5331\n  PROBLEM: when `head -c 65536 \"${pool_attempt_output}\" > \"${pool_rejected_file}\" 2>/dev/null || true` fails to open the target, a pre-existing file at `${pool_rejected_file}` from a previous run can survive (typical bash truncates first, but a failed `open()` does not).\n  WHY: The subsequent `[ -f \"${pool_rejected_file}\" ]` then returns true and `pool_rejected_kept_bytes=\"$(wc -c \u2026)\"` reads the stale size, contradicting the agents.md contract \"0 when the copy failed\" and reporting evidence that belongs to a different attempt.\n- tests/test_review_pool_reviewer.py:395-414\n  PROBLEM: The LAST RUN DIFF's specific change is that `kept_bytes=` now reflects the actual on-disk file size (0 / partial on copy failure) rather than `min(source, 65536)`.\n  WHY: The existing assertions check the log line only up to `reason=`, so the new fields' exact values are not positively verified, and no test simulates a failed copy to confirm `kept_bytes=0` actually lands on disk.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2806180dd2d91eab8f13d98fd76acb877385f5a0a08b1a643fcfc1b6e4fa6013",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7132,
+    "run_id": "38112598293",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38112598293",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011055619_c9cd8503e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7132,
+    "run_id": "38112598293"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T05:56:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

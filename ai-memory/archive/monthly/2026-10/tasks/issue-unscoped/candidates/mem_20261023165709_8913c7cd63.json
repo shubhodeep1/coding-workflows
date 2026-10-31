@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal_queue.py:32, 39-41, 106-114 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `test_position_cli` uses a hardcoded timestamp fixture, but the CLI subprocess uses the real clock, so after the three-hour lease expires the CLI returns `\"go\"` instead of the asserted `\"wait\"`.\n  WHY: The test is nondeterministic and can fail in CI; severity differs between BLOCKER and MAJOR, so the higher severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal_queue.py:test_position_cli | severity=critical | confidence=5\n  PROBLEM: The test fails due to a timestamp mismatch between static fixture data and the current CI clock, preventing PR merge.\n  WHY: The test fixtures use hardcoded timestamps anchored to noon, while the implementation logic uses the real-time clock to calculate lease expiry. In CI environments running hours past the fixture's anchor time, the lease is considered expired, causing the CLI to return \"go\" instead of the expected \"wait\". This blocks the CI pipeline for this PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_failure_heal_queue.py:32, 39-41, 106-114 | severity=high | confidence=5\n  PROBLEM: `test_position_cli` writes fixture ticket timestamps anchored to `NOW = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)` (line 32) via `_ticket(..., age_seconds=5)` (line 108), producing `created_at` of `2026-10-23T11:59:55Z`. The test then invokes the CLI via subprocess (line 113), which uses the real wall clock \u2014 not `NOW`. The default lease is 10,800 seconds (3 hours). When CI ran at 16:12 UTC (over 4 hours after the fixture timestamp), the CLI correctly classified the ticket as stale and returned `status: \"go\"`, but the test asserts `status: \"wait\"` (line 114).\n  WHY: The unit-level `_position` helper (line 44-45) passes `now=NOW` so it is deterministic, but the CLI subprocess has no way to receive `NOW` and uses `datetime.now(timezone.utc)`. After 3 hours the fixture ticket expires and the assertion fails. This is a pre-existing test defect unrelated to this PR's change to `tests/e2e_smoke_canary.txt`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "60d1d0a1433893ec7295085aa03c8597d9de43286c80406e26f4c9af15b5dfc2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7990,
+    "run_id": "39983078532",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39983078532",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023165709_8913c7cd63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7990,
+    "run_id": "39983078532"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T16:57:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

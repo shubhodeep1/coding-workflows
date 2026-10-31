@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:5671-5691 | severity=critical | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The forced-checkout fallback replaces trusted staged support files with target-branch versions, allowing branch-controlled security audit scripts, prompts, or exclusions to affect the branch's own audit in the credential-bearing poller.\n  WHY: The security pass calls `prepare_tracking_judge_checkout` (7755 and 7759) before invoking `bash scripts/security_audit.sh` (7973-7976), and `orchestrate_poll.yml:911-912` provides credentials to the poller; severity ranged from NIT through BLOCKER, so the highest rating is retained.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:5682-5688 | severity=high | confidence=3\n  PROBLEM: On the forced-checkout path, target-ref versions replace the poller's trusted staged support files, so the security pass can run branch-controlled audit scripts, prompts, and exclusions.\n  WHY: The PR's own comment says the forced path is hit \"on every tick\" in this repo, and the security pass calls `prepare_tracking_judge_checkout` (7755 and 7759) before running `bash scripts/security_audit.sh` (7973-7976); this widens an existing weakness in the plain-checkout path.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:5671-5691 | severity=critical | confidence=3\n  PROBLEM: The forced-checkout fallback restores tracked files from the integration branch (target HEAD) over the trusted poller-staged copies of `scripts/`, `prompts/`, and `.github/ai/`.\n  WHY: Allowing an integration branch's versions of the security audit scripts, prompts, or exclusion lists to run enables that branch to bypass or weaken its own security audits.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:5682-5688 | severity=low | confidence=3\n  PROBLEM: The forced-checkout fallback restores the target branch's tracked scripts, prompts, and `.github/ai` files in the credential-bearing poller's checkout instead of retaining the poller's staged copies.\n  WHY: A branch that passes review/autofix could modify a script invoked by the security pass or orchestrator gates, which the forced-checkout path would execute under poller credentials; the plain-checkout path already behaves this way, so this extends rather than creates the attack surface.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:5683 | severity=high | confidence=4\n  PROBLEM: The forced-checkout fallback makes target-branch-controlled `security_audit.sh` executable in the credential-bearing poller process.\n  WHY: `scripts/orchestrate_poll_process.sh:7759, 7976` uses that checkout for the security pass and invokes `bash scripts/security_audit.sh`; `orchestrate_poll.yml:911-912` provides `GH_TOKEN` and `OPENROUTER_API_KEY`, which the branch-controlled script can access or use to bypass its own audit.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "b1c6abef083090408930e1ae9ebaa775d724019239e03e6072822df5b312b658",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7311,
+    "run_id": "38377277045",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38377277045",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013100314_1e709a26cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7311,
+    "run_id": "38377277045"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T10:03:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

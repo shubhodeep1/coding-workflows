@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-14 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The unconditional `process.getBuiltinModule` guard exits 1 on Node.js older than 20.16 / 22.3, replacing the earlier `require` loading that worked on all Node versions.\n  WHY: CommonJS consumers on older Node (18.x, 20.0-20.15, 22.0-22.2) lose a working audit gate at their next sync, because the file is overwritten on every sync; reviewers disagreed on severity (NIT/MAJOR), so the highest is used, and a `require` fallback of about 5 lines would fix it.\n- scripts/workflow_failure_heal.py:5740-5747 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `synced_security_source_paths` (and its caller `synced_check_source_paths`) maps `managed_files` targets to template sources without honouring `seed_only`. This was raised only as a hardening suggestion, not a defect.\n  WHY: The managed-digests gate currently rejects the allowlist first, so the mapping is unreachable today, but a future flow that skips the gate could route consumer-owned allowlist findings upstream again.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-14 | severity=NIT | confidence=3\n  PROBLEM: The script exits 1 on Node.js older than 20.16 / 22.3 (including 18.x, 20.0-20.15, 22.0-22.2), whereas the old `require('child_process')` worked everywhere.\n  WHY: `npm run audit:ci` exits 1 before `npm audit` runs, so CommonJS consumers on older Node lose a working audit gate at the next sync.\n- scripts/workflow_failure_heal.py:5740 (hardening suggestion) | risk score=1\n  PROBLEM: `synced_security_source_paths` ignores `seed_only`; add `if item.get(\"seed_only\") is True: continue` (about 2 lines).\n  WHY: It is unreachable today because the managed-digests gate at line 5718 rejects the allowlist first.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-14 (hardening suggestion)\n  PROBLEM: Add a `require` fallback when `process.getBuiltinModule` is missing (about 5 lines).\n  WHY: It keeps older CommonJS consumers working.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-14 | severity=MAJOR | confidence=4\n  PROBLEM: The hard exit replaces the earlier `require` calls and exits 1 on Node < 20.16 / 22.3 with no fallback.\n  WHY: The script is overwritten on every `@stable` sync, so consumers cannot opt out. The change is documented but still a runtime behaviour change, and a `require` fallback would restore Node 18 CommonJS support.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-14 (hardening suggestion) | risk score=1\n  PROBLEM: Use `process.getBuiltinModule(name)` when present, otherwise `require(name)` guarded by `typeof require === 'function'` (about 6 lines).\n  WHY: It keeps older CommonJS consumers working, and ESM-only consumers on old Node still fail closed.\n- scripts/workflow_failure_heal.py:5723, 5740-5747, 6190 (hardening suggestion) | risk score=1\n  PROBLEM: `synced_security_source_paths` and `synced_check_source_paths` ignore `seed_only`; add `if item.get(\"seed_only\") is True: continue` (about 2 lines).\n  WHY: The gate rejects the allowlist before the mapping is consulted, so it is unreachable today. A future caller that skips the gate would route consumer-owned allowlist findings upstream.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-14 | severity=MAJOR | confidence=4\n  PROBLEM: The unconditional `process.getBuiltinModule` requirement breaks Node versions that previously ran the CommonJS script via `require`, including Node 18 and Node 20 before 20.16.\n  WHY: `npm run audit:ci` exits 1 at the version guard and never runs `npm audit`. The README documents the new minimum, but existing consumers on older runtimes still lose a working gate on sync.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-11 | severity=NIT | confidence=3\n  PROBLEM: The `typeof process.getBuiltinModule !== 'function'` guard hard-fails on Node older than 20.16 / 22.3 in a file that is overwritten on every sync.\n  WHY: CommonJS consumers on Node 18 or 20.0-20.15 that previously passed the gate now exit 1 before `npm audit` runs. The tradeoff is documented and no affected consumer is evidenced, so the reviewer treated it as a compatibility-drift note.\n- scripts/workflow_failure_heal.py:5740-5747, 6190 (hardening suggestion) | risk score=1\n  PROBLEM: The contract mapping enumerates `managed_files` targets without honouring `seed_only`, unlike `build_sync_manifest.py` `derive_managed_digests` (line 335). Add `if item.get(\"seed_only\") is True: continue` (about 1 line).\n  WHY: It is unreachable today because the managed-digests gate (`workflow_failure_heal.py:5713-5720`, `workflow_failure_heal_intake.sh:821-824`) already rejects the allowlist. The change only prevents a future flow that skips the gate from recreating the wipe-and-restore loop.\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:8-14 (hardening suggestion) | risk score=1\n  PROBLEM: The missing-`getBuiltinModule` path hard-exits even where `require` works. Fall back to a bare `require(name)` in try/catch and exit only if that also fails (about 8 lines).\n  WHY: It keeps older CommonJS consumers working. The assertion at `tests/test_audit_gate_template_atomicity.py:316` would need to be scoped to the getBuiltinModule-missing path.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "148601cc91713a061e83ff5a21ec8ba876043104ca6bdea7356ed862c6b2606c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8334,
+    "run_id": "40833115284",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40833115284",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029090835_5c4fa9e2ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8334,
+    "run_id": "40833115284"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T09:08:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

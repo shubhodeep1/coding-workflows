@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/security-audit.yml:432 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The condition `failure() && github.event.repository.private == true` is false on schedule-triggered runs, because `github.event.repository` is absent there. The rejected Claude audit reply is therefore never uploaded on weekly scheduled runs.\n  WHY: The weekly cron run (incident #8204, run 40333816067) is the path this artifact targets, so the step does nothing where it is needed. Reviewers rated this MAJOR. Confidence ranged from 4 to 5. The suggested fix is to resolve repository privacy once into GITHUB_ENV (for example via `gh api repos/${GITHUB_REPOSITORY} --jq .private`) and gate the upload on that value.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The rejected-reply artifact must be available when a failing security audit is rejected as malformed_output, including on the weekly scheduled run that produced the incident (issue #8204, run 40333816067). The upload is to fire for weekly and dispatched runs when the audit fails and the repository is private.\n  expected_change_site: .github/workflows/security-audit.yml:425-442 (upload step `if` condition, line 432)\n  confidence=5\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The `if` condition `failure() && github.event.repository.private == true` evaluates false on schedule events and on workflow_call from the weekly wrapper workflow-templates/ai-security-audit.yml:5-6, so no weekly run uploads. The step comment at security-audit.yml:429-431 acknowledges this. The changelog claim that weekly runs upload the file is therefore inaccurate. The contract test test_security_audit_uploads_rejected_reply_only_for_private_repos_on_failure only checks that the condition string is present, so it passes despite the gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/security-audit.yml:432 | severity=MAJOR | confidence=4\n  PROBLEM: The condition failure() && github.event.repository.private == true fails to account for scheduled events where github.event.repository is undefined.\n  WHY: On weekly scheduled runs the github.event object has no repository metadata, so rejected Claude audit replies are not uploaded even when the repository is private. This contradicts the stated requirement.\n- HARDENING: .github/workflows/security-audit.yml (Upload rejected Claude audit reply step) | retention-days: 3 is hardcoded; use a repository variable or defined constant. Estimated 1 line changed. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: The rejected-reply artifact must be available when a failing security audit is rejected as malformed_output, including on the weekly scheduled run that produced the incident (issue #8204, run 40333816067). The upload must fire for weekly and dispatched runs when the audit fails and the repository is private.\n  Expected change site: .github/workflows/security-audit.yml:425-442 (upload step if condition)\n  Evidence of absence: The condition `failure() && github.event.repository.private == true` is false on schedule events because github.event.repository is null. The incident was triggered by the weekly cron 0 8 * * 0 in workflow-templates/ai-security-audit.yml:5-6, which calls security-audit.yml via workflow_call and inherits the schedule event context. The workflow's own comment at security-audit.yml:429-431 acknowledges this. The contract test test_security_audit_uploads_rejected_reply_only_for_private_repos_on_failure checks only that the condition string is present. A correct fix would resolve repository privacy into GITHUB_ENV and gate on it, then correct the changelog.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/security-audit.yml:432 | severity=MAJOR | confidence=5\n  PROBLEM: The upload step never fires on the weekly scheduled run that produced incident #8204 (run 40333816067). Schedule payloads carry no github.event.repository, so `github.event.repository.private` is null and `null == true` is false.\n  WHY: The workflow's own comment at lines 429-431 acknowledges this limitation, but the fix targets exactly this weekly failure. Resolve repository privacy once into GITHUB_ENV via `gh api repos/${{ github.repository }} --jq .private` and gate the upload on that value.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/security-audit.yml:432 (triggers at lines 3\u20137; wrapper workflow-templates/ai-security-audit.yml lines 5\u20136) | severity=MAJOR | confidence=4\n  PROBLEM: On schedule-triggered runs, `github.event` is empty, so `github.event.repository.private` is null and `null == true` is false. The upload step never runs on the weekly path in any private consumer repository.\n  WHY: The artifact is then capturable only via manual workflow_dispatch, while incident #8204 (run 40333816067) was a weekly scheduled run. A consumer's rejected malformed_output reply is lost with the runner. Fix: resolve privacy into GITHUB_ENV and gate on `failure() && env.SECURITY_AUDIT_REPO_PRIVATE == 'true'`, and correct the changelog wording.\n- TASK_GAP:\n  Requirement: \"Upload that file with an if: failure() upload-artifact step, but only when the repository is private, with retention of 3 days or less\", evaluated on the weekly scheduled audit that produced the #8204 incident (run 40333816067).\n  Expected change site: .github/workflows/security-audit.yml, upload step condition (line 432).\n  Evidence of absence: `github.event.repository.private == true` cannot be true for `schedule` events or for `workflow_call` from the weekly consumer wrapper (workflow-templates/ai-security-audit.yml:5-6), so no weekly run in a private repository uploads. The comment at lines 429\u2013431 shows the author knew. The earlier gemini task gaps about the env var, private-only condition and prompt wording are already satisfied by the diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- HARDENING: .github/workflows/security-audit.yml lines 425\u2013438 | The upload never fires on schedule runs in private consumer repos. Resolve `repos/$GITHUB_REPOSITORY` `.private` once into GITHUB_ENV in an existing pre-audit step and change the `if` to `failure() && env.SECURITY_AUDIT_REPO_PRIVATE == 'true'`. Estimated 4 lines changed. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "197b59c0b341ed99888f17cf8b42e68256caf3938af4274a0e91854bcf87da50",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8207,
+    "run_id": "40355811670",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40355811670",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026163009_125ba57418",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8207,
+    "run_id": "40355811670"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T16:30:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

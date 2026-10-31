@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The re-issue spec says \"Keep STABLE_RELEASE_ENABLED off by default: still run validation and the CI gate, but skip tagging, release, consumer dispatch, and sync-to-main.\" That rules out B, which defaults to `true`, and C, which adds no switch. Add `STABLE_RELEASE_ENABLED` as a new repo variable read by both `.github/workflows/mark-stable.yml` and `.github/workflows/test-and-mark-stable.yml`, with an in-workflow default of `false` (unattended instructions \u00a78). Every gate run then validates and checks CI / lint on `RELEASE_TESTED_SHA` but cuts no release until an operator sets the variable to `true`. That includes runs started by `auto-release-stable.yml` and the promote cycle. This matches \"Do not enable releases\".\nQ2: The changelog step \"Assemble changelog fragments\" (`mark-stable.yml` lines 600-669, and the step at `test-and-mark-stable.yml` line 6209 onward) commits \"chore: assemble changelog fragments for ${VERSION}\" and pushes it to `stable`. That commit names a version, so it is release bookkeeping. On a run that cuts no version it would also move `stable` away from `RELEASE_TESTED_SHA` with nothing tagged. The step's own comment already covers this case: when nothing is pushed, \"the fragments simply wait for the next release\". A disabled run should therefore skip the changelog push and leave `stable` and `changelog.d/` untouched. The spec's order still holds: the CI / lint gate runs after \"Record the tested commit\" and before any changelog push. The changelog step is simply gated off when releases are disabled.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none: both decisions are lettered)\n\nImplementation notes for the planner (both lettered choices):\n- **Where the variable is read.** In both release workflows, read `${{ vars.STABLE_RELEASE_ENABLED || 'false' }}` into step `env:`. Compare it case-insensitively, so only `true` enables releases.\n- **Where the CI gate goes.** Put the CI / lint gate in `scripts/release_ci_gate.sh` and call it immediately after \"Record the tested commit\" in each workflow, before \"Assemble changelog fragments\". It must fail closed when the check-run is missing, incomplete, not `success`, or unreadable.\n- **What the disabled path skips.** Gate these steps on the variable being `true`: changelog assembly, push, tag, release, consumer dispatch and sync-to-main. When it is off, emit a log line saying the release was skipped by `STABLE_RELEASE_ENABLED`.\n- **Tests.** Cover both workflows and the disabled path in `tests/test_release_ci_gate.py`.\n- **Scope.** Stay inside the granted `files_touched` paths.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- STABLE_RELEASE_ENABLED (variable): an operator sets it to `true` once the #6532 fix has merged with required checks passing. Until then, release-gate runs validate and check CI / lint but skip the changelog push, tagging, the release, consumer dispatch and sync-to-main.",
+  "fingerprint": "7bed31e4a5113fd3af09dcb6bdcd64eba95b8103e1b1615655542a1a8f38a3e6",
+  "lineage": {
+    "issue_number": 6770,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37788826617",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37788826617",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6770"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008140810_2a75e6a2d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6770,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37788826617"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6770",
+  "timestamps": {
+    "created_at": "2026-10-08T14:08:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

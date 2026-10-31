@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The failing run's log is unavailable. What should this fix cover?\nChoices:\nA) Fix both defects confirmed in the source: (1) when the judge says merge but nothing merges, report a specific skip reason in both merge branches of `review_rb_judge.sh`; (2) give `llm_failed`, `json_parse_failed` and `merged_pr_unsafe_action` their own comment text in `review_autofix.yml`'s review-blocked comment step. Add contract tests for both. (RECOMMENDED)\nB) Only defect (1), the merge-branch reporting in `review_rb_judge.sh` that the heal issue suggested.\nC) No code change; close as unverifiable until someone pulls the log for run 38053737721.\nQ2: When the judge says merge but no merge happens (PR has conflicts, mergeability still unknown after polling, or `gh pr merge` refused), how should the run report it? No safety gate is weakened under either option.\nChoices:\nA) Stop writing `judge_handled=true` and emit the existing reasons `merge_conflict` / `mergeability_pending` / `sync_merge_failed`. The existing fallback step then labels linked issues `ai:review-blocked` and posts the matching comment it already has for those reasons. `merge_with_followup` already behaves this way. `ai:needs-human` is not added, because these gates are transient. (RECOMMENDED)\nB) Keep `judge_handled=true` (no fallback comment or label change) and only add a `judge_skip_reason` (e.g. `merge_conflict` / `mergeability_pending` / `merge_request_failed`) for the logs and Telegram. This is the smallest change in behaviour.\n**Note:** Q2 applies only if Q1 is A or B. If Q1 is C, Q2 is moot.",
+  "fingerprint": "2b5f626a3e1494b4576d04895c878059b14aaf0406f395fe5f96620b3a951859",
+  "lineage": {
+    "issue_number": 7084,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38055012132",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38055012132",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010132211_94cad0c1db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7084,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38055012132"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7084 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T13:22:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

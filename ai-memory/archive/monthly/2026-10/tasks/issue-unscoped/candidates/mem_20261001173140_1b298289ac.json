@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.claude/commands/implement-plan-claude.md`:332 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: Extra cap rounds are counted by stop ID rather than failure fingerprint, so a budget grant for one failure can give a distinct failure with the same stop ID an extra round without its own judge decision.\n  WHY: The plan at `docs/plans/retire-master-session-plan.md:134` says the cap increases for that fingerprint only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `.claude/commands/implement-plan-claude.md`:332 | severity=MAJOR | confidence=5\n  PROBLEM: Extra cap rounds are counted by stop ID, not by failure fingerprint, although the merged plan specifies that a `budget` grant raises the cap for that fingerprint only (`docs/plans/retire-master-session-plan.md:134`).\n  WHY: After a grant for one failure, a distinct failure with the same stop ID also gets an extra round without its own judge decision.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/implement-plan-claude.md:332 | severity=MAJOR | confidence=4\n  PROBLEM: The cap-counting rule counts budget/descope grants by stop ID, not by stop ID and fingerprint as the merged plan specifies.\n  WHY: A budget grant for one security-cap failure gives a distinct failure with the same stop ID an extra round without the judge assessing that failure.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "afea907dfc92adef6af4b3191cd4f3691f93081080c4322de2c725444fc50121",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36896209286",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36896209286",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001173140_1b298289ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36896209286"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T17:31:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

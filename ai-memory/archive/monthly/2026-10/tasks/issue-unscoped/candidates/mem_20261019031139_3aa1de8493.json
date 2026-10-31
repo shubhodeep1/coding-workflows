@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/comprehensive_test_and_release_gh_api.sh:73 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `[^0-9]` boundary class in the `(502|503|504)` alternative of `gh_api_safe_stderr_is_transient` also treats letters as boundaries, so a SHA-like token such as `a502c` is classified as a transient 5xx.\n  WHY: Non-transient failures such as a 404 are retried 3 more times (5, 10 and 20 s waits, about 35 s of delay) with log noise. Severity disagreement: gemini-3_1-flash-lite said MAJOR, and the other three said NIT. The highest is used, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/comprehensive_test_and_release_gh_api.sh:~73 | severity=NIT | confidence=3\n  PROBLEM: The `[^0-9]` boundary class in the `grep -Eqi` pattern `(^|[^0-9])(502|503|504)([^0-9]|$)` in `gh_api_safe_stderr_is_transient` treats hex letters as boundaries, so a commit SHA containing 502, 503 or 504 matches.\n  WHY: A 404 for a missing commit is retried 3 more times (5, 10 and 20 s waits) and emits three `GH_API_SAFE_RETRY` lines. The final outcome is unchanged, so the only effect is about 35 s of delay and log noise. The existing negative test covers digit neighbours only. The suggested fix is `[^[:alnum:]]` on both sides.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/comprehensive_test_and_release_gh_api.sh:73 | severity=MAJOR | confidence=4\n  PROBLEM: The `[^0-9]` boundary class used to match transient HTTP 502/503/504 errors is too permissive and also matches hex characters.\n  WHY: A commit SHA or URL containing \"502\", \"503\" or \"504\" as a substring (for example \"a502c\") is classified as transient. This triggers unnecessary retries for non-transient failures, causing delay and log noise.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/comprehensive_test_and_release_gh_api.sh:73 | severity=NIT | confidence=3\n  PROBLEM: The `[^0-9]` boundary class treats any non-digit, including letters, as a boundary, so a SHA fragment like `abc502def` is classified as a transient 5xx. The `EOF` alternative in the same regex already uses the tighter `[^[:alnum:]_]`.\n  WHY: A non-transient failure whose payload contains such a SHA fragment is retried up to 3 extra times (5, 10 and 20 s), adding about 35 s of delay per affected read. `test_gh_api_safe_does_not_retry_404` does not cover SHA-containing messages.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/comprehensive_test_and_release_gh_api.sh:73 | severity=NIT | confidence=3\n  PROBLEM: The digit boundaries in the `(^|[^0-9])...(502|503|504)([^0-9]|$)` alternative of `gh_api_safe_stderr_is_transient` allow letters, underscores and other non-digits around a status code, so a SHA-like token such as `a502c` is classified as transient.\n  WHY: When a failed read's stderr includes such a token, the helper retries after waits of 5, 10 and 20 s before returning failure, even for a non-transient error such as 404.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "216777dc3870a5b042718941b85edeb679dc7177d7b408db05833f5c2cff3f10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7649,
+    "run_id": "39191222009",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39191222009",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019031139_3aa1de8493",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7649,
+    "run_id": "39191222009"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T03:11:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

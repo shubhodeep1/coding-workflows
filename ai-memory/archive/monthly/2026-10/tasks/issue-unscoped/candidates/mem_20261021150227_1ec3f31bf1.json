@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/wfopt-0922-validate-dispatch-notice.md:1-2 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The pending changelog fragment still exists although its content is already folded into CHANGELOG.md:3443, so the next release assembly would duplicate the entry.\n  WHY: scripts/assemble_changelog.py:394-424 folds fragments without checking released sections. Severity disagreement: sonnet=MAJOR, gemini=MAJOR, luna=NIT, so the highest (major, mapped to high) is used.\n- CHANGELOG.md:3443 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: A released CHANGELOG.md bullet was edited directly, which CLAUDE.md \u00a720 forbids.\n  WHY: The release assembler does not reconcile direct edits, so the entry is duplicated in the next release. Severity disagreement: gemini=BLOCKER, sonnet=NIT (described as the same duplication seen from the other side), so the highest (blocker, mapped to critical) is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main\"\n  expected_change_site: changelog.d/wfopt-0922-validate-dispatch-notice.md (should be deleted)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: The fragment is still present in the working tree, its text is identical to the CHANGELOG.md:3443 bullet, and the earlier deletion did not persist (restored by the merge of main). The changelog conflict is only partly resolved.\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main\"\n  expected_change_site: agents.d/7604-synced-security-finding-intake.md (should be resolved/deleted)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Gemini reports that the fragment file still exists in the working tree although its content is already folded into agents.md. Sonnet checked by glob and found the file absent, so the reviewers disagree.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/wfopt-0922-validate-dispatch-notice.md:1-2 | severity=MAJOR | confidence=4\n  PROBLEM: The fragment duplicates the bullet at CHANGELOG.md:3443. The previous autofix run deleted it, but the merge of main (HEAD 05b7f59) appears to have restored it.\n  WHY: The next scripts/assemble_changelog.py fold would append a second copy under the next release. The fix is to delete the fragment again, after the final merge of main.\n- CHANGELOG.md:3443 | severity=NIT | confidence=3\n  PROBLEM: A released section was edited directly, which CLAUDE.md \u00a720 and agents.md forbid. This is acceptable only if the pending fragment is removed, and it currently is not.\n  WHY: This is the same duplication seen from the other side, not a separate defect.\n- TASK_GAP: Requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\" | Expected change site: changelog.d/wfopt-0922-validate-dispatch-notice.md should be absent (agents.d/7604* should also be absent) | severity=MAJOR | confidence=4\n  Evidence of absence: The agents.d/7604* file is correctly absent (checked by glob). The changelog fragment is still present, with text identical to the CHANGELOG.md:3443 bullet, so the changelog conflict is only partly resolved.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CHANGELOG.md:3443 | severity=BLOCKER | confidence=5\n  PROBLEM: The correction was edited directly into a released bullet, violating the \"Never edit CHANGELOG.md directly\" rule in CLAUDE.md \u00a720.\n  WHY: The release assembler does not reconcile direct edits, so the entry will be duplicated in the next release.\n- changelog.d/wfopt-0922-validate-dispatch-notice.md:(file existence) | severity=MAJOR | confidence=5\n  PROBLEM: The fragment file still exists in the working tree, although the last run diff showed it was deleted, and its content is already in CHANGELOG.md:3443.\n  WHY: The release assembler will fold the fragment into CHANGELOG.md again, causing a duplicate entry.\n- TASK_GAP: Requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main\" | Expected change site: agents.d/7604-synced-security-finding-intake.md (should be resolved/deleted) | severity=BLOCKER | confidence=5\n  Evidence of absence: The fragment file still exists in the working tree, and its content is already folded into agents.md.\n- TASK_GAP: Requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main\" | Expected change site: changelog.d/wfopt-0922-validate-dispatch-notice.md (should be deleted) | severity=BLOCKER | confidence=5\n  Evidence of absence: The fragment file still exists in the working tree, despite the last run diff claiming it was deleted.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CHANGELOG.md:3443; changelog.d/wfopt-0922-validate-dispatch-notice.md:1-2 (code reference: scripts/assemble_changelog.py:394-424) | severity=NIT | confidence=5\n  PROBLEM: The changelog entry was edited in CHANGELOG.md, but the matching pending fragment remains.\n  WHY: The release assembler adds fragment entries without checking whether they are already in a released section, so the next release will include the entry again.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP: Requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main\" (PR description) | Expected change site: changelog.d/wfopt-0922-validate-dispatch-notice.md (should be deleted) | severity=BLOCKER | confidence=5\n  Evidence of absence: The file exists in the working tree with 2 lines of content. The last run diff shows it was deleted (-2 lines), but the deletion did not persist. The PR changed-files list is empty, so no changes were committed. The fragment content duplicates the entry already folded into CHANGELOG.md:3443, so the next release will fold it again and create a duplicate entry.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "32c3a2842bca032771e4bb05df335a66b7145d00add2dcc5e37d15762e7dbfeb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7807,
+    "run_id": "39618927859",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39618927859",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021150227_1ec3f31bf1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7807,
+    "run_id": "39618927859"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T15:02:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

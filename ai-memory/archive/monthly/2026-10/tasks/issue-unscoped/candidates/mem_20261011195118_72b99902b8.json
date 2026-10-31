@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:413-424; .github/workflows/mark-stable.yml:281-292; .github/workflows/test-and-mark-stable.yml:4750-4761 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: If the `sysconfig` lookup fails, the ShellCheck step falls back to the runner's unpinned binary, which may be an older version.\n  WHY: An older binary can ignore `# shellcheck extended-analysis=false` and reproduce the runner shutdown; other reviewers considered this an accepted residual risk rather than a new defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:413; .github/workflows/mark-stable.yml:281; .github/workflows/test-and-mark-stable.yml:4750 | severity=high | confidence=[4]\n  PROBLEM: The ShellCheck CI job falls back to the runner's unpinned shellcheck binary if the pinned version install fails or the binary is missing.\n  WHY: If the fallback binary is an older version (0.9.x), it ignores the file-wide `# shellcheck extended-analysis=false` directive (SC1107). Consequently, it performs the expensive dataflow analysis that causes the runner to shut down, causing the CI job to fail again, even though the intended fix was applied.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:413-424; .github/workflows/mark-stable.yml:281-292; .github/workflows/test-and-mark-stable.yml:4750-4761 | severity=high | confidence=[4]\n  PROBLEM: When the `sysconfig` lookup fails, `|| sc_dir=\"\"` leaves `sc` set to `shellcheck`; the step then invokes `\"${sc}\" --severity=error \"$f\"`.\n  WHY: If the runner\u2019s binary is an older version, it ignores the poller\u2019s `extended-analysis=false` directive and can reproduce the ShellCheck runner shutdown these changes aim to prevent.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml (and the twin steps at .github/workflows/mark-stable.yml:281, .github/workflows/test-and-mark-stable.yml:4750) | PROBLEM: When the sysconfig lookup fails, the reason is swallowed and the step silently degrades to the runner's ShellCheck, so a future recurrence of the 0.9.x shutdown would show only the generic warning with no root cause in the log. Suggested minimal fix: keep stderr on that one command so the failure reason is visible in the job log, e.g. `sc_dir=\"$(python3 -c 'import sysconfig; print(sysconfig.get_path(\"scripts\"))' 2>&1)\" || sc_dir=\"\"`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f566c9cbe47d656d229b9dfc07e4c4254cec20ae887328661438f184977e9743",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6682,
+    "run_id": "38167610930",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38167610930",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011195118_72b99902b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6682,
+    "run_id": "38167610930"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T19:51:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

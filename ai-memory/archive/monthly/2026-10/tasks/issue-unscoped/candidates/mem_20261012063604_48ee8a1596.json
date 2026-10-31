@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:558-573 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: New content was added directly to `agents.md` instead of through the documented `agents.d/` fragment mechanism.\n  WHY: The documented process says to use a fragment, but the enforcement mechanism is absent at this ref; reviewers disagreed on severity (NIT, MAJOR, BLOCKER), so the highest severity is reported.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- File: agents.md\n  Line or code reference: lines 558-573, the paragraph \"Pending operator step for #6831 (activation gaps after PR #6647), recorded by #7052 ...\"\n  Problem: The PR adds new prose straight into `agents.md` instead of using the documented fragment mechanism.\n  Why it fails at runtime: If the direct-edit check exists on `main`, CI for this PR would fail on the added hunk. The edit could also conflict with concurrent additions to the same section. The reviewer notes that the mechanism does not exist at this ref and says to confirm it exists on the target ref before applying a fix.\n  severity=NIT\n  confidence=3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: agents.md\n  Line or code reference: Added lines 558-572\n  Problem: New content was added directly to `agents.md` instead of through an `agents.d` fragment targeting the exact section.\n  Why it fails at runtime: The repository\u2019s `agents.md` fragment policy says the direct-edit check rejects additions to `agents.md`. This change therefore fails the PR\u2019s CI check.\n  severity=BLOCKER\n  confidence=5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: agents.md\n  Line or code reference: lines 558-572 (the 16 lines inserted between the paragraph ending \"the former `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` placeholder is retired and nothing reads it.\" and the \"Integration-ref trust boundary:\" paragraph)\n  Problem: New content was added directly to `agents.md` instead of through the documented `agents.d/` fragment mechanism.\n  Why it fails at runtime: The enforcement script `scripts/check_agents_md_direct_edits.py` documented in \u00a725 does not exist in this checkout, so CI will not fail on this violation. However, the rule exists to prevent concurrent-write conflicts (incident #6902's PR #6905 conflicted on two direct additions to the same section). This PR violates the documented process and sets a precedent for future PRs to bypass the fragment mechanism. The change should be moved to `agents.d/7052-pr-merge-guard-activation-pending.md` with the appropriate section marker.\n  severity=MAJOR\n  confidence=4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "f1c5e08d33c520986f86ffb152efd771234c4678363ba14c83ddbce5a87a936c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7054,
+    "run_id": "38212007668",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38212007668",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012063604_48ee8a1596",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7054,
+    "run_id": "38212007668"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T06:36:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

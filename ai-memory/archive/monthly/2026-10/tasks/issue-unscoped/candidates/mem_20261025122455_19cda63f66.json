@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue summary states \"Bounding `curl_gh_api` is recorded as a follow-up,\" and the changelog fragment notes this fix \"is tracked separately.\"\n  expected_change_site: The changelog fragment or the PR description.\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No hunk in the PR diff or the PR description references a follow-up issue number for the bounding of `curl_gh_api`. (Severity stated as NIT. Other reviewers anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash considered this deferred by the issue's scope guard and AD-1, so not a gap.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: The issue summary states \"Bounding `curl_gh_api` is recorded as a follow-up,\" and the changelog fragment notes this fix \"is tracked separately.\"\n  Expected change site: The changelog fragment or the PR description.\n  Evidence of absence: No hunk in the PR diff or the PR description references a follow-up issue number for the bounding of `curl_gh_api`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d1673379683feda06ab6a528c607600ccdeb23ff9455b3cc792d7df5691f8f0b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8131,
+    "run_id": "40191267635",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40191267635",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025122455_19cda63f66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8131,
+    "run_id": "40191267635"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T12:24:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

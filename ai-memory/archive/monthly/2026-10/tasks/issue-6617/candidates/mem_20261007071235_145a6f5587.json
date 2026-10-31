@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #6617: update `tests/e2e_smoke_canary.txt`\n\nI planned against `main` at fa60c40d079284241185bb9d12803a5089512cb5. No integration branch is set, so there is no branch mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for exactly one change, to the content of one file that already exists. Nothing calls for creating, extending or reducing anything else, so the scope stays as written.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (already exists). Its current content is:\n  ```\n  status: ok\n  run_id: 26151428977\n  updated-by: ai-pipeline\n  ```\n  Each line ends with LF, including the last one.\n\n2. Functions or modules to implement\n- None. Replace the whole file with exactly these three lines, each ending with LF:\n  ```\n  status: ok\n  run_id: alt-37584198174\n  updated-by: ai-pipeline\n  ```\n  Only the `run_id` line changes. Keep the trailing newline the file already has, and add no blank lines and no trailing spaces.\n\n3. Data structures affected\n- None.\n\n4. API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 How to edit the file\n- Chosen: Rewrite the whole file with exactly the three requested lines.\n- Alternatives considered: Change only the `run_id` line in place.\n- Why: Rewriting the whole file guarantees the content matches the issue exactly, whatever the old file contained. The resulting diff is the same.\n\n## Security considerations\n- Trust boundaries touched: none. This is a static text fixture that no code runs or parses as input.\n- Authorization: there are no new endpoints or other surfaces.\n- External-input validation: not applicable.\n- Abuse cases: none. The file holds no secrets.\n\n5. Risks and edge cases\n- Adding or dropping the final newline could break an exact-match check. Keep it as it is now (LF).\n- Editing any other file would break the constraint that only this file changes, so touch nothing else.\n\n6. Testing considerations\n- `cat -A tests/e2e_smoke_canary.txt` should print exactly three lines, each ending in `$`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`, with one line changed.\n\n7. Pre-execution self-check\n- The edit is fully specified, limited to one file, and the file exists.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d28013e1a69f9510b91cf0feab473105ebe8cb383bf968fa3c97efa915fde016",
+  "lineage": {
+    "issue_number": 6617,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37585218763",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37585218763",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6617"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261007071235_145a6f5587",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6617,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37585218763"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6617",
+  "timestamps": {
+    "created_at": "2026-10-07T07:12:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

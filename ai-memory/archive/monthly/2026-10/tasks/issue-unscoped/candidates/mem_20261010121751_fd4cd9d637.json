@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/sandbox_image.sh:66 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script does not check whether `cd` succeeds while resolving the context path.\n  WHY: If `CONTEXT` is invalid or inaccessible, subsequent commands may use the wrong directory or behave unexpectedly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Pull prebuilt sandbox images from GHCR when one matches its inputs.\n  expected_change_site: .github/workflows/publish-sandbox-images.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The logic to pull prebuilt sandbox images exists in `scripts/sandbox_image.sh`, and the workflow `publish-sandbox-images.yml` exists to push them. However, no workflow currently **pulls** the images; `codex_isolated_exec.sh`, `clarify_isolated_run.sh`, `heal_isolated_implement.sh`, and `review_untrusted_sandbox.sh` invoke `sandbox_image.sh` with the `build` action, which *does* handle the pull-first logic. This is satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/sandbox_image.sh:66 | severity=high | confidence=4\n  PROBLEM: The script uses `cd` within a subshell to resolve the context path without checking if `cd` succeeded.\n  WHY: If the provided `CONTEXT` path is invalid or inaccessible (e.g., due to permissions), `cd` will fail, potentially resulting in `sandbox_image_context` being set to the wrong directory (the current directory of the script runner) or causing unexpected behavior in subsequent commands that rely on the path. While the subsequent checks like `[ -d \"${sandbox_image_context}\" ]` might catch this, handling it at the point of resolution is safer and more robust.\n- Requirement: Pull prebuilt sandbox images from GHCR when one matches its inputs.\n  Expected change site: .github/workflows/publish-sandbox-images.yml\n  Evidence of absence: The logic to pull prebuilt sandbox images exists in `scripts/sandbox_image.sh`, and the workflow `publish-sandbox-images.yml` exists to push them. However, no workflow currently **pulls** the images; `codex_isolated_exec.sh`, `clarify_isolated_run.sh`, `heal_isolated_implement.sh`, and `review_untrusted_sandbox.sh` invoke `sandbox_image.sh` with the `build` action, which *does* handle the pull-first logic. This is satisfied.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "032c256dcff8d9d4b8ba35818f7757bde91a01030c2224c108b4b1b499c1323f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7026,
+    "run_id": "38049307274",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38049307274",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010121751_fd4cd9d637",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7026,
+    "run_id": "38049307274"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T12:17:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

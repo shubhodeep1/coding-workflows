@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_phase_skip_gate_telemetry_contract.py:108 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The test executes the raw clarify workflow step body without substituting `${{ github.repository }}`, causing Bash to fail on the literal expression.\n  WHY: The test fails with `CalledProcessError` in `test_clarify_opened_route_checks_fetched_provenance`; severity differs between BLOCKER and MAJOR, so the higher severity is used.\n- tests/test_log_prefix_regressions.sh:27-55 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The regression check scans only the workflow YAML for `AUTOFIX_DISPATCH_SKIPPED` echo callsites, while the callsites are in extracted step scripts.\n  WHY: The scanner finds no callsites and exits nonzero; severity differs between BLOCKER and MAJOR, so the higher severity is used.\n- docs/INVENTORY.md:249 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The inventory lists `scripts/smoke_review_dispatch.sh`, but that file is absent from the repository.\n  WHY: `tests/inventory_parity.py` rejects the stale inventory entry; severity differs between BLOCKER and MAJOR, so the higher severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_phase_skip_gate_telemetry_contract.py:108 | severity=BLOCKER | confidence=5\n  PROBLEM: The test runs `bash -c \"step['run']\"` with unsubstituted `${{ github.repository }}` expressions from clarify.yml.\n  WHY: Bash receives the literal expressions, breaking the `gh api` URL and `security-dependency` call; `tests-promote-stall-and-review` exits 1.\n- tests/test_log_prefix_regressions.sh:27-55 (assert_review_autofix_dispatch_mirrors) | severity=BLOCKER | confidence=5\n  PROBLEM: The function scans only `.github/workflows/review_autofix.yml`, although the `AUTOFIX_DISPATCH_SKIPPED` callsites were moved to extracted step scripts.\n  WHY: The scanner finds zero callsites, raises `no AUTOFIX_DISPATCH_SKIPPED echo callsites found`, and `tests-hooks-and-orchestrator` fails.\n- docs/INVENTORY.md:249 | severity=BLOCKER | confidence=5\n  PROBLEM: The inventory lists `scripts/smoke_review_dispatch.sh`, but the file does not exist.\n  WHY: `tests/inventory_parity.py` detects the missing listed path and exits 1.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_sandbox.sh: line 33 | confidence=1\n  PROBLEM: Four distinct validation failures all surface the same \"Review workspace path rejected\" message.\n  WHY: An operator reading the failing CI step cannot tell which check tripped. Suggested minimal fix: Split into per-check `if` statements with distinct messages \u2014 \"Review workspace path missing\", \"Review workspace path contains newline\", \"Review workspace path outside ${RUNNER_TEMP}/workspaces\", \"Review checkout git dir missing\".\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_phase_skip_gate_telemetry_contract.py:108 | severity=MAJOR | confidence=5\n  PROBLEM: The test executes the raw \u201cDecide clarify route\u201d workflow step body with bash -c without substituting GitHub Actions expressions such as `${{ github.repository }}`.\n  WHY: Bash receives the expression literally and fails during expansion. The PR-head CI run fails in `test_clarify_opened_route_checks_fetched_provenance` with `CalledProcessError`.\n- tests/test_log_prefix_regressions.sh:27-55 | severity=MAJOR | confidence=5\n  PROBLEM: The regression check scans only `.github/workflows/review_autofix.yml` for `AUTOFIX_DISPATCH_SKIPPED` and `AUTOFIX_DISPATCH_ISSUED` echo callsites. The callsites are in `scripts/review_autofix_step_changes_lost_redispatch.sh` and `scripts/review_autofix_step_post_commit_retrigger.sh`.\n  WHY: The check finds no callsites in the workflow YAML and exits nonzero. The PR-head CI run reports `no AUTOFIX_DISPATCH_SKIPPED echo callsites found`.\n- docs/INVENTORY.md:249 | severity=MAJOR | confidence=5\n  PROBLEM: The inventory lists `scripts/smoke_review_dispatch.sh`, but that file is absent from the repository.\n  WHY: `tests/inventory_parity.py` rejects the stale inventory entry; the PR-head CI run reports `unexpected scripts/smoke_review_dispatch.sh`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "1d68c492f13df22fa599072c17c3906b2e52915d71d7df4e07b88231324ff44a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6173,
+    "run_id": "37178301888",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37178301888",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004051730_9e56ab1e46",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6173,
+    "run_id": "37178301888"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T05:17:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

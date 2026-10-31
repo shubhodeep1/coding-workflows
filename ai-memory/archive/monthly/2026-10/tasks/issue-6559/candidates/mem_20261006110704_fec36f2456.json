@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the intake confirm which repository a heal report really came from?\nChoices:\nA. Each reporting workflow (label reporter, workflow_run reporter, review/autofix failure reporter, and their consumer wrappers) requests a GitHub Actions OIDC token and puts it in the `repository_dispatch` payload. The intake checks the token's signature against GitHub's published keys, its audience, its expiry, and that its `repository` claim equals `source_repo`. It then fetches the claimed issue/PR, label and failed runs from that repository and rejects the report on any mismatch. No shared secret is needed; wrappers gain `id-token: write`. (RECOMMENDED)\nB. Use a per-repository HMAC signing secret (placeholder `WORKFLOW_HEAL_REPORT_SIGNING_KEY` in each consumer, with matching keys stored in this repo), plus the same API binding checks as A. This needs secret setup in every consumer repo.\nC. Binding checks through the GitHub API only (claimed issue/PR exists in `source_repo` with the label, runs belong to it and failed, head SHA matches), with no cryptographic identity. Fabricated issue, label and run claims are rejected, but a dispatcher could still cite a real failure in another registered repository, and its free-text failure evidence stays unauthenticated.\nQ2: How should the intake handle reports from consumers whose synced wrappers do not send the new identity yet?\nChoices:\nA. Fail closed right away. Unauthenticated reports are skipped with a log line and a Telegram WARNING, so heals from unsynced consumers stop until their `@stable` sync lands.\nB. Transition mode behind a new variable, `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH`, defaulting to `false`. While it is `false`, an unauthenticated report is accepted only if every API binding check passes, and it is logged as unauthenticated with a WARNING. A report that does carry an identity is always verified, and a bad identity is rejected. Setting the variable to `true` enforces authentication everywhere. (RECOMMENDED)\nC. Same as B, but the variable defaults to `true` (fail closed), and operators can set it to `false` to relax enforcement during rollout.",
+  "fingerprint": "16fc588796dde724b6dec6a479f31bd7253b8c0d56e44960087f51a6a800f794",
+  "lineage": {
+    "issue_number": 6559,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37453093439",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37453093439",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006110704_fec36f2456",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6559,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37453093439"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6559 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T11:07:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:181 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The documented semicolon-separated fetch instructions do not themselves enforce stopping when a fetch fails, so a session that relies on the separator may continue with stale refs.\n  WHY: Minimax says execution may continue after a failed fetch; Qwen and GLM-5.2 reject this concern because the instructions require each fetch to succeed and define failure as a stop.\n- workflow-templates/.claude/commands/fix-claude-pr.md:step 5 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The parenthetical uses `<base ref>` while the referenced command in `implement-plan-claude.md` uses `<base>`, so a literal lookup may not find it.\n  WHY: Minimax identifies inconsistent placeholder terminology; Qwen and GLM-5.2 say each command intentionally defines its own placeholder convention.\n- workflow-templates/.claude/commands/implement-plan-claude.md:188 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The three-dot project-base diff can exit 0 after a guard change has been reverted on the project branch, falsely treating the branch as containing the default branch\u2019s guard changes.\n  WHY: The merge base can be the default-branch commit, causing the diff to compare that commit with itself and miss the reverted guard.\n- .github/workflows/review_autofix.yml:Run reviewer models step (line not provided) | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The reviewer-model step failed repeatedly with the same fingerprint, and the fingerprint cap prevented another same-head review from producing a result.\n  WHY: The supplied evidence shows no completed reviewer result or underlying failure cause in the PR diff; other reviewers characterize the failure as workflow infrastructure rather than a code defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:181 | severity=high | confidence=3\n  PROBLEM: The literal command uses `;` between two fetch instructions, which does not enforce that each fetch succeeds; a session relying on the separator may continue after a failed fetch and use stale refs.\n  WHY: A failed first fetch can leave `origin/<default>` stale, allowing the drift checks to miss changes; Qwen and GLM-5.2 reject this concern because the text says each fetch must succeed and defines failure as a stop.\n- workflow-templates/.claude/commands/fix-claude-pr.md:step 5 | severity=low | confidence=2\n  PROBLEM: The parenthetical uses `<base ref>` while the referenced command in `implement-plan-claude.md` uses `<base>`, so a literal lookup may not find the referenced command.\n  WHY: The twin test pins the `<base ref>` wording; Qwen and GLM-5.2 say each command intentionally defines its own placeholder convention.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/commands/implement-plan-claude.md:188 | severity=high | confidence=5\n  PROBLEM: The three-dot project-base diff does not verify that the project branch still contains the default branch\u2019s guard changes if a guard change was reverted after merging the default branch.\n  WHY: The merge base is the default-branch commit, so the diff compares that commit with itself and exits 0.\n- .github/workflows/review_autofix.yml:Run reviewer models step (line not provided) | severity=high | confidence=5\n  PROBLEM: The reviewer-model step failed repeatedly with the same fingerprint, and the fingerprint cap stopped another same-head run from producing a reviewer result.\n  WHY: The supplied evidence does not identify a cause in the PR diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e46482bb1aee01e0428013db1f7e7bf4d87fffa4f8862ba5a6a7a523c31f37f0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5280,
+    "run_id": "36794174811",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794174811",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001003657_de8d316b3e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5280,
+    "run_id": "36794174811"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T00:36:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which parts of the proposal are in scope for this issue?\nChoices:\nA. Items 1-3 only: an opt-in weekly `schedule:` in `workflow-templates/ai-validate.yml` (gated by `AI_VALIDATE_SCHEDULE_ENABLED`, default off), default-branch runs with `tracking_issue=0`, plus a sink for red scheduled runs (RECOMMENDED)\nB. Item 4 only: give `validation-refresh.yml` red results a sink; no wrapper schedule\nC. Both A and B in this issue\nD. A now; file B as a separate follow-up issue\nQ2: What cadence should the scheduled run use? GitHub does not read repo variables inside `on.schedule`, so the cron is fixed in the managed template and the same for every consumer that opts in.\nChoices:\nA. Weekly, at a fixed off-peak time (for example Monday 04:00 UTC) (RECOMMENDED)\nB. Daily\nC. Weekly cron, with a second variable that lets a consumer skip ticks to run every N weeks\nQ3: Which LLM phases should a scheduled run use?\nChoices:\nA. Run as it does today: harness generate, diagnose and self-heal, if a harness or repair is needed\nB. Deterministic only: run the existing `.ai/validate.yml` / committed harness with no generate, diagnose or self-heal model calls; a red result just goes to the sink (RECOMMENDED)\nC. Allow generate and diagnose but turn self-heal off (`MAX_SELF_HEAL_ATTEMPTS=0`), so the scheduled run never commits repairs\n**Note:** B costs the least, but a consumer that has never had a harness generated will report red (or `harness_error`) on every run until one exists.\nQ4: Where should a red scheduled run be reported so it is not silent?\nChoices:\nA. One deduplicated issue in the consumer repo (a stable marker per repo, a label such as `ai:scheduled-validation-failed`), updated in place while it stays red and closed when a later scheduled run passes, plus one WARNING alert when it opens (RECOMMENDED)\nB. A workflow-failure heal report dispatched to coding-workflows (new kind or a `SCHEDULED_CHECK_WORKFLOW_NAMES`-style entry), which the intake classifies as workflow-defect or consumer-app-defect\nC. Telegram WARNING only, no issue\n**Note:** if A's issue carries no exclusion label, it enters the consumer's clarify\u2192plan\u2192implement pipeline, which spends LLM calls even if Q3 is B. Choose whether that is wanted, or the issue gets an exclusion like `ai:retro` / `ai:security-audit`.",
+  "fingerprint": "7e2ff90b54d742a2d750fc0b167fbad12243c3e50542df2932c7dd7bbc35a966",
+  "lineage": {
+    "issue_number": 7553,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39026375709",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39026375709",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261017105559_e0e0b10f42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7553,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39026375709"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7553 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-17T10:55:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

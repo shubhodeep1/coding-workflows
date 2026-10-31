@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:901-933 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Moving the \"Review autofix review-pipeline plumbing contract test\" step introduced test failures in tests/test_agents_fragment_contract.py, tests/test_gh_api_write_guard.py, and tests/test_pr_watch_guard.py.\n  WHY: The move is claimed to have broken CI contract tests, indicating an issue in how the step is wired or how it interacts with CI guards (reviewer severity BLOCKER; other reviewers dispute this and say the failures are not tied to the diff).\n- .github/workflows/ci.yml:904-917 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The added comment says the step \"needs only checkout, Python 3.12 and the shared pip install\".\n  WHY: The step runs pytest and several python invocations, so the comment may mislead maintainers about its dependencies (reviewer severity NIT; z-ai_glm-5_3-flash verified the claim as accurate).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml (job tests-heal-plan-and-validation)\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The issue says \"slowest steps\" (plural), but the PR moved only `Review autofix review-pipeline plumbing contract test`. No other steps were moved out of `tests-heal-plan-and-validation`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:901-933 | severity=BLOCKER | confidence=4\n  PROBLEM: Moving the \"Review autofix review-pipeline plumbing contract test\" step introduced test failures in tests/test_agents_fragment_contract.py, tests/test_gh_api_write_guard.py, and tests/test_pr_watch_guard.py.\n  WHY: The move has broken CI contract tests, indicating an issue in how the step is now wired or its interaction with CI guards.\n- .github/workflows/ci.yml:904-917 | severity=NIT | confidence=3\n  PROBLEM: The added comment states the step \"needs only checkout, Python 3.12 and the shared pip install\".\n  WHY: The step runs pytest and multiple python invocations, which may mislead maintainers about dependencies and could lead to incorrect troubleshooting or configuration in the future.\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml (job tests-heal-plan-and-validation)\n  Evidence of absence: The issue requirement specified \"slowest steps\" (plural). The PR only moved a single step, `Review autofix review-pipeline plumbing contract test`. No other steps from `tests-heal-plan-and-validation` were moved to address the timeout issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f222d13ef78a8cd64cb5064c9a154ee4268cdb6e3673c3856e1e0e337a93369d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8400,
+    "run_id": "40972238339",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40972238339",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030001333_18f444bcdc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8400,
+    "run_id": "40972238339"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T00:13:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this heal issue (target `main`) change, given that the resolver's refusal is an intentional security boundary?\nChoices:\nA) Change only the heal routing. When an `autofix_failure` report's reason is a non-retryable sandbox-path reason (`conflict_resolver_sandbox_path_host_only`, etc.), the intake files no heal issue (no new `workflow-defect` / `inconclusive` issues). Instead it asks a human to merge the named host-only paths on the source PR. Add a regression test that feeds this report to the intake and fails on today's routing. (RECOMMENDED)\nB) Add a deterministic host-side resolution. When the live `.claude/hooks/pr_merge_status_guard.py` conflicts and its `workflow-templates/` twin resolves cleanly, copy the twin over the live copy before the conflicted-path check. **Note:** this lets content the model resolved reach a host-executed safety hook, which loosens the boundary the fix constraints say must not be weakened.\nC) Make no shared-code change. Close this issue as \"no shared-code defect\", and a human merges PR #6535's hook conflict on `ai/issue-6525` by hand.\nQ2: If Q1 = A, how should the human hand-off be shown? (Ignore this if Q1 is B or C.)\nChoices:\nA) Label the source PR `ai:needs-human`. Post one comment on it naming the host-only paths with the existing `::error::` headline, and send a Telegram WARNING. Record it in the intake log as `WORKFLOW_HEAL skip reason=non_retryable_host_only` (a new reason value under the existing `WORKFLOW_HEAL` prefix). (RECOMMENDED)\nB) Post the diagnosis comment on the PR (the existing `pr-self-inflicted` path), but add no label and send no Telegram alert.\nC) Classify the report as `consumer-config` (Telegram plus a comment only, as the intake already does for that class), with no label.",
+  "fingerprint": "1fb5a7f8c3f9d1ffe3faddeb39f0809b4f25e99a1d59db6a94ff9c8d956c1133",
+  "lineage": {
+    "issue_number": 6750,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37753477454",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37753477454",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008090421_b93dc4c83b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6750,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37753477454"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6750 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T09:04:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

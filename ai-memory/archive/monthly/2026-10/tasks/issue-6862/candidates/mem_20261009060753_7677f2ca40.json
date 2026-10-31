@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The unblock judge called this an operator step, and the guard reads the grant only from the issue body (`build_automation_grant` in `scripts/files_touched_scope_guard.py`, around lines 177-199). An operator editing this pipeline-authored body keeps the original author, so the grant stays trusted. Option B depends on another fix-up issue being filed, and that is the same chain that has already looped through #6764 \u2192 #6772 \u2192 #6784 \u2192 #6792 \u2192 #6806. Option C cannot work because the flag gate has to live in `scripts/`.\nQ2: `.github/workflows/ci.yml` must be listed. CI runs each conflict-resolve test by its own explicit line (ci.yml lines 770, 988, 993 and 998), and `tests/test_review_conflict_resolve_sandbox_only.py` exists but is not registered anywhere. Leaving `review_autofix.yml` out is safe: the issue requires the flag to default to `false`, and \u00a78 puts that default inside the helper. It also keeps the automation-path surface as small as possible.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none \u2014 both decisions are letter choices)\n\nOperator note for Q1/Q2 (binding detail for the operator step):\n- Edit the body of this issue (keep the original author; do not move the grant into a comment). Add exactly one block, one exact path per line, with no globs and no trailing `/`:\n  ```\n  - files_touched:\n    - scripts/review_conflict_resolve.sh\n    - scripts/review_untrusted_workspace.py\n    - tests/test_review_conflict_resolve_sandbox_only.py\n    - .github/workflows/ci.yml\n    - README.md\n    - changelog.d/6806-conflict-hook-template-resolve.md\n  ```\n- Leave the repository variable `ALLOW_WORKFLOW_EDITS` at `true` (its default). The automation-path guard requires it on top of the grant.\n- Remove `ai:scope-blocked` if it is present, then re-run the pipeline (`/reclarify` or `/approved`, as appropriate).\n- The implementer must stay inside these six paths:\n  - The `CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED` default (`false`) is read inside the helper scripts and is not forwarded from `review_autofix.yml`.\n  - The new regression tests go into the existing `tests/test_review_conflict_resolve_sandbox_only.py`.\n  - CI registers that file with a new `python3 tests/test_review_conflict_resolve_sandbox_only.py` line next to the existing conflict-resolve test lines in `ci.yml`.\n  - Heal intake and the scope guards are not touched.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- files_touched grant (resource): a repository operator (OWNER, MEMBER or COLLABORATOR) edits this issue body to add the `- files_touched:` block above and clears `ai:scope-blocked`. Until then, the implement automation-path guard rejects the three staged automation paths and nothing is committed.\n- CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED (variable): optional. A person sets it to `true` only after the change has merged and its required checks pass. While it is unset, the helpers default to `false`: conflicted hook files keep the existing host-only refusal (`sandbox_path_host_only`) and are never sent to the model.",
+  "fingerprint": "30098f28735612493e5084d7c28cfe2150694130bb5fcc502016fa8459454b5a",
+  "lineage": {
+    "issue_number": 6862,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37891191100",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37891191100",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6862"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009060753_7677f2ca40",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6862,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37891191100"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6862",
+  "timestamps": {
+    "created_at": "2026-10-09T06:07:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

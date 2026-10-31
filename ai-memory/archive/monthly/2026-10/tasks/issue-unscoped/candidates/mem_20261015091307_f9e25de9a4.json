@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/7429-review-snapshot-file-limit.md:2 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fragment says transfer reports `reason=unsafe_file` for an editor-recreated file over 8 MiB, but the transfer error map in scripts/review_untrusted_workspace.py (lines 859-880) does not map \"unsafe file type or size\", so the logged reason is `unknown`.\n  WHY: The safety property holds because the file is still rejected, but the documented reason token contradicts the code. All reviewers rated it NIT.\n- scripts/review_untrusted_workspace.py:874-878 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The snapshot error map includes `unsafe_file` for ValueError(\"unsafe file type or size\"), but with skip_oversized=True the oversized path just skips the file, so that mapping is not reachable for that purpose.\n  WHY: An operator could be misled when troubleshooting, since `unsafe_file` is never logged for skipped oversized files. Rated NIT.\n- tests/test_review_autofix_review_pipeline_contract.py:8657-8720 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: test_review_snapshot_skips_oversized_files_only_when_the_review_sandbox_asks covers only the small-content recreation (`result_conflicts_host`). It does not test recreating an oversized file, so neither the documented `unsafe_file` nor the actual `unknown` reason is locked.\n  WHY: The oversized-file contract is not validated, so the reason code can drift without failing CI. Rated NIT; confidence is 3 from gemini, minimax and qwen (the 4 above is not stated in the source and is incorrect, so read it as 3).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_workspace.py:874-878 | severity=NIT | confidence=4\n  PROBLEM: The snapshot error map includes unsafe_file for ValueError(\"unsafe file type or size\"), but this path is not reachable when skip_oversized is True, since the file is skipped and processing continues.\n  WHY: An operator expecting an unsafe_file log will not get one for skipped oversized files, which can lead to misleading troubleshooting.\n- tests/test_review_autofix_review_pipeline_contract.py:8663-8720 | severity=NIT | confidence=3\n  PROBLEM: test_review_snapshot_skips_oversized_files_only_when_the_review_sandbox_asks does not test the error path for recreating an oversized file and having it rejected with the expected reason token.\n  WHY: The oversized-file contract is not fully validated, so regressions are possible if the transfer logic changes.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/7429-review-snapshot-file-limit.md (the clause \"or `reason=unsafe_file` when the recreated file is itself over 8 MiB, because the result read rejects it first\") | severity=NIT | confidence=4\n  PROBLEM: The fragment claims transfer reports `reason=unsafe_file` for a recreated file over 8 MiB, but the error handler at scripts/review_untrusted_workspace.py:870-880 maps \"unsafe file type or size\" to unsafe_file only for snapshot. For transfer it falls back to \"unknown\".\n  WHY: The file is still rejected, but the logged reason is \"unknown\" rather than the documented \"unsafe_file\". The previous clause (`reason=result_conflicts_host`) was accurate.\n- tests/test_review_autofix_review_pipeline_contract.py (test_review_snapshot_skips_oversized_files_only_when_the_review_sandbox_asks, recreation block) | severity=NIT | confidence=3\n  PROBLEM: The test covers only the 8-byte recreation asserting `reason=result_conflicts_host`. The second documented path, recreated oversized content giving `reason=unsafe_file`, is not exercised.\n  WHY: Neither the documented `unsafe_file` path nor the actual `unknown` path is locked, so the reason can drift without failing CI.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/7429-review-snapshot-file-limit.md:2 (also scripts/review_untrusted_workspace.py:859-877) | severity=NIT | confidence=5\n  PROBLEM: The fragment says an oversized editor-recreated file is rejected with `reason=unsafe_file`, but the transfer error map does not map `unsafe file type or size` to that token.\n  WHY: transfer() calls enumerate_workspace(), where read_regular() raises ValueError(\"unsafe file type or size\"). The transfer map falls back to `reason=unknown`, which contradicts the fragment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7429-review-snapshot-file-limit.md:2 (also scripts/review_untrusted_workspace.py:870-874) | severity=NIT | confidence=4\n  PROBLEM: The fragment says transfer refuses an editor-recreated oversized file with `reason=unsafe_file`, but the transfer error map does not include \"unsafe file type or size\", so the actual reason is `reason=unknown`.\n  WHY: Operators reading the documentation would expect `unsafe_file` in transfer failure logs but would see `unknown`. The file is still rejected.\n- tests/test_review_autofix_review_pipeline_contract.py:8657-8720 | severity=NIT | confidence=3\n  PROBLEM: The test covers the `result_conflicts_host` rejection for small-content recreation but not the case where the recreated file is itself over 8 MiB, which the fragment documents as a separate rejection path.\n  WHY: The behavior when an oversized file is written back to the host is unverified, even though the fragment documents both rejection paths.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "81a888ff4785dfa037cebdf7e9dcf85b1a961fe3f0702a6b319e9e9174788a9f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7429,
+    "run_id": "38708988387",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38708988387",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261015091307_f9e25de9a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7429,
+    "run_id": "38708988387"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-15T09:13:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

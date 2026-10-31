@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2482-2486 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The new comment above the \"Orchestrate poll single-file module tests\" step says \"group 1 carries only its slice and the unblock step (#8072)\", but this step adds a third item to group 1. The same wording is in changelog.d/8080-orchestrate-poll-single-file-modules-to-group-1.md, line 4.\n  WHY: The comment describes a group composition that is false at the commit it ships in, which can mislead later maintenance of the group budgets. The reviewer labelled it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2482-2486 | severity=NIT | confidence=4\n  PROBLEM: The new comment above the \"Orchestrate poll single-file module tests\" step says \"group 1 carries only its slice and the unblock step (#8072)\", but this step adds a third item to group 1. The same wording is in changelog.d/8080-orchestrate-poll-single-file-modules-to-group-1.md, line 4.\n  WHY: The comment describes a group composition that is false at the commit it ships in, which misleads future readers maintaining the group budgets. It is the same stale-text class the previous autofix round corrected in agents.md.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c2be9ff200b764e674a0b9a2e4217d3ae04d02ee5524a858944449c6bc6ecc63",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8081,
+    "run_id": "40129014349",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40129014349",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024203711_640a70cf24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8081,
+    "run_id": "40129014349"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-24T20:37:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The bug is at `workflow-templates/.claude/hooks/pr_merge_status_guard.py:1572-1581` in the Bash push path. When `_read_cache` returns a snapshot younger than `_CACHE_TTL_SECONDS = 300` (line 161) showing an open PR, `blocking_pull_request` finds no offender and the push goes through. The re-check at line 1593 only runs when an offender is already found, so a cached \"open\" state is never re-verified. `_evaluate_mcp_push` (line 1689) has the same flaw. Remote writes are the only operations that can strand work on a merged branch: the docstring of `_unreachable_outcome` (lines 1432-1436) says local commits only strand once pushed. So the fix should require fresh lookups for `reaches_remote` targets and both MCP push tools, and should reuse the existing per-invocation `pr_snapshots` map to batch them. That matches the issue's recommendation exactly. Removing the cache everywhere (B) widens scope for no security gain, and a shorter TTL (C) only narrows the race window without closing it.\nQ2: `_unreachable_outcome` (lines 1421-1458) already handles a remote write it cannot check safely. It blocks with exit 2 when git history shows stranded work. Otherwise it requires explicit human confirmation through `_request_confirmation`, so it never allows the write silently. That satisfies the issue's \"do not proceed on unverified state\" intent without changing the documented CLAUDE.md \u00a721.C policy. The real defect is that stale cached state is used instead of fresh state, and option A removes that fallback. Option B would change a documented cross-repo policy, would have to be mirrored into consumer CLAUDE.md files, and would hard-block legitimate pushes during GitHub outages.\n\nEXECUTION PLAN (required for any non-letter decision):\nNot applicable. Both decisions are lettered options. Implementation notes for the planner:\n- Bash path (around lines 1572-1581): when `target.reaches_remote` is true, skip `_read_cache` and always call `query_pull_requests(slug, branch, target.cwd)`. Still call `_write_cache` with the fresh result, and store `(pull_requests, True, \"\")` in `pr_snapshots[key]` so other targets in the same hook call reuse it. If a `pr_snapshots` entry came from the cache (`fresh=False`), a remote-write target must re-query rather than reuse it. Local commits (`reaches_remote=False`) keep using the cache.\n- MCP path (`_evaluate_mcp_push`, around lines 1689-1718): drop the `_read_cache` read and always query. On `LookupUnavailable`, route through `_unreachable_outcome` as it does today, with no cached fallback.\n- Keep `_CACHE_TTL_SECONDS`, `_read_cache` and `_write_cache` defined and used (\u00a710).\n- Make the same edit in `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py`. The two must stay byte-identical (`tests/test_claude_template_live_parity.py`), and CI never prepares hook live copies from templates.\n- Add a regression test in the existing hook test module: an open PR is cached, the PR then becomes MERGED with a fresh lookup reporting that, and a `git push` (and an MCP push) must be blocked. A second test: a fresh lookup fails while the cache holds an open PR, so the outcome must come from `_unreachable_outcome` (confirm, or block when stranded), never from the cached state.\n- Integration branch for the fix PR: `claude/elegant-johnson-1wgxsf`, as the issue states. It exists at 65a4189b4932.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "972a2c8a4081dbc9d543f46a7f63ee1fb63a17d3eb60b927114941d88fefca2c",
+  "lineage": {
+    "issue_number": 6529,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37438187674",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37438187674",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6529"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006085645_df3c8fff6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6529,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37438187674"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6529",
+  "timestamps": {
+    "created_at": "2026-10-06T08:56:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

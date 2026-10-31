@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/cancel_on_pr_close.yml:22 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The concurrency group change regressed orchestration and recovery logic.\n  WHY: The reviewer says pre-push failures in `tests/test_implement_post_codex_recovery.py` and `tests/test_orchestrate_lib.py` show that the orchestrator relies on the repository-shared concurrency group, and per-PR groups break that contract. The source labels this SEVERITY: BLOCKER, which is mapped here to high. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 disputed that these failures are caused by this change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document the PR-close cleanup concurrency group changes in the repository agents documentation, using the fragment-based delivery required by \u00a730.\n  expected_change_site: agents.d/8327-cancel-on-close-per-pr-queue.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR directly edited `agents.md` in violation of \u00a730.A/C, which triggered a failure in the pre-push contract tests (`tests/test_agents_fragment_contract.py`). The contract requires this documentation to be delivered via a fragment file, not a direct edit, regardless of whether the edit was intended as a correction. Severity was stated as BLOCKER. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 treated the `agents.md:4993` edit as a permitted in-place correction.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/cancel_on_pr_close.yml:22 | severity=BLOCKER | confidence=4\n  PROBLEM: The concurrency group change regressed orchestration and recovery logic.\n  WHY: The pre-push test gate reports failures caused by this change in `tests/test_implement_post_codex_recovery.py` and `tests/test_orchestrate_lib.py`. These failures indicate that the orchestrator or recovery mechanism relies on the repository-shared concurrency group for consistent PR-close run behavior, and changing this to per-PR groups breaks existing orchestrator contracts.\n- TASK_GAP:\n  Requirement: Document the PR-close cleanup concurrency group changes in the repository agents documentation, using the fragment-based delivery required by \u00a730.\n  Expected change site: agents.d/8327-cancel-on-close-per-pr-queue.md\n  Evidence of absence: The PR directly edited `agents.md` in violation of \u00a730.A/C, which triggered a failure in the pre-push contract tests (`tests/test_agents_fragment_contract.py`). The contract requires this documentation to be delivered via a fragment file, not a direct edit, regardless of whether the edit was intended as a correction.\n  SEVERITY: BLOCKER | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "9e2fcaa9d53c2cfed960daa36280b6f6c6d0ddd33da7b3811ab09e40b27dc372",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8331,
+    "run_id": "40832198303",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40832198303",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029090558_d6b4b50d77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8331,
+    "run_id": "40832198303"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T09:05:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

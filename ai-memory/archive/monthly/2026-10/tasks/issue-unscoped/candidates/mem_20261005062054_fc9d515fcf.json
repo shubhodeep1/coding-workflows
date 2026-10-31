@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py` | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: An appended `GIT_DIR+=` override can make the guard check the session checkout instead of the repository Git will use, allowing a push from a different repository to proceed without the merged-PR check.\n  WHY: The reviewers rate this major (high) severity; deepseek_deepseek-v4-pro and minimax_minimax-m3 disagree, reasoning that the uncertain path discards the appended value and falls back to the session checkout, but the finding reports that this fallback can skip the check on the default branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description claims \"Bash *appends* to the existing variable, so the guard checks a different repository than the one git uses\" and \"a push from a merged branch is allowed\" without that appended-override case. The added test should cover that direction.\n  expected_change_site: `tests/test_pr_merge_status_guard.py` near line 815\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The single test at line 815 only checks the \"session checkout has a merged PR\" case, which exercises the fallback path's block outcome. The complement \u2014 session checkout on default branch (line 1347-1348 of `pr_merge_status_guard.py` skips the check) or on an open branch (the guard allows the push) \u2014 is not asserted.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: PR description claims \"Bash *appends* to the existing variable, so the guard checks a different repository than the one git uses\" and \"a push from a merged branch is allowed\" without that appended-override case. The added test should cover that direction (appended GIT_DIR points at a repo whose branch has a merged PR, but the session checkout is on a branch where the check is skipped or on a non-merged branch, so the push goes through).\n  Expected change site: `tests/test_pr_merge_status_guard.py` near line 815 \u2014 a parametrized companion case where the session checkout is on `main` (default branch) or another branch with no merged PR, verifying the warning is set and the push is allowed (documenting the guard's intended fallback scope, or escalating to confirmation if the design intent is different).\n  Evidence of absence: The single test at line 815 only checks the \"session checkout has a merged PR\" case, which exercises the fallback path's block outcome. The complement \u2014 session checkout on default branch (line 1347-1348 of `pr_merge_status_guard.py` skips the check) or on an open branch (the guard allows the push) \u2014 is not asserted. If the guard's intended contract is \"appended override \u21d2 check session checkout, accept its verdict even if main,\" that contract should be locked in by a test; if the intended contract is \"ask for confirmation,\" the current `evaluate` path does not return a confirmation in this scenario.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `.claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py` | severity=high | confidence=5\n  PROBLEM: An appended GIT_DIR+= or GIT_WORK_TREE+= override makes the working directory unknown, but the guard then checks the session checkout instead of the repository Git will use.\n  WHY: With GIT_DIR unset, `GIT_DIR+=<merged-repo>/.git git push origin HEAD` sets GIT_DIR to the supplied path for that command. The guard discards that value and checks the session checkout. If the session checkout is on its default branch, _evaluate_bash skips the merged-PR check; if it is on an open branch, the guard checks that branch instead. The push from the merged repository can therefore proceed unchecked. The regression test covers only the inverse setup, where the session checkout is the merged branch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- `.claude/hooks/pr_merge_status_guard.py and workflow-templates/.claude/hooks/pr_merge_status_guard.py` | severity=high | confidence=4\n  PROBLEM: When an appended `GIT_DIR+=` override cannot be resolved, the guard discards the value and falls back to checking the session checkout. If the session checkout is on the default branch, the guard skips the merged-PR check entirely, allowing a push from a different repository that may be on a merged branch.\n  WHY: With `GIT_DIR+=<merged-repo>/.git git push origin HEAD` from a session checkout on the default branch: (1) `_guarded_git_invocations` sets `working_directory=None` and `environment={}` (lines 365-366), creating an invocation with `cwd=checkout` and a warning; (2) `_push_targets` returns a target with `branch=\"\"`, `tip=\"HEAD\"` (line 435); (3) `_evaluate_bash` resolves `branch = \"\" or current_branch(checkout)` (line 1342), getting the session checkout's branch; (4) if that branch equals the default branch, the check is skipped (lines 1347-1348). Git will push from `<merged-repo>`, but the guard checked the session checkout and allowed the push. The added test only covers the inverse scenario where the session checkout is the merged branch.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "bff5ac22698615d6ead1a1ab68073efd41681605eea53afbe7dce3326610732a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6286,
+    "run_id": "37269765578",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37269765578",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005062054_fc9d515fcf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6286,
+    "run_id": "37269765578"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T06:20:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

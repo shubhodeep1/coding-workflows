@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2580 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The added line wiring `tests/test_test_and_mark_stable_phase7_timeout_status.py` into CI modifies `ci.yml`, which is outside the frozen heal-scope marker (`.github/workflows/test-and-mark-stable.yml`, `tests/**`, `changelog.d/*.md`).\n  WHY: It bypasses the path restriction meant to constrain the heal, because the scope guards (`scripts/implement_commit_changes.sh` 594-605) only check implement-phase staged paths. Reviewers rated it MAJOR; I mapped that to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stay within the heal scope (the workflow file, tests/**, changelog.d/*.md).\" (issue body constraint) and the frozen marker `paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md`\n  expected_change_site: `.github/workflows/ci.yml`\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The LAST RUN DIFF adds one line at `.github/workflows/ci.yml:2580`, and `ci.yml` is not in the marker's allowed paths. The PR description's \"Deferred scope\" does not mention this wiring. The `--strict-allowlist` check at `scripts/implement_commit_changes.sh:594-605` would reject the path in the implement phase.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2580 | severity=MAJOR | confidence=4\n  PROBLEM: The workflow modification to run the new regression test is outside the approved frozen heal-scope marker (paths: .github/workflows/test-and-mark-stable.yml, tests/**, changelog.d/*.md).\n  WHY: The implementation agent is restricted to this scope by the heal-marker. Modifying ci.yml violates this safety constraint and may be rejected by the implementation-phase allowlist guard.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Stay within the heal scope (the workflow file, tests/**, changelog.d/*.md).\" (issue body constraint) and the frozen marker `paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md`.\n  Expected change site: `.github/workflows/ci.yml` (the file the LAST RUN DIFF edits).\n  Evidence of absence: The LAST RUN DIFF adds one line at `.github/workflows/ci.yml:2580` wiring the new test into CI. `ci.yml` is not in the frozen heal-scope marker. The PR description's \"Deferred scope\" does not mention this wiring. The implement-phase `--strict-allowlist` check at `scripts/implement_commit_changes.sh:594-605` would reject this path. The alternatives (moving the wiring into `test-and-mark-stable.yml`, or allowlisting in `UNWIRED_ALLOWLIST`) are worse, but the violation should be acknowledged rather than silently absorbed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2580 | severity=MAJOR | confidence=4\n  PROBLEM: This change modifies `ci.yml`, which is outside the issue's frozen heal scope. The scope guards in `scripts/implement_commit_changes.sh` (lines 594\u2013605) and `.github/workflows/implement.yml` (lines 4626\u20134638) check staged implementation changes, so this later review edit is not rejected by those guards.\n  WHY: The heal PR changes a workflow path excluded from its verified scope, bypassing the path restriction that is meant to constrain the heal.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1af1b78386a972e71dca59c902eb33c9b3fd03c3e2be0d1573bceb4f78243adc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8361,
+    "run_id": "40942002050",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40942002050",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029203605_ea16ef762f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8361,
+    "run_id": "40942002050"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T20:36:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

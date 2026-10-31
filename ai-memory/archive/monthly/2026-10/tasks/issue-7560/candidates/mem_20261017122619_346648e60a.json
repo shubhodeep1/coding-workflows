@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A+B\n\nRATIONALE:\nQ1: Option B needs an operator to supply per-step timings, which nothing here can provide, so it would only cause another round of clarification. Option C picks steps by guesswork and may not get the job under its limit. Option A uses timings measured from the repository's own test commands. It aims for under 75% of the timeout, which matches the `CI_BUDGET_JOB_WARN_RATIO` default (0.75) that `budget-watch` in `.github/workflows/ci.yml` uses to open these issues. The issue's own rule stays in force: no `timeout-minutes` change and no new job names.\nQ2: Prefer one receiving job (A), because that is the smallest change. If no single test job can take the steps and stay under 75% of its 20 minutes, split them across two or more of the other three test jobs (B). `static-checks` (15-minute budget, runs before Python setup) and the `orchestrate-poll` matrix are excluded.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml: jobs `tests-hooks-and-orchestrator` (line 500), `tests-heal-plan-and-validation` (line 851), `tests-promote-stall-and-review` (line 1099), `tests-release-and-log-analysis` (line 1454), each with `timeout-minutes: 20`\n    - tests/test_ci_job_split_contract.py (pins the `lint` aggregate's `needs`, the job budgets, and that no step runs in two jobs)\n    - tests/test_ci_wires_every_test_file.py (every test file must still be named in a workflow)\n  steps:\n    - Time each step of `tests-release-and-log-analysis` and the total of each of the other three test jobs, using the Q1 A method.\n    - Move the slowest steps unchanged (same `name:`, `run:`, `env:`, `if:`) to the test job with the lowest measured total, until the source job is under about 15 minutes and the receiver is still under about 15 minutes. Split across a second job only if one receiver would pass that mark.\n    - Before moving a step, check that its tool setup (Python version, installed packages, jq/PyYAML, checkout depth) also exists in the receiving job. If it does not, choose a different step or a different receiver. Do not add setup steps or new jobs.\n    - Run tests/test_ci_job_split_contract.py and tests/test_ci_wires_every_test_file.py, then put the before and after per-job totals in the PR description.\n  replaces_acceptance_criterion: none (this only fixes how the receiving job is chosen)\n  equivalence_argument: Every test still runs once, in an existing required job under the `CI / lint` aggregate. No timeout is raised and no job name is added.\n  reversibility: Moved steps are byte-identical blocks, so moving them back is a pure move inside one file.\n\nAssumptions:\n- Step timings measured in the network-isolated sandbox are only an estimate of GitHub runner times. The 75% target leaves room for that difference.\n- If a step cannot run in the sandbox, its time is estimated from its test count and recorded as an estimate in the PR description.",
+  "fingerprint": "5861986b389f7c70198b9fccadc9c39ab10691fd712c6b2de74db3059fcba09d",
+  "lineage": {
+    "issue_number": 7560,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39031798324",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39031798324",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7560"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261017122619_346648e60a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7560,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39031798324"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7560",
+  "timestamps": {
+    "created_at": "2026-10-17T12:26:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/editor_isolated_run.sh:104-109 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: cleanup removes the isolation root even when reap fails, so the later credential-restore step can restore credentials without confirming the editor container is gone.\n  WHY: If reaping continues to fail during syntax-repair cleanup, the restore step skips reaping when the root is absent; downstream restore guard at .github/workflows/implement.yml:4497-4500.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/editor_isolated_run.sh:104-109\n  PROBLEM: The cleanup action itself emits no structured log line.\n  WHY: The reap sub-invocation inside it does log, so the gap is minor; adding a matching cleanup log would make cleanup invocations observable without inferring them from the reap sub-log.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/editor_isolated_run.sh:~108-114\n  PROBLEM: The cleanup action emits no log line of its own.\n  WHY: The sibling actions log structured `EDITOR_ISOLATION action=... outcome=... reason=...` lines on stderr; cleanup silently reaps, deletes the private root, and exits, leaving no trace of whether cleanup succeeded, reap failed, or the root was already gone.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/editor_isolated_run.sh:104-109; downstream restore guard at .github/workflows/implement.yml:4497-4500.\n  severity=MAJOR | confidence=5\n  PROBLEM: cleanup removes the isolation root even when reap fails. The later credential-restore step only retries reaping if that root still exists, then restores credentials unconditionally.\n  WHY: If reaping continues to fail during syntax-repair cleanup, cleanup deletes the root and returns an error. The always-run restore step then sees no root, skips reaping, and restores credentials without confirming the editor container is gone.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/editor_isolated_run.sh:107-109\n  PROBLEM: The cleanup action has no log line of its own; only the internal reap call logs.\n  WHY: When cleanup succeeds after a reap failure, the operator sees the reap failure log but no confirmation that the directory was actually removed.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/editor_isolated_run.sh (cleanup branch, after rm -rf and before exit)\n  PROBLEM: The cleanup action does not emit its own EDITOR_ISOLATION log line on success.\n  WHY: Only the inner reap log is visible, making it harder to distinguish a successful cleanup from a no-op in workflow logs.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "83b990ffed84009644fbf07ca424d3e7bcd5eef69f7ad17f7378458e6b174dc1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6475,
+    "run_id": "37535641362",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37535641362",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006221727_f636dc081e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6475,
+    "run_id": "37535641362"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T22:17:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

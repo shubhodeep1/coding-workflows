@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8130,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8130\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8135\",\"pr_number\":8135,\"branch\":\"ai/issue-8130\",\"run_id\":\"40189060707\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40189060707\",\"changed_files\":[\"changelog.d/8130-memory-write-timing-telemetry.md\",\"scripts/ai_memory.py\",\"scripts/ai_memory_lib.py\",\"tests/test_ai_memory_cli.py\"]}",
+  "fingerprint": "9d0d93c25fabbc69946abac824767c7fca6d63fb47592a01ab22270840c6db95",
+  "lineage": {
+    "issue_number": 8130,
+    "parent_ids": [],
+    "pr_number": 8135,
+    "run_id": "40189060707",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40189060707",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8135"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261025115146_2fe7993ad9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8130,
+    "level": "run",
+    "pr_number": 8135,
+    "run_id": "40189060707"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8130: https://github.com/shubhodeep1/coding-workflows/pull/8135",
+  "timestamps": {
+    "created_at": "2026-10-25T11:51:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

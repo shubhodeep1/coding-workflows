@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/verify_release_manifest.py:622 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `mode_mismatch` is emitted by `_check_mode` but is not included in `REASON_TOKENS`.\n  WHY: If tests or tools validate `exc.reason` against `REASON_TOKENS`, the emitted reason will be rejected.\n- tests/test_verify_release_manifest.py:691-697 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `test_pr_tree_added_file_with_wrong_mode_is_rejected` changes the mode of a file already created by `stage_clean_update()`, so it does not cover an added-file change.\n  WHY: The test name implies the added-file case is covered, but the setup exercises a modified-file mode change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the referenced plan cannot be read, use the provisional names and behavior from the issue and record that assumption in a code comment and the PR body.\"\n  expected_change_site: PR description / body\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The code comments document the unavailable plan and provisional names, but the PR description in the review context only says \u201cAutomated implementation,\u201d references issue #7004, and says \u201cRefs #6902\u201d; it does not disclose that the plan or its D1-D6 decisions were unavailable.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/verify_release_manifest.py:622 | severity=low | confidence=4\n  PROBLEM: mode_mismatch is emitted by _check_mode but not included in the REASON_TOKENS set (line 48).\n  WHY: If future tests or tools validate exc.reason against REASON_TOKENS, this emission will trigger a failure instead of being accepted, breaking correctness of the verification logic.\n- tests/test_verify_release_manifest.py:691-697 | severity=low | confidence=4\n  PROBLEM: test_pr_tree_added_file_with_wrong_mode_is_rejected misdescribes coverage.\n  WHY: While not a runtime failure, the test name claims to cover added files, but because stage_clean_update already creates the file, it actually tests a modified file change. Reviewers reading the test name will incorrectly believe the added-path case is covered.\n- Requirement: \"If the referenced plan cannot be read, use the provisional names and behavior from the issue and record that assumption in a code comment and the PR body.\"\n  Expected change site: PR body\n  Evidence of absence: The PR description provided in the review context says only \u201cAutomated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7004. Refs #6902\u201d and does not disclose that the plan or its D1-D6 decisions were unavailable, nor the provisional names and behavior assumed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: If the referenced plan cannot be read, \u201crecord that assumption in a code comment and the PR body.\u201d\n  Expected change site: This implementation PR\u2019s description.\n  Evidence of absence: The code comments record that the plan could not be read and that provisional names were used. The PR description in the review context only says \u201cAutomated implementation,\u201d references issue #7004, and says \u201cRefs #6902\u201d; it does not disclose that the plan or its D1-D6 decisions were unavailable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  Expected change site: PR description / body\n  Evidence of absence: The code comments correctly document the provisional names assumption (e.g., \"Assumption: the authoritative plan ... could not be read, so the job id `verify`, the status context `ai-update-workflows/verify` and the log prefix UPDATER_PR_VERIFY are the provisional names from the issue\"). However, the PR description provided in the review context says only \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7004 / Refs #6902\" and does not disclose that the plan or its D1-D6 decisions were unavailable, as the issue explicitly requires.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- tests/test_verify_release_manifest.py:691-697 | severity=low\n  PROBLEM: The test `test_pr_tree_added_file_with_wrong_mode_is_rejected` is misleadingly named.\n  WHY: It calls `stage_clean_update()` which writes `.claude/settings.json` with default mode, then overwrites it with mode 0o755. This tests a mode change on an existing file (status \"M\"), not an added file (status \"A\"). The genuine added-file case is not covered by this test.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "13361ae20a4382423b05cc317e5a7150c5c8046f8444bc9286119cc1cef106ff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7011,
+    "run_id": "38016454931",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38016454931",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010025422_d06a87f5cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7011,
+    "run_id": "38016454931"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T02:54:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The fragment claims every step from \"Detect smoke test and tune LLM settings\" onward is gated on SKIP_PLAN, but the \"Report refused AI engine fallbacks\" step (`.github/workflows/plan.yml:3293-3295`) has `if: always()` with no SKIP_PLAN condition and still runs on a held plan run.\n  WHY: Anyone reading the folded agents.md is misled about which steps run on a held run; the runtime impact is benign (continue-on-error, no records). All reviewers rated it NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/8151-plan-label-missing-hold.md:2 (conflicts with `.github/workflows/plan.yml:3293-3295`) | severity=NIT | confidence=5\n  PROBLEM: The fragment says every step from \"Detect smoke test and tune LLM settings\" onward is gated on SKIP_PLAN, but \"Report refused AI engine fallbacks\" has `if: always()` and no SKIP_PLAN condition.\n  WHY: A held plan run still executes that step. This is a documentation inaccuracy, not a workflow defect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment omits \"Report refused AI engine fallbacks\" (`.github/workflows/plan.yml:3293-3295`, `if: always()`) from the steps that still run on a held plan run.\n  WHY: The step runs on every held plan run, so the folded agents.md misdescribes the step boundary. Runtime impact is benign (an empty report).\n- HARDENING_SUGGESTIONS: agents.d/8151-plan-label-missing-hold.md line 2: append \", 'Report refused AI engine fallbacks'\" to the list of steps that still run (1 line changed). HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/8151-plan-label-missing-hold.md:2 (and `.github/workflows/plan.yml:3293-3295`) | severity=NIT | confidence=5\n  PROBLEM: The fragment says every step from \"Detect smoke test and tune LLM settings\" onward is gated by SKIP_PLAN, but \"Report refused AI engine fallbacks\" uses `if: always()` with no SKIP_PLAN condition.\n  WHY: A held plan run still executes the fallback-reporting step, so the fragment misstates which steps the hold skips.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/8151-plan-label-missing-hold.md:2 (contradicted by `.github/workflows/plan.yml:3293-3294`) | severity=NIT | confidence=5\n  PROBLEM: The fragment says gating starts at \"Detect smoke test and tune LLM settings\", but \"Report refused AI engine fallbacks\" has `if: always()` and no SKIP_PLAN condition, so it runs on held runs.\n  WHY: The step finds no fallback records on a held run, but the wording is incomplete and would mislead operators reading the folded agents.md.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/8151-plan-label-missing-hold.md:2 (contradicted by .github/workflows/plan.yml:3293-3294) | severity=NIT | confidence=5\n  PROBLEM: The fragment says every step from \"Detect smoke test and tune LLM settings\" onward is gated on SKIP_PLAN. That is false for \"Report refused AI engine fallbacks\" (plan.yml:3293, `if: always()` at line 3294), which has no SKIP_PLAN condition.\n  WHY: Folding the fragment into agents.md misleads anyone diagnosing a held run. Impact is bounded: the step is continue-on-error and records no fallbacks on a held run. The minimal fix is a wording edit only, not a change to plan.yml.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b2e329df1626dfb6e2a874b8efe3bf49971302f21a6360bcafec910e354b3370",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8170,
+    "run_id": "40247190587",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40247190587",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026001741_157f23e083",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8170,
+    "run_id": "40247190587"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T00:17:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

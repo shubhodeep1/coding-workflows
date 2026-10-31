@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a one-line data edit to a smoke canary file.\n\n## Data structures affected\n`tests/e2e_smoke_canary.txt` is a plain-text file with key/value lines:\n- Line 1 stays exactly `status: ok`.\n- Line 2 changes from `run_id: 26151428977` to exactly `decompose-run: 39703422828`.\n- Line 3 (`updated-by: ai-pipeline`) and any later lines stay byte-for-byte the same, including the trailing newline.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 in place\n- Chosen: rewrite only line 2 of `tests/e2e_smoke_canary.txt` to `decompose-run: 39703422828`, and leave line 1 and line 3 as they are.\n- Alternatives considered: rewrite the whole file; add a new line and keep the old `run_id` line.\n- Why: the issue requires line 2 to be exactly the new text and every other line to stay unchanged. An in-place one-line change is the smallest change that meets that.\n\n## Security considerations\n- No trust boundary, endpoint or authorization surface is touched.\n- The new value is a fixed literal from the issue. It contains no secret or credential.\n- No money state is involved.\n\n## Risks and edge cases\n- Keep the file's trailing newline and its LF line endings, so other lines do not change.\n- The issue says the file currently reads `status: ok` / `run_id: 26151428977` / `updated-by: ai-pipeline`. If the file on `orchestrator/project-7838` differs, still apply the acceptance rule: line 1 is `status: ok`, line 2 is the new value, and every other line stays as it is.\n- The parent issue #7839 was closed without merging, so this fix-up must produce a merged PR into `orchestrator/project-7838`.\n\n## Testing considerations\nRun the two acceptance checks:\n- `sed -n '1p' tests/e2e_smoke_canary.txt` should print `status: ok`.\n- `sed -n '2p' tests/e2e_smoke_canary.txt` should print `decompose-run: 39703422828`.\n\nAlso run `git diff` and confirm it shows exactly one changed line.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: the issue names one exact line replacement in one file, listed in `files_touched`. No helper, test or doc change is needed. The complete change and the shortcut are the same edit, so there is nothing to expand or reduce.\n\nPre-execution self-check: the planning ref is `orchestrator/project-7838` at `3c36fcf73a6828eb1da8c221da36a0effc185218`, with integration branch mismatch `false`. The planned path matches `files_touched`, and the acceptance criteria are concrete.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "7684d424d61e67f4dcb8e9fd22d85e26ba0c345f2188ae73990baf563b7cff82",
+  "lineage": {
+    "issue_number": 7841,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39705352326",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39705352326",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7841"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261022013100_d50b415bee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7841,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39705352326"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7841",
+  "timestamps": {
+    "created_at": "2026-10-22T01:31:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

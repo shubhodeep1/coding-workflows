@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_security_audit_workflow_contract.py:def test_security_audit_engine_ignores_ci_event_labels(tmp_path: Path, monkeypatch) -> None: | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The custom test runner calls test functions directly without injecting pytest fixtures, so this test raises a TypeError at runtime.\n  WHY: The test function expects `tmp_path` and `monkeypatch`, but the manual runner invokes it as `obj()` with no arguments.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_security_audit_workflow_contract.py:def test_security_audit_engine_ignores_ci_event_labels(tmp_path: Path, monkeypatch) -> None: | severity=BLOCKER | confidence=[5]\n  PROBLEM: The custom test runner in this file (main()) iterates over globals() and calls test functions directly without injecting pytest fixtures.\n  WHY: The test function test_security_audit_engine_ignores_ci_event_labels expects tmp_path and monkeypatch fixtures to be injected by pytest, but the manual test runner calls the function as obj() with no arguments, causing a TypeError at runtime.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===",
+  "fingerprint": "860c052f785ee68b6ae7dda6d83913c5e6a995cc11d5654205c84480713ae41f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6786,
+    "run_id": "37860150278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37860150278",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008234109_937a5454dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6786,
+    "run_id": "37860150278"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-08T23:41:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

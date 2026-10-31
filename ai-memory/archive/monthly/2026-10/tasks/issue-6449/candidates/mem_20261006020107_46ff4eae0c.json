@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should the fix also harden `WAVE_JUDGE`'s Codex fallback (`orchestrate_poll_process.sh:23087`, which runs `codex ... --sandbox danger-full-access` and inherits `GH_PAT`), or only the Claude path?\nChoices:\nA) Harden both paths. Add `WAVE_JUDGE` to `READ_ROLES` so Claude uses the networkless, credential-free read profile, and change the Codex fallback to `--sandbox read-only` with `GH_PAT`/`GH_TOKEN` removed from its environment. This matches how `SECURITY_JUDGE` is already called. Trusted poller code keeps doing all GitHub writes from the validated JSON verdict. Contract tests cover both paths. (RECOMMENDED)\nB) Claude path only. Add `WAVE_JUDGE` to `READ_ROLES` and leave the Codex fallback unchanged, to be fixed in a separate issue.\nC) Claude path only, and remove the Codex fallback for `WAVE_JUDGE`, so the poller fails closed and skips the tick whenever Claude isolation is unavailable.\nQ2: `STALL_JUDGE` (line 14765) and `INTEGRATION_JUDGE` (line 8722) also run with the Claude write profile and receive PR-derived content. Should this issue cover them too?\nChoices:\nA) No. Fix only `WAVE_JUDGE`, the judge this finding names. The siblings are left to their own audit findings or a follow-up issue, which keeps this change small and avoids breaking any write behaviour those judges may depend on. (RECOMMENDED)\nB) Yes. Move every orchestrator JSON-verdict judge (`WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`) to the read profile and harden their Codex fallbacks the same way as the Q1 answer.\n**Note:** if you pick B here and B in Q1, the Codex fallbacks are left unchanged for all three judges.",
+  "fingerprint": "ca798c30c7fcede67d2d3e2ffde1d5eb898366e958c12fee6e60e02dcd11442d",
+  "lineage": {
+    "issue_number": 6449,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37401512708",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37401512708",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006020107_46ff4eae0c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6449,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37401512708"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6449 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T02:01:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

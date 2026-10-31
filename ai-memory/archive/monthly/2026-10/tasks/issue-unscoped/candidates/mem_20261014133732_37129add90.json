@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh:411-421 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: user_manager_route_open() treats pgrep/find inspection failures (errors suppressed, empty output) as route closed (return 2), so selfcheck passes instead of failing closed.\n  WHY: A denied or failed pgrep or find can hide a live user manager or sockets under /run/user/<uid>/systemd, so selfcheck passes when it should fail; source severity was MAJOR, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nHardening suggestion only (not a finding): scripts/validation_harness_sandbox.sh user_manager_route_open() lines 404-422, comment at 396-403. The comment says rootlesskit's and containerd's sockets are not counted, but find only searches ${rt}/systemd, so nothing actively excludes them. Suggested fix: add explicit -path exclusions. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validation_harness_sandbox.sh:411-421 | severity=MAJOR | confidence=4\n  PROBLEM: Inspection failures are treated as evidence that the systemd user-manager route is closed. The pgrep and find calls suppress errors, and the function returns 2 when they produce no output; cmd_selfcheck() treats return code 2 as a safe result.\n  WHY: If these checks fail while a user manager or reachable socket exists, user_manager_route_open() reports the route closed and selfcheck passes instead of failing closed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nHardening suggestion only (not a finding): sandbox_release_systemd_session (lines 374-394) early-returns on no systemd process or linger file, so a leftover user bus socket without a manager is not torn down. No fix required. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f30181e9dc2d2929c5da134e9fa832c699b05df1f247aefe5173c047f8bc5036",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7384,
+    "run_id": "38568660677",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38568660677",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014133732_37129add90",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7384,
+    "run_id": "38568660677"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-14T13:37:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

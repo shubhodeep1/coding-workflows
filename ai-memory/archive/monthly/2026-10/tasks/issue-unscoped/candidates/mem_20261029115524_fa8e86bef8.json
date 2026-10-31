@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection and placement of the steps moved from `tests-hooks-and-orchestrator`\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/ci.yml` comment says step timings could not be read and steps were picked by estimated cost, the changelog says the target job's remaining headroom is an estimate, so the diff does not establish that the moved steps were the slowest or that `tests-release-and-log-analysis` had the most headroom. (Reviewer severity: MAJOR. Other reviewers considered this disclosed residual risk accepted in prior rounds.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of the steps moved from `tests-hooks-and-orchestrator`.\n  Evidence of absence: The workflow comment says the step timings could not be read and the steps were picked by estimated cost. The changelog likewise says the target job\u2019s remaining headroom is an estimate. The diff therefore does not establish that the moved steps were the slowest or that `tests-release-and-log-analysis` had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "39ab7ec1a2cbf69ef8e215a2bbd7524ebb523dd47c432c51bbb3911fa99a9c98",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8285,
+    "run_id": "40858201088",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40858201088",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029115524_fa8e86bef8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8285,
+    "run_id": "40858201088"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T11:55:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

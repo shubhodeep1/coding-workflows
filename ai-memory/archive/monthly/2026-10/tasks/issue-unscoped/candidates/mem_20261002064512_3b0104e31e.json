@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/escalation-judge.md:54 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Rule (a) checks the project head ref but not the base ref, so a same-repository PR targeting an unrelated base can pass the final-PR ownership check and be closed.\n  WHY: A stale or tampered log entry could name such a PR; reviewers disagreed on severity (MAJOR vs NIT), so the highest severity is used.\n- .claude/commands/escalation-judge.md:54 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The root copy's rule (b) uses prefix-only head matching, which can match another project's branch when project slugs share a prefix.\n  WHY: An escalation judge reading the root copy could close another project's PR; reviewers disagreed on severity (MAJOR vs NIT), so the highest severity is used.\n- .claude/commands/escalation-judge.md:54 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The root copy's rule (c) omits `activation-fix-<k>` from the legacy-mode branch list, so the close procedure will not close those PRs.\n  WHY: The root copy's legacy-mode close list is incomplete compared with the corrected twin.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workfow-templates/.claude/commands/escalation-judge.md (twN) and .claude/commands/escalation-judge.md (root copy)\n  Line or code reference: sTep 8 close rule (a), line 54\n  severity=NIT | confidence=3\n  PROBLEM: Rule (a) checks only the head ref and does not check the base ref.\n  WHY: A same-repository PR targeting another base could pass the final-PR ownership check and be closed.\n- .claude/commands/escalation-judge.md\n  Line or code reference: sTep 8 close rule (b), line 54\n  severity=NIT | confidence=5\n  PROBLEM: The root copy uses prefix-only matching for rule (b), unlike the twin's exact branch-kind matching.\n  WHY: A root-copy judge could close a PR whose branch matches only the project prefix.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/escalation-judge.md\n  Line or code reference: line 54, rule (a) \"the final PR: head exactly `claude/implement-plan-<slug>`;\"\n  severity=NIT | confidence=3\n  PROBLEM: Rule (a) constrains only the head ref and not the base ref.\n  WHY: A same-repository PR targeting a non-default branch could be closed as the project's final PR.\n- .claude/commands/escalation-judge.md\n  Line or code reference: line 54, rule (b) and (c)\n  severity=MAJOR | confidence=4\n  PROBLEM: The root copy retains prefix-only matching for rule (b) and omits `activation-fix-<k>` from rule (c)'s legacy-mode list.\n  WHY: A root-copy judge could close another project's PR through prefix matching, and legacy-mode close will not close activation-fix PRs.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/commands/escalation-judge.md\n  Line or code reference: Line 54, step 8 close rule (a): the final PR is accepted based on its head repository and exact head ref, but the rule does not constrain its base ref.\n  severity=MAJOR | confidence=4\n  PROBLEM: The ownership check does not constrain the base ref.\n  WHY: A same-repository PR targeting an unrelated base could be accepted and closed as this project's final PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/escalation-judge.md\n  Line or code reference: Step 8 `close`, rule (a) \u2014 `(a) the final PR: head exactly `claude/implement-plan-<slug>``\n  severity=NIT | confidence=3\n  PROBLEM: Rule (a) constrains only the head ref and head repository, not the base ref.\n  WHY: A stale or tampered log entry could name a PR targeting an unrelated base, which would pass the ownership check.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/commands/escalation-judge.md\n  Location: step 8 close path, rule (a) (line 54)\n  Issue: Rule (a) checks only the head ref and head repository, not the base ref; a stale or tampered log entry naming a PR with the same head ref but a different base branch would pass the ownership check.\n  Suggested minimal fix: Add a base-ref constraint to rule (a), e.g. \"(a) the final PR: head exactly `claude/implement-plan-<slug>` and base is the default branch (or the issue base in issue mode);\"\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b47bbb424459f1deda2bd49a9fa0ee52138ecd26257585899c6e48b4d9496ff5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36973471525",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36973471525",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002064512_3b0104e31e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36973471525"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T06:45:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

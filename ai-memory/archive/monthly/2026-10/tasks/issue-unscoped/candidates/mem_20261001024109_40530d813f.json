@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- The implementation is sound; the last run (d7d692c1) only updates the progress log to record review round 2. Earlier code changes passed through three review rounds; the symlink-race finding was addressed via `_open_scratchpad_file` (O_NOFOLLOW | O_DIRECTORY per-component walk), and the directory-rename finding was rejected because the check binds by name per AD-1. The cross-pollination summary confirms zero pass-1 findings. All plan deliverables are present in the diff; the sole incomplete check-run (review / codex-agent) is in_progress, not failed.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b2dfefd0f1a3568c07c435b5fc60401c1b603d9f82cd530af2a2cbf422a92406",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5714,
+    "run_id": "36805298812",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36805298812",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001024109_40530d813f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5714,
+    "run_id": "36805298812"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T02:41:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2205-2260 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Moving test steps from `tests-promote-stall-and-review` to `tests-release-and-log-analysis` caused pre-push failures in `tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py` and `tests/test_workflow_checkout_integration_ref_audit.py`.\n  WHY: The reviewer assumes these tests enforce static constraints on `ci.yml`; severity is stated as BLOCKER. Other reviewers (minimax_minimax-m3, z-ai_glm-5_3-flash, anthropic_claude-sonnet-5_5) dispute the causal link and say the tests read files this PR does not touch.\n- .github/workflows/ci.yml:2205-2260 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The moved steps now run in the `tests-release-and-log-analysis` job, whose environment, setup steps and concurrency guards may not suit the moved test suites.\n  WHY: The reviewer infers from the failing contract tests that implicit requirements were not met; severity is stated as MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Reduce the runtime of CI job `tests-promote-stall-and-review` by moving its slowest steps to the CI job with the most headroom without causing CI failure.\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR moved the steps but introduced multiple CI contract test failures, so \"without causing CI failure\" is unmet. The other three reviewers report no task gaps.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2205-2260 | severity=BLOCKER | confidence=4\n  PROBLEM: Moving test steps from `tests-promote-stall-and-review` to `tests-release-and-log-analysis` caused multiple pre-push tests to fail, including `tests/test_agents_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_pr_watch_guard.py`, and `tests/test_workflow_checkout_integration_ref_audit.py`.\n  WHY: These tests likely enforce static constraints on the workflow definitions in `ci.yml`. Moving steps between jobs may violate the expected structure, job-level guards or environment. The reviewer calls the autofix editor's dismissal of these failures as unrelated incorrect.\n- .github/workflows/ci.yml:2205-2260 | severity=MAJOR | confidence=3\n  PROBLEM: The moved steps now execute in the context of the `tests-release-and-log-analysis` job instead of `tests-promote-stall-and-review`.\n  WHY: The environment, setup steps and job-level concurrency guards of the new job may not be compatible with the moved test suites, and the failing contract tests indicate implicit requirements were not met.\n- TASK_GAP:\n  Requirement: Reduce the runtime of CI job `tests-promote-stall-and-review` by moving its slowest steps to the CI job with the most headroom without causing CI failure.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR moved the steps but introduced multiple CI contract test failures that prevent merging, so \"without causing CI failure\" is unmet.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ff0d1bc442cbe708fc5b410f39a6b0523f16d577eada6b63a8f0239641251058",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8469,
+    "run_id": "41062515792",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41062515792",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030135528_caa6ec9f76",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8469,
+    "run_id": "41062515792"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T13:55:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

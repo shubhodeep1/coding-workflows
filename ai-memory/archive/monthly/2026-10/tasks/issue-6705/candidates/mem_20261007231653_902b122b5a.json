@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6705,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6705\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6707\",\"pr_number\":6707,\"branch\":\"ai/issue-6705\",\"run_id\":\"37697468722\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37697468722\",\"changed_files\":[\".github/workflows/clarify.yml\",\".github/workflows/claude-engine-smoke.yml\",\".github/workflows/orchestrate.yml\",\".github/workflows/orchestrate_clarify_respond.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/plan.yml\",\".github/workflows/security-audit.yml\",\".github/workflows/validate.yml\",\"README.md\",\"agents.md\",\"changelog.d/6705-ai-engine-fallback-policy.md\",\"docs/scripts-pending-removal.md\",\"scripts/ai_engine.sh\",\"scripts/ai_engine_fallback_report.sh\",\"scripts/clarify_isolated_run.sh\",\"scripts/claude_pool_token.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/review_untrusted_sandbox.sh\",\"scripts/security_audit.sh\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/test_ai_engine.py\",\"tests/test_security_audit_workflow_contract.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "c33d75cfa3cd8895f78133d939b14b51d64f73418c119458f8911f4348b40619",
+  "lineage": {
+    "issue_number": 6705,
+    "parent_ids": [],
+    "pr_number": 6707,
+    "run_id": "37697468722",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37697468722",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6707"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261007231653_902b122b5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6705,
+    "level": "run",
+    "pr_number": 6707,
+    "run_id": "37697468722"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6705: https://github.com/shubhodeep1/coding-workflows/pull/6707",
+  "timestamps": {
+    "created_at": "2026-10-07T23:16:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

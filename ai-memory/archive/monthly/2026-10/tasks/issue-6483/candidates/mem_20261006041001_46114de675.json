@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should happen when a held PR's head has a `findings` marker but no open `ai:security` follow-up for its branch (matched by the `Integration branch: <ref>` line)?\nChoices:\nA) The gate holds with a new reason, `followups_missing`, which is left out of the mute list so the judge sends a CRITICAL alert. Closed issues are not reopened, because a collaborator closing one may be a deliberate waiver. (RECOMMENDED)\nB) A, and the gate also reopens the closed follow-up issues and notes the reopen on the PR. It still sends an alert if the follow-ups are closed a second time on the same head.\nC) A, and the gate also starts a fresh audit of the unchanged head. Closed follow-ups would no longer suppress the security-audit dedupe for that branch, so their findings are filed again.\nQ2: When follow-ups are still open but the head has not changed, how long should the gate wait before it stops muting `awaiting_followups` and sends an alert?\nChoices:\nA) Add a new variable, `SECURITY_PASS_FOLLOWUP_STALE_HOURS`, defaulting to `24`. The clock starts at the `findings` marker's timestamp; that is long enough for a follow-up to run clarify, plan, implement and review. (RECOMMENDED)\nB) Reuse the existing `SECURITY_PASS_PENDING_STALE_HOURS` (default `6`).\nC) No time limit. Only alert when the follow-ups are missing (Q1).",
+  "fingerprint": "d642e4b004155be3762c91073d53f4dcac0d452fbeac8d839444a2b34657f9dd",
+  "lineage": {
+    "issue_number": 6483,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37411950090",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37411950090",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006041001_46114de675",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6483,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37411950090"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6483 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T04:10:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

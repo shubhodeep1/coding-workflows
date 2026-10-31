@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:2089-2095 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The inner condition in the final-attempt branch uses `editor_stall_fallback_active -ne 1`, so when an earlier stall kill already set the sticky flag, the final attempt logs \"Final editor attempt: ... capacity-limited\" instead of the stall message.\n  WHY: The model chosen is correct and only the operator log is misleading. Severity disagreement: sonnet-5.5 and gpt-6-luna rated it NIT, while minimax and qwen rated it MAJOR. The source reviews used no \"critical\" level, so the highest stated severity is MAJOR, and the \"critical\" above is not a source rating.\n- scripts/review_apply_fixes.sh:2093 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `echo` inside the `else` is not indented to match the surrounding block, so it looks like an unclosed `if` to a reader.\n  WHY: Style only, and `bash -n` still passes. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_apply_fixes.sh:2089-2094 | severity=NIT | confidence=3\n  PROBLEM: When attempt 1 is stall-killed, attempt 2 switches to the fallback, and attempt 3 is the final attempt, attempt 3 falls to the `else` and logs \"capacity-limited\" even though a stall caused the switch.\n  WHY: The model chosen is correct and only the operator-facing log line is misleading.\n- scripts/review_apply_fixes.sh:2093 | severity=NIT | confidence=2\n  PROBLEM: The `echo` inside the `else` is not indented to match the surrounding block.\n  WHY: Style only, with no runtime effect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_apply_fixes.sh:2089-2094 | severity=MAJOR | confidence=4\n  PROBLEM: The inner condition `editor_stall_fallback_active -ne 1` plus `editor_stall_fallback_applies` is the opposite of what the elif on line 2095 uses. When a sticky stall flag carries into the final attempt, the log prints \"capacity-limited\" and drops the required stall-switch line.\n  WHY: Reproduces on a 3-attempt loop where attempt 1 is stall-killed and attempt 3 is final. The model is correct but the message is wrong, and the new tests only assert string presence, so they do not catch the inverted condition.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_apply_fixes.sh:2090-2093 | severity=NIT | confidence=4\n  PROBLEM: When an earlier stall kill already set `editor_stall_fallback_active=1`, the final-attempt branch selects the fallback but logs that the primary is capacity-limited.\n  WHY: The condition at line 2090 is false in that case, so the capacity-limited message prints even though the fallback was selected because of a stall.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_apply_fixes.sh:2089-2095 | severity=MAJOR | confidence=5\n  PROBLEM: The inner condition uses `editor_stall_fallback_active -ne 1`, the opposite of the elif's condition. When an earlier stall kill has set the sticky flag, the final attempt logs the misleading \"capacity-limited\" message.\n  WHY: Trace with 3 attempts and attempt 1 stall-killed: attempt 3's inner check is false, so the else branch prints the wrong cause. The fix inverted the first term of the condition that was asked for.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "78467903ab5d3d5fc934c6c604d54fedfc01ff0dc047af98a1d3ec952ff97336",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7497,
+    "run_id": "38885707582",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38885707582",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016104743_008c15b080",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7497,
+    "run_id": "38885707582"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T10:47:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

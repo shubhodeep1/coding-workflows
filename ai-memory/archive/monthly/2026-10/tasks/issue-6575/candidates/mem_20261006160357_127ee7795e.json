@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The root cause is unconfirmed. How much should this fix cover?\nChoices:\nA) Two changes plus a regression test. (1) Make the conflict resolver report a short, sanitized reason (path and rule only, never file contents) when it refuses a path. (2) Make `scripts/review_conflict_prepare.sh` settle every remaining conflict on `.ai/.workspace_source_manifest.txt` itself before the final path list is built, not only the case where both sides edited it. `.ai` stays excluded from the sandbox, and any other refused path still fails closed. The test puts the manifest plus one other file in conflict; it fails on head `07305da` and passes with the fix. (RECOMMENDED)\nB) Only the sanitized refusal reason and a test for it. Leave the manifest handling unchanged until a later failure shows which path was refused.\nC) Option A, plus a check that refuses symlinked or other unsupported paths before the model runs, with a named reason for each kind of refusal.\nQ2: Only applies if Q1 is A or C. When one side deleted the manifest and the other changed it, what should the result be?\nChoices:\nA) Keep the side that still has the file, merged with any added lines, and stage it. The file is a generated list that `workspace_init.sh` rebuilds anyway. (RECOMMENDED)\nB) Always take the base branch's version, or its deletion.\nC) Do not handle this case automatically. Leave it to fail closed, with the new refusal reason naming the manifest and the conflict type.",
+  "fingerprint": "e2351f37216976090b6d664886371454a758f4e98711b722339d46af0ff4e170",
+  "lineage": {
+    "issue_number": 6575,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37491607880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37491607880",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006160357_127ee7795e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6575,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37491607880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6575 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T16:03:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

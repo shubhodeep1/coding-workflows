@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix go on?\nChoices:\nA) The head branch of PR #6611, `ai/issue-6607`, where the failure happened. If that PR has merged by implementation time, use the branch it merged into, as `scripts/retarget_merged_base.sh` already does. (RECOMMENDED)\nB) The default branch `main`, treating it as a test-suite defect that exists apart from PR #6611.\nC) Reproduce first, then decide: use `main` if the failing test also fails there, otherwise `ai/issue-6607`.\nQ2: The tests in shard 1 of group 3 may all pass when re-run at the PR head, which would mean a flaky or environment-dependent failure. What should implementation do then?\nChoices:\nA) Change no code. Report the failure as not reproducible, listing the tests that were run and their results, and leave the CI aggregate and isolation safeguards untouched. (RECOMMENDED)\nB) Make a small fix to a test in that shard that clearly depends on timing or on order (for example a shared tempdir, a fixed sleep or a port), but only if the code shows that dependency.\nC) Add retry or re-run logic to the shard step in `ci.yml`. **Note:** the issue says not to change the aggregate check or safeguards just to clear the failure, so this option goes against that instruction.",
+  "fingerprint": "ed6c743070785502a132b9adeb8285cd717c9dfe9fd0e23976d3ab14a8d98d65",
+  "lineage": {
+    "issue_number": 6932,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37926481868",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37926481868",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009115946_8f6137ee16",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6932,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37926481868"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6932 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T11:59:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: C\n\nRATIONALE:\nQ1: Option A on its own cannot succeed. `scripts/sync_claude_live_copies.py` (lines 5 and 660\u2013668) says \"The pipeline's editors may not edit `.claude/**`\". The `.claude/` tree is also missing from the sandbox snapshot this run sees: only `workflow-templates/.claude/hooks/pr_merge_status_guard.py` is present, with 8 `config_override` matches. So with A alone the issue always ends in `BLOCKED:`. Option B points at `ai/sync-claude-live-copies-held`, and GitHub reports that branch does not exist, so choosing it would leave the issue in a loop with nothing to act on. C tries the code fix first and then hands the remaining step to an operator through the existing `ai:operator-step` channel. Since the held PR does not exist, the hand-off has to name a manual update of the live copy, not the held PR.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - workflow-templates/.claude/hooks/pr_merge_status_guard.py (the correct source; it already has the commit/config_override check at lines 1548-1554 according to the issue evidence)\n    - .claude/hooks/pr_merge_status_guard.py (the target, which must become byte-identical to the template)\n    - scripts/sync_claude_live_copies.py (confirms editors cannot edit `.claude/**`)\n    - tests/test_claude_template_live_parity.py (the parity gate the fix must clear)\n  steps:\n    - Do not edit the template; it is already correct. Do not change any other behaviour.\n    - Try to make `.claude/hooks/pr_merge_status_guard.py` an exact byte copy of `workflow-templates/.claude/hooks/pr_merge_status_guard.py`, keeping the executable bit the same, and add a changelog fragment `changelog.d/<issue>-live-merged-pr-hook-parity.md`.\n    - Check whether the live file actually appears in the resulting diff. If it does not (the file is absent from the sandbox, the write is refused, or the transfer drops it), do not commit a changelog-only change and do not report success. End with exactly: `BLOCKED: .claude/hooks/pr_merge_status_guard.py is outside the editor sandbox; operator step: copy workflow-templates/.claude/hooks/pr_merge_status_guard.py over .claude/hooks/pr_merge_status_guard.py (byte-identical, same mode) on main`. The unblock judge's `operator_step` route then files this on the `ai:operator-step` tracker and closes the issue.\n    - The operator-step text must say that `ai/sync-claude-live-copies-held` does not currently exist. The step is a manual live-copy update, or merging whatever sync PR `sync-claude-live-copies.yml` opens if one appears later.\n  replaces_acceptance_criterion: \"Live hook is byte-identical to the template in this issue's PR\" becomes \"the live hook is byte-identical in this PR, or an `ai:operator-step` entry records the exact copy command when the editor cannot write `.claude/`\"\n  equivalence_argument: Either way the gap ends with exactly one owner and a byte-for-byte copy instruction. The release parity test (`tests/test_claude_template_live_parity.py`) stays the enforcement point, so nothing passes until the live copy really matches.\n  reversibility: The live-copy update is a single-file copy that can be reverted with git. The operator-step entry can be superseded or closed with no code impact.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):",
+  "fingerprint": "6625524437bf66289084dac9e4e2914001f91e0ddf3f896c6b0b0bd86ebd77a7",
+  "lineage": {
+    "issue_number": 6624,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37607460773",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37607460773",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6624"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007103444_515d28134f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6624,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37607460773"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6624",
+  "timestamps": {
+    "created_at": "2026-10-07T10:34:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6538-6539 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The jq invocation passes `--argjson defer \"${defer}\"`, but the filter never references `$defer`.\n  WHY: jq silently ignores the unused variable, which may mislead readers about whether the defer flag affects the filter.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add a regression test verifying that the waiver-list cap preserves all `followup_pending` rows when more than 100 waiver rows or advisories are present, dropping only settled rows.\n  expected_change_site: tests/test_orchestrate_poll_process.py, under the `# --- Line ownership (plan item 4b, decision D4) ---` block\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The six existing `test_security_pass_line_ownership_*` tests cover advisory-only, mixed, budget, re-report, non-boolean, and off modes, but none seed enough rows to exceed the 100-row cap and verify pending rows survive while only settled rows are dropped.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nTASK_GAP\nRequirement: The linked issue's acceptance criteria lists \"tests/test_orchestrate_poll_process.py -k security\" coverage for the line-ownership behavior. Add a regression test for the defensive cap rule: the waiver list must never drop a row with `followup_pending: true` because the deferred filer reads only persisted rows, and a dropped pending row would never be filed.\nExpected change site: tests/test_orchestrate_poll_process.py \u2014 a regression test that seeds more than 100 waiver rows with a mix of pending and settled, then verifies the cap preserves every pending row and drops only the oldest settled rows.\nEvidence of absence: The six existing test_security_pass_line_ownership_* tests cover advisory-only, mixed, budget, re-report, non-boolean-advisory, and off modes, but none seeds enough waiver rows to exceed 100. The test for >100 rows is absent. The pass-1 consensus flagged this same gap (qwen, confidence=4). The prior editor noted it as TASK_GAP_DEFERRED because their sandbox lacked jq, but the CI harness has jq and would run the test.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP\nRequirement: Add a regression test that verifies the waiver-list cap preserves all followup_pending rows when more than 100 advisories are present, dropping only settled rows.\nExpected change site: tests/test_orchestrate_poll_process.py\nEvidence of absence: No test in tests/test_orchestrate_poll_process.py exercises the >100 advisories scenario. The existing tests cover advisory-only, mixed, budget, re-report, non-boolean, and off modes, but none seed enough rows (more than 100 waiver rows) to trigger the cap to verify that followup_pending rows are protected and only settled rows are dropped.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\nRequirement: A regression test verifying that the `security_pass_waived_findings` 100-row cap preserves all `followup_pending` rows (the new defensive logic introduced in the LAST RUN DIFF) when more than 100 line-ownership advisories accumulate in a single audit. This is a direct guard against the bug the LAST RUN DIFF fixed (`.[-100:]` would silently drop pending rows so the deferred filer never saw them).\nExpected change site: `tests/test_orchestrate_poll_process.py` \u2014 a new test under the `# --- Line ownership (plan item 4b, decision D4) ---` block that seeds \u2265101 waiver rows (mix of `followup_pending: true` and settled), invokes `security_pass_record_waivers` (or `_run_poller` with an oversized payload), and asserts every pending row survives while only settled rows are dropped.\nEvidence of absence: The six existing `test_security_pass_line_ownership_*` tests cover advisory-only, mixed, budget, re-report, non-boolean, and `off` modes, but none exceed 100 rows. The LAST RUN DIFF introduced a non-trivial jq pipeline (`$rows \u2192 $settled \u2192 $dropped \u2192 filter`) whose only safeguard against regression is the inline comment; without a runtime test, a future `.[-100:]` re-introduction would not be caught. The previous editor's own summary explicitly tagged this as `TASK_GAP_DEFERRED` because their sandbox lacked `jq`; CI's harness does have `jq`, so the test runs there.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:6538-6539 (`--argjson defer \"${defer}\"`) | severity=NIT | confidence=4\n  PROBLEM: The `--argjson defer \"${defer}\"` argument is passed to `jq` but `$defer` is never referenced in the jq filter expression.\n  WHY: It does not fail -- jq silently ignores unused bound variables. But it misleads readers into thinking the defer flag affects the jq output, when in fact the defer branching happens only in the shell loop below (lines 6567-6579). A future editor might try to use `$defer` inside the filter and be confused about why it has no effect.\nTASK_GAP\nRequirement: The LAST RUN DIFF introduced a new waiver-list cap in `ensure_security_pass_state_fields` (line 5477) and `security_pass_record_waivers` (line 6491) that preserves `followup_pending` rows when capping settled rows at 100. This defensive logic prevents a real bug where >100 line-ownership advisories in one audit could have pending rows silently dropped by the old `.[-100:]` slice.\nExpected change site: `tests/test_orchestrate_poll_process.py` -- a regression test that seeds >100 `followup_pending` waiver rows and verifies the cap preserves them all while dropping only settled rows.\nEvidence of absence: No test in `tests/test_orchestrate_poll_process.py` exercises the >100 advisories scenario. The six existing `test_security_pass_line_ownership_*` tests (lines 23837-24015) cover advisory-only, mixed, budget, re-report, non-boolean, and off modes, but none seed enough rows to trigger the cap. The previous editor explicitly noted this as TASK_GAP_DEFERRED because their sandbox lacked `jq`, but the CI harness has `jq` and the test would run there.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "eec81bd6547051a2127e0a00d633d31c60ee0365cb6ca69d858b77272a71329a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6742,
+    "run_id": "37752902614",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37752902614",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008092718_eb8a56a600",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6742,
+    "run_id": "37752902614"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T09:27:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

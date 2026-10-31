@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:989-1002 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: After a run where the label edit succeeds but the comment post fails, a later run fails on `--remove-label ai:planning`, records `label_state=failed`, skips the one-shot marker comment, and sends a WARNING that misstates the issue as still `ai:planning`.\n  WHY: Both reviewers rated it NIT (low). The unblock judge still acts on `ai:blocked`, so impact is limited to a lost marker and a misleading operator page. Reviewers disagree on whether `gh issue edit --remove-label` errors for an absent label; sonnet-5_5 and minimax-m3 dismissed the finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/plan.yml:989-1002 | severity=low | confidence=4\n  PROBLEM: After a partial success where the label edit succeeds but the comment post fails, a retry fails on `--remove-label ai:planning` (already removed), records `label_state=failed`, skips the comment, and sends a WARNING that misstates the issue as still `ai:planning`.\n  WHY: The one-shot `ai:plan-pr-not-open:v1` marker comment is lost permanently after a transient comment-post failure. The unblock judge still acts on `ai:blocked`, so the issue is correctly parked.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/plan.yml:989-996 (and WARNING text at line 1002) | severity=low | confidence=3\n  PROBLEM: The hand-off collapses label-add and label-remove into one `gh issue edit` and treats any failure as `label_state=failed`. If `ai:planning` is absent on a later run, the remove fails, the comment gate skips, and the one-shot marker is never posted.\n  WHY: The log records `label=failed` and the WARNING says \"the issue is still ai:planning\" although `ai:blocked` is already applied. The unblock judge still acts on `ai:blocked`, so severity stays low.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "998ac5823afed1e22ceac940dcc60ddad7e383557c86105a4d8746e80fa8c08e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8123,
+    "run_id": "40186812032",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40186812032",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025112348_da245b70db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8123,
+    "run_id": "40186812032"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T11:23:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

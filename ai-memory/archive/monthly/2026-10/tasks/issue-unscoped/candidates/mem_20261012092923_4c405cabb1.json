@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_wires_every_test_file.py:57-63 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The CI wiring guard fails because `tests/test_clarify_sandbox_base_image_preseed.py` is reported as unwired and is not in `UNWIRED_ALLOWLIST`.\n  WHY: The guard failure causes `static-checks` and the aggregate `lint` job to fail; severity is high, the highest reported, though anthropic_claude-sonnet-5_5 rated it NIT and said it comes from the merge base rather than this PR.\n- .github/workflows/ci.yml:aggregate lint job | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The aggregate lint job fails because the CI wiring guard reports `tests/test_clarify_sandbox_base_image_preseed.py` as unwired.\n  WHY: The reported assertion failure blocks PR merging.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: All test files must be wired into a CI workflow.\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The static-checks job reports `tests/test_clarify_sandbox_base_image_preseed.py` missing from any workflow step and absent from `UNWIRED_ALLOWLIST`; the PR's changed files do not touch `ci.yml` or the allowlist, and no diff hunk adds this file to either.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ci_wires_every_test_file.py:57-63 | severity=NIT | confidence=3\n  PROBLEM: the CI run on head 00f69fa failed `static-checks` because `tests/test_clarify_sandbox_base_image_preseed.py` is in no workflow and not in `UNWIRED_ALLOWLIST`.\n  WHY: the guard asserts every test file is wired into a workflow. I searched the checkout: that file does not exist, and nothing in the repo mentions it. It is not in this PR's changed-file list either. It most likely arrives with the base branch in CI's merge checkout. Nothing in this diff creates or should wire it, and the linked issue does not list `ci.yml` as an affected file. It should clear once the branch is updated against a base that carries the file and its wiring, or once that wiring lands on the base.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:aggregate lint job | severity=BLOCKER | confidence=5\n  PROBLEM: The lint job fails due to an AssertionError in tests/test_ci_wires_every_test_file.py\n  WHY: The test suite requires every test file to be wired into a CI workflow, but tests/test_clarify_sandbox_base_image_preseed.py is not referenced in any workflow step, causing the aggregate lint job to fail and block PR merging.\n- TASK_GAP\n  Requirement: All test files must be wired into a CI workflow.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The static-checks job fails because tests/test_clarify_sandbox_base_image_preseed.py is missing from any workflow step, and it is not in the UNWIRED_ALLOWLIST.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_wires_every_test_file.py:57-63 | severity=BLOCKER | confidence=5\n  PROBLEM: The CI guard fails because `tests/test_clarify_sandbox_base_image_preseed.py` is in the PR's merge commit but is not referenced by any CI workflow and is not in `UNWIRED_ALLOWLIST`.\n  WHY: `pytest -q tests/test_ci_wires_every_test_file.py` runs in `static-checks`; when `_is_wired(relative, workflow_text)` returns false for the new test file and the file is not in the allowlist, `assert not unwired` fails with the AssertionError that ships in the failing log, the step exits 1, the dependent `lint` job fails, and the required check is not satisfied so `gh pr merge --auto` (or the deterministic-skip merge) cannot proceed.\n- TASK_GAP\n  Requirement: \"Move that step's body into a sourced script under `scripts/`, preserving its step ID, environment, outputs, and behavior... Update the step-script contract and inventory, then rerun the size and contract tests. Do not raise the guard.\" The linked issue is filed by `check-failure-triage` because CI failed; the PR is the fix for that CI failure.\n  Expected change site: Either `.github/workflows/ci.yml` (wire the new test into an existing step) or `tests/test_ci_wires_every_test_file.py` `UNWIRED_ALLOWLIST` (add the file with the reason it cannot run in CI).\n  Evidence of absence: The `static-checks` job log for run 38218735110 (head 00f69fa5) fails with `AssertionError: These test files run in no workflow; add each to a CI step in .github/workflows/ci.yml (or to UNWIRED_ALLOWLIST with the reason it cannot run there): tests/test_clarify_sandbox_base_image_preseed.py`. The PR's changed files do not touch `ci.yml` or the allowlist, and no diff hunk adds this file to either. Without one of those edits, the PR cannot reach the mergeable state its name and intent require.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_ci_wires_every_test_file.py:57-63 | severity=BLOCKER | confidence=5\n  PROBLEM: CI run 38218735110 reports `tests/test_clarify_sandbox_base_image_preseed.py` in the evaluated tree, but it is neither referenced by a workflow nor listed in the empty `UNWIRED_ALLOWLIST`.\n  WHY: The wiring guard rejects that test file, causing `static-checks` and the aggregate `lint` job to fail. The guard is also run in `.github/workflows/ci.yml:224`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b6cd761af2d1c8be44898de17ef2d44ffc72539c2ab180d773bad8dbcb4f5ded",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6979,
+    "run_id": "38218759874",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38218759874",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012092923_4c405cabb1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6979,
+    "run_id": "38218759874"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T09:29:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

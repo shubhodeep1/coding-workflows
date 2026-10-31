@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:302-302 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `if [ \"$(gh api ...)\" = \"${ref}\" ]` check does not handle `gh api` failures (rate limits, transient unavailability) beyond `|| true` suppressions.\n  WHY: A transient non-zero exit leaves an empty string that fails to match, so the judge keeps waiting when it should have retired the placeholder (source severity=MAJOR, mapped to high).\n- scripts/unblock_judge.sh:1704-1704 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `unblock_hold_resumed_since` returns 1 when `jq` fails on a missing, malformed or empty `item_comments.json`, which may mask the root cause.\n  WHY: The fallback of keeping the hold is the intended safe behavior, but the function assumes the file is present and readable (source severity=NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:302-302 | severity=high | confidence=4\n  PROBLEM: The `if [ \"$(gh api ...)\" = \"${ref}\" ]` check does not handle `gh api` failures (rate limits, transient unavailability) beyond `|| true` suppressions.\n  WHY: A transient non-zero exit leaves an empty string that fails to match, so the judge keeps waiting when it should have retired the placeholder (source severity=MAJOR, mapped to high).\n- scripts/unblock_judge.sh:1704-1704 | severity=low | confidence=3\n  PROBLEM: `unblock_hold_resumed_since` returns 1 when `jq` fails on a missing, malformed or empty `item_comments.json`, which may mask the root cause.\n  WHY: The fallback of keeping the hold is the intended safe behavior, but the function assumes the file is present and readable (source severity=NIT, mapped to low).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "97c8c1a955f5d82b2ce660bcf3a7757410aa4d3d4cc98bda170aa459f35e6a62",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8315,
+    "run_id": "40954184965",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40954184965",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029220949_ff08de0d35",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8315,
+    "run_id": "40954184965"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T22:09:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

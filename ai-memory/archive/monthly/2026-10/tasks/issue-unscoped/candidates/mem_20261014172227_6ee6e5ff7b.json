@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, destination job selection for the moved step (`tests-promote-stall-and-review`, step \"Workflow failure heal contract and driver tests\")\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The rationale at lines 1318-1330 says step timings and current per-job timings were unavailable. The destination was chosen because budget-watch never flagged it. The only timing cited is the old 8.2-minute figure from run 36523765261, so the \"most headroom\" choice is not demonstrated (severity disagreement: sonnet NIT, luna MAJOR, qwen MAJOR; highest used is MAJOR).\n- requirement: \"Move its slowest steps\" (plural)\n  expected_change_site: `.github/workflows/ci.yml`, `tests-heal-plan-and-validation`\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: Only one step was moved. Without step timings, moving more steps would be a guess, and the issue gives no count. The reviewer says this is not a gap it would raise.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, where the destination job is chosen.\n  Evidence of absence: The step is moved unchanged with its name kept, `timeout-minutes` untouched and no new job added. Those parts are met. The \"most headroom\" choice rests on indirect evidence. The comment at lines 1318-1329 says step timings and current per-job durations were unreadable. The old 8.2-minute figure and \"never flagged by budget-watch\" are the stand-ins. This is residual and already accepted. If the destination job grows near its limit, `budget-watch` will open a new issue on a later push to `main`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- TASK_GAP: Requirement: \"Move its slowest steps\" (plural).\n  Expected change site: `.github/workflows/ci.yml`, `tests-heal-plan-and-validation`.\n  Evidence of absence: Only one step was moved. Without step timings, moving more steps would be a guess, and the issue gives no count. This is not a gap I'd raise.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- All other checklist sections reported NONE. The reviewer verified the moved step at `.github/workflows/ci.yml` line 1331 is byte-identical to the removed block. Both jobs use identical setup. `test_no_step_runs_in_more_than_one_job` is still satisfied.\n- HARDENING_SUGGESTIONS: None. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, destination selection for \"Workflow failure heal contract and driver tests.\"\n  Evidence of absence: The rationale at lines 1320-1327 says the run's step timings and current per-job timings were unavailable. It selects `tests-promote-stall-and-review` because budget-watch had not flagged it, and the only timing cited is its historical 8.2-minute run. The PR does not establish that this destination has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- All other checklist sections reported NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, destination job selection for the moved step.\n  Evidence of absence: The step was placed in `tests-promote-stall-and-review` (lines 1331-1336), but the rationale (lines 1318-1330) says step timings were unavailable. The destination was chosen because budget-watch never flagged it. The only timing cited is 8.2 minutes from run 36523765261 (2026-09-29), which agents.md line 3509 identifies as making it \"the slowest test job\" in that run. The PR does not establish that the destination has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- All other checklist sections reported NONE.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "64a2a0b091794e3677143990e07a179517b8902b67d061b86196b19f9b0cb51a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7388,
+    "run_id": "38602766010",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38602766010",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014172227_6ee6e5ff7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7388,
+    "run_id": "38602766010"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T17:22:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

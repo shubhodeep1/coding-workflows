@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Activation verification of PR #7207 says `STABLE_RELEASE_ENABLED` should default to off. #7029 and #7272 deliberately made the stable-release switches default to on. Which should the pipeline do?\nChoices:\nA. Keep the default on and change no release behaviour. Add one `agents.d/` fragment and a changelog fragment saying that `STABLE_RELEASE_ENABLED` defaults to on on purpose, as the #7272 fragment says for `RELEASE_TAGGING_ENABLED`. The fragment would also say that activation verification should not report this as a gap, so it stops filing this issue. (RECOMMENDED)\nB. Keep the default on, change no files, and close this issue as not planned.\nC. Do what the issue asks. In both release jobs, default `STABLE_RELEASE_ENABLED` to `false` in `env:` and in the `${STABLE_RELEASE_ENABLED:-...}` script fallback, in `mark-stable.yml` and `test-and-mark-stable.yml`. Update the switch contract tests (`tests/test_mark_stable_release_tag_refspec_contract.py`, `tests/test_release_manifest_workflow_contract.py`), README.md:242-243 and the workflow comments. Stable releases stop until an operator sets `STABLE_RELEASE_ENABLED=true`, which brings back the stall that #7029 fixed.\n   **Note:** C contradicts #7029 and #7272, so `RELEASE_TAGGING_ENABLED` would still default to on. If you choose C, say whether that switch should also become default-off. Otherwise the planner will change only `STABLE_RELEASE_ENABLED`.",
+  "fingerprint": "afec6a77180e044c54245e3fbc17d28c782a01dc6c5b9ddb2b4c51765fce7c70",
+  "lineage": {
+    "issue_number": 7298,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38332804924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38332804924",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013014123_a76d13043a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7298,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38332804924"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7298 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T01:41:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

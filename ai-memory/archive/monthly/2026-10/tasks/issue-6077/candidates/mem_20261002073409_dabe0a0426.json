@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `34634236ca583195de46a795fc642a09a68d8fb2` on `orchestrator/project-6031`; it matches the issue\u2019s integration branch. The `/answer` confirms continuation and adds no further constraints.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `implement.yml`\u2019s baseline resolver and workspace shell-context mechanism  \nScope-mode justification: Keep this to the existing workflow and its contract tests. A shortcut that writes empty `GIT_DIR` and `GIT_WORK_TREE` values to `$GITHUB_ENV` is not equivalent to unsetting them: the runner passes those values to subsequent steps, and an empty `GIT_DIR` makes Git fail. Shell-scoping the existing pin and clearing the shell hook after repository work is the complete safe path. Under \u00a76 Core Priorities, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed. ([github.com](https://github.com/actions/runner/blob/main/src/Runner.Worker/FileCommandManager.cs))\n\n## Automation and lifecycle\n- Extend the existing `.github/workflows/implement.yml` job, triggered by an `/approved` issue comment. No new script, scheduler entry, supervisor, database gate, or future-removal registry entry is needed.\n- Budget implementation and focused verification for **at most 45 minutes**.\n\n## Files likely to change\n- `.github/workflows/implement.yml`\n- `tests/test_review_rb_judge_reissue_baseline.py`\n- `tests/test_workspace_init.py`\n- Targeted references in `tests/conftest.py` and `agents.md` **only if needed** to correct statements that implement globally exports the Git pin. No unrelated reflow.\n\n## Implementation\n1. In **Resolve trusted prior PR baseline branch**, remove the step-level multiline `ISSUE_BODY` export. Read `ISSUE_BODY_FILE` as the sole body source. If it is absent or unreadable, ignore the baseline override and retain the existing resolved-ref checkout fallback; emit no body text. Keep the author, footer, PR-head, and ref verification gates.\n2. In **Activate workspace shell context**, retain `BASH_ENV` and the existing workspace `cd`, but export `GIT_DIR` and `GIT_WORK_TREE` from that Bash hook rather than `$GITHUB_ENV`. Bash-run repository commands and their children retain the pin; checkout\u2019s JavaScript post-actions do not inherit a job-wide pin. Checkout\u2019s Git commands copy their process environment and run against each checkout\u2019s working directory, which is why merely repointing a global pin to the root checkout is insufficient for the support checkouts. ([github.com](https://github.com/actions/checkout/blob/main/src/git-command-manager.ts))\n3. After **Run workspace before_remove hook** and **Cleanup temporary artifacts**, add a final `if: always()` step that writes an empty `BASH_ENV` value to `$GITHUB_ENV`. No repository operation follows it. This reaches subsequent actions through the runner environment file; an in-step `unset` alone does not. Confirm post-action behavior in an actual Actions run before claiming warning suppression. ([docs.github.com](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands?_bhlid=e8c372250d0bb9ee98253284e564f60359ba6c9f&tool=bash&utm_source=openai))\n\n## Data structures and API/interface changes\nNo external interface or GitHub API call changes. Preserve existing variable names and baseline output fields. The baseline resolver no longer receives body text through its step environment; its unavailable-file path selects the normal checkout rather than accepting an event-body override.\n\n## Decisions\n### D1 \u2014 Keep Git pinning out of checkout post-action environments\n- **Chosen:** Export the existing Git pin through the Bash workspace hook and clear `BASH_ENV` after all repository work.\n- **Alternatives considered:** In-step `unset`; empty `GIT_DIR`/`GIT_WORK_TREE` entries in `$GITHUB_ENV`; repointing both entries to the root checkout.\n- **Why:** The first does not affect post-actions, the second breaks Git, and the third can direct a support checkout\u2019s cleanup at the wrong repository. The runner retains `$GITHUB_ENV` assignments for later actions. ([github.com](https://github.com/actions/runner/blob/main/src/Runner.Worker/FileCommandManager.cs))\n\n## Security considerations\nThe issue body crosses an untrusted-input boundary. Keep it in the verified file, never interpolate it into YAML script source or a step environment, and log only fixed, body-free fallback diagnostics. Baseline reuse remains authorized by trusted issue-author association and the existing closed-PR/head/ref checks; an unavailable body file must not bypass them. Post-action credential cleanup must operate on each checkout, not a globally pinned repository. ([github.com](https://github.com/actions/checkout?utm_source=openai))\n\n## Risks and edge cases\n- Early skips, failures, and cancellation may bypass ordinary steps: the final clearing step must use `always()`. A runner terminated before it can execute is not covered by an in-job guarantee.\n- A missing or invalid UTF-8 body file must select the normal checkout without a baseline API lookup. An empty, valid file has no baseline footer.\n- **Existing-test conflict:** `tests/test_review_rb_judge_reissue_baseline.py` currently asserts the `ISSUE_BODY` export and fallback to event-body text; those expectations must change. `tests/test_workspace_init.py` currently expects the Git worktree pin in `$GITHUB_ENV`.\n\n## Testing\nUpdate the existing extracted-step tests to cover valid file precedence, missing/unreadable/invalid-UTF-8 files, body-free diagnostics, and unchanged baseline verification. Exercise the activation hook in a child Bash process against a scratch repository, then simulate the `$GITHUB_ENV` hand-off: confirm repository commands retain the pin before teardown and Git launched for root and nested checkout directories receives no pin afterward. Assert teardown ordering and `always()`. Run focused pinned-toolchain checks, workflow lint, and an existing Actions implement run; inspect its checkout post-action logs before reporting warning suppression.\n\n## Pre-execution self-check\nThe plan is implementation-ready, stays on the matched integration ref, and requires no undisclosed scalar input. No repository files were changed during planning.\n\nPLAN_SELF_CHECK: WARNING: Local tests can verify environment scope and ordering, but actual checkout post-action warnings require an Actions run to assess.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ff1a43c8085578026be66101db1b34b7f2fd8848fbc8fc018c82dc7c45941440",
+  "lineage": {
+    "issue_number": 6077,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36978515889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36978515889",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6077"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261002073409_dabe0a0426",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6077,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36978515889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6077",
+  "timestamps": {
+    "created_at": "2026-10-02T07:34:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

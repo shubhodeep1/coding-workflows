@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8210,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8210\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8211\",\"pr_number\":8211,\"branch\":\"ai/issue-8210\",\"run_id\":\"40392843631\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40392843631\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\".github/workflows/review_autofix.yml\",\"agents.d/8210-prepush-gate-integration-repair.md\",\"changelog.d/8210-prepush-gate-integration-repair.md\",\"prompts/integration-sync-test-repair.txt\",\"scripts/orchestrate_poll_process.sh\",\"scripts/review_autofix_step_prepush_test_gate.sh\",\"scripts/review_conflict_resolve.sh\",\"tests/review_autofix_step_scripts.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_conflict_resolve_sandbox_only.py\",\"workflow-templates/ai-review.yml\"]}",
+  "fingerprint": "9e5e09ad127bc48db054ba0638003d472d85727d7360228242b67ae352ce15f1",
+  "lineage": {
+    "issue_number": 8210,
+    "parent_ids": [],
+    "pr_number": 8211,
+    "run_id": "40392843631",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40392843631",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8211"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261026203320_35e925de0d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8210,
+    "level": "run",
+    "pr_number": 8211,
+    "run_id": "40392843631"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8210: https://github.com/shubhodeep1/coding-workflows/pull/8211",
+  "timestamps": {
+    "created_at": "2026-10-26T20:33:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

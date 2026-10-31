@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/prepush_affected_tests.py:123-125,750,820-821 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `_STATIC_MESSAGE_LINE_RE.sub(\"line N\", ...)` normalisation also feeds the editor-facing tail, so cross-reference line numbers such as ruff F811 \"from line 12\" become \"from line N\".\n  WHY: Only diagnostic wording is degraded, with no wrong verdict or crash; all three reviewers rated it NIT.\n- .claude/hooks/prepush_affected_tests.py:1263-1273 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The comment \"so it holds the push like before instead of passing as failures\" misdescribes prior behaviour, because a missing or unknown stamp status used to fall through to FINDING_STAMP_FAILURES, which does not hold the push.\n  WHY: Only the comment is wrong, and the new FINDING_NEEDS_HUMAN fail-closed behaviour is correct; both reviewers rated it NIT.\n- .claude/hooks/prepush_affected_tests.py:1262-1273 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `if status != \"fail\":` treats any non-passing, non-\"fail\" status such as \"pending\" or \"running\" as invalid and raises a needs-human finding.\n  WHY: A still-running or pending stamp would be reported as \"has no valid status\" instead of telling the user to wait; rated NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement the new pre-push affected-test gate, including the gate module, host-side container wrapper, and step scripts for implement/review autofix.\n  expected_change_site: scripts/prepush_test_gate_run.sh, scripts/implement_step_prepush_test_gate.sh, scripts/review_autofix_step_prepush_test_gate.sh\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff only changes `.claude/hooks/prepush_affected_tests.py`, and the three scripts are missing from it. Note that anthropic_claude-sonnet-5_5 reported no task gaps: the PR description names only the sync of that hook file and no linked issue exists. Reviewer severity: BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/hooks/prepush_affected_tests.py:123-125 (about 750) | severity=low (NIT) | confidence=3\n  PROBLEM: The normalisation also feeds the tail shown to the editor, so a ruff message such as \"from line 12\" reads \"from line N\" and the cross-referenced line number is lost.\n  WHY: It does not fail. Only diagnostic wording is affected. Normalising is needed so a moved finding still matches the baseline.\n- .claude/hooks/prepush_affected_tests.py:1263-1273 | severity=low (NIT) | confidence=4\n  PROBLEM: Before this PR, a stamp with a missing or unknown status fell through to `FINDING_STAMP_FAILURES`, which does not hold the push. The new `FINDING_NEEDS_HUMAN` branch holds it, so \"like before\" in the comment is inaccurate.\n  WHY: It does not fail. The new fail-closed behaviour is correct, and only the comment is wrong.\n- Hardening suggestion: in `_hook_findings`, branch `if status != \"fail\"`, include the repr of the status value in the \"records no gate result\" message, or leave it as is (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/prepush_affected_tests.py:1262-1273 | severity=low (NIT) | confidence=3\n  PROBLEM: `if status != \"fail\":` treats any non-passing status that is not \"fail\" (e.g. \"pending\", \"running\") as invalid or unknown and raises a needs-human finding.\n  WHY: A pre-push test stamp that is still running or pending would be flagged as \"has no valid status\" instead of telling the user to wait for the test to complete.\n- TASK_GAP:\n  Requirement: Implement the new pre-push affected-test gate, including the gate module, host-side container wrapper, and step scripts for implement/review autofix.\n  Expected change site: .claude/hooks/prepush_affected_tests.py, scripts/prepush_test_gate_run.sh, scripts/implement_step_prepush_test_gate.sh, scripts/review_autofix_step_prepush_test_gate.sh\n  Evidence of absence: The PR diff ONLY includes changes to `.claude/hooks/prepush_affected_tests.py`. The planned scripts `scripts/prepush_test_gate_run.sh`, `scripts/implement_step_prepush_test_gate.sh`, and `scripts/review_autofix_step_prepush_test_gate.sh` are missing from the PR diff.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/prepush_affected_tests.py:750 (normalized message later included in the finding tail at 820) | severity=low (NIT) | confidence=4\n  PROBLEM: The line-number normalization is used for displayed diagnostics as well as baseline comparison. For example, Ruff F811's \"from line 12\" reference becomes \"from line N.\"\n  WHY: A newly introduced F811 or F402 finding loses the cross-reference line in its summary and repair input. The gate verdict is unaffected.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/hooks/prepush_affected_tests.py:1263-1272 (comment at 1264-1265; same at workflow-templates/.claude/hooks/prepush_affected_tests.py:1263-1272) | severity=low (NIT) | confidence=4\n  PROBLEM: The comment \"so it holds the push like before instead of passing as failures\" misdescribes prior behavior. A missing status used to fall through to the FINDING_STAMP_FAILURES branch, which hook_decision filters out (line 1317), returning DECISION_CONTEXT_ONLY, so the push was not held. The new branch raises FINDING_NEEDS_HUMAN, which holds it.\n  WHY: No runtime failure. The misleading comment could send a maintainer in the wrong direction and mask the tightening as unchanged behavior.\n- .claude/hooks/prepush_affected_tests.py:125, 750, 820-821 (template copy: 125, 750, 820-821) | severity=low (NIT) | confidence=3\n  PROBLEM: The `_STATIC_MESSAGE_LINE_RE.sub(\"line N\", ...)` normalisation is applied to the stored finding tuples, not just the comparison keys, so cross-reference line numbers (e.g. ruff F811 \"name defined on line 12\") are rewritten to \"line N\" in the editor-facing `tail` built at lines 820-821.\n  WHY: No crash or wrong verdict. Only diagnostic text quality degrades, and the cross-referenced line number is unrecoverable from the summary.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9d98f6bb94ef6ca7b069de719af5e1eb08e6e4e7bcd4c3d3034a72b280d48a2a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8404,
+    "run_id": "40982952595",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40982952595",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030020837_c87b00b50b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8404,
+    "run_id": "40982952595"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T02:08:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_ledger.py:257-270 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_GIT_GLOBAL_OPTS` (`{0,8}` quantifier) matches at most eight Git global options, so a verdict like `git -c a=b` repeated nine times followed by `fetch origin main` is not classified as `git_remote_op`, and no other pattern catches it (`origin main` without a slash does not trip `origin_ref`).\n  WHY: `validate --sandbox-check` / `_check_sandbox_instructions` accepts the verdict, so `unblock_judge.sh` never re-asks and the network-less implementer is told to fetch, which is the fun-token-multi-chain#639 failure. All four reviewers rated it SEVERITY: NIT, mapped here to low. Reviewers note it is unlikely and no worse than pre-PR behaviour, and the gemini reviewer notes the sandbox still blocks it at execution time. The anthropic reviewer adds that the cap cannot simply be raised, because `_GIT_OPT_VALUE` (line 256) has overlapping alternatives (`\"[^\"\\n]*\"` vs `\\S+`), so failed matches cost about 2^n. minimax_minimax-m3 explicitly disputed raising this as a finding, saying the bound is the deliberate ReDoS fix.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_ledger.py:lines 257-261, `_GIT_GLOBAL_OPTS` ending in `)){0,8}`, used by `git_remote_op` at lines 269-270 | severity=NIT | confidence=4\n  PROBLEM: The global-option skip is capped at eight tokens. A remote command with 9 or more global options (for example, nine `-c a=b` then `fetch origin main`) is not matched, `origin main` does not trip `origin_ref`, and `_check_sandbox_instructions` (lines 896-902) accepts the verdict.\n  WHY: `validate --sandbox-check` succeeds and `unblock_judge.sh` sets `validate_ok=true` and never re-asks, so the fix-up tells the network-less implementer to fetch (fun-token-multi-chain#639). This is a heuristic gap, not an exploitable boundary; the impact equals pre-PR behaviour and no test pins the cap. The cap cannot be raised to `*` or `{0,32}` because `_GIT_OPT_VALUE` (line 256) overlaps: a quoted `\"a\"` matches both `\"[^\"\\n]*\"` and `\\S+`, so failed matches cost about 2^n and the ReDoS would return. The comment at lines 253-255 (\"the alternatives are disjoint\") is untrue for the value sub-pattern.\n- HARDENING: scripts/unblock_ledger.py line 256, `_GIT_OPT_VALUE`\n  ISSUE: The unquoted alternative `\\S+` also matches quoted tokens, so the alternatives are not disjoint.\n  FIX: Change it to `[^\\s\"'][^\\s]*`, then raise the cap to `{0,32}` (or `*`). Add a test with nine `-c a=b` options then `fetch` (expect `sandbox_incompatible:git_remote_op`), and add 30 quoted `-c \"a\"` options then `status` to the timing test. About 1-2 regex lines and 6 test lines.\n- HARDENING: scripts/unblock_ledger.py lines 253-255, comment\n  ISSUE: The comment claims disjoint alternatives, but the value sub-pattern overlaps.\n  FIX: Correct the comment or make it true with the change above (1 line).\n- TASK COMPLETENESS: NONE. The CLAUDE.md section 19 \"Implements #N\" bullet is deliberately deferred and recorded as IMPLEMENTS_MARKER_CLAUDE_MD_UNSET_OPERATOR_STEP in agents.d/7765-implements-marker.md.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_ledger.py:Lines 257-261 (_GIT_GLOBAL_OPTS) | severity=NIT | confidence=5\n  PROBLEM: _GIT_GLOBAL_OPTS limits git global options to a maximum of 8, so commands with 9 or more global options bypass git_remote_op detection.\n  WHY: The regex requires the subcommand (for example, fetch) to come right after at most 8 option tokens. This bypasses the sandbox-check optimization, but the networkless sandbox still blocks the command at execution time.\n- HARDENING: scripts/unblock_ledger.py Line 261 (_GIT_GLOBAL_OPTS)\n  ISSUE: The limit of 8 is arbitrary.\n  FIX: Raise the limit to 16 (1 line).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- NOTE: The reviewer explicitly declined the 9+ option finding at `scripts/unblock_ledger.py:256-272`. It says the `{0,8}` bound is the deliberate ReDoS fix: `_GIT_OPT_VALUE` ambiguity makes matching exponential, and the previous run measured 10.7 s for 36 tokens with `MAX_TEXT` 1200. It also says the precondition is unlikely, since `ROUND2_639` has no such options.\n- NOTE: The reviewer says the disjointness claims hold for the option alternatives (Alt 1 vs Alt 4 lookahead, and Alt 2 vs Alt 3 names). It hand-traced the listed commands, which all match `git_remote_op`.\n- NOTE: The check runs on text already truncated by `_clean_text` (`MAX_TEXT = 1200`, line 818; `scripts/unblock_ledger.py:1018-1022`). The fix-up sees the same truncated text, so nothing is lost.\n- NOTE: The re-ask loop in `scripts/unblock_judge.sh:1556-1601` is consistent with `agents.d/7742-unblock-sandbox-instructions.md`, and `UNBLOCK_JUDGE_REASK_NOTE=\"\"` at line 111 cannot be injected from the environment.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_ledger.py:257-270, `_GIT_GLOBAL_OPTS` and `SANDBOX_INCOMPATIBLE_PATTERNS` | severity=NIT | confidence=5\n  PROBLEM: The Git option matcher stops after eight options, so `git -c a=b` repeated nine times followed by `fetch origin main` is not classified as `git_remote_op`, and no other pattern rejects it.\n  WHY: `_clean_text` allows up to 1200 characters, so the instruction passes `--sandbox-check` and the networkless implementer fails when it tries to fetch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_ledger.py:_GIT_GLOBAL_OPTS, line 261 (the `{0,8}` quantifier) | severity=NIT | confidence=3\n  PROBLEM: The matcher recognizes at most eight Git global options, so a verdict with nine or more (for example, `git -c a=b` \u00d79 then `fetch origin main`) is not matched by `git_remote_op` and passes validation.\n  WHY: The fix-up would ask the network-less implementer to fetch, fail in the sandbox, and the item would wait for the next scan. The reviewer judged the likelihood very low and the impact limited, and called the bound a deliberate, documented trade-off.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE: The reviewer reported that no task payload was provided: the message held only the pipeline preamble and an unsubstituted `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder. It asked for the task to be resent.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a283835196870adb142acc635a00bd006554c733542311ebcdee343534fd5c7a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7743,
+    "run_id": "39575559024",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39575559024",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021100615_9773f45d24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7743,
+    "run_id": "39575559024"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T10:06:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

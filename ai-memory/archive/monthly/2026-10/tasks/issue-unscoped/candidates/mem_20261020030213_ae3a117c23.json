@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:3294-3302 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_redact_memory_push_stderr` strips token values and URL userinfo but leaves the origin URL (host/path) in the raised `MemoryGitError` message (call site 3365-3369).\n  WHY: The linked issue says \"Never put the token or the origin URL in the message\"; the tests (tests/test_ai_memory_push_retry_backoff.py:432-447, 484-511) don't assert URL absence. Reviewers labelled this MAJOR, which is mapped here to high.\n- scripts/ai_memory_lib.py:3275 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_MEMORY_PUSH_RATE_LIMIT_RE` (`rate[ _-]?limit|abuse`) matches the word \"abuse\" anywhere in stderr, so a permanent auth failure can be misclassified as retryable and consume all 16 attempts (hardening suggestion).\n  WHY: The suggested fix is to tighten the pattern to `abuse[ _-]?detect|triggered an abuse`, or to apply the exemption only to a matching 403 diagnostic. HARDENING_RISK_SCORE: 1.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Never put the token or the origin URL in the message.\" (issue #7714, \"Change\" item 2)\n  expected_change_site: `_redact_memory_push_stderr` in scripts/ai_memory_lib.py (3294-3302) and its call site at 3369\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The redactor handles only token env values and URL userinfo, so the origin URL is not replaced; the tests at tests/test_ai_memory_push_retry_backoff.py:432-447 and 484-511 don't assert URL removal; `_resolve_origin_url` (scripts/ai_memory_lib.py:3176) is the source for the URL to scrub.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_memory_lib.py:3294-3302 (call at 3369) | severity=MAJOR | confidence=5\n  PROBLEM: The redactor removes only the `GH_TOKEN`/`GITHUB_TOKEN`/`GH_PAT` values and URL userinfo, so the origin URL host and path remain in the `MemoryGitError` message.\n  WHY: The issue requires \"Never put the token or the origin URL in the message.\" Tests at tests/test_ai_memory_push_retry_backoff.py:432-447 and 484-511 don't assert URL absence. The fix is to also redact the URL from `_resolve_origin_url` (scripts/ai_memory_lib.py:3176).\n- HARDENING scripts/ai_memory_lib.py:3275 | HARDENING_RISK_SCORE=1\n  PROBLEM: `_MEMORY_PUSH_RATE_LIMIT_RE` matches \"abuse\" anywhere in stderr.\n  WHY: An unrelated mention of \"abuse\" would route a permanent auth failure into the 16-attempt retry loop. Suggested fix: `r\"rate[ _-]?limit|abuse[ _-]?detect|triggered an abuse\"`.\n- TASK_GAP:\n  Requirement: \"Never put the token or the origin URL in the message.\" (issue #7714, \"Change\" item 2)\n  Expected change site: `_redact_memory_push_stderr` in scripts/ai_memory_lib.py (3294-3302) and the call site at 3369\n  Evidence of absence: The origin URL is not replaced, and the tests don't assert URL removal.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/ai_memory_lib.py:3294-3302 (used at 3365-3369) | severity=MAJOR | confidence=5\n  PROBLEM: The redactor removes token values and URL userinfo but leaves the origin URL's host and path in the exception.\n  WHY: Redaction turns `https://x-access-token:<token>@github.com/o/r` into `https://***@github.com/o/r`, which `persist_memory_operation` includes in the `MemoryGitError`. This contradicts the requirement that the message not contain the origin URL.\n- HARDENING scripts/ai_memory_lib.py:3275 | HARDENING_RISK_SCORE=1\n  PROBLEM: The `abuse` alternative in `_MEMORY_PUSH_RATE_LIMIT_RE` exempts any stderr containing that word, including credential failures that are not 403 rate-limit or abuse responses.\n  WHY: Suggested fix: apply the exemption only to a matching 403 diagnostic.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/ai_memory_lib.py:3294-3302 (call site 3365-3369) | severity=MAJOR | confidence=4\n  PROBLEM: The redactor strips token values and URL userinfo but not the origin URL itself. For example, `https://github.com` in a \"could not read Username\" error passes through unchanged.\n  WHY: The issue says \"Never put the token or the origin URL in the message.\" Private GitHub Enterprise or self-hosted hostnames would reach logs. The test at tests/test_ai_memory_push_retry_backoff.py:432-447 doesn't assert URL absence.\n- HARDENING scripts/ai_memory_lib.py:3275 | HARDENING_RISK_SCORE=1\n  PROBLEM: `r\"rate[ _-]?limit|abuse\"` matches \"abuse\" anywhere in stderr.\n  WHY: An auth failure whose stderr mentions \"report abuse to security@...\" would be misclassified as retryable. Suggested fix: `r\"rate[ _-]?limit|abuse[ _-]?detect|triggered an abuse\"`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "35226afee7b294bfe900babd2497d7cea30609a2499b8b62022845a9b82a0844",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7720,
+    "run_id": "39360192316",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39360192316",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020030213_ae3a117c23",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7720,
+    "run_id": "39360192316"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T03:02:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

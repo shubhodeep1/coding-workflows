@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh:962 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `stage_from_head` uses `capture_output=True` on `git cat-file blob`, so the whole blob is buffered in runner memory, while `add()` streams from disk.\n  WHY: The `HEAD:workflow-templates/validation-harness/` prefix entry sends every tracked file under that directory through this path, so a large committed file could OOM the staging step and produce `harness_error`. Severity disagreement: gemini rated it MAJOR with confidence 4. The other four reviewers rated it a nit or hardening suggestion (risk score 1) and called it speculative. The ledger takes the highest rating.\n- scripts/validation_harness_sandbox.sh:945-955 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A `git cat-file blob` failure returns `False` (silent skip) without explicit logging in some cases.\n  WHY: The harness can be left with outdated or missing working-tree support files and no sign of why the HEAD-version staging failed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/validation_harness_sandbox.sh:stage_from_head (`subprocess.run(git + [\"cat-file\", \"blob\", ...], capture_output=True)`) | severity=NIT | confidence=1\n  PROBLEM: HARDENING_SUGGESTION. The whole blob is buffered in runner memory, while `add()` streams from disk. The new `workflow-templates/validation-harness/` prefix entry sends every tracked file under that directory through this buffered path.\n  WHY: This matters only if a very large file were committed under the six staged paths. The code shows no such file, so the reviewer rated it speculative. Suggested fix: run `git cat-file -s <oid>` and return False above 8 MiB (about 4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_harness_sandbox.sh:962 | severity=MAJOR | confidence=4\n  PROBLEM: `stage_from_head` buffers large blobs in runner memory using `capture_output=True`.\n  WHY: The `HEAD:workflow-templates/validation-harness/` prefix entry applies to every tracked file under that directory. A large file staged through it forces the staging process to allocate its whole size in memory, which could OOM-kill the step and leave the run as `harness_error` instead of a fallback.\n- scripts/validation_harness_sandbox.sh:945-955 | severity=NIT | confidence=3\n  PROBLEM: `git cat-file blob` failure results in a `False` return (silent skip) rather than explicit logging, unless a git call succeeds but returns an incorrect type or meta.\n  WHY: If `git cat-file` fails on an internal error, the stage is skipped silently. The harness may keep outdated or missing support files from the working tree with no indication of why the HEAD-version staging failed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validation_harness_sandbox.sh:962 (stage_from_head, `git cat-file blob` call) | HARDENING_RISK_SCORE=1\n  PROBLEM: HARDENING_SUGGESTION. `capture_output=True` holds the whole blob in memory, and the new `HEAD:workflow-templates/validation-harness/` prefix makes the set open-ended. A branch that commits a large file there is buffered whole, while the working-tree path (`add`) streams.\n  WHY: Suggested fix: read the object size first with `git cat-file -s <oid>` and `return False` above 8 MiB (the review sandbox's `MAX_FILE` in `scripts/review_untrusted_workspace.py:23`). Estimated change: 4 lines.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validation_harness_sandbox.sh:962 (stage_from_head()) | HARDENING_RISK_SCORE=1\n  PROBLEM: HARDENING_SUGGESTION. `capture_output=True` buffers an entire committed blob in memory. The directory-prefix argument applies this to every tracked file under `workflow-templates/validation-harness/`.\n  WHY: Suggested fix: stream the blob into the tar, or impose a size bound before buffering and log when the bound is exceeded. Estimated change: 4-8 lines.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/validation_harness_sandbox.sh:962 (STAGE_PY, `stage_from_head`, `git cat-file blob` subprocess) | HARDENING_RISK_SCORE=1\n  PROBLEM: HARDENING_SUGGESTION. `capture_output=True` buffers the entire HEAD blob in the staging process's memory, while the working-tree `add()` path streams from disk. The `HEAD:workflow-templates/validation-harness/` prefix entry applies this to every tracked file under that directory.\n  WHY: A large committed file there would be read whole and could OOM-kill the staging step, surfacing as `harness_error` instead of a clean working-tree fallback. Suggested fix: run `git cat-file -s <oid>` before the call and `return False` above a cap such as 8 MiB, mirroring `MAX_FILE` in `review_untrusted_workspace.py`. Estimated change: 4 lines.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3cb5df58a4c0139a2e698264f2c82bb0d041c9ffc2db49cf821202b4f7161123",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8067,
+    "run_id": "40099579135",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40099579135",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024142301_caad561fa0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8067,
+    "run_id": "40099579135"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T14:23:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

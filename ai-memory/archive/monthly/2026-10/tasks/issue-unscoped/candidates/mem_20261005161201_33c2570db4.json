@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_isolated_exec.sh:212-214, 219 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The dependency registry proxy socket (`/socket`) is mounted in the isolated agent container during the `run` action.\n  WHY: Exposing the host-side proxy socket may let a compromised agent interact with that proxy and bypass intended network restrictions.\n- tests/test_pr_merge_status_guard.py:1037-1045 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The regression tests for separate-value `--repo` and `--rep` forms are absent from the current file despite being claimed in the last-run diff.\n  WHY: The guard handles these forms, but the missing tests leave the claimed regression coverage absent.\n- scripts/ai_engine.sh:258-306 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: `claude_run` executes `claude -p` directly on the host instead of through `codex_isolated_exec.sh`.\n  WHY: A prompt injection can access `CLAUDE_CODE_OAUTH_TOKEN` (lines 318) and the host `.git/config` (lines 308-322), which contains the `GH_PAT` remote URL.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/codex_isolated_exec.sh:212-214, 219 | severity=critical | confidence=4\n  PROBLEM: The dependency registry proxy socket (`/socket`) is mounted in the isolated agent container during the `run` action.\n  WHY: Exposing the host-side proxy socket may let a compromised agent interact with that proxy and bypass intended network restrictions.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_pr_merge_status_guard.py:1037-1045 | severity=high | confidence=4\n  PROBLEM: The regression tests for separate-value `--repo` and `--rep` forms are absent from the current file despite being claimed in the last-run diff.\n  WHY: The guard handles these forms, but the missing tests leave the claimed regression coverage absent.\n- scripts/ai_engine.sh:258-306 | severity=critical | confidence=5\n  PROBLEM: `claude_run` executes `claude -p` directly on the host instead of through `codex_isolated_exec.sh`.\n  WHY: A prompt injection can access `CLAUDE_CODE_OAUTH_TOKEN` (lines 318) and the host `.git/config` (lines 308-322), which contains the `GH_PAT` remote URL.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3a12c548c9355e4e92b6d68c3bb888f11491f070ec02e83cd4921758225b952e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6187,
+    "run_id": "37331242855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37331242855",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005161201_33c2570db4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6187,
+    "run_id": "37331242855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T16:12:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

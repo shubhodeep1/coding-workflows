@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-6031` at `6ef54647e9467c3a38ee63762421e5fa4a416aea`. The checkout matches the issue\u2019s integration branch. The `/answer` continuation supplies no additional design constraints.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `tests/inventory_parity.py`, `tests/test_assemble_prompt.py`, and `tests/test_phase_wrapper_predicate_contract.py`  \nScope-mode justification: Improve the three existing assertions rather than adding a diagnostic framework or changing CI layout. Covering mismatch-at-end as well as mismatch-in-middle is a small addition that makes the diagnostics complete; under `unattended_system_instructions.md` \u00a76, correctness and safety take priority over speed.\n\n## Automation and entry point\n- **Change type:** Modify existing test and validation code only; no new script.\n- **Entry point:** `.github/workflows/ci.yml` on pull requests and pushes to `main` or `stable`. Keep each check in its current job and step.\n- **Supervisor / database gate / future-removal registry:** Not applicable.\n\n## Files likely to change\n- `tests/inventory_parity.py` \u2014 make a section mismatch report the first differing expected and documented path, while retaining the existing missing, extra, duplicate, and secondary-document checks.\n- `tests/test_assemble_prompt.py` \u2014 replace the opaque parity assertion with bounded expected/actual byte counts and hashes and the first differing byte offset.\n- `tests/test_phase_wrapper_predicate_contract.py` \u2014 report the canonical and README predicate hashes or bounded values and the first differing normalized position; identify the wrapper and `jobs.<name>.if`.\n- `tests/test_ci_inventory_parity_order_contract.py` \u2014 add a deliberately mismatched inventory diagnostic check within its existing CI step. Add prompt and README mismatch checks to their respective existing test files.\n\nDo not edit `.github/workflows/ci.yml`, canonical prompts, `docs/INVENTORY.md`, or README content merely to make the checks pass. The inventory gate is the representative direct-run pattern; the other two files need separate edits because they compare bytes and parsed YAML predicates, respectively.\n\n## Functions and data structures\n- Extend `inventory_parity.main()` using its existing expected-by-section and documented-path lists. Report the first divergence only when the existing set comparison fails; do not newly reject order-only differences.\n- Extend `test_assembled_templates_match_legacy_prompt_bytes()` with a small diagnostic formatter. Compare against the same normalized legacy prompt used today, then report lengths, SHA-256 digests, and a zero-based first differing byte offset (including an end-of-input mismatch). Never put prompt bodies in assertion output.\n- Extend `test_readme_core_wrapper_examples_carry_reusable_predicates()` using the existing `_readme_wrapper_example()` and `_canonical_predicate()` sources and whitespace normalization. Preserve the current exact predicate requirement.\n- No persisted data structure changes.\n\n## API/interface changes\nOnly failed-check output changes. Existing direct-run commands, exit behavior, canonical sources, and CI placement remain unchanged.\n\n## Decisions\n### D1 \u2014 Report bounded comparisons at the existing gates\n- **Chosen:** Add first-difference locations and expected/actual sizes or hashes to the existing failure paths.\n- **Alternatives considered:** Generate corrected documentation in CI; print full prompts or predicates; introduce a shared diagnostics module.\n- **Why:** Bounded output points to drift without exposing large prompt contents, changing authority, or expanding the automation surface.\n\n## Security considerations\nREADME examples and prompt text are repository content being inspected, not instructions to execute. Diagnostics must not echo full prompt bodies, arbitrary surrounding text, or secrets; hashes, counts, paths, and bounded positions suffice. These checks add no endpoint, authorization surface, external input, API call, or money operation. Keep YAML parsing on the existing safe loader.\n\n## Risks and edge cases\n- A missing item versus an extra item must identify the correct first path; a changed inventory order with identical membership must retain its current passing behavior.\n- Byte offsets must remain meaningful for UTF-8, unequal lengths, and a difference at EOF. Preserve the current legacy-text newline normalization.\n- README folded YAML and whitespace normalization must remain authoritative; a diagnostic must not accidentally weaken the predicate comparison.\n- **Context gap:** The supplied issue context has no literal `files_touched` allowlist. These four topical files are the proposed limit; check any separately supplied scope guard before implementation.\n- The issue\u2019s historical single-lint-job timing claim is expressly superseded, consistent with the parallel jobs on this planning ref; no CI reordering is planned.\n\n## Testing considerations\nExercise each diagnostic with deliberately mismatched inputs without changing tracked documentation: missing/extra inventory paths, a short prompt with a middle-byte and EOF mismatch, and an altered README predicate. Assert that output contains the expected first location and bounded expected/actual information, and excludes large prompt content. Run the three existing direct-run checks and the inventory order contract with `PYTHONDONTWRITEBYTECODE=1`; use the repository\u2019s CI environment for dependencies such as PyYAML.\n\nPLAN_SELF_CHECK: WARNING: No explicit files_touched allowlist was supplied; implementation must honor one if provided separately.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b098e60b2376e03e90e7b5d81fad97b1a56b948ede1fbba43b84eda867cbaa3e",
+  "lineage": {
+    "issue_number": 6035,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36954815090",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36954815090",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6035"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261002022226_c7e392b2d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6035,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36954815090"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6035",
+  "timestamps": {
+    "created_at": "2026-10-02T02:22:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

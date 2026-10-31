@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for #7330: no code change (resolution B)\n\nThis issue needs no code change on the default branch, and the issue should be closed as not planned. The fix belongs to PR #7259's own review/autofix loop on `ai/issue-7257`.\n\n**Planning ref:** the planning context lists `main` at `184e769daebca28d687602e8fb7f03b7421cff15`. The workspace I checked was at `c7e0d88db942b83ac8227946cd04cf6f47c03a64`, because `main` has moved on. No integration branch is declared, and the mismatch line reads `unknown`, not `true`.\n\nScope-mode: Hold Scope\nReuse-audit: extends PR #7259's existing review/autofix loop (`review_autofix.yml`), which already handles failing CI checks on its own head\nScope-mode justification: the only clarification question, Q1, was answered **B**: close this issue with no code change and leave the failure to PR #7259's review/autofix loop. I checked `main` and confirmed the answer's premise. `scripts/orchestrate_poll_process.sh` has 0 matches for `run_issue_7251_dependency_wait`, and `tests/test_issue_7251_dependency_wait.py` does not exist. On `main`, `tests/test_unblock_scan.py:195` (`assert lines[guard + 1].strip() == \"run_standalone_stall_recovery\"`) and `tests/test_orchestrate_poll_workflow_contract.py:205-209` (the `UNBLOCK_SCAN_SWEEP_ONLY` guard followed directly by `run_unblock_scan`) both describe `main`'s current code correctly and pass. Making either assertion require the dependency-wait call would break `main`'s CI. Making it accept either order (option C, which was rejected) would weaken a passing ordering contract. There is no smaller safe change than none. Per \u00a76 (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), not breaking `main` comes first.\n\n## Files likely to change\n\nNone. No repository file changes in this issue. Specifically, `tests/test_unblock_scan.py` and `tests/test_orchestrate_poll_workflow_contract.py` stay unchanged on `main`.\n\n## Functions or modules to implement\n\nNone.\n\nThe fix that is needed lives on PR #7259's head `ai/issue-7257`, and its review/autofix editor makes it there. Recorded here as guidance only:\n- In `test_poller_runs_the_scan_once_per_tick_after_the_project_loop`, require `run_issue_7251_dependency_wait || true` right after the post-loop guard and before `run_standalone_stall_recovery`. Keep the check that the scan runs exactly once after the loop.\n- In `test_unblock_scan_runs_without_tracking_issues`, require the dependency-wait call between the `UNBLOCK_SCAN_SWEEP_ONLY` guard and `run_unblock_scan || echo ...`. Keep the `exit 0` sweep-only check.\n- Do not remove the dependency-wait call just to make the old assertions pass.\n\n## Data structures affected\n\nNone.\n\n## API or interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Resolve on PR #7259's own branch, not on main\n- **Chosen:** no change on `main`. The failure is left to PR #7259's review/autofix loop on `ai/issue-7257`, and this issue is closed as not planned.\n- **Alternatives considered:** (A) send the fix to `ai/issue-7257` through a `Target branch:` line in this issue; (C) make the assertions on `main` accept either order.\n- **Why:** the issue body has no branch-routing line, so plan and implement resolve to `main`, where the tested call does not exist. Option A would need a body edit plus `/reclarify` before planning. Option C weakens a passing contract on `main` to allow for unmerged code. The documented rule is that a PR-specific CI failure belongs to that PR's own loop (agents.md, check-triage base gate and the #7140 precedent).\n\n## Security considerations\n\n- **Trust boundaries:** none touched. No workflow, script, prompt or test changes.\n- **Authorization:** no new endpoint or surface.\n- **External input:** I used the issue body and triage logs only as evidence. They contain no routing directive, and none was acted on.\n- **Abuse cases:** none introduced. Leaving `main`'s ordering contract strict keeps the regression signal intact.\n- **Money handling:** not applicable.\n\n## Risks and edge cases\n\n- **Conflict found:** the issue's \"Affected files\" section implies editing the two tests, but the code they would need to describe exists only on `ai/issue-7257`. On `main` both tests are correct as written.\n- **PR #7259's loop may not fix the assertions.** Then CI on that PR stays red and its normal escalation applies (identical-failure cap, review-blocked judge). This issue does not need to stay open for that.\n- **Implement with no changes.** If this issue moves to `/approved`, the implement phase will produce an empty diff. The expected outcome is to close the issue as not planned, not to open a PR.\n- **Reversibility:** a person who wants this issue to carry the fix can add `Target branch: ai/issue-7257` to the body and post `/reclarify`. Nothing done here needs undoing.\n\n## Testing considerations\n\n- There are no tests to add or change on `main`.\n- Acceptance: CI (`CI / lint` aggregate, jobs `tests-hooks-and-orchestrator` and `tests-heal-plan-and-validation`) passes on PR #7259's head after its own loop updates the assertions on `ai/issue-7257`. `tests/test_issue_7251_dependency_wait.py:316-321` on that branch still enforces the new order.\n- I ran no validators, because there was nothing to validate.\n\n## Pre-execution self-check\n\n- Q1 is mapped to B, and the plan follows its steps exactly.\n- I confirmed the premise on `main` by reading code: 0 occurrences of `run_issue_7251_dependency_wait`, and the current assertions match `main`'s poller.\n- No automation paths are listed, so the automation-path plan gate has nothing to hold.\n\n**Assumptions:**\n- PR #7259's review/autofix loop will see its failing CI checks.\n- `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` / `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` are off, which is their default.\n\n**Missing context:**\n- I did not read the tests or `scripts/orchestrate_poll_process.sh` on `ai/issue-7257`. The triage evidence is taken as given.\n\nPLAN_SELF_CHECK: WARNING: The plan has no file changes; if implement runs it will produce an empty diff, and the expected outcome is to close the issue as not planned rather than open a PR.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "89fcf921fa1ccc18226467c8667894d38eb30174d0a05bf1a4ae0e6ba2b47ffd",
+  "lineage": {
+    "issue_number": 7330,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38475209905",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38475209905",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7330"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261013221236_df2583792b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7330,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38475209905"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7330",
+  "timestamps": {
+    "created_at": "2026-10-13T22:12:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this heal issue cover, given that the final security finding on PR #6209 is unknown?\nChoices:\nA) Observability only: include the rejected relative directory path (sanitized, length-capped) and the reason it failed (symlink, `allowed()` rule) in the `unsafe workspace directory` error and the editor-fallback refusal line, plus a regression test. Allowlist rules stay as they are. (RECOMMENDED)\nB) Option A, and also fix the final PR #6209 security finding. You must supply the finding ID or text, or the follow-up issue number it was filed under. Without it this cannot be planned or verified.\nC) Option A, and also add an exact-path allowlist entry for `.claude/commands/audit-plans.md` (see Q2).\nD) Close as not a shared-workflow defect: the escalation is a PR-level security finding at the 5-cycle cap, already handled by `/re-security-pass` or a waiver on that PR.\nQ2: Should the review editor's sandbox allowlist (`allowed()` / snapshot / transfer in `scripts/review_untrusted_workspace.py`) admit `.claude/commands/audit-plans.md`?\nChoices:\nA) No. Keep all of `.claude/**` out of the untrusted editor sandbox. Fix any root/template parity drift in a normal PR instead. (RECOMMENDED)\nB) Yes, that exact path only. Keep rejecting every other `.claude/` path, and add snapshot and transfer tests for both cases.\n**Note:** B only matters together with Q1:C. If you choose Q1:A, B, or D, answer Q2:A.",
+  "fingerprint": "ef3c3635d12f8ed06200141506f25ddb863140fd34169853f03448fd94dbab7a",
+  "lineage": {
+    "issue_number": 6301,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37264327728",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37264327728",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005044752_17697f8b9a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6301,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37264327728"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6301 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T04:47:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

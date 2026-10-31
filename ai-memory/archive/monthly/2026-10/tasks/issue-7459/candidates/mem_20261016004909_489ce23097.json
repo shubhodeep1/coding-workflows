@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan: rewrite `tests/e2e_smoke_canary.txt` to the smoke-test values\n\nPlanning ref: `orchestrator/project-7458` at `87661edee773fbbc33c58bbee4b07aa315df9239`. The integration branch matches.\n\nCurrent file content (3 lines, each ending in a newline):\n```\nstatus: ok\nrun_id: 26151428977\nupdated-by: ai-pipeline\n```\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one existing file and gives its exact final content, so there is nothing to widen or narrow. This is a plain data edit: no helper, pattern or new code is needed, and no other file changes.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. Replace the whole file with exactly these two lines, ending in a newline:\n```\nstatus: ok\ndecompose-run: 38830172694\n```\n- Line 1 already matches and stays as it is.\n- Line 2 (`run_id: 26151428977`) is replaced.\n- Line 3 (`updated-by: ai-pipeline`) is removed, because the issue says to keep only these two lines.\n\n## Data structures affected\nOnly the content of the canary text file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Remove the third line\n- Chosen: drop `updated-by: ai-pipeline`, leaving exactly two lines.\n- Alternatives considered: keep line 3 and change only line 2.\n- Why: the issue says that if the file has other content beyond those two lines, keep only these two lines.\n\n## Security considerations\n- No trust boundary, endpoint, authorization or external input is involved.\n- No secrets and no money handling.\n- No abuse cases apply.\n\n## Risks and edge cases\n- Use LF line endings, not CRLF, and end the file with exactly one newline.\n- No other file may change, including `tests/e2e_smoke_canary_b.txt` and `tests/e2e_smoke_canary_spec.txt`.\n- No changelog fragment is needed for a smoke-test data file, since the issue says to change only this file.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n '2p' tests/e2e_smoke_canary.txt` prints `decompose-run: 38830172694`.\n- `wc -l tests/e2e_smoke_canary.txt` reports `2`.\n- `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\nThe scope is one file and the content is fully specified, so nothing blocks implementation.\n\n## Summary\n- Actions taken: read `tests/e2e_smoke_canary.txt` to get its current content; no repository files were changed.\n- Assumptions: line 3 is removed, following the issue's \"keep only these two lines\" rule.\n- Missing context: none.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "c4303bc89238b9190d840b4d8f3ece39feee722847e46a0a075992c44052f975",
+  "lineage": {
+    "issue_number": 7459,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38830828505",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38830828505",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7459"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261016004909_489ce23097",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7459,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38830828505"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7459",
+  "timestamps": {
+    "created_at": "2026-10-16T00:49:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

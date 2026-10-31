@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The only change that fixes this is a byte-for-byte copy into `.claude/hooks/prepush_affected_tests.py`. agents.md L2793-2794 and L869 say pipeline editors cannot write `.claude/**`. The issue forbids every in-scope alternative: no divergence allowlist entry, no relaxing the parity test, no reverting the template. That rules out C, which is bound to fail. B's changelog entry would not fix anything, so it adds churn and risks another heal cycle for no gain. GITHUB FACTS settle which operator route applies: `ai/sync-claude-live-copies` does not exist and `ai/sync-claude-live-copies-held` exists at `8c8184635771`. So `sync-claude-live-copies.yml` did run. It could not verify the template commit's provenance (agents.md L2817-2818), so it put the copy on the held draft-PR branch for human review. Option A's operator step is therefore concrete and needs no data from me. A person reviews that held draft, which should contain only the 25 added template lines described in the issue, marks it ready and merges it.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - GITHUB FACTS: branch `ai/sync-claude-live-copies-held` at `8c8184635771`; `ai/sync-claude-live-copies` absent\n    - agents.md L2790-2827 (\"Live `.claude/` copies and their templates\": held-draft path, never force-pushed)\n    - .github/workflows/sync-claude-live-copies.yml L51-64 (Telegram WARNING for a held sync, with the draft PR number)\n    - tests/test_claude_template_live_parity.py (the strict parity check; it stays unchanged)\n  steps:\n    - The plan makes no repository edits. It records one operator step: a human opens the draft PR from `ai/sync-claude-live-copies-held` into `main`.\n    - The human confirms the diff only makes `.claude/hooks/prepush_affected_tests.py` match `workflow-templates/.claude/hooks/prepush_affected_tests.py`, including the file mode. The expected diff is the 25 added lines: `_STATIC_MESSAGE_LINE_RE`, `STAMP_FAILURES_NOT_HELD`, the `_static_findings` change, the invalid-status stamp branch in `_hook_findings`, and the `hook_decision` stripping. The human then marks the PR ready and merges it.\n    - If the held PR has been closed or holds other content, an interactive operator session copies the template over the live file byte for byte, keeping the mode. It commits on a non-`ai/*` branch and opens a PR into `main`.\n    - Nobody touches `.github/ai/claude_template_divergence.json`, the parity test, or the template.\n    - The issue stays open until push CI on `main` passes `Live .claude/ copies match their templates` and `Require every CI job to succeed`.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Merging the held sync PR makes the live copy byte-identical to the tested template. The parity test then passes without being weakened, which is exactly the fix the issue asks for.\n  reversibility: The plan makes no repository edits, so there is nothing to revert. If a human rejects the held diff, the template commit can be reverted through a normal PR instead. That decision belongs to a human.",
+  "fingerprint": "06c235d296840e675500c79fe896cf4edc86315efab205a71a753ca61bfbe1c6",
+  "lineage": {
+    "issue_number": 8357,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40867662434",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40867662434",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8357"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029114924_f7d8350e85",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8357,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40867662434"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8357",
+  "timestamps": {
+    "created_at": "2026-10-29T11:49:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

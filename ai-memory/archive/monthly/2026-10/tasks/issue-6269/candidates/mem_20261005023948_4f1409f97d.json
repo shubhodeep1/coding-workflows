@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6269,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6269\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6279\",\"pr_number\":6279,\"branch\":\"ai/issue-6269\",\"run_id\":\"37255059709\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37255059709\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6269-unblock-untrusted-pr-fail-closed.md\",\"scripts/unblock_actions.py\",\"scripts/unblock_judge.sh\",\"tests/test_unblock_judge.py\"]}",
+  "fingerprint": "71258efff581a1295fffb8e77f5655c3f0ff6f3099baa019a712e933082f9815",
+  "lineage": {
+    "issue_number": 6269,
+    "parent_ids": [],
+    "pr_number": 6279,
+    "run_id": "37255059709",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37255059709",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6279"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005023948_4f1409f97d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6269,
+    "level": "run",
+    "pr_number": 6279,
+    "run_id": "37255059709"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6269: https://github.com/shubhodeep1/coding-workflows/pull/6279",
+  "timestamps": {
+    "created_at": "2026-10-05T02:39:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

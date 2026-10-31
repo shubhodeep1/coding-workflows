@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The grant has to be an exact `files_touched:` block in the body of this issue. `.github/workflows/implement.yml` (lines 1648\u20131658) passes the issue metadata snapshot to `scripts/files_touched_scope_guard.py --emit-automation-grant`, and that script's `extract_files_touched` (lines 110\u2013140) reads only the first `files_touched:` block in the body. A `/answer` comment therefore can't supply the grant. Option A covers both automation paths the #6785 run staged, plus the ordinary files the guard checks once a list exists. It's also the only option that lets the repo variable turn the flag on per repository. Option C repeats the #6785 rejection. Option B leaves the flag with no way to be switched on until another PR.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/implement.yml:1648-1664: the grant is emitted from the issue body plus the issue author (`--pipeline-login`, OWNER/MEMBER/COLLABORATOR).\n    - scripts/files_touched_scope_guard.py:110-140: the block format is a line `files_touched:` followed by more-indented `- <path>` lines, with no blank line inside the list.\n    - Existing targets: scripts/check_failure_triage.sh, .github/workflows/check_failure_triage.yml, tests/test_check_failure_triage_workflow_security.py.\n    - New file: changelog.d/6785-check-triage-pr-head-routing.md\n  steps:\n    - Before implement runs, the issue body must contain exactly this block (2-space indented entries):\n        files_touched:\n          - scripts/check_failure_triage.sh\n          - .github/workflows/check_failure_triage.yml\n          - tests/test_check_failure_triage_workflow_security.py\n          - README.md\n          - agents.md\n          - changelog.d/6785-check-triage-pr-head-routing.md\n    - In scripts/check_failure_triage.sh, read `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` with default `false`. When it is not `true`, current behaviour is unchanged byte for byte.\n    - When the flag is `true`, use the PR read the helper already makes. Routing requires all of these:\n      - the PR is open;\n      - the head repository equals the base repository;\n      - the head ref passes `git check-ref-format --branch`;\n      - the check-run head SHA and the PR head SHA are both nonempty and equal.\n    - If any condition fails or can't be read, the helper:\n      - logs `CHECK_TRIAGE ... outcome=skip reason=routing_unverified`;\n      - sends a WARNING Telegram alert (fail-open);\n      - exits 0 without filing an issue.\n    - Once routing is verified, the script (not the model) appends `Integration branch: <head_ref>` to the composed body before the existing final body validation. That validation accepts exactly one such line, and only when it equals the verified head ref; any other routing line is still rejected.\n    - In .github/workflows/check_failure_triage.yml, pass `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED: ${{ vars.CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED || 'false' }}` through `env:` to the collect and diagnose steps. Never interpolate the head ref into `run:` source.\n    - Add tests in tests/test_check_failure_triage_workflow_security.py:\n      - flag off: no change;\n      - accepted: open same-repo PR with matching SHAs;\n      - rejected cases: fork head, closed PR, invalid ref, SHA mismatch, empty SHA, and a forged or duplicate `Integration branch:` line in model text.\n    - Document the variable in README.md and the check-failure-triage entry in agents.md, and add the changelog fragment.\n  replaces_acceptance_criterion: none\n  equivalence_argument: Option A gives the guard the exact trusted allowlist it was missing in #6785, with no globs. It covers the two automation paths and the ordinary files the general guard checks once a list exists.\n  reversibility: The flag defaults to `false`, so turning it off (or never setting the repo variable) restores today's behaviour. The grant only allows the listed paths, and a person can narrow it by editing the issue body before `/approved`.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- FILES_TOUCHED_GRANT (resource): this needs a person. An OWNER/MEMBER/COLLABORATOR, or the pipeline account, must edit the body of this issue and add the exact `files_touched:` block above before implement runs. I can't edit the issue body, and a block posted in a comment is not read. Until the block is there, implement's automation-path guard rejects the `scripts/` and `.github/` edits again and the issue returns to `ai:scope-blocked`.\n- CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED (variable): set it to `true` per repository only after the change merges and has been reviewed. Until then the helper treats it as `false`, routes nothing, and files triage issues exactly as it does today.\n\nAssumptions: This issue keeps its pipeline or trusted author, so a `files_touched` block added later still counts as trusted under the existing author check.\n\nMissing context: I didn't have #6785's original description; this answer relies on the unblock judge's summary in this issue.",
+  "fingerprint": "2ef9e09a821a0b57ebf930042cf354b85f9ce8497eccb94f10f743bfb81d0678",
+  "lineage": {
+    "issue_number": 6794,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37825972687",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37825972687",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6794"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008184846_80c241d6d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6794,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37825972687"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6794",
+  "timestamps": {
+    "created_at": "2026-10-08T18:48:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

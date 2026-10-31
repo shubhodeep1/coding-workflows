@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:File size exceeds the 480,000-byte guard. | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The workflow file is reported as 481,287 bytes, exceeding the 480,000-byte guard.\n  WHY: GitHub Actions does not execute workflows exceeding the size limit, leading to phantom failure runs.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move sufficiently large inline `run:` bodies into scripts/ until the workflow is well under the 480,000-byte mark (aim for 50,000+ bytes of headroom). Preserve step conditions and environment, register and stage each moved script, and confirm both failing tests and the step-script contract pass.\n  expected_change_site: .github/workflows/review_autofix.yml, scripts/, scripts/stage_workflow_support.sh, tests/review_autofix_step_scripts.py, docs/INVENTORY.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The workflow file remains at 481,287 bytes, failing the size-guard contract test in CI.\n- requirement: CLAUDE.md \u00a720.A requires exactly one changelog fragment per PR whenever the PR changes observable behaviour, including workflow changes and new scripts under `scripts/`.\n  expected_change_site: `changelog.d/<id>-<slug>.md`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The previous AI autofix run deleted `changelog.d/6964-review-support-sha-test-count.md`; no replacement fragment exists, and `changelog.d/` carries 28 unrelated fragments and nothing for #6964 or the size split.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:File size exceeds the 480,000-byte guard. | severity=BLOCKER | confidence=5\n  PROBLEM: The workflow file size is 481,287 bytes, which triggers the size-guard failure in CI.\n  WHY: GitHub Actions does not execute workflows exceeding the size limit, leading to phantom failure runs.\n- Requirement: Move sufficiently large inline run: bodies into scripts/ until the workflow is well under the 480,000-byte mark (aim for 50,000+ bytes of headroom). Preserve step conditions and environment, register and stage each moved script, and confirm both failing tests and the step-script contract pass.\n  Expected change site: .github/workflows/review_autofix.yml, scripts/, scripts/stage_workflow_support.sh, tests/review_autofix_step_scripts.py, docs/INVENTORY.md\n  Evidence of absence: The workflow file remains at 481,287 bytes, failing the size-guard contract test in CI.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: CLAUDE.md \u00a720.A requires exactly one changelog fragment per PR whenever the PR changes observable behaviour (workflow changes, new scripts under `scripts/`, modified test contracts, support-SHA wiring changes).\n  Expected change site: `changelog.d/<id>-<slug>.md` describing the workflow size-split move into `scripts/review_autofix_step_*.sh`, the new freshness-helper verification step at `.github/workflows/review_autofix.yml:2206-2215`, and the contract-test expansion in `tests/test_workflow_failure_heal.py:3619-3631`.\n  Evidence of absence: The previous AI autofix run deleted `changelog.d/6964-review-support-sha-test-count.md`; its reasoning that the PR only changes a test is stale after the merge from main brought in the size split. No replacement fragment exists; `changelog.d/` carries 28 unrelated fragments and nothing for #6964 or the size split.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "af87c0f51bc89b1e3368d252a299943fb58c4377c15450bef5133b6a53c923a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6966,
+    "run_id": "37990755289",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37990755289",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009211450_5dc494fa84",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6966,
+    "run_id": "37990755289"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T21:14:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

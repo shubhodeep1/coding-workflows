@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The root command still describes `/implement-plan-claude` as an in-session implementation, while the template describes a Claude-engine orchestrator hand-off.\n  WHY: `test_template_parity` fails on the current checkout. The supplied CI log confirms `tests-hooks-and-orchestrator` failed on this assertion, causing the aggregate `lint` check to fail.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Keep the root `.claude/commands/audit-plans.md` in byte-level parity with its template twin `workflow-templates/.claude/commands/audit-plans.md`; the `test_template_parity` test (tests/test_audit_plans_command.py:29-30) enforces this and any divergence fails the `tests-hooks-and-orchestrator` CI job, blocking the aggregate `lint` check.\n  expected_change_site: `.claude/commands/audit-plans.md`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: This PR modifies `workflow-templates/.claude/commands/audit-plans.md` (the wording around `/implement-plan-claude` at lines 103 and 126 was changed from \"Claude implements it in-session\" / \"hand it to the AI orchestrator\" to \"Claude-engine orchestrator hand-off\") but the matching root copy `.claude/commands/audit-plans.md` is not in `pr_changed_files.txt` and no diff hunk updates it. CI run 37258084636 confirms the `test_template_parity` failure cascades into the `lint` aggregate, which prevents merge. The editor workspace excludes `.claude/commands/` from transfer (scripts/review_untrusted_workspace.py:34-44), so the autofix editor cannot repair this in isolation, but the PR as a whole is responsible for the parity contract.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Keep the root `.claude/commands/audit-plans.md` in byte-level parity with its template twin `workflow-templates/.claude/commands/audit-plans.md`; the `test_template_parity` test (tests/test_audit_plans_command.py:29-30) enforces this and any divergence fails the `tests-hooks-and-orchestrator` CI job, blocking the aggregate `lint` check.\n  Expected change site: `.claude/commands/audit-plans.md`\n  Evidence of absence: This PR modifies `workflow-templates/.claude/commands/audit-plans.md` (the wording around `/implement-plan-claude` at lines 103 and 126 was changed from \"Claude implements it in-session\" / \"hand it to the AI orchestrator\" to \"Claude-engine orchestrator hand-off\") but the matching root copy `.claude/commands/audit-plans.md` is not in `pr_changed_files.txt` and no diff hunk updates it. CI run 37258084636 confirms the `test_template_parity` failure cascades into the `lint` aggregate, which prevents merge. The editor workspace excludes `.claude/commands/` from transfer (scripts/review_untrusted_workspace.py:34-44), so the autofix editor cannot repair this in isolation, but the PR as a whole is responsible for the parity contract.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/audit-plans.md; workflow-templates/.claude/commands/audit-plans.md; tests/test_audit_plans_command.py:29-30 | severity=BLOCKER | confidence=5\n  PROBLEM: The root command still describes `/implement-plan-claude` as an in-session implementation, while the template describes a Claude-engine orchestrator hand-off.\n  WHY: `test_template_parity` fails on the current checkout. The supplied CI log confirms `tests-hooks-and-orchestrator` failed on this assertion, causing the aggregate `lint` check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8e8ba3596e443a13359ced95b8b9467c03deef454cb50efd24bbba63ce12d24a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37258084925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37258084925",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005043038_b1e2823b8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37258084925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T04:30:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

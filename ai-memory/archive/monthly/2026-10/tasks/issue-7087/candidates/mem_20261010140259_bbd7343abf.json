@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should a demonstrated fix land? The pipeline can't push onto PR #6611's head branch directly.\nChoices:\nA. Open the fix PR against PR #6611's head branch, declared on a `Target branch: <PR #6611 head ref>` line in the issue body (`scripts/resolve_integration_ref.sh` routes to it). Fall back to the default branch if PR #6611 is already merged or closed. (RECOMMENDED)\nB. Open the fix PR against the default branch, regardless of PR #6611's state.\nC. Don't open a separate PR. Push straight onto PR #6611's head branch. This is outside the implement pipeline and needs an interactive session.\nQ2: The implementer can't fetch job 113792812346's log or rerun CI. How should it get shard 1's failure?\nChoices:\nA. Rebuild shard 1 locally in the sandbox: run the same CI job slice at PR #6611's head with the same sharding variables (for `orchestrate-poll`: `CI_POLL_TEST_GROUP_INDEX` / `CI_POLL_TEST_GROUP_COUNT` / `CI_POLL_TEST_SHARDS`). The fix PR's own CI run then serves as the \"rerun CI\" step. (RECOMMENDED)\nB. Have a host-side step, or a person, paste shard 1's failing output into this issue first. Implementation waits until it's there.\nC. Add a workflow step that fetches the job log with `GH_PAT` before the editor runs. This changes workflows beyond this triage.\nQ3: If shard 1's failure doesn't reproduce, what should the run leave behind so it doesn't end as another no-op or BLOCKED?\nChoices:\nA. Commit only a short findings note, for example `docs/triage/pr-6611-ci-shard-1.md`, giving the PR head SHA, the exact commands run and the result. No code or workflow changes. (RECOMMENDED)\nB. Make no commit. Close this issue as `ai:closed` with a findings comment and accept the no-op handling.\nC. Emit `BLOCKED:` and hand the issue to a person.",
+  "fingerprint": "c153c2c55c81631717053ecc5003f227aea0731b1cb3db95a1221c5da718e1c6",
+  "lineage": {
+    "issue_number": 7087,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38057692471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38057692471",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010140259_bbd7343abf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7087,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38057692471"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7087 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T14:02:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

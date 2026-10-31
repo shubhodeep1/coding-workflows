@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1018 | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The preparation step is absent from the current CI workflow; if the parity test step described in the full PR diff is present, it would lack the preparation needed for `test_claude_template_live_parity.py`.\n  WHY: In the current checkout the parity test step is also absent, so the reviewer reports no immediate runtime failure from the last run diff alone.\n- scripts/claude_anthropic_relay.py:141-143 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, qwen_qwen3_7-plus]\n  PROBLEM: `self.connection.settimeout(1)` is outside the `try/except OSError` block handling body-drain errors.\n  WHY: If restoring the timeout raises `OSError`, it is not caught by that block; severity was not stated by google_gemini-3_8-flash and was NIT from qwen_qwen3_7-plus.\n- scripts/claude_anthropic_relay.py:Relay.do_POST, the `forwarded_request_headers(self.headers) is None` branch after the new bounded drain | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: This rejection path returns 400 without draining the already-validated request body.\n  WHY: If the client is still uploading its body, the connection closes without consuming it, so the client can get a broken pipe instead of a clean 400.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR DESCRIPTION says the live copy of `.claude/commands/audit-plans.md` \"is copied from\" its template to fix the parity gap from #6176.\n  expected_change_site: `.claude/commands/audit-plans.md` (a modification to the live copy) and `workflow-templates/.claude/commands/audit-plans.md` if the template moved.\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Neither `.claude/commands/audit-plans.md` nor `workflow-templates/.claude/commands/audit-plans.md` appears in `pr_changed_files.txt`. The changelog fragment `changelog.d/6118-main-ci-green-claude-template-sync.md:3` then contradicts the description by stating \"This change updates the hook and three live commands; `audit-plans.md` has no change in this PR.\" The divergence allowlist does NOT list audit-plans.md, so `tests/test_claude_template_live_parity.py::test_live_copies_match_their_templates` would fail on a real out-of-sync pair.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml:1018 | severity=MAJOR | confidence=3\n  PROBLEM: The last run diff correctly removes the duplicate preparation step and fetch-depth: 0 from the tests-release-and-log-analysis job. The current checkout confirms the step is absent from both the removal target and from tests-hooks-and-orchestrator. However, tests-hooks-and-orchestrator at line 389-390 also has no fetch-depth: 0 and no preparation step, meaning the parity test step referencing test_claude_template_live_parity.py would fail since that file does not exist in the current workspace and there is no preparation. The preparation step appears entirely absent from the current ci.yml.\n  WHY: If the parity test step referencing test_claude_template_live_parity.py was present in ci.yml (as the full PR diff claims), it would fail at import time because the file is absent and no preparation copies are done. In the current checkout, the parity test step itself is also absent, so there is no immediate runtime failure from the last run diff alone.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/claude_anthropic_relay.py:lines 140-143\n  PROBLEM: In do_POST, self.connection.settimeout(1) is called after the try/except OSError drain loop. Moving it inside the try block ensures any unexpected socket error when restoring the timeout is caught alongside body-drain errors.\n  WHY: Any unexpected socket error when restoring the timeout is outside the try/except OSError drain loop.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: PR DESCRIPTION says the live copy of `.claude/commands/audit-plans.md` \"is copied from\" its template to fix the parity gap from #6176.\n  Expected change site: `.claude/commands/audit-plans.md` (a modification to the live copy) and `workflow-templates/.claude/commands/audit-plans.md` if the template moved.\n  Evidence of absence: Neither `.claude/commands/audit-plans.md` nor `workflow-templates/.claude/commands/audit-plans.md` appears in `pr_changed_files.txt`. The changelog fragment `changelog.d/6118-main-ci-green-claude-template-sync.md:3` then contradicts the description by stating \"This change updates the hook and three live commands; `audit-plans.md` has no change in this PR.\" Either the description is stale or the file genuinely is not synced; both are surfaced as a single inconsistency, and the divergence allowlist does NOT list audit-plans.md, so `tests/test_claude_template_live_parity.py::test_live_copies_match_their_templates` would fail on a real out-of-sync pair.\n  ISSUE_CONFIDENCE: 3\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_anthropic_relay.py:Relay.do_POST, the `forwarded_request_headers(self.headers) is None` branch after the new bounded drain | severity=NIT | confidence=4\n  PROBLEM: This rejection path returns 400 without draining the already-validated request body. The new drain only runs in the preceding validation branch.\n  WHY: A request with a valid Content-Length but a forwarded header value longer than MAX_HEADER_VALUE is rejected here. If the client is still uploading its body, the connection closes without consuming it, so the client can get a broken pipe instead of a clean 400.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_anthropic_relay.py:PR diff lines 141-143 | severity=NIT | confidence=4\n  PROBLEM: The settimeout(1) call is outside the try/except OSError block that handles body-drain failures\n  WHY: If the client resets the connection during body draining, the drain loop catches OSError and continues, but the subsequent settimeout(1) call can raise an unhandled OSError. While the HTTP server framework would catch this, wrapping it makes error handling explicit and prevents potential log noise from broken connections.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "86f71993b07af5723455b0859e533436368cdbffa9203cf3f55d7559706b063f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6288,
+    "run_id": "37294921898",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37294921898",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005105742_563354dcd9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6288,
+    "run_id": "37294921898"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T10:57:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

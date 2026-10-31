@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for #7221: wire `tests/test_clarify_sandbox_base_image_preseed.py` into CI\n\nPlanning ref: `git rev-parse HEAD` = `7a620daff53ddbb43e009963d0ad198f56f58039`, branch `main`. The planning context has no integration-branch metadata and reads `Integration branch mismatch: unknown`, not `true`, so this plan targets the default branch.\n\nScope-mode: Hold Scope\nReuse-audit: extends `.github/workflows/ci.yml` step \"Regression tests wired by the CI wiring guard (part 1)\"\nScope-mode justification: This is a one-line CI wiring fix. The test file is already on `main`. When run locally with plain Python (pytest isn't installed in the planning sandbox), all 13 of its tests passed. `tests/test_ci_wires_every_test_file.py::test_every_test_file_runs_in_a_workflow` fails on `main` with exactly this one file, so `main` is red too, not only PR #7217. The guard's own contract (agents.md, CI job layout) says a new test file goes into an existing step of the job whose topic it covers. The \"part 1\" step in `tests-heal-plan-and-validation` is the catch-all step for files the guard found. Its pytest list is alphabetical and already holds sandbox-related tests such as `tests/test_review_sandbox_install_timeout.py`. That job already installs `pytest` and `pyyaml`, which the test needs. Nothing larger is warranted: the guard stays as it is, and there is no allowlist entry and no new step or job. A sandbox-free test that passes does not qualify for `UNWIRED_ALLOWLIST`.\n\n1. Files likely to change\n- `.github/workflows/ci.yml`: in job `tests-heal-plan-and-validation`, step `Regression tests wired by the CI wiring guard (part 1)` (around lines 916\u2013950), add one pytest argument line:\n  `            tests/test_clarify_sandbox_base_image_preseed.py \\`\n  It goes in alphabetical order, between `tests/test_branch_rebuild.py \\` and `tests/test_codex_thread_reuse_review.py \\`. Use the same 12-space YAML indent and keep the trailing ` \\`. The last entry, `tests/test_workflow_support_ref_follows_pin.py`, stays last with no trailing backslash. Spaces only; YAML forbids tabs.\n- No other files. The test file, the guard and `clarify.yml` stay unchanged.\n\n2. Functions/modules to implement\n- None. This is a workflow-step argument addition only.\n\n3. Data structures affected\n- None.\n\n4. API/interface changes\n- None. Step `name:`, job id, `needs`, `timeout-minutes`, and the aggregate `lint` job are unchanged. The `CI / lint` check name is unchanged.\n\n## Decisions\n\n### D1 \u2014 Where to wire the test\n- Chosen: add it to the existing \"Regression tests wired by the CI wiring guard (part 1)\" pytest invocation in `tests-heal-plan-and-validation`, as the triage issue suggests.\n- Alternatives considered: (a) a new dedicated step such as \"Clarify sandbox base image pre-seed tests\"; (b) the existing \"Standalone clarify auto-decide tests (port P3)\" step around line 566; (c) an `UNWIRED_ALLOWLIST` entry in `tests/test_ci_wires_every_test_file.py`.\n- Why: the part-1 step is the catch-all for guard-found files and already runs pytest with PyYAML installed. A new step adds YAML for no gain. The P3 step covers clarify-respond auto-decide, which is unrelated to the docker pre-seed. The allowlist is only for tests that cannot run in CI, and this one runs with a fake `docker` and no network or secrets.\n\n### D2 \u2014 Changelog fragment\n- Chosen: no `changelog.d/` fragment.\n- Alternatives considered: a `changelog.d/7221-ci-wire-clarify-preseed-test.md` fragment.\n- Why: this is internal CI wiring with no operator- or consumer-visible behaviour change, and `ci.yml` is not synced to consumers. If the implementer's reading of CLAUDE.md \u00a720 says a fragment is needed, adding a short `<!-- changelog: changed -->` fragment is harmless and stays in scope.\n\n## Security considerations\n- Trust boundaries: none touched. The added test runs in an existing CI job with its existing permissions and no secrets. It execs `clarify.yml`'s pre-seed `run:` body against a fake `docker` on `PATH`, inside a tempdir. Its own `test_step_env_has_no_secrets_and_defaults_to_mirrors` checks that the step takes no secrets.\n- No new endpoints, inputs or auth surfaces. No money handling.\n- Abuse case: none new. The edit adds only a fixed literal path to a pytest argument list. No `${{ }}` expression is involved.\n\n5. Risks and edge cases\n- Conflict note: the issue frames this as a PR #7217 failure, but the guard also fails on `main` at `7a620da`. The fix lands on the default branch, and PR #7217 recovers once `main` is merged in or its branch syncs.\n- Conflict note: the issue says the checkout had no Git metadata. The planning checkout does have Git metadata, but it doesn't matter here.\n- YAML continuation risk: a missing ` \\` or a misplaced last line would break the pytest command or drop later files. The alphabetical position in the middle of the list avoids touching the final entry.\n- Docker on the runner: the test shells out to `docker` through a fake binary placed first on `PATH`. Locally it passed with no real Docker, so a GitHub runner's real Docker is shadowed and never contacted.\n- Automation-path guard: `.github/workflows/ci.yml` is an automation path. The issue body has no `files_touched` block, so implement relies on the pipeline-author open grant (`reason=pipeline_author_no_allowlist`) or a trusted author. If the issue author isn't the GH_PAT login or a trusted association, implement stops at `ai:scope-blocked`.\n- Workflow size: about 50 bytes added to `ci.yml`, nowhere near the 480,000-byte guard.\n\n6. Testing considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py tests/test_ci_wires_every_test_file.py`. Both should pass; the guard's `test_every_test_file_runs_in_a_workflow` fails before the edit.\n- Run `tests/test_ci_job_split_contract.py`, which checks that no step runs in two jobs and pins the budgets, to confirm the step structure is unchanged.\n- Run `yamllint` or `actionlint` on `.github/workflows/ci.yml`, as CI's `static-checks` does.\n- Check `git diff --stat` shows one line added in `.github/workflows/ci.yml`.\n\n7. Pre-execution self-check\n- Requirement covered: the one unwired file gets wired, and the guard stays enabled.\n- Grounded: the file exists, the guard fails with only this file, the test passes, the step is at lines 916\u2013950 in `tests-heal-plan-and-validation`, and the job installs `pytest`/`pyyaml` (line 790).\n- No new scripts, supervisor, scheduler wiring, DB work or registry entries (\u00a720 N/A). CI already runs on push and PR.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "a0d680bc3919b03d996d573021345d6b80027cec18ca75ba58b328db8e225806",
+  "lineage": {
+    "issue_number": 7221,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38216511103",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38216511103",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7221"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261012071936_25b71cae2f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7221,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38216511103"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7221",
+  "timestamps": {
+    "created_at": "2026-10-12T07:19:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

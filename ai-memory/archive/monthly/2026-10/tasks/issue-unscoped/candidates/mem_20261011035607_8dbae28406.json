@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-judge-review-blocked.txt:126-128 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The prompt has 251 lines, exceeding the DEFAULT tier\u2019s 250-line budget.\n  WHY: The prompt-size check fails, causing static-checks and aggregate lint to fail and blocking the PR from merging.\n- prompts/_templates/mode-judge-review-blocked.txt:File length 251 lines | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The template copy is reported to have 251 lines, exceeding the DEFAULT tier\u2019s 250-line budget.\n  WHY: This reviewer reports that the CI check fails; Qwen and z-ai report that the template copy is 244 lines and is not over budget.\n- scripts/orchestrate_poll_process.sh:26888-26891 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The trailing null-guard in the three-line `N_BASE_REF` derivation is unreachable because the preceding `if` already clears `N_BASE_REF` when it is empty or `null`.\n  WHY: It causes no runtime failure today, but the dead branch may mislead future readers and risk reintroducing the bug if the earlier branch is simplified.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- prompts/mode-judge-review-blocked.txt:lines 126-128 | severity=BLOCKER | confidence=5\n  PROBLEM: The rewording grew the file by one physical line, leaving it at 251 lines, one over the DEFAULT tier limit.\n  WHY: The prompt size budget check fails, causing static-checks and aggregate lint to fail and blocking the PR from merging.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- prompts/mode-judge-review-blocked.txt:File length 251 lines | severity=BLOCKER | confidence=5\n  PROBLEM: The prompt file length exceeds the 250-line DEFAULT tier limit.\n  WHY: CI check fails, blocking PR merge.\n- prompts/_templates/mode-judge-review-blocked.txt:File length 251 lines | severity=BLOCKER | confidence=5\n  PROBLEM: The template copy length exceeds the 250-line DEFAULT tier limit.\n  WHY: CI check fails, blocking PR merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- prompts/mode-judge-review-blocked.txt:lines 126-127 | severity=BLOCKER | confidence=5\n  PROBLEM: The LAST RUN edit split one physical line into two, growing the file from 250 to 251 lines.\n  WHY: The prompt size budget test rejects over-budget files, causing static-checks and aggregate lint to fail and blocking the PR from merging.\n- scripts/orchestrate_poll_process.sh:lines 26888-26891 (the three-line `N_BASE_REF` derivation: jq read, `if [ -z \u2026 ] || [ \"${N_BASE_REF}\" = \"null\" ]` fallback to `${N_BASE:-}`, then a trailing `[ \"${N_BASE_REF}\" != \"null\" ] || N_BASE_REF=\"\"`) | severity=NIT | confidence=3\n  PROBLEM: The trailing null-guard is dead code because the preceding `if` already clears `N_BASE_REF` whenever it is empty or the literal string `null`.\n  WHY: No runtime failure occurs today, but the dead branch misleads future readers and risks a maintainer simplifying the earlier branch and reintroducing the bug.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- prompts/mode-judge-review-blocked.txt:126-127 | severity=BLOCKER | confidence=5\n  PROBLEM: The changed wording adds a line, bringing this DEFAULT-tier prompt to 251 lines.\n  WHY: CI\u2019s prompt-size check rejects prompts over 250 lines, causing static-checks and aggregate lint to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- prompts/mode-judge-review-blocked.txt:lines 126-127 | severity=BLOCKER | confidence=5\n  PROBLEM: The last autofix run split one line into two, growing the file from 250 to 251 lines.\n  WHY: The prompt-size check rejects any file over 250 lines, causing static-checks and aggregate lint to fail and blocking the PR from merging.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- prompts/mode-judge-review-blocked.txt:lines 126-127 (the two-line wrap added by the last autofix commit 9696b37: \"informational) being completed with success/neutral/skipped (a cancelled\" + \"newest run of a check blocks) \u2014 so\"); file is now 251 lines total (line 1: \"# tier: DEFAULT\"). | severity=BLOCKER | confidence=5\n  PROBLEM: The wording change split one line into two, growing the DEFAULT-tier prompt from 250 to 251 lines.\n  WHY: The prompt-size check rejects files over 250 lines, causing static-checks and aggregate lint to fail and blocking the PR from merging.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b1005232a0cf1392fd1d4bc613f6a94ebeddcc36516df42018e4d69d08ca5ca4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7133,
+    "run_id": "38108416342",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38108416342",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011035607_8dbae28406",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7133,
+    "run_id": "38108416342"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T03:56:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

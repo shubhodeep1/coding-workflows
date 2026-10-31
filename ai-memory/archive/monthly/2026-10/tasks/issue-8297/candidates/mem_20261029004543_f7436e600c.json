@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nI set out the plan below. I read only the canary file and the start of its verification test, and changed nothing.\n\n## Plan: Rewrite `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `main` @ `fa8c36e67d76f2c17c816db114f6e1cda816a150`. The integration branch mismatch line reads `unknown`, not `true`, so the plan is not blocked.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a content-only edit.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one file and its exact new content, and forbids touching anything else. There is nothing to reuse or widen, so the only option is a full rewrite of the existing file.\n\n## Data structures affected\nThe canary file now holds two lines: `status: ok` and `decompose-run: 40427433026`. Replace them with exactly these three lines:\n```\nstatus: ok\nrun_id: alt-40794181365\nupdated-by: ai-pipeline\n```\nKeep LF line endings and one trailing newline after the last line, the same as the current file. Add no other whitespace.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Full overwrite instead of a line edit\n- Chosen: Replace the whole file with the three specified lines.\n- Alternatives considered: Edit the existing lines in place.\n- Why: The issue requires exactly these lines, and a full overwrite guarantees nothing old is left behind.\n\n## Security considerations\nThere are no trust boundaries, endpoints or secrets involved. The content is a fixed literal, so there is no outside input to validate.\n\n## Potential risks or edge cases\n- The verifier, `tests/test_e2e_editor_smoke_canary.py`, compares the canary byte-for-byte against `tests/e2e_smoke_canary_spec.txt`. It only runs in the release workflow's Phase 4b (when `E2E_PHASE_4B_INVOKED` is set) and skips otherwise, so local CI is not affected. Do not change the spec file or the test.\n- Getting the trailing newline wrong could fail a byte-exact check. Use one final `\\n`.\n\n## Testing considerations\n- Check the result with `cat -A tests/e2e_smoke_canary.txt`: it should show three lines, each ending in `$`.\n- `git diff --stat` should list only this one file.\n\n## Pre-execution self-check\nThe plan follows the issue exactly, changes one file, and needs no clarification.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "e328d970c5f80544c02b360ba0de91c4becb9b09955c268b3a82ba3fbc4030f1",
+  "lineage": {
+    "issue_number": 8297,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40795074621",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40795074621",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8297"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261029004543_f7436e600c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8297,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40795074621"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8297",
+  "timestamps": {
+    "created_at": "2026-10-29T00:45:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

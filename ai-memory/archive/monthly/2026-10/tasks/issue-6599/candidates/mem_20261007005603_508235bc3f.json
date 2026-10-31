@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) A specific workflow or pipeline phase (clarify, plan, implement, review/autofix, orchestrate, validate). Please name it. (RECOMMENDED)\nB) A specific script, prompt or helper under `scripts/` or `prompts/`. Please give the path.\nC) Documentation only (README, `agents.md`, `docs/`).\nD) None. This issue was opened by mistake or as a test and should be closed without changes.\nQ2: What problem should the change fix, and how will we know it worked?\nChoices:\nA) A specific bug or failed run. Please give the run ID, PR/issue number or error message, and the expected behaviour. (RECOMMENDED)\nB) Performance or cost (for example runtime, API calls or tokens). Please name the metric and the target.\nC) A new capability or behaviour change. Please describe the desired behaviour.\nD) No concrete problem. Close the issue.",
+  "fingerprint": "55842e18fd3dacb94066e67dc81318c7647cb11563b8773ff6c085b59a76ed6a",
+  "lineage": {
+    "issue_number": 6599,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37554099281",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37554099281",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007005603_508235bc3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6599,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37554099281"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6599 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T00:56:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

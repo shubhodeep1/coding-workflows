@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:line 2356 (and the parallel lines 2357, 2360, 2361 for the other labels) | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The short-label regexes use `[ \\t:=]*`, allowing a label immediately followed by a digit to be mistaken for a count.\n  WHY: A filename fragment such as `total5` can be parsed as a declared count despite the stated whole-word separator requirement.\n- scripts/validate_editor_audit.sh:lines 122, 128, 134, 139 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The four short-label regexes use `[[:space:]:=]*`, allowing a label immediately followed by a digit to be mistaken for a count.\n  WHY: An adjacent-digit filename such as `review_total5.txt` can supply a count, bypassing the intended protection.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR's stated goal is \"Accept the Claude editor's short audit count labels (unblocks every Claude-edited PR)\" \u2014 i.e., make every parser along the editor-summary path tolerate both the canonical (`total issues listed: N; issues applied: N; ...`) and the Claude short (`total N; applied N; already applied N; ignored N`) form so the autofix pipeline works end-to-end on Claude-edited PRs.\n  expected_change_site: `scripts/review_commit_changes.sh:715` (`_t` extraction grep), line 717 (`_a` extraction grep), line 718 (`_aa` extraction grep)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR DIFF contains no change to `scripts/review_commit_changes.sh`; its extraction regexes only match canonical forms, so Claude short-form audit bullets are skipped and the audit-convergence detector does not set `_audit_convergence_applies=true`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_apply_fixes.sh:line 2356: `has_total = normalized ~ /(^|[^a-z0-9_])total[ \\t:=]*[0-9]+/` (and the parallel lines 2357, 2360, 2361 for the other labels) | severity=NIT | confidence=4\n  PROBLEM: The short-label alias regex uses `[ \\t:=]*` which allows zero chars between the label word and the digit.\n  WHY: A file path or word like `total5.txt`, `applied5`, `ignored5`, or `already applied5` (label immediately followed by a digit, no separator) would match and supply a count.\n- scripts/validate_editor_audit.sh:lines 122, 128, 134, 139 | severity=NIT | confidence=4\n  PROBLEM: The four `elif` short-label regexes use `[ \\t:=]*`, allowing zero characters between the label word and the digit.\n  WHY: A reviewer file path containing `total5` adjacent to a digit could silently corrupt extracted counts and propagate a wrong total into the arithmetic check.\n- TASK_GAP\n  Requirement: The PR's stated goal is \"Accept the Claude editor's short audit count labels (unblocks every Claude-edited PR)\" \u2014 i.e., make every parser along the editor-summary path tolerate both the canonical (`total issues listed: N; issues applied: N; ...`) and the Claude short (`total N; applied N; already applied N; ignored N`) form so the autofix pipeline works end-to-end on Claude-edited PRs. The PR description explicitly enumerates the validators it touches (`review_apply_fixes.sh`, `validate_editor_audit.sh`) and the editor prompt, but does not enumerate every audit-bullet consumer.\n  Expected change site: `scripts/review_commit_changes.sh:715` (`_t` extraction grep), line 717 (`_a` extraction grep), line 718 (`_aa` extraction grep) \u2014 the audit-convergence detector that decides whether a commit should be treated as ledger-only-equivalent (skipping rb_judge) or should fall through to rb_judge.\n  Evidence of absence: PR DIFF contains no change to `scripts/review_commit_changes.sh`. Once this PR merges, every Claude-edited audit bullet of shape `- \u2026 \u2014 total 5; applied 0; already applied 0; ignored 5` will produce `_t=\"\"` at line 716, hit the `[ -n \"${_t}\" ] || continue` guard, leave `_audit_total_lines=0`, fail the `_audit_total_lines -gt 0` precondition at line 724, and never set `_audit_convergence_applies=true`.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a887222652f187abb41f9efb4dc45f6435c39bd6dd9345e16036a1dc165410e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6622,
+    "run_id": "37601140262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37601140262",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007100934_9f958c8055",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6622,
+    "run_id": "37601140262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T10:09:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

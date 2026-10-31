@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: In `scripts/review_consolidate.sh`, the host fallback after Claude returns 75 or the sandbox is missing (lines 619\u2013630) and the codex-selected main path both reach the same host `opencode_run_cmd` command, which uses the `writer` agent (lines 588\u2013594). Moving only the fallback (B) would leave the same GH_PAT exposure on the default codex path, so the finding would still be open. `scripts/review_untrusted_sandbox.sh` already supports `prepare-ephemeral` OpenCode runs with a read-only source mount and the `reviewer` agent (lines 11\u201363, 370\u2013382), so A follows how the judges and conflict resolver already work. If isolation can't be set up, writing empty output keeps the \"the consolidator never gates\" contract in agents.md; C would break that contract and its tests, so it is rejected.",
+  "fingerprint": "f950b9b6535c64b25ee2c700db4fd534c38c5a2d230e5067937a9d0ae697f9ad",
+  "lineage": {
+    "issue_number": 6461,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37405565216",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37405565216",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6461"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006025221_3773df4826",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6461,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37405565216"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6461",
+  "timestamps": {
+    "created_at": "2026-10-06T02:52:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

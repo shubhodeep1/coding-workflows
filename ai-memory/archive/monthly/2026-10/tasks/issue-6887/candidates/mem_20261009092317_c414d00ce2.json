@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The heal scope only allows `implement.yml`, `tests/**` and `changelog.d/*.md`, but the fix belongs in `scripts/unblock_*.py`/`.sh`. How should this issue go ahead?\nChoices:\nA) Treat this issue as out of scope: post the diagnosis, close it, and file a new trusted-author issue whose `files_touched` lists `scripts/unblock_actions.py`, `scripts/unblock_judge.sh`, `scripts/unblock_ledger.py`, `tests/test_unblock_judge.py` and a changelog fragment (RECOMMENDED)\nB) Stay inside the current scope: add only a regression test in `tests/test_unblock_judge.py`, marked xfail, plus a changelog fragment that records the defect. No behaviour change.\nC) Stay inside the current scope by pinning consumer `SCRIPT_REF` in `implement.yml` to the wrapper's release SHA instead of `stable`. Note: the diagnosis does not show this causes the block, so the unblock defect would remain.\nQ2: When the unblock judge returns `operator_step` for an item blocked by the automation-path grant guard, what should happen?\nChoices:\nA) Record the `ai:operator-step` entry and send the Telegram alert, keep the original issue blocked, and create no fix-up issue or fix-up request (RECOMMENDED)\nB) Create the fix-up as today, but only with a `files_touched` grant copied from the trusted guard-rejection marker's exact paths. Note: this gives automation the authority the guard reserves for trusted authors.\nC) Remove `operator_step` from the judge's menu for automation-path blocks (`unblock_ledger.py decide`), so only waiting or terminal verdicts remain\nQ3: Should the same protection cover `descope` fix-ups, which use the same `_fixup_ops` path (`scripts/unblock_actions.py:298-313,343-344`) and can also ask for protected-path edits?\nChoices:\nA) Yes: apply the same rule to `descope` and `operator_step` whenever the stop came from an automation-path rejection (RECOMMENDED)\nB) No: change only `operator_step`, as the diagnosis suggests",
+  "fingerprint": "e92401e2c7f7ede05b869f5dca0d524b958086eebd9953460e29c46f8443f33f",
+  "lineage": {
+    "issue_number": 6887,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37910284310",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37910284310",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009092317_c414d00ce2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6887,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37910284310"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6887 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T09:23:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

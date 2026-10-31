@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:644-694 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The new regression test `test_pipefail_truncation_sites_use_non_pipe_forms` is defined after the `if __name__ == \"__main__\": raise SystemExit(main())` block, so it never runs when the file is executed as a script.\n  WHY: CI runs the file directly with `python3` (`.github/workflows/ci.yml:578-581`), and `main()` raises SystemExit before the test is defined, so the truncation assertions are never checked. Severity disagreement: Gemini and Qwen said BLOCKER, Luna said NIT. I used the highest, mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_semble_contract.py:644-649 | severity=BLOCKER | confidence=5\n  PROBLEM: The new regression test function is defined after the main script execution entry point.\n  WHY: `main()` raises SystemExit before the test definition is reached, so the CI test suite never runs this regression test.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_semble_contract.py:645-649 | severity=NIT | confidence=5\n  PROBLEM: The new regression test is not run by the CI invocation.\n  WHY: CI runs this file directly with `python3` at `.github/workflows/ci.yml:578-581`. `main()` raises SystemExit before the new test definition, and `main()` does not call that test, so the truncation assertions never run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_semble_contract.py:645-694 | severity=BLOCKER | confidence=5\n  PROBLEM: The regression test is defined after the `if __name__ == \"__main__\": raise SystemExit(main())` block at lines 644-645, so it never executes when the file is run as a script.\n  WHY: CI invokes the file directly with `python3 tests/test_review_semble_contract.py`, so the `__main__` block exits immediately and the pipefail-truncation assertions go untested.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "356d1aac3ac8af3af4bb06be0c1e3658b964b9a73f1b5afaa25ca4d6765f2031",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7645,
+    "run_id": "39190726120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39190726120",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019025252_9447c66daf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7645,
+    "run_id": "39190726120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T02:52:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

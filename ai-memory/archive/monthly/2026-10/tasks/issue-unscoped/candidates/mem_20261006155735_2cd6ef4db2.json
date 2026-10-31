@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1958-1963, 2085-2116 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When verified inherited lineage exceeds `max_depth`, the escalation decision leaves `prior_issue` and `prior_repo` unset despite having verified a source issue.\n  WHY: This loses the source issue and repository context in escalation logs, obscuring the lineage chain; severity is highest at MAJOR, with disagreement from reviewers rating it NIT or describing it as minor.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py lines 2085-2098 | severity omitted | confidence omitted\n  PROBLEM: When a verified source_gen triggers escalation (gen > max_depth), prior_issue remains None and prior_repo remains \"\" because only the elif branch (fingerprint fallback, lines 2092-2096) sets them.\n  WHY: Runtime behavior is equivalent because the intake script labels the source issue regardless; the escalation log loses observability context.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:1958-1963 (in the original, line numbers may vary slightly in current diff) | severity=MAJOR | confidence=4\n  PROBLEM: When the generation depth limit is exceeded (gen > max_depth), prior_issue and prior_repo remain unset (None/empty string), causing the escalation log to lose the source issue context.\n  WHY: When gen exceeds max_depth, these variables are not populated, leading to \"prior_issue=none\" and \"prior_repo=\" in the logs, reducing observability for debugging why lineage chains were capped.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py, lines 2087-2095 | severity=NIT | confidence=5\n  PROBLEM: When verified inherited lineage exceeds max_depth, the decision sets gen and root from source_gen/source_root but leaves prior_issue and prior_repo unset.\n  WHY: The escalation decision reports prior_issue as null and prior_repo as empty even when it verified a specific source heal issue, obscuring the actual cross-repository escalation chain.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py, 2087-2091, 2104-2116 | severity=NIT | confidence=4\n  PROBLEM: When a verified source_gen triggers escalation (gen > max_depth), prior_issue and prior_repo remain unset (None and \"\"), so the escalation decision loses the source issue identity.\n  WHY: The intake script's fallback logic recovers the source issue, but the escalate log line at intake.sh:549 changes from \"prior_issue=<number> prior_repo=<repo>\" to \"prior_issue=none prior_repo=<SELF_REPO>\", reducing observability for debugging escalation chains.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal.py, lines 2085-2091, budget_decision \u2014 the `if source_gen is not None:` branch | severity omitted | confidence omitted\n  PROBLEM: When a verified `source_gen` triggers escalation (`gen > max_depth`), `prior_issue` and `prior_repo` remain `None`/`\"\"` because the verified-source branch only sets `gen` and `root`.\n  WHY: The intake's escalate handler falls through to the `elif` branch which labels the same issue, so runtime behavior is equivalent, but the escalate log loses the source heal issue's identity and repository.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "166b472ef1496956c42fe6907205c6b7d401933e49e85304f27df91ad3588393",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6553,
+    "run_id": "37479191146",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37479191146",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006155735_2cd6ef4db2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6553,
+    "run_id": "37479191146"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T15:57:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

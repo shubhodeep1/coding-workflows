@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: DERIVE_FROM_REPO\nQ2: A\nQ3: A\nQ4: A\n\nRATIONALE:\nQ1: Option A as written would miss the #7185 case. When the unblock judge re-issues a non-security issue, `scripts/unblock_actions.py` (lines 427\u2013491) creates it with `labels: []` and a body of just \"Re-issued by the unblock judge from #N. / Specification: \u2026 / Why: \u2026\". So #7185 has neither the `ai:check-triage` label nor the `- **Pull request:**` line. The check should cover check-failure triage issues (option A), plus re-issues that trace back to one. It walks the re-issue references to a trusted `ai:check-triage` source issue, reusing `origin_references` and the existing depth/read caps in `scripts/files_touched_scope_guard.py`. It ignores PR numbers in titles or prose, which are untrusted text, and does not touch workflow-heal issues (option B) or any issue that merely mentions a PR (option C).\nQ2: A deterministic check on the host, before \"Run Codex planning\" in `plan.yml` (line 1177), skips the model when it matches and plans as usual when a read fails. That fits this repo's fail-open, contract-tested pattern. The Python must run from the trusted support copy with `python3 -I -B` (the #7159 rule), never from the checkout. It needs one PR read, one or two check reads, and at most `ORIGIN_MAX_ISSUES` issue reads for the lineage walk, and only for issues that qualify under Q1.\nQ3: `ai:closed` already exists and is used across `scripts/label_helpers.sh`, `orchestrate_lib.py` and the poller. Closing the issue as \"not planned\" keeps it out of the unblock scan, which avoids the loop that option C would recreate. A new label (option B) would mean contract and label-sync changes for no gain. Remove phase labels (`ai:planning`, `ai:clarification`) when closing, and deduplicate on the marker so a re-run posts nothing new.\nQ4: Only \"merged, and the check named in the triage issue passed on the PR's final head\" shows that this exact failure is fixed. Two shapes need handling, both mirroring the base-gate reads in `scripts/check_failure_triage.sh` (lines 457\u2013483):\n- **Check-run triage:** `commits/<final_head>/check-runs?check_name=<name>&filter=latest` must show every listed run completed with `success`.\n- **Workflow-run triage** (empty check-run id; the check name is the workflow name, as in #6977's \"CI\"): resolve the workflow from the run id in the details URL, then require the newest run of that workflow with `head_sha=<final_head>` to be `completed` and `success`.\n\nIf the check did not pass on the final head, the issue stays open and is planned. If its target branch equals the merged PR's former head branch, planning uses the PR's base branch instead and says so in the log.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/unblock_actions.py lines 427-491 (a re-issue body starts \"Re-issued by the unblock judge from #N.\"; a non-security re-issue gets no labels)\n    - scripts/files_touched_scope_guard.py: `origin_references` (line 214), `fetch_issue_with_gh` (line 239), `_origin_author_trusted` (line 261), `ORIGIN_MAX_DEPTH=4`, `ORIGIN_MAX_ISSUES=8`\n    - scripts/check_failure_triage.sh lines 791-802 (body lines `- **Pull request:** <url> (\\`<head_ref>\\`)`, `- **Failing check:** \\`<name>\\` (conclusion: \u2026)`, `- **Head SHA:** \\`<sha>\\``) and line 136 (`TRIAGE_LABEL=\"ai:check-triage\"`)\n  steps:\n    - Eligible directly: the issue carries `ai:check-triage`, its author passes `_origin_author_trusted`, and its body has a parseable `- **Pull request:**` line whose URL points at this repository's `/pull/<N>`.\n    - Eligible through lineage: the issue was written by the pipeline account and `origin_references` finds a source reference. Walk the sources with `fetch_issue_with_gh`, within ORIGIN_MAX_DEPTH and ORIGIN_MAX_ISSUES, until reaching a trusted issue that meets the direct rule. That issue's Pull request and Failing check lines are the inputs. If the walk exceeds a bound, a read fails, or it reaches an untrusted source, planning runs as usual (log the reason).\n    - Only parse the body's header lines. Ignore the title and the Specification/Why prose (#7185's title \"CI on PR #6976\" is untrusted).\n    - Regression test: fixture issue A (`ai:check-triage`, trusted author, Pull request line for PR #6976, Failing check `CI`) and fixture issue B (no labels, pipeline author, body \"Re-issued by the unblock judge from #A.\u2026\"). Stub the PR read as merged into `main` and the newest `CI` run on the final head as completed/success. Planning B must post the superseded marker, add `ai:closed`, close the issue as not planned, never start the model, and never mention the head branch `ai/issue-6969` as a target. Also cover these cases, each of which must plan normally: PR open, PR merged but check failed, PR read fails, lineage depth exceeded, untrusted source.\n  replaces_acceptance_criterion: Q1 option A's \"only `ai:check-triage` issues\"\n  equivalence_argument: This covers the same issue family, now including its re-issues, which is the only shape that reproduces #7185. The PR number still comes only from the trusted triage body, never from text an attacker could write.\n  reversibility: The walk is separate code. Remove the lineage branch, or set a kill switch `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED` (default `true`; `false` keeps planning unchanged), to go back to strict option A or to no check at all. A wrongly closed issue can be reopened, and the marker comment names the PR and check so a person can verify.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n\nAssumptions: the PR, check-run and workflow-run reads reuse the job's existing `GH_TOKEN` and `gh_api_retry`. The supersede path adds no new secret.\n\nMissing context: the full #7185 body was not visible here. The re-issue shape was inferred from the code path in `unblock_actions.py` and the issue's title, \"Re-issue of #6977\".",
+  "fingerprint": "b6d4c8b0cf460e391ee69739474aa4850ce17a2222146edcfea4b803c3fd64df",
+  "lineage": {
+    "issue_number": 7216,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38213704671",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38213704671",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7216"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261012065148_3e2fe8976b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7216,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38213704671"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7216",
+  "timestamps": {
+    "created_at": "2026-10-12T06:51:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

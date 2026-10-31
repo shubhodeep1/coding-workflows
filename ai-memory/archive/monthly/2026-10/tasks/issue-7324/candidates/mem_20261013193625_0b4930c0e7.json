@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: All three failures concern files that exist only on PR #7249's head. GitHub shows `ai/issue-7228` open at `63df62d6d676`, and this checkout of the default branch has no `scripts/pr_dependency.py`. That rules out option C. Fixing on the PR head is what the triage asked for, and the head branch is the only place these files exist. One caveat: `scripts/resolve_integration_ref.sh` reads `Target branch:` / `Integration branch:` only from the issue body (`get_issue_body`, line 67). `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` defaults to `false` in `plan.yml` and `implement.yml`, and the checkout for this run was the default branch. So this answer alone does not move planning onto `ai/issue-7228`. See the routing safeguard under Q2's plan.\nQ2: The test exists to cover the issue-specific fail-closed path. Changing the fixture to a run with no tracking issue (or standalone recovery only) reaches that path, and the identity guard at `scripts/orchestrate_poll_process.sh:18805-18815` stays as it is. Option B would stop testing the issue-specific path. Option C makes the change bigger than this CI repair needs.\n\nEXECUTION PLAN:\nQ1 (routing safeguard; the decision is a letter, but this is how it gets executed):\n  strategy: derive_from_repo\n  inputs:\n    - scripts/resolve_integration_ref.sh (reads branch lines from the issue body only)\n    - .github/workflows/plan.yml, .github/workflows/implement.yml (`CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` defaults to `false`)\n    - Unblock judge #7032 (agents.md): a reissue of a standalone, non-security CI-failure issue whose PR is open gets a `- Integration branch:` line with the PR head ref.\n  steps:\n    - Planner: check the planning checkout before writing a plan. If `scripts/pr_dependency.py` is missing, or the branch is not `ai/issue-7228`, do not plan against the default branch. Emit `BLOCKED: fix must land on PR #7249 head branch ai/issue-7228; planning checkout lacks scripts/pr_dependency.py`. The unblock judge then reissues the issue with an `Integration branch: ai/issue-7228` line.\n    - If the checkout is `ai/issue-7228`, plan three edits:\n      (a) Add a `scripts/pr_dependency.py` entry to `docs/INVENTORY.md`, next to the related entries around lines 303-307.\n      (b) In `tests/test_pr_dependency.py::test_gates_are_wired_with_trusted_isolated_copies` (around line 187), stop requiring `pr_dependency.py` to be the last case alternative. Assert instead that the helper is one of the alternatives copied into the trusted host-Python directory in `.github/workflows/clarify.yml:274-276`.\n      (c) Do the Q2 fix.\n    - Do not change any workflow, script or prompt. Only `docs/INVENTORY.md` and the two test files are in scope.\n  reversibility: If PR #7249 merges first, or its own review/autofix loop fixes these failures, this issue becomes a no-op. It can then be closed as not planned.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - tests/test_orchestrate_poll_process.py:5844-5848 (the assertion) and 1382-1386 (the fixture creates a tracking issue)\n    - scripts/orchestrate_poll_process.sh:18805-18815 (the earlier fail-closed identity check)\n  steps:\n    - On `ai/issue-7228`, run `python3 -m pytest tests/test_orchestrate_poll_process.py -k test_standalone_pr_dependency_fails_closed_without_identity_or_trust` to get the full traceback. The CI log shows only the test name.\n    - If the run stops at the tracking-state identity guard, change this test's fixture so it has no open tracking issue (or runs standalone recovery only). Keep the issue-specific assertion as written.\n    - If the traceback shows a different cause, fix the test or fixture for that cause. Do not change the poller's identity guard or its fail-closed behaviour.\n  reversibility: Only the test changes. If a person wants the earlier-guard case covered too, it can be added later as a separate case, as in option C.",
+  "fingerprint": "90b77625f8b049e2be28eeee483f0711c2554118e3bdc8a7be789d803cc17fc6",
+  "lineage": {
+    "issue_number": 7324,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38454822284",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38454822284",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7324"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261013193625_0b4930c0e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7324,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38454822284"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7324",
+  "timestamps": {
+    "created_at": "2026-10-13T19:36:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

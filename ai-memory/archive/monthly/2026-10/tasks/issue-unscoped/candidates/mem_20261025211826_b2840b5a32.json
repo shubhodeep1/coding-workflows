@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:344-452 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: When the label_missing hold sets SKIP_PLAN=true, the early plan job steps (Checkout repository, workflow support staging, runtime setup) are not gated, so they still run on a held run. clarify.yml gates these steps with label_missing_hold.\n  WHY: Each held run spends runner minutes on work that no later step uses, and it is not a correctness failure. Severity disagreement: minimax and qwen rated it NIT, and gemini gave no severity. The lines 445-840 range comes from minimax's reference.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:344-452 (and following steps in the job) | confidence=4\n  PROBLEM: Subsequent steps in the `plan` job are not gated by `SKIP_PLAN`.\n  WHY: The `label_missing` hold logic sets `SKIP_PLAN=true` in `GITHUB_ENV`, but subsequent steps such as \"Checkout repository\" and \"Stage workflow support\" do not check it and run unnecessarily when the plan is held.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:445-840 (versus the hold block at lines 344-432) | severity=NIT | confidence=3\n  PROBLEM: On the `reason=label_missing` hold, none of the early steps (Checkout repository through workflow support staging and runtime init, up to line 840) are gated on `label_missing_hold` or `SKIP_PLAN`. The first gated step is \"Fetch issue comments\" at line 842.\n  WHY: Held runs waste runner minutes on checkout and support staging. The run still ends correctly because SKIP_PLAN short-circuits the later steps. clarify.yml gates every step from Checkout onward, so plan.yml only partly mirrors it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/plan.yml:344-432, 445-452 | severity=NIT | confidence=4\n  PROBLEM: The hold gates six downstream steps with `if: env.SKIP_PLAN != 'true'`. Unlike clarify.yml, which gates Checkout at clarify.yml:339 with `if: steps.refctx.outputs.label_missing_hold != 'true'` and cascades that gate through about 30 later steps, plan.yml still runs checkout, support staging, runtime workspace creation and issue-metadata fetch on a held run.\n  WHY: There is no correctness failure. Each held run spends runner minutes on work that no later step uses. Prior review already rated this NIT and accepted it as residual for this forward-merge PR.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2ccd07cb0c22b4782fe7bf930e28ecea9d943a06b45b7aa0d01b8553c9975465",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8170,
+    "run_id": "40233021461",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40233021461",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025211826_b2840b5a32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8170,
+    "run_id": "40233021461"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T21:18:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

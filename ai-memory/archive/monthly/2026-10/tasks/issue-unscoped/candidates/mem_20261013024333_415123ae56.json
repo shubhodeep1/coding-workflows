@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_freshness_ci_failed.sh: lines 66-76 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The retry delay accepts any digit string, so an excessively large repository-variable value can consume the job\u2019s time budget in inter-attempt sleeps before marker retries and dispatch can complete.\n  WHY: The severity is high based on Gemini\u2019s MAJOR assessment; Qwen rated it NIT, and the other reviewers presented it as a hardening suggestion without severity. A large value can delay or prevent dispatch during a transient API error.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_freshness_ci_failed.sh | severity/confidence not stated\n  PROBLEM: The retry wait can now be set through a repo variable, and any digit string passes the check. A very large value would hold the job through two long sleeps on a transient API error and delay the dispatch.\n  WHY: Suggested minimal fix: Also fall back to 5 when the value is above a small bound, for example `[ \"${#retry_sleep}\" -le 2 ] && [ \"${retry_sleep}\" -le 60 ] || retry_sleep=5`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_freshness_ci_failed.sh: lines 69-70 | severity=MAJOR | confidence=[4]\n  PROBLEM: An excessively large numeric setting for `FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS` can be passed through by the workflow variable and consume significant time budget within the retry loop, potentially leading to job timeouts or unnecessary delays before dispatch occurs.\n  WHY: An operator accidentally setting a very large number (e.g., `3600`) would cause the script to pause for hours across multiple attempts, effectively blocking the PR from being sent back to review.\n- TASK_GAP (retracted; no gap reported): Requirement: The PR description states: \"The new repository variable `FRESHNESS_CI_FAILED_REDISPATCH_ENABLED` is on by default; set it to `false` to turn it off.\" Expected change site: .github/workflows/review_autofix.yml `deterministic-skip-merge` job env. Evidence of absence: The PR diff (and last run diff) adds `FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS` to the `env` block in `review_autofix.yml`, but the requirement to document the `FRESHNESS_CI_FAILED_REDISPATCH_ENABLED` variable as configurable via repository variable (as it appears in the description, and as the script implements via `${FRESHNESS_CI_FAILED_REDISPATCH_ENABLED:-true}`) is correctly implemented, but the description implied this variable is *also* configurable via repository variable, which it *is* implicitly implemented as `${... || 'true'}` in the workflow YAML. The implementation looks correct based on the code, but I need to double-check if the requirement was to *explicitly* document this in the `env` block for clarity or if the current implementation is sufficient. Wait, looking at `review_autofix.yml` in the PR: `FRESHNESS_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FRESHNESS_CI_FAILED_REDISPATCH_ENABLED || 'true' }}` This IS implemented correctly. There is no gap. (Correction: The requirement was met in the code.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_freshness_ci_failed.sh | severity/confidence not stated\n  PROBLEM: The repository variable is validated as a digit string only. A very large numeric value (e.g., 3600) would still pass the check, and the loop sleeps between attempts twice, so the job can be held for hours on a transient API error and exhaust the step / job budget before reaching `marker_failed`.\n  WHY: Suggested minimal fix: Add an upper bound check immediately after the digit check and fall back to 5 when exceeded, for example `[ \"${retry_sleep}\" -le 60 ] || retry_sleep=5`. The default of 5 is unchanged for sensible values, and a misconfigured `vars.FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS` cannot strand the auto-merge job.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_freshness_ci_failed.sh: Lines 69-76 | severity/confidence not stated\n  PROBLEM: The retry delay accepts any digit string and is passed directly to `sleep`. The workflow now exposes it through a repository variable, so an excessively large value can consume the job\u2019s time budget before the remaining marker attempts and review dispatch run.\n  WHY: Suggested minimal fix: Bound the accepted delay (for example, 0\u201360 seconds) and fall back to 5 when it exceeds that range.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_freshness_ci_failed.sh: lines 69-70 | severity=NIT | confidence=[4]\n  PROBLEM: The variable accepts any digit string, and the workflow now exposes it through a repository variable (.github/workflows/review_autofix.yml:1087). A very large numeric value (for example 3600) would make the two inter-attempt sleeps consume 7200 seconds of job time on a transient API error, preventing the remaining retries and the dispatch.\n  WHY: The regex `^[0-9]+$` passes for any integer. With `FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS=3600` and a transient GitHub API outage, the loop at lines 71-77 sleeps 3600 seconds between each of the 3 marker POST attempts, holding the job for over an hour before logging `marker_failed`. The dispatch never runs, and the PR keeps its failed CI.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No review findings reported. Says the input appears to be a fragment of the unattended codex-cli pipeline header, notes that `{{REFERENCE_SEVERITY_CLASSIFICATION}}` was not substituted, and asks what task the session should perform.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "798c740a2c44d71865ff2749465cb269c24b0defb69865083df855e72a21deea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7292,
+    "run_id": "38335796972",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38335796972",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013024333_415123ae56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7292,
+    "run_id": "38335796972"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T02:43:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:lines 804-816 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1_flash-lite]\n  PROBLEM: The diagnose-stage routing validation checks `ROUTING_TARGET_BRANCH` against `HEAD_REF` but does not verify the routing metadata against `pr_payload.json`.\n  WHY: The hand-off metadata could be tampered with between collect and diagnose; verifying against `pr_payload.json` would provide defense-in-depth. Severity mapping: source severity was MAJOR.\n- scripts/check_failure_triage.sh:lines 451-461 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The routing check validates the PR head ref\u2019s syntax but does not verify that the branch still exists before emitting it as the target branch.\n  WHY: An open PR can retain a head ref after its branch is deleted, causing routing to file a triage issue and bypass the base-branch gate before `scripts/resolve_integration_ref.sh:123-128` fails because the declared branch does not exist. Severity mapping: source severity was MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Once #6856 is routed to ai/issue-6838, change that branch\u2019s test expectation from four to five, document the auto-approval step, retain the exact env-first assertion, and rerun required CI.\"\n  expected_change_site: `plan.yml` (on `ai/issue-6838` branch)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1_flash-lite]\n  EVIDENCE: The current PR only modifies `scripts/check_failure_triage.sh` to enable routing to `ai/issue-6838`; the `plan.yml` expectation change from four to five entries and documentation of auto-approval remain to be performed as part of the operator-step follow-up.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1_flash-lite ===\n- scripts/check_failure_triage.sh:lines 804-816 | severity=high | confidence=[3]\n  PROBLEM: The defense-in-depth routing validation added after the file hand-off checks `ROUTING_TARGET_BRANCH` against `HEAD_REF` but does not verify the authenticity of the routing metadata itself against `pr_payload.json` within the diagnose stage.\n  WHY: While the code is protected by the first-pass check, it is theoretically possible for a hand-off metadata file to be tampered with between the collect and diagnose stages if the workspace is compromised; verifying against `pr_payload.json` (which is fetched from GitHub) provides a stronger defense-in-depth against hand-off tampering.\n- Requirement: \"Once #6856 is routed to ai/issue-6838, change that branch\u2019s test expectation from four to five, document the auto-approval step, retain the exact env-first assertion, and rerun required CI.\"\n  Expected change site: `plan.yml` (on `ai/issue-6838` branch)\n  Evidence of absence: The current PR only modifies `scripts/check_failure_triage.sh` to enable routing to `ai/issue-6838`. The specific expectation change on `plan.yml` (from four to five entries) and the documentation of auto-approval remain to be performed as part of the operator-step follow-up.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1_flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh:lines 451-461 | severity=high | confidence=[4]\n  PROBLEM: The routing check validates the PR head ref\u2019s syntax but does not verify that the branch still exists before emitting it as the target branch.\n  WHY: An open PR can retain a head ref after its branch is deleted. With routing enabled, this code still files a triage issue and bypasses the base-branch gate. Later, scripts/resolve_integration_ref.sh:123-128 checks whether the declared branch exists and fails if it does not, leaving the fix pipeline blocked.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4505b0a8dba67c27a53ae03a83491b3dfb9ca4c86025300a36580322e9235acd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7062,
+    "run_id": "38271347120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38271347120",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012160120_7d3e35f6bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7062,
+    "run_id": "38271347120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-12T16:01:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

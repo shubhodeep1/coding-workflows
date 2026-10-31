@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, the moved-step block in `tests-release-and-log-analysis` at lines 2146-2173\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The step timings were unreadable, so steps and destination were picked by estimate, and the diff provides no measured timings or headroom showing these are the slowest steps or that `tests-release-and-log-analysis` has the most headroom (it recorded 15m14s of 20 in `changelog.d/8278-release-job-steps-moved.md:2`, then received four steps in #8279 and four more here, `changelog.d/8281-hooks-job-steps-to-release.md:11`). Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT with confidence 2 and treated it as a residual risk already deferred; openai_gpt-6-luna rated MAJOR with confidence 4.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, destination job `tests-release-and-log-analysis`. The choice of that job is justified only in `changelog.d/8281-hooks-job-steps-to-release.md` and the comment above the moved block.\n  Evidence of absence: The step timings were unreadable, so the steps and the destination were picked by estimate. The PR discloses this in the `ci.yml` comment and in the changelog. A prior editor round deferred this gap. The release job recorded 15m14s of 20 in #8278 and then took four more steps in #8279 plus these four. That is a residual risk, not a missing deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the moved-step block in `tests-release-and-log-analysis` at lines 2146-2173.\n  Evidence of absence: The PR says the run's step timings could not be read and selects steps by estimated cost instead. The updated changelog records that `tests-release-and-log-analysis` took 15m14s of its 20-minute timeout in run 40750326439 (`changelog.d/8278-release-job-steps-moved.md:2`), then received four steps in #8279 and four more in this PR (`changelog.d/8281-hooks-job-steps-to-release.md:11`). The diff provides no measured timings or headroom showing these are the slowest steps or that this destination has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "21e463aecd686bd4bfade485466f1fd59dc6e5a2361378b916a5b38794aadb0e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8285,
+    "run_id": "40843414150",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40843414150",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029101604_91cfcac321",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8285,
+    "run_id": "40843414150"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T10:16:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

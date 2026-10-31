@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/inline_edit_guard.py: line 485; `inline_edit_kind()` at lines 450-454 and 484-489; `inline_edit_kind()`, lines 450 and 484-486; `inline_edit_kind()` at lines 343 and 376-380 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `inline_edit_kind()` strips heredoc bodies before recursively scanning command substitutions, so Python writes in heredocs nested inside substitutions are not detected.\n  WHY: Bash executes the write, but the recursive scan sees the heredoc body removed and the command reaches the normal permission flow instead of being denied; all reviewers rated this MAJOR.\n- .claude/hooks/inline_edit_guard.py: `_MODE_WRITES` regex used in the second `_PYTHON_WRITE_PATTERNS` entry (line ~122-124) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `_MODE_WRITES` regex does not detect `open()` writes when a keyword argument such as `encoding=` appears before `mode=`.\n  WHY: The regex does not match through the intervening keyword argument, so the hook does not deny a call such as `open('x', encoding='utf-8', mode='w').write('y')`; the reviewer rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/inline_edit_guard.py, line 485, `tokenizer.substitution_bodies(stripped)` | severity=MAJOR | confidence=4\n  PROBLEM: `inline_edit_kind` extracts command-substitution bodies from the heredoc-stripped text, so a heredoc body inside a substitution is unavailable to the recursive scan.\n  WHY: For `echo \"$(python3 - <<'PY'\\nPath('x').write_text('y')\\nPY\\n)\"`, Bash executes the write, but the hook returns no decision and the inline edit reaches the normal permission prompt.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/inline_edit_guard.py, `inline_edit_kind()` at lines 450-454 and 484-489 (the `substitution_bodies` recursion) | severity=MAJOR | confidence=4\n  PROBLEM: `inline_edit_kind()` recurses into command substitutions after stripping heredoc bodies, so it misses writes in heredocs nested inside substitutions.\n  WHY: The Python write executes, but the hook returns no decision and the command reaches the normal permission flow instead of being denied.\n- .claude/hooks/inline_edit_guard.py, `_MODE_WRITES` regex used in the second `_PYTHON_WRITE_PATTERNS` entry (line ~122-124) | severity=NIT | confidence=3\n  PROBLEM: The regex does not match a write mode argument when a keyword argument like `encoding=` appears before `mode=`.\n  WHY: A call such as `open('x', encoding='utf-8', mode='w').write('y')` is not denied; the reviewer notes that the test at `tests/test_inline_edit_guard.py` explicitly asserts this case gets no decision.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/inline_edit_guard.py, `inline_edit_kind()`, lines 450 and 484-486 | severity=MAJOR | confidence=5\n  PROBLEM: `inline_edit_kind()` strips heredoc bodies before recursively scanning command substitutions.\n  WHY: The Python write in `echo \"$(python3 - <<'PY'\\nfrom pathlib import Path\\nPath('x').write_text('y')\\nPY\\n)\"` is not detected or denied, and the command falls through to the normal permission flow.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/inline_edit_guard.py, `inline_edit_kind()` at lines 343 and 376-380 | severity=MAJOR | confidence=4\n  PROBLEM: `inline_edit_kind()` strips heredoc bodies before recursively inspecting command substitutions, so it misses Python file writes inside nested heredocs.\n  WHY: `substitution_bodies(stripped)` extracts the substitution after the heredoc body has been removed; the recursive scan sees an empty heredoc, so the write is not denied.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0cb28aefaf39d97e71afe9e9621968f8c8139c96d4e3f2d7437ef91c3ccd699b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4877,
+    "run_id": "36830181491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36830181491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001080954_8baabef51b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4877,
+    "run_id": "36830181491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T08:09:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

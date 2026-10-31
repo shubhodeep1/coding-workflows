@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/7355-dead-values-cleanup.md:2 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fragment lists `invalid_audit_timestamp` among the reasons the check \"skipped before reading the audit\", but `_check_branch_rebuild_threshold` in `scripts/orchestrate_poll_process.sh` (lines 11525-11532) has already read the audit and then rejects the timestamp.\n  WHY: Operators reading the registry text would conclude the audit was never consulted, when it returned an invalid timestamp. The code and log line are correct, so only the description is wrong. Every reviewer rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/7355-dead-values-cleanup.md:line 2 (clause \"`last_rebuild_at=none` means no earlier rebuild timestamp was read, either because the audit records none or because the check skipped before reading the audit (... `invalid_audit_timestamp`)\") | severity=NIT | confidence=5\n  PROBLEM: The fragment lists `invalid_audit_timestamp` among the reasons the check skipped before reading the audit. In `_check_branch_rebuild_threshold` in `scripts/orchestrate_poll_process.sh`, the audit is already fetched (line 11516) and `.audit.last_rebuild_at` is already read (line 11525) when this reason is set (line 11530). The return at line 11532 comes before `BRANCH_REBUILD_LAST_REBUILD_AT` is assigned at line 11536.\n  WHY: The caller logs `last_rebuild_at=none` because a malformed timestamp was read and rejected, not skipped. The registry text points operators to the wrong cause. `audit_unavailable` is correctly listed. The code and log line are correct.\n- HARDENING_SUGGESTIONS: agents.d/7355-dead-values-cleanup.md, line 2. Move `invalid_audit_timestamp` out of the \"skipped before reading the audit\" list. Say instead that it skips after the audit was read but the `last_rebuild_at` value was rejected, so `last_rebuild_at` stays `none`. Estimated 1 line changed.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/7355-dead-values-cleanup.md:line 2 (cross-referenced with `scripts/orchestrate_poll_process.sh` lines 11525\u201311532) | severity=NIT | confidence=5\n  PROBLEM: The log-prefix documentation misstates what happened for `invalid_audit_timestamp`. It says the check skipped before reading the audit, but the audit timestamp is read and then rejected as invalid.\n  WHY: Operators may infer the audit was not read, rather than that it was read and held an invalid timestamp. `last_rebuild_at=none` reflects that no valid timestamp was accepted.\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7355-dead-values-cleanup.md:line 2 (the `BRANCH_REBUILD_THRESHOLD_DECISION` registry bullet) | severity=NIT | confidence=5\n  PROBLEM: The fragment lists `invalid_audit_timestamp` among the skip reasons where \"the check skipped before reading the audit\". In `_check_branch_rebuild_threshold` (`scripts/orchestrate_poll_process.sh`), line 11525 extracts `.audit.last_rebuild_at`, line 11527 enters the `if` block because the value is non-empty, and lines 11529-11532 then reject the timestamp and return. The global `BRANCH_REBUILD_LAST_REBUILD_AT` is never assigned (line 11536 is unreachable on this path).\n  WHY: An operator seeing `skip_reason=invalid_audit_timestamp last_rebuild_at=none` would conclude the audit was never consulted. The audit returned an unparseable timestamp, which is a different diagnostic and points the operator at audit data quality, not audit availability.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "fac19319d7341ebf67d2349b18cee3262c1140e0c46323e8c59d7272b744aef8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7378,
+    "run_id": "38564305064",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38564305064",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014130241_0d054afb7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7378,
+    "run_id": "38564305064"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T13:02:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

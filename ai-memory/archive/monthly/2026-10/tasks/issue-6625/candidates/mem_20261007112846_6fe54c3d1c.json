@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6625,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6625\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6627\",\"pr_number\":6627,\"branch\":\"ai/issue-6625\",\"run_id\":\"37611367842\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37611367842\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"agents.md\",\"changelog.d/6625-failure-cap-support-version.md\",\"scripts/orchestrate_poll_process.sh\",\"scripts/workflow_failure_heal.py\",\"tests/test_orchestrate_poll_noop_suspicious_recovery.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "a4d47fd5cd62c41340bab3d656e5e0efeaec90aba1440c06a3240dab66761221",
+  "lineage": {
+    "issue_number": 6625,
+    "parent_ids": [],
+    "pr_number": 6627,
+    "run_id": "37611367842",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37611367842",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6627"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261007112846_6fe54c3d1c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6625,
+    "level": "run",
+    "pr_number": 6627,
+    "run_id": "37611367842"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6625: https://github.com/shubhodeep1/coding-workflows/pull/6627",
+  "timestamps": {
+    "created_at": "2026-10-07T11:28:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `19a95097a14b558e52d1de31a1374f23daba2b74`. The integration branch mismatch line reads `unknown`, not `true`, so planning goes ahead.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNo code changes. Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly these three lines, each ending in a single LF newline:\n\n```\nstatus: ok\nrun_id: alt-41149960627\nupdated-by: ai-pipeline\n```\n\nThe file currently has two lines: `status: ok` and `decompose-run: 40427433026`. The `decompose-run:` line goes away and the two new lines are added.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names exactly one existing file and its exact final content. It forbids touching anything else, so there is nothing to add or cut. No helper, script, scheduler wiring, supervisor or database work applies.\n\n## Automation / script surface (\u00a720.E)\n- **New or changed scripts:** none. This only edits an existing data file.\n- **Scheduler or PR-push entry point:** none.\n- **Long-running supervisor:** not needed.\n- **Database gate:** not applicable.\n- **Entry in `docs/scripts-pending-removal.md`:** not needed.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file instead of patching individual lines\n- **Chosen:** Write the full three-line content, with a trailing newline after the last line.\n- **Alternatives considered:** Keep the existing `decompose-run:` line and append the new lines; write the file without a trailing newline.\n- **Why:** The issue says the file must be \"exactly\" these three lines, so the old line has to go. A trailing LF matches the current file and normal POSIX text-file convention.\n\n## Security considerations\nNo trust boundary, endpoint, external input, secret or money state is involved. The only abuse case would be changes to other files, and the scope constraint prevents that: the diff must touch only `tests/e2e_smoke_canary.txt`.\n\n## Risks and edge cases\n- **Exact content:** CRLF line endings, trailing spaces or extra blank lines would break the \"exactly\" requirement.\n- **No conflicts found:** the issue matches the codebase. The file exists, and the new content replaces the `decompose-run:` line.\n\n## Testing considerations\n- Run `cat -A tests/e2e_smoke_canary.txt`. It should print exactly `status: ok$`, `run_id: alt-41149960627$` and `updated-by: ai-pipeline$`.\n- Run `git diff --stat`. It should show only that one file changed.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "42546563fdcf3483ebbd13025967239ba20bc440c86045fbf8c5837dab6accfb",
+  "lineage": {
+    "issue_number": 8493,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41150481326",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41150481326",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8493"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261031003429_1e0f0b5a70",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8493,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41150481326"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8493",
+  "timestamps": {
+    "created_at": "2026-10-31T00:34:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

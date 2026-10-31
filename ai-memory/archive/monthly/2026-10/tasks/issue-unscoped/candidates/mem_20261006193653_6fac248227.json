@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1778 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: For consumer repositories, `_trusted_run_link_comment` accepts only `github-actions[bot]` as the author of a recognized phase-failure comment, rejecting comments posted by the configured `GH_PAT` owner.\n  WHY: For issue escalations there is no PR-association fallback, so genuine failed-run references are rejected as `not_linked_to_issue` and intake proceeds without the corresponding run logs.\n- scripts/workflow_failure_heal.py:1773 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The body-prefix check rejects cancelled or timed-out clarify and implement comments because their posted prefixes are not in `PHASE_FAILURE_COMMENT_PREFIXES`.\n  WHY: Such comments cannot link their runs through the failure comment; for issue escalations and runs without an applicable PR fallback, the run is dropped from the heal payload.\n- scripts/workflow_failure_heal.py:1853-1857 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Label-report calls to `verify_run_provenance` now return `status: ok` with `run_refs: []` and `reason: no_verified_runs` where they previously returned `not_applicable`.\n  WHY: The reviewer states this does not fail at runtime and is internally consistent for intake, but notes the contract change for future callers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py:1770-1778 | severity=MAJOR | confidence=4\n  PROBLEM: For consumer label-escalation reports, `_trusted_run_link_comment` only accepts `github-actions[bot]`, although consumer phase-failure comments are posted by the `GH_PAT` owner.\n  WHY: For `source_kind=issue` escalations there is no PR-association fallback, so run references vouched for only by these comments are rejected as `reason=not_linked_to_issue`; the heal issue lacks the relevant failure evidence. For `source_kind=pull_request` escalations, the PR-association fallback reduces the impact.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:1772-1778 | severity=MAJOR | confidence=5\n  PROBLEM: Insufficient verification of run-log references in label escalations.\n  WHY: [Already satisfied] The reviewer states that the changes in `_trusted_run_link_comment` and `_verify_label_run_refs` correctly verify the run's repository, conclusion, and association with the escalated issue before fetching logs, addressing the preliminary trust-boundary finding. Classification: Already satisfied.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:1778 | severity=MAJOR | confidence=5\n  PROBLEM: For consumer label reports, `_trusted_run_link_comment` only accepts `github-actions[bot]`, but consumer phase-failure comments are posted by the `GH_PAT` owner.\n  WHY: `_verify_label_run_refs` cannot link issue-escalation runs vouched for by those comments; intake drops the references as `not_linked_to_issue` and proceeds without their logs.\n- scripts/workflow_failure_heal.py:1773 | severity=MAJOR | confidence=5\n  PROBLEM: The body-prefix check requires failed-comment prefixes and rejects the cancelled/timed-out clarify and implement comments actually posted by those workflows.\n  WHY: For issue escalations, or runs without an applicable PR-association fallback, the run is dropped from the heal payload.\n- scripts/workflow_failure_heal.py:1853-1857 | severity=NIT | confidence=3\n  PROBLEM: Label-report calls to `verify_run_provenance` now return `status: ok` with `run_refs: []` and `reason: no_verified_runs` where they previously returned `not_applicable`.\n  WHY: The reviewer states this does not fail at runtime and is internally consistent for intake, but notes the contract change for future callers.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py:1770-1778; _verify_label_run_refs, lines 1818-1826 | severity=MAJOR | confidence=5\n  PROBLEM: Consumer phase-failure comments are accepted only when authored by `github-actions[bot]`, although the reusable plan workflow posts them with `GH_TOKEN` set to `secrets.GH_PAT`.\n  WHY: An issue escalation cannot use the PR-association fallback, so the genuine failed-run reference is rejected as `not_linked_to_issue` and intake proceeds without that run's job logs.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py:1757-1778 | severity=MAJOR | confidence=5\n  PROBLEM: Consumer-repository phase-failure comments are posted by the `GH_PAT` owner, but `_trusted_run_link_comment` accepts only `github-actions[bot]` for consumer repos.\n  WHY: The recognized comment passes the association and body checks but fails the author check; issue escalations have no PR-only fallback, so the run reference is rejected as `not_linked_to_issue` and the intake proceeds without its logs.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal.py:1778 | severity=MAJOR | confidence=4\n  PROBLEM: For consumer repositories, `_trusted_run_link_comment` trusts only `github-actions[bot]`, while phase-failure comments are posted using `GH_TOKEN: ${{ secrets.GH_PAT }}` and are authored by the PAT owner's human account.\n  WHY: For issue-kind escalations, no PR-association fallback applies; run references are dropped as `reason=not_linked_to_issue`, leaving intake without failed-run logs. The reviewer notes the test fixture at `tests/test_workflow_failure_heal.py:1539` masks the issue by using `github-actions[bot]`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "eb8c9d1cd93f268357c8599d4da3522ece255b40a24ca1705be3735d626c007c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6582,
+    "run_id": "37514886558",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37514886558",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006193653_6fac248227",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6582,
+    "run_id": "37514886558"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T19:36:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

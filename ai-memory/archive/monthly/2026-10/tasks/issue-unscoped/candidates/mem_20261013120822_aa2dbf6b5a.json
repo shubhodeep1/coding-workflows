@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"cover both managed and standalone poller stall-recovery approvals\"\n  expected_change_site: tests/test_orchestrate_poll_process.py\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: LAST RUN DIFF adds only the managed test (tests/test_orchestrate_poll_process.py:24764-24797); no standalone default-on regression appears in the PR diff, last_run_diff.patch, or last_run_changed_files.txt. The issue explicitly names both managed and standalone poller stall-recovery approvals as in scope.\n- requirement: \"fail closed when required inputs are unavailable\"\n  expected_change_site: tests/test_orchestrate_poll_process.py\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: LAST RUN DIFF's new test only exercises the grant-mismatch path (asserts `outcome=defer issue=10 paths=scripts/security_audit.sh,.github/workflows/security-audit.yml` and `STALL_SKIP ... reason=automation_path_plan_hold`); no diff hunk mocks a missing plan comment or an unavailable guard helper under the default flag, and the existing test_managed_auto_approve_holds_without_trusted_plan_comment (tests/test_orchestrate_poll_process.py:24691) uses an untrusted author rather than a missing comment. The issue explicitly requires fail-closed behaviour when required inputs are unavailable.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"cover both managed and standalone poller stall-recovery approvals\"\n  Expected change site: tests/test_orchestrate_poll_process.py \u2014 a new test mirroring test_managed_auto_approve_default_on_holds_ungranted_security_plan_and_posts_granted for the standalone sweep-only path (the existing test_standalone_auto_approve_holds_protected_plan_with_flag_off at tests/test_orchestrate_poll_process.py:24807 explicitly sets env_overrides={\"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED\": \"false\"}, so no standalone test currently exercises the default-on gate holding an ungranted plan or approving a granted one without overriding the flag).\n  Evidence of absence: LAST RUN DIFF adds only the managed test (tests/test_orchestrate_poll_process.py:24764-24797); no standalone default-on regression appears in the PR diff, last_run_diff.patch, or last_run_changed_files.txt. The issue explicitly names both managed and standalone poller stall-recovery approvals as in scope.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"fail closed when required inputs are unavailable\"\n  Expected change site: tests/test_orchestrate_poll_process.py \u2014 a new test that exercises the poller's `plan_comment_unavailable` and `plan_gate_helper_unavailable` reasons (orchestrate_poll_process.sh logs these under `STALL_SKIP ... reason=automation_path_plan_hold`) under the default-on flag.\n  Evidence of absence: LAST RUN DIFF's new test only exercises the grant-mismatch path (asserts `outcome=defer issue=10 paths=scripts/security_audit.sh,.github/workflows/security-audit.yml` and `STALL_SKIP ... reason=automation_path_plan_hold`); no diff hunk mocks a missing plan comment or an unavailable guard helper under the default flag, and the existing test_managed_auto_approve_holds_without_trusted_plan_comment (tests/test_orchestrate_poll_process.py:24691) uses an untrusted author rather than a missing comment. The issue explicitly requires fail-closed behaviour when required inputs are unavailable.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "3f7681f8fd65cef633f7a39aaeccf1fb1029367fe3c0ee4950e3db8623e5346b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7182,
+    "run_id": "38392682649",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38392682649",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013120822_aa2dbf6b5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7182,
+    "run_id": "38392682649"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T12:08:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

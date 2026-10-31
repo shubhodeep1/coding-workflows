@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n\nNone. This is a data-only edit. Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly these three lines, ending with one trailing newline:\n\n```text\nstatus: ok\nrun_id: 39600101749\nupdated-by: ai-pipeline\n```\n\nThat is the same as `printf 'status: ok\\nrun_id: 39600101749\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n\n## Data structures affected\n\nOnly the text content of the canary fixture changes. No schemas, state or config are touched.\n\n## API or interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Overwrite the file instead of editing it\n- Chosen: Write the complete three-line content in a single overwrite.\n- Alternatives considered: Edit only the lines that differ.\n- Why: The issue requires the content to match exactly. A full overwrite guarantees that no old lines survive and that there is exactly one trailing newline.\n\n## Security considerations\n\nNo trust boundaries, endpoints, credentials or money-handling surfaces are involved. The file content is fixed text given in the issue and is not built from external input.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a one-file overwrite and forbids touching any other file. No helpers, tests, changelog fragments or docs are needed, because this file is a pipeline smoke canary and not a behaviour change.\n\n## Risks and edge cases\n\n- An extra blank line at the end, a missing final newline, or CRLF line endings would break the exact match. The file must end in exactly one `\\n`.\n- Editors must not add a changelog fragment or an `agents.d` fragment. The issue limits the change to this one file, and CLAUDE.md \u00a720 does not require a changelog entry for a test fixture.\n- `Integration branch mismatch` reads `unknown`, not `true`, so no BLOCKED condition applies.\n\n## Testing considerations\n\n- Run `git diff --stat` and confirm it shows only `tests/e2e_smoke_canary.txt`.\n- Confirm the file is byte-exact with `printf 'status: ok\\nrun_id: 39600101749\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt`, which should exit 0.\n\n## Pre-execution self-check\n\n- The plan touches only the one allowed file.\n- The content matches the issue exactly, including the trailing newline.\n- There are no external inputs and no automation paths.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "17abc1fca8f372e027231258647db18189ca828c9fd2cc9db17f8d5e9ebb8645",
+  "lineage": {
+    "issue_number": 7809,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39602333699",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39602333699",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7809"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261021125423_87dec6f665",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7809,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39602333699"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7809",
+  "timestamps": {
+    "created_at": "2026-10-21T12:54:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

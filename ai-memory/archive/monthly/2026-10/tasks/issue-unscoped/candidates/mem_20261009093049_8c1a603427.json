@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:orchestrate-poll CI job failure | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The orchestrate-poll CI job failed with exit code 1 following the update to the install-opencode action pin.\n  WHY: The reviewer reports that pipeline orchestration is broken, preventing automatic maintenance and polling tasks from executing.\n- .github/workflows/orchestrate_poll.yml:299; CI run 37907017153, check `orchestrate-poll (3)` | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The supplied CI results show this check failed, and the aggregate `lint` check consequently exited with code 1.\n  WHY: CI remains red, so the PR has not passed verification; the available log tail reports 33 passing tests but does not identify the failing test or establish a connection to the changed pin.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_poll.yml:orchestrate-poll CI job failure | severity=critical | confidence=[4]\n  PROBLEM: The orchestrate-poll CI job failed with exit code 1 following the update to the install-opencode action pin.\n  WHY: Pipeline orchestration is broken, preventing automatic maintenance and polling tasks from executing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/orchestrate_poll.yml:299; CI run 37907017153, check `orchestrate-poll (3)` | severity=high | confidence=[5]\n  PROBLEM: The supplied CI results show this check failed, and the aggregate `lint` check consequently exited with code 1.\n  WHY: CI remains red, so the PR has not passed verification. The available log tail reports 33 passing tests but does not identify the failing test or establish a connection to the changed pin.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d19e6c83087dc9d81e7b9b9d2af2250c2af56e3ce2375d5de0984bc663dd9397",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6879,
+    "run_id": "37907017698",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37907017698",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009093049_8c1a603427",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6879,
+    "run_id": "37907017698"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T09:30:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

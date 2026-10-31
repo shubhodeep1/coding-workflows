@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: B\nQ3: A\n\nRATIONALE:\nQ1: GitHub Actions records `pull_request` check-runs against the PR head SHA, even though the job checks out the test-merge ref. So `scripts/pr_checks_lib.sh:199` is already querying the right commit, and polling `merge_commit_sha` (option C) would never see CI. The real gap is at `:360-373`, where an empty result is read as green. The base-moved case is already covered by `_pr_base_fresh_for_merge`, which runs again after any wait that actually polled. Option B's extra workflow-runs read would duplicate that check.\nQ2: Option A can be satisfied by a check that is not CI. The default required set includes `review / gate`, and an earlier review run's successful `review / gate` check-run on the same head is not excluded by `PR_CHECKS_SELF_RUN_ID`. That would satisfy A even when CI never registered. The issue asks for \"the configured CI check\" to exist and succeed. Naming that one check, defaulting to `lint` like `RELEASE_CI_GATE_CHECK_NAME`, does exactly that; `lint` is the aggregate job of `.github/workflows/ci.yml`. Consumer CI check names are unknown, so the `lint` default applies only in this repository. Consumers keep today's behaviour until they set the variable, which avoids 45-minute timeouts on every consumer auto-merge.\nQ3: The cited lines 360-373 belong to `_pr_wait_for_required_checks`, so the change is scoped there. The orchestrator's direct merges through `_pr_checks_completed` have their own required-set semantics and other guards. Keeping them unchanged keeps the change surgical.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/pr_checks_lib.sh (`_pr_checks_completed` lines 151-313, `_pr_wait_for_required_checks` lines 342-400+)\n    - `RELEASE_CI_GATE_CHECK_NAME` default `lint` (scripts/release_ci_gate.sh) as the precedent for the check name\n    - .github/workflows/review_autofix.yml and scripts/review_rb_judge.sh (the callers of `_pr_wait_for_required_checks`)\n  steps:\n    - Add the variable `AUTO_MERGE_REQUIRED_CI_CHECK`. The helper resolves it inside `pr_checks_lib.sh`, so it always has a default there (\u00a78). If the variable is unset, the default is `lint` when `GITHUB_REPOSITORY` is `shubhodeep1/coding-workflows` and `none` otherwise. An explicit value always wins. `none` or an empty value turns the new requirement off, because a repository variable cannot hold an empty string.\n    - In `_pr_checks_completed`, from the check-runs JSON it already fetched (no new API call), record two side-channel values for the configured name: `PR_CHECKS_LAST_CI_STATE=absent|pending|success|failure` and `PR_CHECKS_LAST_CI_NAME`. Use the newest non-self check-run with that exact name on the head SHA. Only conclusion `success` counts as `success`; `skipped`, `neutral` and `cancelled` count as `failure`.\n    - In `_pr_wait_for_required_checks`, when the requirement is on and the result is `ok`:\n      - `absent` or `pending`: keep polling until the budget is spent, then return outcome `timeout`.\n      - `failure`: return outcome `failed`.\n      - `success`: return `ok`.\n      - Never treat zero check-runs as green while the requirement is on. Keep the existing two-interval grace path only for `none`.\n    - Add `ci_check=<name> ci_state=<state>` to the `AUTOFIX_AUTO_MERGE_CHECKS` log line. Existing keys and outcomes stay as they are.\n    - Keep the reviewed-head binding unchanged: callers still pass `head_sha`, the merge still uses `--match-head-commit`, and freshness is still re-checked after a wait.\n    - Add tests (for example in `tests/test_pr_checks_lib_required_filter.py` or a new test beside it) for: absent leads to timeout; pending then success leads to ok; a skipped or failed `lint` leads to failed; `none` keeps the legacy grace; an old `review / gate` success alone does not authorize; the default is `lint` only in this repository.\n    - Document the variable in the README variables table and the agents.md auto-merge paragraph, and add a `changelog.d/` fragment.\n  replaces_acceptance_criterion: \"require the configured CI check to exist and succeed\" becomes: one named check (default `lint` in this repository, opt-in elsewhere) must exist on the reviewed head and succeed.\n  equivalence_argument: Actions `pull_request` CI reports its `lint` aggregate on the head SHA from the test-merge checkout. Requiring that check to be present and successful means only a CI run that actually finished can authorize the merge. An empty result can no longer pass, and a different check such as `review / gate` cannot stand in for CI.\n  reversibility: Setting `AUTO_MERGE_REQUIRED_CI_CHECK=none` restores the previous behaviour. Setting it to another check name changes the requirement per repository. No state migration is needed.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- AUTO_MERGE_REQUIRED_CI_CHECK (variable): a consumer repository that wants the stricter gate sets this to the name of its aggregate CI check-run. Until it is set, consumers keep today's behaviour (no named-check requirement), and this repository uses `lint`.\n\n**Assumptions:**\n- The default is scoped by repository: `lint` here, off in consumers. This keeps consumer auto-merges from waiting 45 minutes and then being refused while their CI check names are unknown.\n- A matching check-run only needs the right name and the head SHA. It is not also verified as coming from `ci.yml`, which the release gate does check.\n\n**Missing context:** I read only `scripts/pr_checks_lib.sh` lines 151-400. I did not check the CI job names in consumer repositories or the current callers' exact arguments.",
+  "fingerprint": "fb2a449d65903b156dd96042c7993acc86045f5ee73e0ca1d0acbd6ee78faab5",
+  "lineage": {
+    "issue_number": 6963,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37971048611",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37971048611",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6963"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009181711_c7622ca772",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6963,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37971048611"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6963",
+  "timestamps": {
+    "created_at": "2026-10-09T18:17:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

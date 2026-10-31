@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: Issue #7185 (re-issue of #6977): superseded, no repository change\n\nScope-mode: Hold Scope\nReuse-audit: extends test_review_autofix_passes_support_sha_to_every_marker_site\nScope-mode justification: This issue asked us to repair PR #6976 on its head branch (`ai/issue-6969`) so that its CI check stopped failing. PR #6976 has since merged with all 22 checks passing, according to the unblock judge's round-1 `accept_with_followup` verdict on this issue. That makes the requested repair obsolete. There is no open PR and no failing check left, and the issue says not to change or re-merge #6976. On `main` (HEAD `4fafa058aab3472ee0e13692c86209450e57c9ab`), the test this issue wanted updated already covers all three gate-output exports, including the deterministic-skip merge helper. The smallest safe action is therefore to change nothing in the repository, confirm that `main` already meets the issue's acceptance points, and close this issue as superseded. The judge also asked for a follow-up issue so that planning detects CI-repair issues whose PR has already merged. That follow-up is filed separately and is not part of this issue. Doing it here would widen scope beyond the judge's instruction (\u00a79, \u00a718).\n\nPlanning ref: `main` @ `4fafa058aab3472ee0e13692c86209450e57c9ab`. The integration branch metadata is empty and \"Integration branch mismatch\" reads `unknown`, not `true`, so no `BLOCKED:` applies.\n\n### Clarification answer mapping\n- The only open question was the earlier planning block (\"Reason: integration branch mismatch\"). The `/answer` from the unblock judge settles it: the work is accepted with a follow-up issue, PR #6976 merged with passing checks, and there is no failing check to waive. The `ai/issue-6969` head branch the issue named is no longer the target. Nothing should be pushed to it.\n\n### 1. Files likely to change\n- None.\n- Already satisfied on `main`, nothing to edit:\n  - `tests/test_workflow_failure_heal.py` \u2192 `test_review_autofix_passes_support_sha_to_every_marker_site` (around line 4140). It no longer counts `REVIEW_SUPPORT_SHA` occurrences. It checks each source of the value directly:\n    - the gate's `Evaluate review gate` step reads `steps.resolve_support.outputs.review_support_sha`;\n    - the `fingerprint-cap-block` and `codex-agent` jobs, and the `deterministic-skip-merge` step \"Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge\", all read `needs.gate.outputs.review_support_sha`;\n    - every `REVIEW_SUPPORT_SHA:` line must be one of those two verified sources.\n  - `.github/workflows/review_autofix.yml`:\n    - the gate env is at line 646;\n    - the job-level and step-level exports from `needs.gate.outputs.review_support_sha` are at lines 2316, 2654 and 2992;\n    - the SHA check `git -C .codex-freshness-src rev-parse HEAD ... = \"${REVIEW_SUPPORT_SHA:-}\"` is at lines 2380\u20132381.\n\n  The workflow's SHA verification stays as it is.\n\n### 2. Functions or modules to implement\n- None.\n\n### 3. Data structures affected\n- None.\n\n### 4. API or interface changes\n- None. No workflow inputs, env vars, markers or log prefixes are added or renamed.\n\n## Decisions\n\n### D1 \u2014 Treat the issue as superseded instead of editing code\n- Chosen: no repository change. Verify that `main` already meets the acceptance points and close #7185 as superseded by the merge of PR #6976.\n- Alternatives considered:\n  - (a) Push a sync or test edit to `ai/issue-6969`. The PR is merged, and the judge said not to touch #6976.\n  - (b) Edit the test on `main` again. It is already structural and covers all three exports.\n  - (c) Build the \"detect merged-PR repair issues\" planning guard in this issue.\n- Why: (a) and (b) would be no-ops or would rewrite merged history. (c) is the judge's separate follow-up, and bundling it here would widen scope (\u00a79, \u00a718).\n\n### D2 \u2014 Leave the follow-up out of this plan\n- Chosen: rely on the follow-up issue that comes with the unblock judge's `accept_with_followup` verdict. It covers the planning-side detection plus a regression test for the #7185 scenario.\n- Alternatives considered: implement that detection here.\n- Why: the verdict defines it as its own issue. Keeping it separate keeps this issue's diff empty and auditable.\n\n## Security considerations\n- Trust boundaries: none touched. No workflow, script, prompt or credential path changes.\n- Authorization: no new endpoint or surface.\n- External input: the issue body (an untrusted re-issue) names a branch, `ai/issue-6969`. This plan deliberately does not push to it, so an old re-issue body cannot cause writes to a branch that is no longer current.\n- Abuse cases: none introduced. `REVIEW_SUPPORT_SHA` verification (line 646 and lines 2380\u20132381) is unchanged.\n- Money handling: not applicable.\n\n### 5. Risks and edge cases\n- Conflict noted: the issue says the head branch \"still asserts that there are only two REVIEW_SUPPORT_SHA exports\". That is out of date. PR #6976 has merged, and `main`'s test is structural rather than count-based.\n- An implement run that ends with no file changes may be read as a failure or no-op by downstream automation. The intended outcome here is closing #7185 as superseded, not a PR. If implement runs anyway, it should commit nothing and must not create an empty PR.\n- If PR #6976's merge were later reverted on `main`, this conclusion would no longer hold. The verification below catches that.\n\n### 6. Testing considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \"tests/test_workflow_failure_heal.py::test_review_autofix_passes_support_sha_to_every_marker_site\"` on the pinned toolchain (CI or the repo's dev deps). Expected result: pass.\n- This was not run during planning because pytest is not installed in the planning sandbox (`No module named pytest`). The result is UNVERIFIED, so rely on `main`'s CI `lint` aggregate.\n- No new tests in this issue. The regression test for the #7185 scenario belongs to the judge's follow-up issue.\n\n### 7. Pre-execution self-check\n- Every acceptance point in the issue is already met on `main`, or no longer applies because PR #6976 merged.\n- Every file, line and symbol cited above was read on `4fafa058` during planning.\n- No `BLOCKED:` trigger applies: the mismatch line reads `unknown`, and no external scalar input is needed.\n\nPLAN_SELF_CHECK: WARNING: This plan intentionally changes no files. The implement phase should close #7185 as superseded rather than open an empty PR.\nPLAN_SELF_CHECK: WARNING: The targeted pytest was not run during planning (pytest is not installed in the sandbox), so the result is UNVERIFIED; rely on main's CI.\n\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "1d7d3f6ac9bc488f09d7ef9445011c8e7e17a8d1a57359dc09f5a136f5029749",
+  "lineage": {
+    "issue_number": 7185,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38213011852",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38213011852",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7185"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261012064257_bf881fe2d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7185,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38213011852"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7185",
+  "timestamps": {
+    "created_at": "2026-10-12T06:42:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

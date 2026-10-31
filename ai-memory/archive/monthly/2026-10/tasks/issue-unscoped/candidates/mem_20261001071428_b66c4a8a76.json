@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_session_janitor.py:lines 297-307 (the parametrize cases) | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The parametrized test cases have inconsistent scenario descriptions, and the IDLE-case comment ambiguously describes a stage that is not currently running.\n  WHY: The assertions still pass, so this is a clarity nit rather than a runtime failure.\n- scripts/claude_session_janitor.py:line 114 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `NON_SUPERSEDING_STAGE_PATTERN` is defined but no longer referenced in the code path.\n  WHY: It does not fail at runtime, and the plan documents the decision in AD-2, but the \u00a76 rationale for retaining the unused constant is a slightly stretched reading.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_claude_session_janitor.py:lines 297-307 (the parametrize cases) | severity=low | confidence=2\n  PROBLEM: Two of the three parametrize cases are missing the third case's scenario description, and the comment for the IDLE case reads \"A live stage may not have run its step 0 yet\" \u2014 but `IDLE` means the stage is NOT currently running, so the wording \"live stage may not have run its step 0 yet\" is ambiguous: a stage that has not run step 0 is more likely still `RUNNING`, not `IDLE`. The third parametrize case (`RUNNING + WORKING`) carries no explanatory comment.\n  WHY: The assertions still pass (all three cases route the stage session through the `kind in (None, \"stage\")` \u2192 `not_ours += 1` branch before the status check), so this is purely a clarity nit for a future reader; the test would catch a regression only because it covers the three buckets, not because the comments are accurate.\n- scripts/claude_session_janitor.py:line 114 \u2014 `NON_SUPERSEDING_STAGE_PATTERN = re.compile(r\"^(?:checker|waiting:|deploy-activate)\")` | severity=low | confidence=2\n  PROBLEM: The constant is defined but no longer referenced anywhere in the code path; the `classify()` function removed the only consumer in this PR. The comment says it is \"Kept so the module's names do not change (CLAUDE.md \u00a76)\".\n  WHY: It does not fail at runtime \u2014 ruff does not flag a module-level assignment as unused by default, and the plan documents the decision in AD-2. But \u00a76 forbids renaming/removing/repurposing identifiers, not keeping dead ones, so the rationale (\"no identifier may be removed in place under \u00a76\") is a slightly stretched reading. A consumer that imports this constant (none does today) would have no behavior to rely on.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8e6a18fc53c66d25b2dee9dd5a803453b8834de7dd1feb275eb7045354ff60e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5674,
+    "run_id": "36825354577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36825354577",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001071428_b66c4a8a76",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5674,
+    "run_id": "36825354577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T07:14:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

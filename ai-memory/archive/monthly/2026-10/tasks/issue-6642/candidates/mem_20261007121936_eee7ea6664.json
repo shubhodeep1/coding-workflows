@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The finding is already fixed on `main`. At `.github/workflows/orchestrate.yml:815-822` the decomposer calls `claude_run ORCHESTRATE` and first strips `GH_TOKEN`, `GITHUB_TOKEN`, `GH_PAT` and `OPENROUTER_API_KEY` from its environment. `claude_run` in `scripts/ai_engine.sh:225-232,339-346` starts Claude only through `codex_isolated_exec.sh run --engine claude`. The pool token is passed only as `--claude-token-file`, which the host relay reads (\"The token file is read only by the host relay the helper starts\"). Moving to `review_untrusted_sandbox.sh` (option B) would swap one working boundary for another with no known gap. Option C would leave nothing to stop a later change from bringing the exposure back, so contract tests that pin the boundary are the right deliverable.\nQ2: `ORCHESTRATE` is not in `READ_ROLES` (`scripts/claude_engine.py:99`), so today it gets the write profile: `Read,Grep,Glob,Bash,Edit,Write`, `bypassPermissions` and `workspace` isolation (`scripts/ai_engine.sh:296`). The decomposer's plan comes from the stream-json transcript on stdout, which the host captures (`ai_engine.sh:336-352`), so it needs no write tools. The codex fallback for the same step already runs `--mode read-only` (`orchestrate.yml:830`). The read profile therefore matches the fallback and removes Bash and Write from a model that reads untrusted project descriptions.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/orchestrate.yml (decomposer step, lines ~811-831)\n    - scripts/ai_engine.sh (`claude_run`, lines ~225-352)\n    - scripts/claude_engine.py (`READ_ROLES`, line 99)\n    - tests/test_codex_agent_isolation_contract.py (existing \"no host `claude -p`\" contract; extend it, don't duplicate it)\n    - changelog.d/\n  steps:\n    - Add contract tests, either extending `tests/test_codex_agent_isolation_contract.py` or in a new `tests/test_orchestrate_decomposer_isolation_contract.py`. They assert that the `ORCHESTRATE_ENGINE = claude` branch of the decomposer step in `orchestrate.yml` calls only `claude_run ORCHESTRATE` and contains no direct `claude ` launch.\n    - Assert that the same call is prefixed by `env -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT -u OPENROUTER_API_KEY`.\n    - Assert that `claude_run` in `scripts/ai_engine.sh` builds its command with `codex_isolated_exec.sh` and `--engine claude`, and that `token_file` appears only as the argument to `--claude-token-file`.\n    - Assert that no `--include` value and no `--workdir` in the decomposer call can resolve to the Claude pool directory. Check statically that the decomposer step does not set `AI_ENGINE_INCLUDE_PATHS` and that `claude_run`'s workdir argument is `${PWD}`, not the pool dir.\n    - Assert that the codex fallback branch still uses `codex_isolated_exec.sh run --mode read-only`.\n    - Add the fragment `changelog.d/<issue>-orchestrate-decomposer-isolation.md` per CLAUDE.md \u00a720.\n  replaces_acceptance_criterion: \"Run the decomposer in a credential-free sandbox using a fixed-path host API relay\" is replaced by \"prove with contract tests that the decomposer already runs that way, and keep it that way\".\n  equivalence_argument: `codex_isolated_exec.sh` with `claude_anthropic_relay.py` is the same kind of boundary the issue asks for: a credential-free, network-isolated container with a host relay that alone reads the token file. The tests turn the fix into a guarded invariant.\n  reversibility: If a human still wants the review-sandbox path, they can do that migration later; these tests remain valid as a boundary check either way.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/orchestrate.yml line ~818 (env prefix of the `claude_run ORCHESTRATE` call)\n    - scripts/ai_engine.sh lines 242-246 (`AI_ENGINE_READ_ONLY` handling)\n  steps:\n    - Add `AI_ENGINE_READ_ONLY=true` to the env assignments on the decomposer's `claude_run` line, next to `AI_ENGINE_MODEL_HINT` and `AI_ENGINE_EFFORT_HINT`. Set it at the call site and leave `READ_ROLES` unchanged, so the role-defaults table and agents.md are untouched.\n    - Add a contract assertion that the decomposer's `claude_run ORCHESTRATE` invocation carries `AI_ENGINE_READ_ONLY=true`.\n    - Leave the codex fallback unchanged; it is already read-only.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Under the read profile the plan output still reaches `CODEX_OUTPUT_FILE` through the host-captured transcript, so decomposition behaviour is unchanged while Bash, Edit and Write are removed.\n  reversibility: Remove the one env assignment to return to the write profile.",
+  "fingerprint": "8f5962057de8222c00b134ec14ffdd814bc68eadb7952a1a1beda3b0a0822c92",
+  "lineage": {
+    "issue_number": 6642,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618591880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618591880",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6642"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007121936_eee7ea6664",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6642,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618591880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6642",
+  "timestamps": {
+    "created_at": "2026-10-07T12:19:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

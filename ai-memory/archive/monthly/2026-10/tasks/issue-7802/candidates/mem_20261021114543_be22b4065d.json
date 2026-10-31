@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The heal scope on this issue does not cover the files the fix must change. How should this issue go forward?\nChoices:\nA) Plan the fix as the issue describes. Accept that it will be held or scope-blocked, and hand it to the unblock judge or a person to re-issue with an exact `files_touched` grant. (RECOMMENDED)\nB) Close this heal issue now. Open a replacement standalone issue with the same root cause and fix text, and a `files_touched:` block that lists exactly these files:\n   - `scripts/review_conflict_prepare.sh`\n   - `tests/test_conflict_folded_fragment_keep.py`\n   - `agents.d/<n>-forward-merge-folded-fragment-keep.md`\n   - `changelog.d/<n>-forward-merge-folded-fragment-keep.md`\nC) Restrict the fix to in-scope paths only, meaning the tests, the changelog fragment and `review_autofix.yml`. **Note:** this cannot remove the root cause, because the stage check lives in `scripts/review_conflict_prepare.sh`. It also conflicts with the issue's \"deterministic failure, no workaround\" constraint.",
+  "fingerprint": "3eac960671a4a998480692f500031f3dad7e0333f846fd9c2cc3a374c6fc7ba8",
+  "lineage": {
+    "issue_number": 7802,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39593527288",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39593527288",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261021114543_be22b4065d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7802,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39593527288"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7802 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-21T11:45:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

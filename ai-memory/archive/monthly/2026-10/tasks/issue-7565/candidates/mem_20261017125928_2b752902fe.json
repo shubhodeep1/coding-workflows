@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update `tests/e2e_smoke_canary.txt` for smoke run 39033435276\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for an edit to one existing data file, and only that file may change. I checked the planning ref (`orchestrator/project-7564`, HEAD `d1cdb4ceb4d18ca7d4cd00eaf8c70890e94a2cd5`, mismatch `false`). The file is there with three lines: `status: ok`, `run_id: 26151428977`, `updated-by: ai-pipeline`. No helper or script is involved, so the smallest change that matches the issue is the right one.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data-only edit:\n1. Keep line 1 as `status: ok`. It already matches, so set it to exactly that.\n2. Replace line 2 (`run_id: 26151428977`) with `decompose-run: 39033435276`.\n3. Keep line 3 (`updated-by: ai-pipeline`) as it is.\n4. End the file with a single trailing newline. It already has one.\n\n## Data structures affected\nOnly the plain-text canary file. No schema, workflow or code changes.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 instead of inserting a new one\n- Chosen: overwrite the current line 2 (`run_id: \u2026`) with `decompose-run: 39033435276`.\n- Alternatives considered: insert the new line as line 2 and push `run_id` down to line 3.\n- Why: The issue says to \"make the second line\" the new value and to keep the content *after those two lines*. That reads as replacing lines 1 and 2 and keeping line 3 onward, so the `updated-by` line survives and the file does not grow.\n\n## Security considerations\nNo trust boundary, endpoint, credential or external input is involved. The only possible abuse would be scope creep: the PR must not touch `tests/e2e_smoke_canary_b.txt` (a sibling issue owns it) or any other file.\n\n## Risks and edge cases\n- If a parallel PR edits the same file, the integration branch can conflict. The sibling issue owns a different file, so this is unlikely.\n- Line endings must stay LF. The file uses LF now and should have no CRLF.\n- If the file were missing it would have to be created with the two lines, but on this ref it exists.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 39033435276`.\n- `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n- `tail -c1` of the file is a newline.\n\n## Pre-execution self-check\n- The planning ref matches the integration branch.\n- The file has been read.\n- The only open question, how to treat the old line 2, is settled by D1.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "38d639ccd2fccc75bac056a852f52cb45b34c279eca3a3cca427a57bd52219ff",
+  "lineage": {
+    "issue_number": 7565,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39034127659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39034127659",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7565"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261017125928_2b752902fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7565,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39034127659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7565",
+  "timestamps": {
+    "created_at": "2026-10-17T12:59:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

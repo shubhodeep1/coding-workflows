@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:242-246\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The retry cleanup in `.claude/commands` only prunes unadmitted Markdown files, leaving unadmitted non-Markdown files in the reused workspace.\n  WHY: Those files persist across editor retries even though transfer rejects them; the primary safeguard preventing them from reaching the host remains intact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_untrusted_workspace.py (line ~243 in the full PR diff)\n  PROBLEM: The `.claude/commands` retry-pruning loop only inspects names ending in `.md`, so unadmitted non-Markdown files can persist in the disposable container workspace across retries.\n  WHY: `allowed()` requires the `.md` suffix, so transfer ignores those files, but the cleanup also ignores them; suggested minimal fix: replace `target.name.endswith(\".md\")` with `target.is_file()`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_untrusted_workspace.py: lines 242-246\n  PROBLEM: The retry cleanup loop in `.claude/commands` leaves unadmitted non-Markdown files in the container workspace across editor retries.\n  WHY: `enumerate_workspace()` filters those files from transfer, but `refresh()` does not unlink them; suggested minimal fix: check `not target.is_dir()`, `not target.name.startswith(\".\")`, and `\".claude/commands/\" + target.name not in commands`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_untrusted_workspace.py: lines 242-246\n  PROBLEM: Retry cleanup removes unadmitted Markdown files but leaves unadmitted non-Markdown files in the reused editor workspace.\n  WHY: Those files persist across retries; suggested minimal fix: prune every unadmitted regular file in that directory rather than filtering cleanup by the `.md` suffix. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_untrusted_workspace.py, lines ~242-246\n  PROBLEM: The retry cleanup in `.claude/commands` leaves unadmitted non-Markdown files in the workspace across retries.\n  WHY: `transfer` drops these files, so the host trust boundary remains intact, but the files linger in the container; suggested minimal fix: replace `target.name.endswith(\".md\") and not target.name.startswith(\".\")` with `target.is_file() and not target.name.startswith(\".\")`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f84d4e798f4c550b52d3ac0d4200364f43195ff4d32f6126c2f77865595e71d8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6299,
+    "run_id": "37278909062",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37278909062",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005080356_25e939a0c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6299,
+    "run_id": "37278909062"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T08:03:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

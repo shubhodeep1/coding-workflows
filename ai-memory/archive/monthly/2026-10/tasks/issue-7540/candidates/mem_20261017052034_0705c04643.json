@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7540,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7540\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7545\",\"pr_number\":7545,\"branch\":\"ai/issue-7540\",\"run_id\":\"39004267826\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39004267826\",\"changed_files\":[\".github/workflows/implement.yml\",\"changelog.d/7540-implement-ci-triage-pr-not-open.md\",\"tests/test_plan_superseded_merged_pr_workflow.py\",\"tests/test_workflow_checkout_integration_ref_audit.py\"]}",
+  "fingerprint": "c32d18d47142bfa7025eb6dbdb2a6b495afa0101357fbe848af1f83f0f6f2f13",
+  "lineage": {
+    "issue_number": 7540,
+    "parent_ids": [],
+    "pr_number": 7545,
+    "run_id": "39004267826",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39004267826",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7545"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261017052034_0705c04643",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7540,
+    "level": "run",
+    "pr_number": 7545,
+    "run_id": "39004267826"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7540: https://github.com/shubhodeep1/coding-workflows/pull/7545",
+  "timestamps": {
+    "created_at": "2026-10-17T05:20:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

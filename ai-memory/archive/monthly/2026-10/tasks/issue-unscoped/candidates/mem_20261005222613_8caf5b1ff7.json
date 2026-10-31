@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:_context() | severity=high | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: A standalone `ai:security` issue with no finding marker can be reissued without a finding marker.\n  WHY: The replacement lacks the finding identity needed for security tracking; the reviewers disagree whether this is a gap because the original stays open when no finding ID exists.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"For security findings, preserve the finding ID \u2026 on replacements.\"\n  expected_change_site: scripts/unblock_actions.py, _context() and plan()\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  EVIDENCE: OpenAI reports that _context() leaves security_metadata_unsafe false when no finding marker exists (lines 156-164) and plan() creates a replacement without a finding marker because security_finding_id is absent (lines 372-378, 403); deepseek_deepseek-v4-pro says the scenario is safe because the original stays open and cites scripts/unblock_actions.py:404 (`if not security_issue or ctx.get(\"security_finding_id\")` gates close), scripts/unblock_actions.py:406-408 (comment posted), and tests/test_unblock_judge.py:568-571 (test verifies replacement label and comment, not a closed-and-lost finding).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"For security findings, preserve the finding ID \u2026 on replacements\"\n  Expected change site: scripts/unblock_actions.py, _context() and plan()\n  Evidence of absence: The cross-pollination scenario is incorrect \u2014 when finding_id is None, the replacement is created with the ai:security label, the original stays open (not closed), and a \"stays open\" comment is posted. Verified at scripts/unblock_actions.py:404 (`if not security_issue or ctx.get(\"security_finding_id\")` gates close) and scripts/unblock_actions.py:406-408 (comment posted). The test at tests/test_unblock_judge.py:568-571 explicitly verifies this creates a replacement with label and a comment, not a closed-and-lost finding. All linked-issue deliverables are present: finding ID transfer (line 372-373), label preservation (line 379), dependency metadata transfer (line 377-378), integration-branch metadata transfer (line 374-376), and durable-transfer-before-close guard (line 404).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cFor security findings, preserve the finding ID \u2026 on replacements.\u201d\n  Expected change site: scripts/unblock_actions.py, _context() and plan().\n  Evidence of absence: When a standalone ai:security issue has no finding marker, _context() leaves security_metadata_unsafe false (lines 156-164). plan() then creates a replacement without a finding marker because security_finding_id is absent (lines 372-378, 403). The original stays open, but the replacement does not retain the finding identity.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_actions.py:_context() function, guard for security_metadata_unsafe | severity=MAJOR | confidence=4\n  PROBLEM: When a standalone ai:security issue has no finding marker, security_metadata_unsafe remains False, allowing reissue to proceed. The replacement is created without a finding marker.\n  WHY: A security issue without a finding marker gets reissued as another security issue without a finding marker. The replacement loses security tracking \u2014 the audit deduplicates against the original's marker, but the replacement has no marker to identify it as a security finding. This violates the issue's requirement to \"preserve the finding ID\" and \"close the predecessor only after verified resolution or durable transfer.\" When there's no finding ID to transfer, the predecessor should stay open.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d21eecb183acc4202bf95c211fb88a578138106b6d675c144a036068febdbd0f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6374,
+    "run_id": "37379500491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37379500491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005222613_8caf5b1ff7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6374,
+    "run_id": "37379500491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T22:26:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

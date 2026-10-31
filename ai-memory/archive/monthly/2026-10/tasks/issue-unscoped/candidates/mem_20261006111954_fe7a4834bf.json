@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/37432054768-merge-guard-env-chdir.md:filename | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The changelog fragment filename uses a GitHub Actions run ID instead of the required issue or PR number.\n  WHY: The fragment still assembles, but the filename violates CLAUDE.md \u00a720.B and breaks the required naming convention.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: After three distinct LLM failures, the item \u201ctriggers one Telegram alert.\u201d\n  expected_change_site: docs/plans/remove-unattended-pipeline-stuck-states-plan.md, P6 notice-delivery handling\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The plan\u2019s P6 delivery steps retry when the alert is unconfirmed; its risks section says an ambiguous Telegram response may have delivered and that retry can produce a second alert (lines 314, 317, 429).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/37432054768-merge-guard-env-chdir.md:filename | severity=NIT | confidence=4\n  PROBLEM: The changelog fragment filename uses a GitHub Actions run ID (37432054768) instead of the required `<issue-or-pr>-<slug>.md` format specified in CLAUDE.md \u00a720.B.\n  WHY: The fragment assembles correctly regardless of filename, so no runtime failure occurs. The violation is a naming convention only.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/37432054768-merge-guard-env-chdir.md:filename | severity=NIT | confidence=4\n  PROBLEM: The changelog fragment filename uses a run ID instead of a PR or issue number, violating CLAUDE.md \u00a720.B.\n  WHY: The fragment will be assembled correctly by scripts/assemble_changelog.py, but the naming convention is broken, preventing correct traceability.\n- TASK_GAP\n  Requirement: The PR description requires that, after three distinct LLM failures, the item \u201ctriggers one Telegram alert.\u201d\n  Expected change site: P6, scripts/unblock_actions.py terminal close and notice-delivery handling.\n  Evidence of absence: The plan\u2019s P6 delivery steps retry when the alert is unconfirmed, while its risk section explicitly accepts that an ambiguous Telegram response can cause a second alert on retry.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/37432054768-merge-guard-env-chdir.md:filename | severity=NIT | confidence=4\n  PROBLEM: The fragment filename uses a GitHub Actions run ID (37432054768) instead of an issue or PR number, violating CLAUDE.md \u00a720.B (\"Create `changelog.d/<issue-or-pr>-<slug>.md`\").\n  WHY: The fragment will still be assembled by `scripts/assemble_changelog.py` because the path is unique, but the naming convention is broken. The convention exists so two concurrent PRs editing the same area pick distinct paths by issue/PR number; a run ID is not stable for that purpose and obscures provenance.\n- TASK_GAP\n  Requirement: The PR description states \"the item stays open, gets one line in a single standing 'needs human' issue, and triggers one Telegram alert.\"\n  Expected change site: docs/plans/remove-unattended-pipeline-stuck-states-plan.md P6 implementation step 2 (notice-delivery sequence in scripts/unblock_actions.py)\n  Evidence of absence: The plan's P6 step 2 retries unconfirmed Telegram sends, and the Risks & Mitigations section explicitly states \"an ambiguous Telegram response may have delivered even though the ledger records no confirmation, so retry can produce a second alert.\" The \"one Telegram alert\" promise in the PR description is therefore not literally deliverable; the plan acknowledges a second-alert case as an accepted trade-off. Either the PR description should reflect that reality (e.g., \"at least one Telegram alert; a second may fire when the first response is ambiguous\") or P6 should add a guard (idempotency token / dedupe marker checked before the retry send) so the at-most-once property actually holds.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: After three distinct LLM failures, the item \u201ctriggers one Telegram alert.\u201d\n  Expected change site: `docs/plans/remove-unattended-pipeline-stuck-states-plan.md`, P6 notice-delivery handling.\n  Evidence of absence: P6 retries when an alert is unconfirmed (lines 314, 317), while the risks section explicitly says an ambiguous Telegram response may have delivered and that retry can produce a second alert (line 429). The plan therefore does not ensure the promised single alert.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/37432054768-merge-guard-env-chdir.md:filename | confidence not stated\n  PROBLEM: The fragment filename uses a run ID (37432054768) instead of a PR or issue number, violating CLAUDE.md section 20.B which requires the format `<issue-or-pr>-<slug>.md`.\n  WHY: The fragment will still be assembled correctly by `scripts/assemble_changelog.py`, but the naming convention is broken.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "187393175edd1087258cbc7bfbfea22a6b2a310fa377d32a28a5b5263062c885",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6519,
+    "run_id": "37445508269",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37445508269",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006111954_fe7a4834bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6519,
+    "run_id": "37445508269"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T11:19:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

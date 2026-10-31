@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md: \"Stable log prefixes (contractual)\" section \u2014 bulleted list and LOG_PREFIX.name= entries around lines 1802-1804 and 1994-1996 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The emitted `CLAUDE_FIXER_PANEL_FLOOR` log prefix is missing from the contractual stable-log-prefix lists.\n  WHY: No current runtime failure was reported, but the missing registration breaks the established prefix contract and future tooling that relies on the registry could miss panel-floor events.\n- scripts/review_autofix_step_claude_fixer_handoff.sh:134 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `find ... | wc -l | tr ...` pipeline has no failure handler under `set -euo pipefail`.\n  WHY: If `find` exits non-zero, `pipefail` can make the assignment fail and terminate the script before the panel-active fallback, preventing the handoff from completing; the reported failure is safe because it does not auto-merge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- agents.md, \"Stable log prefixes (contractual)\" section | severity=low | confidence=4\n  PROBLEM: The new `CLAUDE_FIXER_PANEL_FLOOR` log prefix is not registered in the stable log prefixes list.\n  WHY: No current runtime failure was reported, but future tooling relying on the prefix registry would miss it.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/review_autofix_step_claude_fixer_handoff.sh\n  Line or code reference: lines 143-149\n  Problem: The panel-floor formula and active-reviewer derivation are correct; no runtime failure was reported.\n  Why it fails at runtime: no runtime failure \u2014 the formula is correct, and the test cases cover the boundaries.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- File: agents.md\n  Line or code reference: \"Stable log prefixes (contractual)\" block (the `LOG_PREFIX.name=...` enumeration around line 1994-1996 already registers `CLAUDE_FIXER_HANDOFF`, `CLAUDE_FIXER_REVIEW_BLOCKED`, `CLAUDE_FIXER_AUTO_MERGE`)\n  Problem: The new `CLAUDE_FIXER_PANEL_FLOOR \u2026` line emitted by `review_autofix_step_claude_fixer_handoff.sh:150` is not added to the stable log prefixes list.\n  Why it fails at runtime: the prefix itself still prints and the round still works (the script does not depend on the registration); the defect is only the contract drift, not a runtime crash.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- File: scripts/review_autofix_step_claude_fixer_handoff.sh\n  Location: line 134 (`claude_fixer_panel_active=\"$(find \"${PREVIOUS_REVIEWS_DIR}\" -maxdepth 1 -type f -name 'status_review_*.txt' 2>/dev/null | wc -l | tr -d '[:space:]')\"`)\n  Issue: With `set -euo pipefail` (line 51), if `find` exits non-zero (e.g. directory removed between the `-d` guard and the `find` call), the assignment swallows the exit code and the regex check still produces `claude_fixer_panel_active=0` (so the round degrades to `floor_met=unknown` rather than the current \"round clean\" path), so the pipeline does not need to fail at all here.\n  Suggested minimal fix: append `|| true` to the `find` invocation so the pipeline always returns 0, matching the existing `2>/dev/null` intent.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: scripts/review_autofix_step_claude_fixer_handoff.sh\n  Line or code reference: 134\n  Problem: The `find ... | wc -l | tr ...` pipeline runs under `set -euo pipefail` (line 51) without a failure handler. If `find` returns non-zero (e.g., the directory is removed between the `-d` guard at line 133 and the `find` call, or a filesystem error occurs), `pipefail` propagates the non-zero exit, and `set -e` exits the script.\n  Why it fails at runtime: The step fails and the handoff does not complete. The failure mode is safe (no auto-merge), but it is inconsistent with the `|| true` pattern used elsewhere in the script (lines 124, 138) and turns a TOCTOU race into a hard step failure rather than a graceful fallback to `claude_fixer_panel_active=0`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: agents.md\n  Line or code reference: \"Stable log prefixes (contractual)\" section \u2014 bulleted list and LOG_PREFIX.name= entries around lines 1802-1804 and 1994-1996\n  Problem: The new `CLAUDE_FIXER_PANEL_FLOOR` log prefix emitted by `scripts/review_autofix_step_claude_fixer_handoff.sh:150` is not registered in either the bulleted stable-log-prefix list or the `LOG_PREFIX.name=` list.\n  Why it fails at runtime: No workflow-log-analysis code depends on this prefix yet, so there is no runtime failure. However, the established convention is that every emitted `CLAUDE_FIXER_*` prefix is registered, and the gap breaks that consistency contract.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- file: scripts/review_autofix_step_claude_fixer_handoff.sh\n  location: line 134 \u2014 `claude_fixer_panel_active=\"$(find \"${PREVIOUS_REVIEWS_DIR}\" -maxdepth 1 -type f -name 'status_review_*.txt' 2>/dev/null | wc -l | tr -d '[:space:]')\"`\n  issue: Under `set -euo pipefail` (line 51), if `find` exits non-zero (e.g., a TOCTOU race where the directory is removed between the `-d` guard at line 133 and the `find` call, or a permission error on a file), `pipefail` propagates the non-zero exit through the pipeline, and `set -e` exits the script before the `|| claude_fixer_panel_active=0` fallback at line 136 can run. The failure is safe (no auto-merge), but the script exits rather than degrading to `floor_met=unknown`.\n  suggested minimal fix: Append `|| true` inside the command substitution: `claude_fixer_panel_active=\"$(find \"${PREVIOUS_REVIEWS_DIR}\" -maxdepth 1 -type f -name 'status_review_*.txt' 2>/dev/null | wc -l | tr -d '[:space:]' || true)\"`\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "be39468336076bad7a3a1865c92d3c1b2ca5c612f9996b990548117fd54a8d14",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5964,
+    "run_id": "36836574319",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36836574319",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001100432_ec15f9f544",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5964,
+    "run_id": "36836574319"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T10:04:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

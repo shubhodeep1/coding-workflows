@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix target?\nChoices:\nA) The PR branch `ai/issue-6642` (PR #6649). Reproduce at head `fcaf5b268c9476abe534d306323e1648123ce9e9`, then fix whatever PR #6649's change broke in the poller or its test (RECOMMENDED)\nB) The default branch `main`. Treat it as a defect already on `main`, and check first that the same shard tests fail there\nC) Whichever branch the reproduction points to: `main` if the tests fail there too, otherwise `ai/issue-6642`\n**Note:** if the test only fails on PR #6649's head, choosing B gives a `main` PR that does not fix the red check on #6649.\nQ2: What should happen if running shard 1's tests (`tests/test_orchestrate_poll_process.py`, group 3 of 4, shard 1 of 4) at the failing head passes cleanly?\nChoices:\nA) Close this issue as a non-reproducible flake with a comment listing the tests that were run, change no code, and re-run CI on PR #6649 (RECOMMENDED)\nB) Run that shard's tests repeatedly (for example 5 times, and once alongside the other three shards). Fix any intermittent failure that shows up; otherwise close as in A\nC) Harden the shard runner in `.github/workflows/ci.yml` so the failing shard's log is easier to find in future failures. Keep the failure gate at lines 1416-1443 unchanged\n**Note:** C changes a workflow file. It needs a `files_touched` grant for `.github/workflows/ci.yml` and `ALLOW_WORKFLOW_EDITS=true`, and it is not compatible with Q1:A unless that grant is added to this issue.\nAssumptions:\n- The test list for each shard is deterministic, so the failing tests can be found without the missing log.\n- `tests/test_orchestrate_poll_process.py` is the only test file the shard ran.\nMissing context:\n- The full log for job `orchestrate-poll (3)` in run 37907827857 cannot be accessed: it needs sign-in and was not included in the issue.",
+  "fingerprint": "faf853cf6b4cafff5a643dc326031087298d075877cc69700d41105f69c7ad4e",
+  "lineage": {
+    "issue_number": 6890,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37911355821",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37911355821",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009093241_74f2064643",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6890,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37911355821"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6890 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T09:32:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

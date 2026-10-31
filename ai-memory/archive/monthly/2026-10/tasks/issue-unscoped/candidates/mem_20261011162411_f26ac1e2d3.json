@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:19469-19476 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: In the standalone `close_and_reissue` path, the empty-title guard separates the engine-label `mapfile` from `gh issue create`, violating the adjacency required by the engine-label propagation test.\n  WHY: The test checks the line immediately before every poller issue or PR creation call, and CI reports that it fails on the `if` line, leaving the required `lint` check red.\n- .github/workflows/ci.yml:403-407 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The current ShellCheck run did not complete because the runner received a shutdown signal during the check.\n  WHY: The required `static-checks` check remains red, but the supplied logs show no ShellCheck diagnostic and do not establish a code defect; the severity reflects a check failure that blocks `lint`, not an identified code issue.\n- scripts/orchestrate_poll_process.sh:15745-15748 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The managed `close_and_reissue` failure branch calls `tg_notify_issue` without the new test exercising that call path.\n  WHY: The review confirms the helper is defined and says the recovery accounting is correct; a runtime issue would matter only if the helper were undefined or its signature had changed.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh: standalone `close_and_reissue` case, lines 19469-19476 | severity=BLOCKER | confidence=5\n  PROBLEM: The `if [ -n \"${orig_title}\" ]; then` guard separates the label-argument `mapfile` from `gh issue create`, violating the adjacency required by the engine-label propagation test.\n  WHY: The test fails with `AssertionError: if [ -n \"${orig_title}\" ]; then`, causing `tests-hooks-and-orchestrator` and aggregate `lint` to fail.\n- .github/workflows/ci.yml: `static-checks` ShellCheck loop (`for f in scripts/*.sh ...; do shellcheck --severity=error \"$f\"`) | severity=MAJOR | confidence=2\n  PROBLEM: The runner received a shutdown signal while checking `scripts/orchestrate_poll_process.sh`, without a ShellCheck diagnostic.\n  WHY: The current poller-file check remains unconfirmed; the review says a CI re-run is needed and no code defect is established by this evidence.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh: Around lines 15962-15974 (for standalone reissue) and 19461-19472 (for managed reissue) | confidence=5\n  PROBLEM: The engine-label `mapfile` is outside the conditional guarding `gh issue create`, so it no longer immediately precedes the creation call.\n  WHY: `tests/test_engine_label_propagation.py::test_every_poller_issue_and_pr_creation_inherits_the_label` requires the `mapfile` call to immediately precede every `gh issue create` command.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: lines 19467-19469 (standalone `close_and_reissue` case, after the last run's empty-title guard) | severity=BLOCKER | confidence=5\n  PROBLEM: The empty-title guard separates the engine-label `mapfile` from `gh issue create`, violating the adjacency required by the test.\n  WHY: CI fails `tests/test_engine_label_propagation.py::test_every_poller_issue_and_pr_creation_inherits_the_label` with `AssertionError: if [ -n \"${orig_title}\" ]; then`, causing `tests-hooks-and-orchestrator` and aggregate `lint` to fail.\n- scripts/orchestrate_poll_process.sh: line 15745 (managed `close_and_reissue` failure branch, last run change) | severity=NIT | confidence=2\n  PROBLEM: The new `tg_notify_issue` call is in the failure branch, but the new test does not exercise that call.\n  WHY: This matters only if `tg_notify_issue` is undefined or its signature changed; the review confirms it is defined and says recovery accounting is correct.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: 19469-19472 | severity=BLOCKER | confidence=5\n  PROBLEM: The standalone reissue path separates the label-argument `mapfile` from `gh issue create`, violating the required adjacency.\n  WHY: `tests/test_engine_label_propagation.py:121-123` fails on the `if` line, leaving `tests-hooks-and-orchestrator` and aggregate `lint` red.\n- .github/workflows/ci.yml: 403-407, the \u201cShellCheck static analysis\u201d loop. | severity=MAJOR | confidence=5\n  PROBLEM: The current CI run did not complete ShellCheck because the runner received a shutdown signal.\n  WHY: `static-checks` fails and aggregate `lint` remains red, but the supplied log does not establish a code defect or identify a ShellCheck finding.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: standalone close_and_reissue case, lines 19469-19476 (last run diff) | severity=BLOCKER | confidence=5\n  PROBLEM: The empty-title guard separates the label-argument `mapfile` from `gh issue create`; the review also reports the same adjacency break in the managed case (lines 15709-15715 in the last run diff).\n  WHY: `tests/test_engine_label_propagation.py::test_every_poller_issue_and_pr_creation_inherits_the_label` asserts that the immediately preceding line starts with `mapfile -t _engine_label_args < <(engine_label_create_args`, and CI confirms the assertion fails.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh: lines 19469-19472 (standalone `close_and_reissue` case) | severity=BLOCKER | confidence=5\n  PROBLEM: The empty-title guard separates the engine-label `mapfile` from `gh issue create`, violating the contract test\u2019s required adjacency.\n  WHY: CI reports `FAILED tests/test_engine_label_propagation.py::test_every_poller_issue_and_pr_creation_inherits_the_label`; the required `lint` check stays red.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "36d2ba5ee6a0910cdd43257bc1e725ff329c81555d78dd3dd2df54a0684b9971",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6682,
+    "run_id": "38152948807",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38152948807",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011162411_f26ac1e2d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6682,
+    "run_id": "38152948807"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T16:24:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

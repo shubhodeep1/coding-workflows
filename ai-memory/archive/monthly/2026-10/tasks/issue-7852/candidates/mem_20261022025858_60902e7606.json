@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue: overwrite the e2e smoke canary file\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- None. This is a data-file content replacement and adds no code.\n- Replace the whole file with exactly these three lines, with a newline after the last one:\n  ```\n  status: ok\n  run_id: 39712973511\n  updated-by: ai-pipeline\n  ```\n  The shell equivalent is `printf 'status: ok\\nrun_id: 39712973511\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n\n## Data structures affected\n- None. The file is plain text with no schema.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the file completely instead of patching it\n- Chosen: replace the entire file with the three specified lines and a trailing newline.\n- Alternatives considered: editing only the lines that differ.\n- Why: the issue asks for an exact final content with no extra lines. A full overwrite guarantees that whatever the file holds now, the result matches.\n\n## Security considerations\n- Trust boundaries touched: none. The file is a test fixture and no code executes it.\n- Authorization: no new endpoint or surface.\n- External-input validation: not applicable. The values are fixed literals taken from the issue.\n- Abuse cases: none. The file holds no secrets, credentials or money state.\n\n## Potential risks or edge cases\n- A CRLF line ending or a missing trailing newline would break an exact-content check. Write LF line endings and end the file with exactly one `\\n`.\n- The issue says the file already exists. If it is missing on this ref, create it in `tests/` but do not create any directory.\n- No changelog fragment is needed. The issue limits the change to this one file, and the file is a smoke fixture with no user-visible behaviour.\n\n## Testing considerations\n- Check the result with `printf 'status: ok\\nrun_id: 39712973511\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt`.\n- Run `git diff --stat` and confirm it lists only `tests/e2e_smoke_canary.txt`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: the issue fully specifies a single-file content replacement and explicitly forbids touching any other file. No helper or pattern applies, and widening or narrowing the scope would break the stated constraints.\n\nPre-execution self-check: the plan names one file and its exact bytes, and needs no external inputs. The `Integration branch mismatch:` line reads `unknown`, not `true`, so the plan does not block on it.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "8effe6d0fd6b0d085a661e8a49bc2975db5ab777f5d424a014e9726d3b8f4454",
+  "lineage": {
+    "issue_number": 7852,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39713528164",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39713528164",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7852"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261022025858_60902e7606",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7852,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39713528164"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7852",
+  "timestamps": {
+    "created_at": "2026-10-22T02:58:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

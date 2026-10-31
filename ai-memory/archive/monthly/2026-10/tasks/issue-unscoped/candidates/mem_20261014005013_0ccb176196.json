@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml` \u2014 step selection and destination job (`static-checks`)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The comment at `.github/workflows/ci.yml:486-489` says per-step timings were unavailable when the steps were chosen; the PR does not verify the selected steps are the slowest or that `static-checks` has enough headroom to keep both jobs below their 75% warning thresholds.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes`.\"\n  Expected change site: `.github/workflows/ci.yml`.\n  Evidence of absence: The comment above the moved steps says \"Per-step timings for that run were not available when these steps were chosen.\" Nothing in the diff shows these two steps are the slowest in `tests-heal-plan-and-validation`, or that `static-checks` can absorb them. `static-checks` has the smallest timeout of the CI test jobs (15 minutes against 20), and #7250 already moved the \"Implement post-Codex recovery unit tests\" step and the 35-file \"Regression tests wired by the CI wiring guard (part 1)\" step into it. The \"about 2 minutes measured\" figure predates both moves, and the updated header comment says as much. I cannot confirm from the repository whether the issue's expected outcome (both jobs under their 75% warning thresholds, 15m for the 20-minute job and 11m15s for `static-checks`) is met. The previous autofix run recorded this limitation in the comments rather than resolving it, and the next `budget-watch` run on main will show the real numbers. The risk is that the rebalance only shifts load into the job with the least slack. The remedy is a follow-up that uses run 38481381592's step timings (or the next `budget-watch` run), not a change to this diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\" (issue #7334)\n  Expected change site: .github/workflows/ci.yml \u2014 both the choice of which steps move out of tests-heal-plan-and-validation and the choice of destination job (static-checks).\n  Evidence of absence: The added comment at .github/workflows/ci.yml:486-489 explicitly states \"Per-step timings for that run were not available when these steps were chosen.\" The editor's PR comment in entry[2] confirms \"I could not check the bigger concern, whether static-checks has enough room for the moved steps, because neither the run's per-step timings nor static-checks' current duration was available here.\" The PR also moves 32 tests (~19 in \"Validation self-test unit tests\" at lines 490-510 plus ~13 in \"Validation bootstrap and family direct-run tests\" at lines 512-526) into static-checks, whose 15-minute timeout is the smallest among the CI jobs (the four tests-* jobs have 20-minute timeouts) and which had ~13 minutes of measured headroom before #7250 moved a 35-test step into it; nothing re-measures that headroom. Two of the issue's explicit preconditions (the steps are the slowest, the destination has the most headroom) are unverifiable from this PR, so the goal \"for both jobs to stay below the 75% CI budget warning threshold\" is not demonstrated.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of which steps to move from `tests-heal-plan-and-validation` to `static-checks`\n  Evidence of absence: The PR diff shows two steps moved (\"Validation self-test unit tests\" and \"Validation bootstrap and family direct-run tests\"), but the comment at lines 486-488 explicitly states \"Per-step timings for that run were not available when these steps were chosen.\" The issue requires moving the *slowest* steps based on run timings from run 38481381592, but no timing data was consulted. Without this data, there is no verification that: (1) the moved steps are actually the slowest in `tests-heal-plan-and-validation`, (2) the rebalance reduces that job below the 75% warning threshold (15 minutes), or (3) `static-checks` will not exceed its 15-minute timeout. The editor summary confirms: \"I could not check the bigger concern, whether `static-checks` has enough room for the moved steps, because neither the run's per-step timings nor `static-checks`' current duration was available here.\" The issue's expected outcome \u2014 \"both jobs to stay below the 75% CI budget warning threshold\" \u2014 cannot be verified from the repository alone.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e2c91695304ffd48a3b0c528fbd76bf128d4dd6137c8672e86ad793c2046362f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7337,
+    "run_id": "38489807779",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38489807779",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014005013_0ccb176196",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7337,
+    "run_id": "38489807779"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T00:50:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

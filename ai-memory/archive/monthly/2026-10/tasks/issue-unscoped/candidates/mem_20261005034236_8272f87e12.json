@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:457-460 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The PR head's CI run reports 5 failed tests in `tests/test_pr_merge_status_guard.py` and the aggregate `lint` check fails.\n  WHY: The failing test job leaves the PR's CI check red and blocks passing the aggregate check; the supplied failure context does not map these failures to either changed file.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"This PR copies the twin byte for byte. The change is wording only: the step 6 merge-conflict gate, the archival and \u00a718.F sweep rules, and the report format are unchanged.\"\n  expected_change_site: `.claude/commands/audit-plans.md` should match `workflow-templates/.claude/commands/audit-plans.md`\n  confidence=[2]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: Cannot verify byte-for-byte parity without reading the workflow-templates copy, but the diff shows consistent wording changes across all four hunks that align with the stated intent (treating in-session `/implement-plan-claude` as legacy, naming both orchestrator hand-offs). The changes preserve the step 6 conflict gate structure, archival rules, and report format.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:457-460 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR head\u2019s CI run reports 5 failed tests in `tests/test_pr_merge_status_guard.py` (172 passed); the aggregate `lint` check also fails.\n  WHY: The failing test job leaves the PR\u2019s CI check red and blocks passing the aggregate check. The supplied failure context does not map these failures to either changed file.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"This PR copies the twin byte for byte. The change is wording only: the step 6 merge-conflict gate, the archival and \u00a718.F sweep rules, and the report format are unchanged.\"\n  Expected change site: `.claude/commands/audit-plans.md` should match `workflow-templates/.claude/commands/audit-plans.md`\n  Evidence of absence: Cannot verify byte-for-byte parity without reading the workflow-templates copy, but the diff shows consistent wording changes across all four hunks that align with the stated intent (treating in-session `/implement-plan-claude` as legacy, naming both orchestrator hand-offs). The changes preserve the step 6 conflict gate structure, archival rules, and report format.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3fdf87ef26795ea2b076e50fab73b9c38b2f933dab1eb7e842cd797c1c63892f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6291,
+    "run_id": "37259236732",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37259236732",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005034236_8272f87e12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6291,
+    "run_id": "37259236732"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T03:42:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nI verified the diagnosis, and the failing test is already fixed in two places that disagree:\n\n- **Branch `ai/issue-8004` (HEAD `8a98d2f`):** `test_position_cli` now builds its tickets with `real_now = datetime.now(timezone.utc)`, passed through the `now=` keyword that `_ticket()` already takes.\n- **Default branch (`isolated-base`):** has a separate fix for the same test, using a variable named `cli_now` and a different comment.\n\nApart from that test, the test file is the same on both. `scripts/workflow_failure_heal.py` is also the same on both (`git diff isolated-base HEAD` does not list it), and the default branch has `render_heal_queue_ticket` (line 5306), `heal_queue_position` (line 5346) and the `heal-queue` subcommand (line 6497).\n\nThe remaining risk is that both sides changed the same lines of `test_position_cli` from a common ancestor in different ways. That is a likely content conflict when the PR is synced with or merged into `main`.\n\n## Files likely to change\n- `tests/test_workflow_failure_heal_queue.py`\n\n## Functions or modules to implement\n- `tests/test_workflow_failure_heal_queue.py::test_position_cli`: make the branch's lines 106-111 byte-identical to the default branch's version (`git show isolated-base:tests/test_workflow_failure_heal_queue.py`, lines 106-111):\n  - Replace the two-line comment (\"The CLI has no --now and uses the real clock, ...\") with the default branch's comment: \"The CLI measures ticket age against the wall clock, so these fixtures are stamped from the real current time (as _live_ticket does), not from NOW.\"\n  - Rename `real_now` to `cli_now`, declare it before `comments = tmp_path / \"comments.json\"` as the default branch does, and pass `now=cli_now` to both `_ticket(...)` calls.\n  - Leave the rest of the test unchanged: both subprocess calls, the `--runs-json` \"go\" assertion with `stale == [10]`, and the `ticket` subcommand check.\n- After the edit, `git diff isolated-base -- tests/test_workflow_failure_heal_queue.py` should be empty.\n\n## Data structures affected\n- None. The fixture timestamps change only in the variable that holds them; the values still come from the real clock.\n\n## API or interface changes\n- None. Only the test changes. `workflow_failure_heal.py heal-queue position`, `scripts/workflow_failure_heal_queue.sh` and the lease logic stay as they are.\n\n## Decisions\n### D1 \u2014 Align with the default branch's fix instead of keeping the branch's own wording\n- Chosen: copy the default branch's `cli_now` version of `test_position_cli` onto the branch so the file matches `main`.\n- Alternatives considered: (a) keep the branch's `real_now` version, which works but leaves a conflicting hunk against `main`; (b) pass a very large `--lease-seconds` or skip the test, which the triage issue rules out; (c) add a `--now` flag to the CLI, which changes production code for a test-only problem.\n- Why: both versions behave the same. Matching `main` removes the 8-line diff, so the PR's merge with `main` has nothing to conflict on in this file, and the change stays surgical (\u00a79).\n\n### D2 \u2014 No production code change\n- Chosen: leave `scripts/workflow_failure_heal.py` unchanged.\n- Alternatives considered: change how the CLI picks \"now\" or its default lease.\n- Why: the test's lease case (`age_seconds=20_000` is stale) and the in-process `_position()` tests show that a 10,800 s lease against the wall clock is the intended behaviour. The failure came from the test's fixed `NOW` of 2026-10-23T12:00Z, which goes stale once the real clock passes 15:00Z.\n\n## Security considerations\n- Trust boundaries: none touched. The change is one test fixture in a test file.\n- Authorization: no new endpoint or surface.\n- External input: none; the fixture JSON is written to `tmp_path`.\n- Abuse cases: none. The queue's lease and stale-ticket rules are unchanged, so a stale ticket still cannot hold the queue and a live one still blocks.\n- Money handling: not applicable.\n\n## Potential risks or edge cases\n- Conflict detection: the checkout's working-tree copy of `scripts/workflow_failure_heal.py` (6,452 lines) has no `heal_queue_position` or `heal-queue` subcommand. The committed file at HEAD and on `isolated-base` (6,693 lines) has both. The difference looks like a filtered or stale snapshot copy, not branch content, since `git diff isolated-base HEAD` does not list the file. The implementer should run the test against the committed script; a local import error would point to the snapshot, not to this change.\n- The same timestamp problem could exist in other tests that pass fixed-`NOW` timestamps to a subprocess. I checked this file: the other position tests call `_position()` in process with `now=NOW`, and the fake-`gh` queue tests already use `_live_ticket()`. Nothing else here needs a change.\n- Clock skew in CI: ages of 5 s and 1 s against a 10,800 s lease leave a very large margin.\n\n## Testing considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal_queue.py -q` and expect all tests to pass, `test_position_cli` included, whatever the time of day.\n- Run `git diff isolated-base -- tests/test_workflow_failure_heal_queue.py` and expect no output.\n- Run `ruff check tests/test_workflow_failure_heal_queue.py`.\n- No changelog fragment is needed: this is a test-only change, and PR #8009 already carries its own fragment.\n\n## Pre-execution self-check\n- One file with an exact target state (the default branch's lines). No production code, workflows, automation paths or `agents.md` are touched.\n- The fix addresses the failing assertion (`'go' == 'wait'`) because the holder ticket is now fresh against the CLI's real clock.\n\nScope-mode: Hold Scope\nReuse-audit: extends test_position_cli\nScope-mode justification: The failure is a wall-clock dependency in one test, and both the branch and `main` already carry a working fix. The smallest safe change is to make the branch's copy match `main`, which keeps the `real_now` behaviour, removes a future merge conflict, and leaves the queue logic in `scripts/workflow_failure_heal.py` untouched. Completeness does not need more: other tests in the file are already deterministic. Under \u00a76 (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), correctness is met with no behavioural risk.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: WARNING: The working-tree copy of scripts/workflow_failure_heal.py lacks the heal-queue code that HEAD and the default branch have; run the test against the committed script, not the sandbox copy.\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "35d0f906a0c753aa16bd4d1a35596ac1504a3d6067c47fea6457b0a9340c8bdc",
+  "lineage": {
+    "issue_number": 8010,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40006002889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40006002889",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8010"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261023185638_012b4d2e5c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8010,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40006002889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8010",
+  "timestamps": {
+    "created_at": "2026-10-23T18:56:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

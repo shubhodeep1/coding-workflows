@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:2447-2454 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The template registers `prepush_affected_tests.py`, but the live `.claude/settings.json` lacks that registration and the live `.claude/hooks/prepush_affected_tests.py` is absent.\n  WHY: The parity tests fail on this mismatch, causing the `tests-hooks-and-orchestrator` and `tests-release-and-log-analysis` jobs and aggregate `lint` to fail; the reviewers classify this as a blocker.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The PR must land with passing CI so the four optimization deliverables (7127 cancelled-check gate, 7165 `implement.yml` expression limit, 7172 `gh_retry` in the guard-block handler, 7268 poller API dedup) actually ship on `main`.\"\n  expected_change_site: `.claude/settings.json` (live copy) plus `.claude/hooks/prepush_affected_tests.py` (new live hook file)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `git diff` against `main` shows no changes to `.claude/settings.json` or to `.claude/hooks/prepush_affected_tests.py`; the diff only touches `workflow-templates/.claude/settings.json` (via the `9cb0f32` sync merge recorded in this branch).\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_pr_merge_status_guard.py:2451 | severity=BLOCKER | confidence=5\n  PROBLEM: The template registers an extra PreToolUse Bash hook, `python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prepush_affected_tests.py hook` with timeout 30. The live `.claude/settings.json` does not register it, and the live hook file does not exist.\n  WHY: Both parity tests assert byte equality. The CI log for run 38375946329 shows `tests-hooks-and-orchestrator` and `tests-release-and-log-analysis` failing, which fails the aggregate `lint` check. This repository's auto-merge wait requires `lint` to succeed on the reviewed head, so the PR cannot auto-merge while this holds.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR must land with passing CI so the four optimization deliverables (7127 cancelled-check gate, 7165 `implement.yml` expression limit, 7172 `gh_retry` in the guard-block handler, 7268 poller API dedup) actually ship on `main`. The CI snapshot on head 11e61118 shows `lint`, `tests-hooks-and-orchestrator` and `tests-release-and-log-analysis` failing because `workflow-templates/.claude/settings.json` (template) registers a new `PreToolUse` Bash hook running `python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prepush_affected_tests.py hook` with `timeout 30`, but the live `.claude/settings.json` does not register the hook and `.claude/hooks/prepush_affected_tests.py` does not exist on the branch.\n  Expected change site: `.claude/settings.json` (live copy) plus `.claude/hooks/prepush_affected_tests.py` (new live hook file), kept byte-identical with `workflow-templates/.claude/settings.json` and `workflow-templates/.claude/hooks/prepush_affected_tests.py` per `tests/test_claude_template_live_parity.py` and the byte-identity assertion in `tests/test_pr_merge_status_guard.py:2451` (`test_template_copies_are_identical`) and the matching check in `tests/test_session_start_extract_repo_slug.py` whose captured failure is `FAIL: workflow-templates/.claude/settings.json must be byte-identical to .claude/settings.json; consumer auto-sync would otherwise propagate stale SessionStart registration.`\n  Evidence of absence: `git diff` against `main` shows no changes to `.claude/settings.json` or to `.claude/hooks/prepush_affected_tests.py`; the diff only touches `workflow-templates/.claude/settings.json` (via the `9cb0f32` sync merge recorded in this branch). The consensus finding from `anthropic/claude-sonnet-5.5` and `openai/gpt-6-luna` (`tests/test_pr_merge_status_guard.py:2443-2454`, severity `critical`, confidence `5`) flags the same defect. The PR is auto-merge-disabled at the workflow level because `AUTO_MERGE_REQUIRED_CI_CHECK` requires a successful CI-bound `lint` on the head, and the `lint` check-run will keep failing until the live copies are synced. Pipeline editors cannot write `.claude/**`; `tests/test_claude_template_live_parity.py` keeps the parity test as a hard signal, so a trusted operator must copy `workflow-templates/.claude/settings.json` and `workflow-templates/.claude/hooks/prepush_affected_tests.py` over their live paths in a byte-for-byte manner (or wait for the post-merge `ai/sync-claude-live-copies` PR to land and re-sync `main` into this branch) before this PR can be merged.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/settings.json:140-147 | severity=BLOCKER | confidence=5\n  PROBLEM: The template and live settings files differ, and the live `.claude/hooks/prepush_affected_tests.py` is absent.\n  WHY: The provided CI run fails `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical` on this mismatch; `tests/test_session_start_extract_repo_slug.py` also fails. Those failures make the `tests-hooks-and-orchestrator` and `tests-release-and-log-analysis` jobs fail, which leaves aggregate `lint` red.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "67fd01b7741f031cfe73d28cc821c0d47001593b2e7d4ed861f84ade4eb19b65",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38391407882",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38391407882",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013115053_29734d4376",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38391407882"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T11:50:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

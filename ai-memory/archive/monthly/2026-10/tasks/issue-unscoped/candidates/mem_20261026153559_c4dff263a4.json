@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #8204 \"Suggested fix\" item 1: \"In `.github/workflows/security-audit.yml`, step `run_security_audit`, set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT`\" and add an `if: failure()` artifact upload with short retention.\n  expected_change_site: `.github/workflows/security-audit.yml`, the `env:` block of the `run_security_audit` step (lines 387-404) plus a sibling `if: failure()` `actions/upload-artifact` step\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No hunk in the PR diff touches `.github/workflows/security-audit.yml`, `SECURITY_AUDIT_CLAUDE_REJECTED_OUT` is not exported in the workflow's `env:`, `actions/upload-artifact` does not appear in that file, the PR changes only the prompt files, prompt-policy test, and changelog fragment. Severity NIT per both reviewers (minimax_minimax-m3 notes another reviewer rated it MAJOR).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Issue #8204 \"Suggested fix\" item 1 (\"Diagnostics first (smallest change; it does not weaken the D1 refusal): In `.github/workflows/security-audit.yml`, step `run_security_audit`, set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT: ${{ runner.temp }}/security_audit_claude_rejected.txt`. Add an `if: failure()` `actions/upload-artifact` step for that file, with a short retention.\")\n  Expected change site: `.github/workflows/security-audit.yml`, the `env:` block of the `run_security_audit` step (currently at lines 387-404) plus a sibling `if: failure()` step that uploads `${RUNNER_TEMP}/security_audit_claude_rejected.txt` with a short retention.\n  Evidence of absence: No hunk in the PR diff touches `.github/workflows/security-audit.yml`. `SECURITY_AUDIT_CLAUDE_REJECTED_OUT` is not exported in the workflow's `env:` and `actions/upload-artifact` does not appear in that file. The PR title and the AI editor's \"Ignored suggestions\" comment explicitly defer this; the prompt-contract fix is implemented and the regression test is in place.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Hardening suggestion (HARDENING_RISK_SCORE: 1): prompts/mode-security-audit.txt, prompts/_templates/mode-security-audit.txt lines 38-40 (prompt) and 31-33 (template): indentation inconsistency between the anchor bullet (leading space) and the two new bullets (no leading space); the position-based test in `tests/test_security_audit_prompt_policy.py:163` currently passes. Suggested: add an assertion pinning the new bullets' indentation (about 2 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"In `.github/workflows/security-audit.yml`, step `run_security_audit`, set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT`\" and add an `if: failure()` artifact upload with short retention.\n  Expected change site: `.github/workflows/security-audit.yml`, the `run_security_audit` step's environment and an adjacent artifact-upload step.\n  Evidence of absence: The PR changes only the prompt files, prompt-policy test, and changelog fragment. No diff adds the environment variable or artifact upload. The prompt-contract alternative is implemented, but this separate diagnostics deliverable is absent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7f63910fe261a017e5f9e8f86f1783e260915e5eabe354f33ae45d4494194c34",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8205,
+    "run_id": "40347495359",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40347495359",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026153559_c4dff263a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8205,
+    "run_id": "40347495359"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T15:35:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

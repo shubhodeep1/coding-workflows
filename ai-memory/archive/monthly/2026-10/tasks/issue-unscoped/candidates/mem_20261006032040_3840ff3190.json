@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:176-182, 212-222 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When DELETE returns HTTP 404, `unblock_removed_guard` remains empty, so a subsequent failed `/approved` comment does not restore the block label.\n  WHY: The issue can be left without a resume command or scan-visible block label and become stuck; severity differed, with one reviewer rating it BLOCKER and the others rating it MAJOR.\n- tests/test_unblock_judge.py:1821-1823 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The test is reported to expect the scope-blocked label to be restored after `/reclarify` fails, although the failed comment causes the subsequent `remove_label` operation to be skipped.\n  WHY: The reviewers say this makes the test expectation inconsistent with the handler; severity differed, with one reviewer rating it BLOCKER and the other rating it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_judge.sh:214-221 (remove_label handler) and 176-181 (failed /approved comment handler) | severity=high | confidence=4\n  PROBLEM: When DELETE returns HTTP 404, `unblock_removed_guard` stays empty, so if the subsequent `/approved` comment POST fails, the restoration handler does not restore the blocker label.\n  WHY: The issue ends up with `ai:awaiting-approval` but no block label or resume command, and the unblock scan cannot discover it.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:176-180 and 212-220 | severity=critical | confidence=5\n  PROBLEM: If blocker label deletion returns 404, the handler does not set `unblock_removed_guard`, so a subsequent failed `/approved` comment POST does not trigger restoration.\n  WHY: The blocker label remains absent even though the resumption command failed, requiring manual intervention or waiting for the next scan cycle.\n- tests/test_unblock_judge.py:1821-1823 | severity=high | confidence=5\n  PROBLEM: The test expects the scope-blocked label to be restored when `/reclarify` fails, but the code skips `remove_label` and its restoration logic when `ops_failed` is true.\n  WHY: The test expectation is logically inconsistent with the current code.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:212-222 (remove_label branch) and 176 (comment branch restoration check) | severity=high | confidence=4\n  PROBLEM: The `remove_label` handler only sets `unblock_removed_guard` when DELETE succeeds; on HTTP 404 it remains empty, so a subsequent failed `/approved` comment skips re-adding the label.\n  WHY: The unblock scan cannot retry the issue, and recovery depends on a slower stall recovery cron.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh: `unblock_run_ops`, lines 176\u2013180 and 214\u2013220 | severity=high | confidence=5\n  PROBLEM: A 404 while removing the block label is treated as nonfatal but does not set `unblock_removed_guard`, so a subsequent failed `/approved` comment POST does not restore the label.\n  WHY: The issue has neither a resume command nor the scan-visible block label, so the unblock scan cannot pick it up for retry.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_unblock_judge.py:1821-1823 (test_failed_issue_resume_keeps_scan_visible_block, scope-blocked branch) | severity=critical | confidence=5\n  PROBLEM: The test is reported to expect the scope-blocked label to be restored, but when `/reclarify` fails, `ops_failed` causes the subsequent `remove_label` operation to be skipped.\n  WHY: The reviewer says `labels_removed` will be empty and `labels_added` will not contain `ai:scope-blocked`, contradicting the test assertion.\n- scripts/unblock_judge.sh:176-180 (remove_label handler) and 212-220 (failed /approved restoration) | severity=high | confidence=4\n  PROBLEM: When DELETE returns HTTP 404, the handler does not set `unblock_removed_guard`, so a subsequent failed `/approved` comment does not restore the block label.\n  WHY: The issue has neither a scan-visible block label nor a resume command, making it invisible to the unblock scan until the cooldown expires.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/unblock_judge.sh:212-221, the remove_label handler in unblock_run_ops | severity=high | confidence=4\n  PROBLEM: The HTTP 404 branch does not set `unblock_removed_guard`, so if the subsequent `/approved` comment POST fails, the restoration logic does not restore the block label.\n  WHY: The issue is left with `ai:awaiting-approval` but no scan-visible block label, making it invisible to the scan with no automatic recovery path.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8fa89bc8485d89df6811fe0f37acb2c76328d5ab91ef9e44a2771e3e5bca988c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37405230104",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37405230104",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006032040_3840ff3190",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37405230104"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T03:20:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

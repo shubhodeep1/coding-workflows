@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the heal-evidence scope lock (the `scope-allowlist` output used by `HEAL_EVIDENCE_SCOPE_LOCK`) get its entries from?\nChoices:\nA. Ignore the issue body completely for heal-evidence runs. Take entries only from the approved plan's files-to-change list, keep only exact file paths (rules in Q2), and fail closed (scope-blocked) when no valid entry remains. This is the smallest change that closes the reported exploit and keeps heal fixes running, but it keeps the plan as a source, which the recommendation discourages. (RECOMMENDED)\nB. Keep issue-body parsing, but only outside fenced code blocks, the untrusted evidence or diagnosis sections, and blockquotes, and only when the issue body's author and edit history are the intake account (the same check already used for run references). Fall back to the plan as in A.\nC. Add a new intake-written, provenance-bound scope block to heal issues (marker plus verified intake authorship and edit history), built from the validated `crash_file` / `changed_files` payload fields. Ignore both the plan and free text. Any heal issue without the block fails closed, including existing open ones, and fixes that also need tests or changelog fragments may be scope-blocked.\n   **Note:** C cannot be combined with A or B, because C drops the plan and body sources. A+B is a valid combination.\nQ2: Which entries should the scope lock reject, beyond the current `*` / `..` / absolute-path filter?\nChoices:\nA. Reject anything that is not a concrete file: a trailing `/`, a last path segment with no file extension (the scope guard treats a bare entry as covering everything beneath it), glob characters, a `.git` segment in any letter case, and non-printable or surrounding whitespace. This matches the existing `REISSUE_FILES_TOUCHED_NEW_OUTPUTS` validator. Exact files under `scripts/`, `.github/workflows/`, `prompts/` and `tests/` stay allowed. (RECOMMENDED)\nB. A, plus reject every path on the review deterministic-skip protected list (`.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, and so on). Most workflow-defect heal fixes would then fail closed, because their fixes live in those paths.\nC. A, plus reject only the files that enforce the guard itself (`scripts/files_touched_scope_guard.py`, `scripts/workflow_failure_heal_evidence.py`, `scripts/implement_commit_changes.sh`, `.github/ai/`, `.claude/hooks/`), so a heal run cannot widen its own scope lock. A heal fix that has to change those files would need a human-cleared run.",
+  "fingerprint": "28540d72a73904495503673d4c8b699268645587f1413b77665a9dc6ec4bc5f8",
+  "lineage": {
+    "issue_number": 6443,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37398504315",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37398504315",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006012919_c56aab5b3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6443,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37398504315"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6443 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T01:29:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

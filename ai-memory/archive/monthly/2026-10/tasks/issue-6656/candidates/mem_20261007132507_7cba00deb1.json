@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The pipeline can't write `.claude/hooks/pr_merge_status_guard.py`. The snapshot also has no live copy of the hook; only `workflow-templates/.claude/hooks/pr_merge_status_guard.py` is there. So no editor run can fix this. Option B needs a held sync PR, and GITHUB FACTS says `ai/sync-claude-live-copies-held` does not exist. Choosing B would mean waiting on data nobody can provide, which is the circular loop the data-provision guard forbids. Option C weakens a deliberate security boundary. A person must copy the template over the live hook in a commit they write themselves, matching both content and executable bit. Until then, #6624 and #6628 stay blocked.\nQ2: The issue forbids a runtime gate in either hook, and both hooks must stay byte-identical, so option C is out. Option B would make the parity test skip, which waives a failing check, and the issue forbids that too. The placeholder isn't needed: since this issue changes no code, there is nothing for a flag to switch on or off. The step stays inactive simply because nothing ships until a person does it.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none \u2014 both decisions are lettered)\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- LIVE_MERGED_PR_HOOK_PARITY_UNSET_OPERATOR_STEP (account): no secret or variable to create. An authorized person copies `workflow-templates/.claude/hooks/pr_merge_status_guard.py` to `.claude/hooks/pr_merge_status_guard.py`, keeping the executable bit (`cp -p`, then check with `git diff --stat` and `tests/test_claude_template_live_parity.py`), in a commit they author. Until then, the pipeline makes no change and opens no PR, #6624 and #6628 stay blocked, and this issue stays recorded as an `ai:operator-step` entry.",
+  "fingerprint": "ca2212707c9bab2c7f0e63966232a4cb6fe919aa7bc393f99558cf8bea7dfc5f",
+  "lineage": {
+    "issue_number": 6656,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37627117790",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37627117790",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6656"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007132507_7cba00deb1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6656,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37627117790"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6656",
+  "timestamps": {
+    "created_at": "2026-10-07T13:25:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:654-656 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer claims the `printf` format string could interpret percent characters in the token and produce incorrect base64 input.\n  WHY: The reviewer says this could cause authentication failure; qwen_qwen3_7-plus disputes the claim, noting that percent characters in the argument are treated literally.\n- scripts/review_merge_train.sh:693 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_mt_probe_repo_cleanup` EXIT trap may overwrite a previously set EXIT trap without saving and restoring it.\n  WHY: The reviewer says this could prevent another trap from executing; qwen_qwen3_7-plus disputes the concern, noting that only one trap exists in the script.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_merge_train.sh:654-656 | severity=high | confidence=[4]\n  PROBLEM: The use of `printf 'x-access-token:%s' \"${token}\"` to construct the base64 input is potentially unsafe if the token contains `%` characters, as `printf` interprets the format string.\n  WHY: If the token contains `%` characters, it will be interpreted as a format specifier instead of a literal, leading to incorrect base64 encoding and authentication failure.\n- scripts/review_merge_train.sh:693 | severity=low | confidence=[3]\n  PROBLEM: The `_mt_probe_repo_cleanup` function is registered as an EXIT trap, but it does not save and restore any previously set EXIT trap.\n  WHY: If another part of the script were to set an EXIT trap, this implementation would overwrite it, potentially preventing that trap from executing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ed240e27964a8693ae341e7d24f5ec8e1951fcd0b0a7cc3b2a12f6862878d3b1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6990,
+    "run_id": "37999085491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37999085491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009224934_755bf0e9d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6990,
+    "run_id": "37999085491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T22:49:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

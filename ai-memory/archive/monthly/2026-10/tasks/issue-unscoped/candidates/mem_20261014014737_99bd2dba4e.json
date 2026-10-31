@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:_mark_superseded | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_newer_than` compares `[id, started_at]` lexicographically to determine whether a run is superseded, which may misorder runs if IDs are not strictly increasing or timestamps should determine newness.\n  WHY: The review considers relying on ID ordering brittle because the ID may not be guaranteed to increase monotonically.\n- scripts/orchestrate_poll_process.sh:around lines 1641, 1655 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_summarize_final_merge_blockers` may fail to filter superseded runs if `_mark_superseded` produces unexpected output or `$ci` and `$bound` are not passed correctly.\n  WHY: Incorrect filtering could report superseded check-runs as blocking a merge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a lightweight no-action poll gate\" (recommendation 5 from `analysis/workflow-optimization-2026-09-16.md`).\n  expected_change_site: `scripts/orchestrate_poll_process.sh`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff and last run diff do not show a preflight check in `scripts/orchestrate_poll_process.sh` that skips checkout/tool setup when no-op ticks occur.\n- requirement: \"Add a support-symbol contract preflight before reviewer fan-out \u2014 critical path\" (recommendation 1 from `analysis/workflow-optimization-2026-09-16.md`).\n  expected_change_site: `scripts/review_run_reviewers.sh`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff and last run diff do not show a `declare -F` preflight check for mandatory functions before reviewer execution.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh | severity=low | confidence=2\n  PROBLEM: The logic for determining when a run is superseded (`_newer_than`) relies on `(.id // 0), (.started_at // \"\")`.\n  WHY: Comparing an array of `[id, started_at]` lexicographically might not be correct if `id` is not strictly increasing or if `started_at` is the primary indicator of \"newness\". While `id` often correlates with time, depending on it lexicographically for supersession might be brittle if `id` is not guaranteed to be strictly monotonically increasing.\n- scripts/orchestrate_poll_process.sh (around lines 1641, 1655) | severity=high | confidence=3\n  PROBLEM: The `_summarize_final_merge_blockers` uses `_mark_superseded` and `select(._superseded | not)`. If `_mark_superseded` produces unexpected output or if the jq context (`$ci`, `$bound`) is not passed correctly, the filtering might be incorrect.\n  WHY: If the jq expression fails to properly filter out non-superseded runs, it could incorrectly report blocking check-runs that have actually been superseded, leading to a blocked merge.\n- TASK_GAP\n  Requirement: \"Add a lightweight no-action poll gate\" (recommendation 5 from `analysis/workflow-optimization-2026-09-16.md`).\n  Expected change site: `scripts/orchestrate_poll_process.sh`\n  Evidence of absence: The PR diff and last run diff do not show a preflight check in `scripts/orchestrate_poll_process.sh` that skips checkout/tool setup when no-op ticks occur.\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"Add a support-symbol contract preflight before reviewer fan-out \u2014 critical path\" (recommendation 1 from `analysis/workflow-optimization-2026-09-16.md`).\n  Expected change site: `scripts/review_run_reviewers.sh`\n  Evidence of absence: The PR diff and last run diff do not show a `declare -F` preflight check for mandatory functions before reviewer execution.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "efeec26916a743e96969ded9bc038267382f73ebfd83ab41449067fd03beacd0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38494472864",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38494472864",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014014737_99bd2dba4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38494472864"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-14T01:47:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

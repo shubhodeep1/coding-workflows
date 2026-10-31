@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:5763-5766 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The supersede failure path runs an unconditional `git reset --quiet --hard \"${STALE_FRESH_HEAD}\"`, which drops uncommitted tracked changes before falling back to rebase, where the rebase path would have reported a dirty tree.\n  WHY: Gemini rated it MAJOR with confidence 4. Sonnet rated it NIT with confidence 2 and said a dirty tree is not an evidenced scenario. I used the highest severity. minimax_minimax-m3 found it safe because no step between \"Commit changes\" and \"Push branch\" writes tracked files.\n- .github/workflows/implement.yml:5755 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: `git merge --quiet` suppresses git's own failure reason when the supersede merge fails.\n  WHY: The step logs only \"Superseding leftover ... failed\", so the cause is hard to diagnose. Gemini rated it NIT with confidence 3, and minimax gave it as a hardening suggestion.\n- scripts/implement_stale_branch_check.sh:64 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Lowering `GH_RETRY_MAX_ATTEMPTS` from 2 to 1 removes the only retry for transient non-rate-limit failures such as a 5xx or a connection reset.\n  WHY: One transient error returns `outcome=keep reason=api_unavailable` and the push falls back to the old rebase path. This is safe because nothing is force-pushed and the next run retries. Sonnet rated it NIT.\n- .github/workflows/implement.yml:5735 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `[ ! -f \"${stale_branch_helper}\" ]` check does not reject a symlink at the trusted run-dir path.\n  WHY: This is a hardening suggestion with HARDENING_RISK_SCORE 1. The run dir is staged by the job itself, so the exposure is negligible. The fix is to add `|| [ -L \"${stale_branch_helper}\" ]`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/implement_stale_branch_check.sh:64 | severity=NIT | confidence=3\n  PROBLEM: Lowering the retry cap from 2 to 1 removes the only retry for non-rate-limit transient failures such as a 5xx or a connection reset.\n  WHY: One transient error returns `outcome=keep reason=api_unavailable` and the push falls back to the old rebase path. This is a safe failure direction and a deliberate trade-off.\n- .github/workflows/implement.yml (supersede failure path, `git merge --abort ... || true` then `git reset --quiet --hard \"${STALE_FRESH_HEAD}\"`) | severity=NIT | confidence=2\n  PROBLEM: The hard reset also drops uncommitted tracked changes, where the rebase path would have reported a dirty tree.\n  WHY: The step runs after the commit step, so a dirty tracked tree is not an evidenced scenario. The reviewer asked for no change.\n- .github/workflows/implement.yml (`[ ! -f \"${stale_branch_helper}\" ]` check in \"Push branch\") | HARDENING_RISK_SCORE=1\n  PROBLEM: The check does not reject a symlink at the trusted run-dir path.\n  WHY: The run dir is staged by the job itself, so the exposure is negligible. The suggested fix is `[ ! -f \"${stale_branch_helper}\" ] || [ -L \"${stale_branch_helper}\" ]`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:5763-5766 | severity=MAJOR | confidence=4\n  PROBLEM: The new supersede failure path runs an unconditional `git reset --quiet --hard \"${STALE_FRESH_HEAD}\"`, which silently discards staged and unstaged working-tree changes before falling back to rebase.\n  WHY: If the workspace has uncommitted edits, the `-s ours` merge might fail and the hard reset then drops those changes silently. The sibling rebase path fails loudly on a dirty tree.\n- .github/workflows/implement.yml:5755 | severity=NIT | confidence=3\n  PROBLEM: `git merge --quiet` hides git's own failure reason when the supersede merge fails.\n  WHY: The failure is hard to diagnose because stderr is suppressed. Appending `2>&1` or dropping `--quiet` would provide diagnostic logs.\n- .github/workflows/implement.yml:5735 | HARDENING_RISK_SCORE=1\n  PROBLEM: The helper copy is checked with `[ ! -f \u2026 ]` only.\n  WHY: The suggested fix is `[ ! -f \"${stale_branch_helper}\" ] || [ -L \"${stale_branch_helper}\" ]`.\n- .github/workflows/implement.yml:5755 | HARDENING_RISK_SCORE=1\n  PROBLEM: `git merge --quiet` hides git's own failure reason.\n  WHY: The suggested fix is to drop `--quiet` or append `2>&1` so git's stderr reaches the log.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml:5735 | HARDENING_RISK_SCORE=1\n  PROBLEM: The staged helper is accepted as a regular file without rejecting a symlink, unlike sibling trusted-support helper checks in the same workflow, which also test `-L`.\n  WHY: The suggested fix is `if [ ! -f \"${stale_branch_helper}\" ] || [ -L \"${stale_branch_helper}\" ]; then`.\n- .github/workflows/implement.yml:5755 | HARDENING_RISK_SCORE=1\n  PROBLEM: `git merge --quiet --no-edit -s ours --allow-unrelated-histories ...` suppresses git's stderr, so a failed supersede does not show whether the merge or the push failed.\n  WHY: The only signal is \"Superseding leftover ... failed (the branch may have moved)\". The suggested fix is to drop `--quiet`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "991091d3f1d185d152b331b4f56f1bcc297de50e3898cd03c6e181a776460c32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7911,
+    "run_id": "39897726489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39897726489",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023051113_d6414fc55f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7911,
+    "run_id": "39897726489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T05:11:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

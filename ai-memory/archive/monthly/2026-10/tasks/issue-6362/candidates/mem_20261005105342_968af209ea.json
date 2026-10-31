@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which installers should the fix cover?\nChoices:\nA) Python only (lines 311-313). Split pip into a networked step that never sees the source tree and an offline install of the source tree. Leave npm, yarn and pnpm as they are.\nB) Every installer in the dependency step (RECOMMENDED). The networked container gets only manifest and lock files: `package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `requirements*.txt`, `pyproject.toml`. It never gets the full workspace or yarn config files that can point yarn at a repo file. Anything that builds or installs the source tree runs in a second container with `--network none`. That second step only adds output to the existing dependency area the agent already uses, so it never writes back into the workspace copy, and the current `prep-finalize` check stays as it is.\nC) Python plus yarn and pnpm only: those paths start a tool fetched by `npx`, which can read repo config. Leave the `npm ci --ignore-scripts` paths (lines 302 and 308) as they are.\nQ2: How should the networked step work out the Python dependency list without running the repo's build code?\nChoices:\nA) Read only what the files declare (RECOMMENDED). Take `[project].dependencies` and the `dev` extra (`[project.optional-dependencies].dev`) from `pyproject.toml`, plus the lines of `requirements.txt`. Drop any editable, local-path, `file:` or custom-index lines from the networked step. Install those lines in the networked container. Then install the source tree offline with `pip install --no-deps --no-build-isolation -e .`. A project whose dependency list is generated at build time, or anything the offline step cannot install, falls back to the existing warning that marks validations it cannot run as UNVERIFIED. This keeps today's rule that this step never fails the run.\nB) Like A, but skip installing the source tree entirely. Install only the declared third-party dependencies, so no repo build code runs in either container.\nC) First run the repo's build backend offline (`--network none`) only to generate the package metadata, then install the resulting dependency list in the networked container without the source tree. This covers projects whose dependency list is generated at build time. It is more complex and needs any build tools to already be available offline.\n**Note:** C would also have to apply to `requirements.txt` entries that point at local paths, which A and B simply exclude.",
+  "fingerprint": "afa244c1fe454c795f4234338f021e4f619b52afcf0becb3718b3a430560823f",
+  "lineage": {
+    "issue_number": 6362,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37298481770",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37298481770",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005105342_968af209ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6362,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37298481770"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6362 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T10:53:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

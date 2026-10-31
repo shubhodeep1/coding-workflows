@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1479-1480 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The documentation incorrectly says the nightly self-test job environment carries no secret, although its `contents: write` permission provides `GITHUB_TOKEN`.\n  WHY: The inaccurate claim could mislead operators about the job's credential exposure, despite per-test credential scrubbing providing protection.\n- .github/workflows/nightly-validation-selftest.yml:43-52; scripts/validation_selftest_matrix.py:274-310 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A self-test can plant an executable `.git/hooks/pre-push` in the enclosing checkout, and the later token-bearing push does not disable or isolate repository hooks.\n  WHY: Because fixture workspaces have no `.git` of their own, Git discovers the checkout\u2019s `.git` directory above them; a test can write there and have its hook capture `STATUS_PUSH_TOKEN` during the later push.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- agents.md:1479-1480 | severity=low | confidence=5\n  PROBLEM: Documentation states \"its job environment carries no secret\" regarding the nightly self-test job, though its `contents: write` permission provides `GITHUB_TOKEN`.\n  WHY: The documentation inaccuracy could mislead operators into believing the job is credential-free when it is not; per-test credential scrubbing provides actual protection.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: .github/workflows/nightly-validation-selftest.yml; scripts/validation_selftest_matrix.py\n  Line or code reference: Workflow lines 43-52 run the self-test before lines 129-157 expose `STATUS_PUSH_TOKEN` and run `git pull` / `git push`. `validation_selftest_matrix.py:274-310` creates each fixture workspace beneath the checkout and runs the test driver there.\n  Problem: A self-test can plant an executable `.git/hooks/pre-push` in the enclosing checkout. The later token-bearing push does not disable or isolate repository hooks.\n  Why it fails at runtime: The fixture workspace has no `.git` of its own, so Git discovers the checkout\u2019s `.git` directory above it. A test running as the same user can write there. During the later `git push`, Git runs the planted hook with `STATUS_PUSH_TOKEN` in its environment, allowing the test\u2019s code to capture the write-capable token. `persist-credentials: false` prevents direct token access during tests but does not prevent them from arranging code to run when the token is introduced later.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "62c77f676e7bf64822d08774dbcb0ce74ce92c24bfde5f2661ee9770549f10b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6569,
+    "run_id": "37888914646",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37888914646",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009060247_56ed9cd241",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6569,
+    "run_id": "37888914646"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T06:02:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

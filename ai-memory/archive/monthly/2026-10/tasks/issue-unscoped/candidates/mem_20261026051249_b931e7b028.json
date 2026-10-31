@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of steps moved from `tests-hooks-and-orchestrator` and the destination job (comment at lines 1507-1511)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/ci.yml` lines 1507-1511 and the changelog fragment say the step timings of run 40264887710 could not be read, the three steps were chosen by estimated test and subprocess counts, and the destination's headroom is unmeasured. Severity NIT. The PR discloses this, and the next `budget-watch` run on `main` re-checks every job.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the choice of which steps leave `tests-hooks-and-orchestrator` and which job receives them.\n  Evidence of absence: The workflow comment at `ci.yml:1507-1511` and the changelog fragment both say the step timings of run 40264887710 could not be read. The three steps were picked by estimated test and subprocess counts, and the destination's headroom is unmeasured. The names and bodies are otherwise unchanged. The PR discloses the estimate, and the next `budget-watch` run on `main` re-checks every job, so this is a disclosed limitation and no code is missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-hooks-and-orchestrator` and destination job.\n  Evidence of absence: The comment at `.github/workflows/ci.yml` lines 1507\u20131511 states that the run's step timings were unreadable and the three steps were selected by estimated test and subprocess counts, not by those timings. The changelog fragment confirms the selection and destination headroom were estimates, so the required timing-based selection is not established.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0308a862716b10f5f0a0f682c61cec261e9deabcd3d69e39e4512daeffddf259",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8184,
+    "run_id": "40271921814",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40271921814",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026051249_b931e7b028",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8184,
+    "run_id": "40271921814"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T05:12:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

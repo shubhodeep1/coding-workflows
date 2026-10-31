@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:lines 272-276 and line 292 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, z-ai_glm-5_2]\n  PROBLEM: Trailing glued descriptor redirects such as `2>&1` and `2>/dev/null` are misclassified as ambiguous numeric arguments because the redirect-handling condition does not check `redirect_fd`.\n  WHY: The resulting `<ambiguous-io-number>` is treated as a refspec, and its failed resolution spuriously requests confirmation for a safe push.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:lines 272-276 and line 292 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, z-ai_glm-5_2]\n  PROBLEM: The template copy has the same missing `redirect_fd` check, misclassifying trailing glued descriptor redirects as ambiguous numeric arguments.\n  WHY: Consumer repositories can receive spurious confirmation prompts for safe pushes using glued descriptor redirection.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/hooks/pr_merge_status_guard.py:lines 272-276 and line 292 | severity=high | confidence=5\n  PROBLEM: Trailing glued descriptor redirects such as `2>&1` and `2>/dev/null` are misclassified because the redirect-handling condition omits `redirect_fd`.\n  WHY: The `<ambiguous-io-number>` becomes a bogus refspec, fails resolution, and triggers an unwarranted confirmation prompt for a safe push.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:lines 272-276 and line 292 | severity=high | confidence=5\n  PROBLEM: The template copy has the identical missing `redirect_fd` check for trailing glued descriptor redirects.\n  WHY: Safe pushes in consumer repositories can spuriously trigger confirmation prompts and stall automation.\n- tests/test_pr_merge_status_guard.py:lines 974-984\n  PROBLEM: The test asserts that glued `2>/dev/null` prompts for confirmation, masking the omitted `redirect_fd` check and conflicting with documented behavior.\n  WHY: The suggested minimal fix is to parameterize the test with spaced or quoted ambiguous forms, then assert that glued `2>/dev/null` and `2>&1` do not prompt when the branch is safe.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/pr_merge_status_guard.py:lines 273-275 and line 292 | severity=high | confidence=4\n  PROBLEM: `redirect_fd` is computed but not used in the redirect-handling condition, so glued descriptor redirects are treated as ambiguous numeric arguments.\n  WHY: The bogus refspec fails `git rev-parse` and causes an unwarranted confirmation prompt for a safe push.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:lines 273-275 and line 292 | severity=high | confidence=4\n  PROBLEM: The template copy has the same unused `redirect_fd` condition as the root copy.\n  WHY: Consumer repositories using glued descriptor redirects get spurious confirmation prompts.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "41c415f608a16d06be721e08e4787380c4212e6fa22cbea58ad822ca0769a41a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6187,
+    "run_id": "37270673226",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37270673226",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005070754_90581d7791",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6187,
+    "run_id": "37270673226"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:07:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

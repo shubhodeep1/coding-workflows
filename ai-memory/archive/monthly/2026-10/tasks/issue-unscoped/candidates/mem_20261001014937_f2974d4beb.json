@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:587-589 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The release step issues three separate DELETE requests to remove Claude labels, including requests for labels that may not be present.\n  WHY: Each request consumes shared GitHub API quota even when the label is absent.\n- .github/workflows/clarify.yml (Job predicate at line 21 and \u201cDecide clarify route\u201d at lines 455\u2013456; the body-marker classification is in scripts/claude_issue_route.py:233\u2013234.) | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The later-line `/reclarify` exclusions identify orchestrator-managed issues by label only, while the existing routing logic also identifies them by a `Managed by: AI Orchestrator` line in the issue body.\n  WHY: A body-marked issue without the `ai:orchestrator-managed` label can pass the new gates and be routed to Codex with a trusted comment containing a later-line `/reclarify`, no HTML comment, and an `ai:blocked` label.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/clarify.yml:587-589 | severity=NIT | confidence=4\n  PROBLEM: The \"Release Claude claim on switch to Codex\" step removes labels with three separate DELETE requests rather than batching them in one `gh issue edit --remove-label` invocation.\n  WHY: The extra API calls consume shared GitHub quota; each DELETE is error-suppressed with `|| true`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/clarify.yml: lines 587-589 | severity=NIT | confidence=4\n  PROBLEM: The release step executes three separate DELETE calls to remove labels instead of checking attached labels or batching removals.\n  WHY: Three REST requests are made even if only one label is present, consuming shared API quota; missing-label errors are suppressed with `|| true`.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml (Job predicate at line 21 and \u201cDecide clarify route\u201d at lines 455\u2013456; the body-marker classification is in scripts/claude_issue_route.py:233\u2013234.) | severity=MAJOR | confidence=5\n  PROBLEM: The later-line `/reclarify` exclusions identify orchestrator-managed issues by label only, while existing routing logic also identifies them by a `Managed by: AI Orchestrator` line in the issue body.\n  WHY: A body-marked issue without the `ai:orchestrator-managed` label can pass both new gates and be routed to Codex with a trusted comment containing a later-line `/reclarify`, no HTML comment, and an `ai:blocked` label.\n- .github/workflows/clarify.yml: Lines 587\u2013589 | severity=NIT | confidence=5\n  PROBLEM: The release step sends DELETE requests for all three labels even when the issue has only one of them.\n  WHY: Each unnecessary request consumes shared GitHub REST API quota on every affected Codex handoff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/clarify.yml: 587-589 | severity=NIT | confidence=3\n  PROBLEM: The release step removes three labels with three separate DELETE requests instead of batching them into one `gh issue edit --remove-label` invocation.\n  WHY: Each DELETE consumes shared GitHub API quota even when the label does not exist; the path is rare and the plan's \u00a715 constraint is defensible.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/clarify.yml: 587-589 (Release Claude claim on switch to Codex step) | severity=NIT | confidence=5\n  PROBLEM: The step issues three separate DELETE requests to remove Claude labels, including requests for labels that may not exist on the issue.\n  WHY: Each DELETE consumes GitHub REST API quota; the path is rare and the plan explicitly chose one call per label.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fa5d3c5c064cbe69ed6dfcf54039b24e61faff1ea63e1446ec1aabb1fc669023",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5324,
+    "run_id": "36800359951",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36800359951",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001014937_f2974d4beb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5324,
+    "run_id": "36800359951"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T01:49:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

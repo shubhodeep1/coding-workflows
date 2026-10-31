@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/gh_api_write_guard.py:179-190, 1502-1505 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The live `.claude/hooks/gh_api_write_guard.py` is not synchronized with the updated template, so it lacks the bare `--help` / `-h` handling.\n  WHY: CI parity tests fail, and interactive sessions still prompt for permission on `gh api --help`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Deliver the live hook twin-first under Q40 / CLAUDE.md \u00a728.C: synchronize `.claude/hooks/gh_api_write_guard.py` with the updated template in the master session's `[claude-twin-sync]` commit.\n  expected_change_site: `.claude/hooks/gh_api_write_guard.py`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: `.claude/hooks` search finds no `_BARE_HELP_ARGS` or `_is_bare_gh_api_help`; `.claude/hooks/gh_api_write_guard.py` has zero matches for `_is_bare_gh_api_help` or `_BARE_HELP_ARGS`; CI job tests-hooks-and-orchestrator fails `test_live_copies_match_their_templates` on `hooks/gh_api_write_guard.py`; `tests/test_gh_api_write_guard.py` loads the live copy at `GUARD_PATH`, so the bare-help tests cannot pass until the sync commit lands; `tests/test_claude_template_live_parity.py::test_live_copies_match_their_templates` is already red on run 38057718480 with `hooks/gh_api_write_guard.py` listed as drift.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Deliver it twin-first under Q40 / CLAUDE.md \u00a728.C: edit `workflow-templates/.claude/hooks/gh_api_write_guard.py` only. The master session copies the file into `.claude/` in a `[claude-twin-sync]` commit.\" The template and the live hook must end up byte-identical (`tests/test_gh_api_write_guard.py::test_template_parity`, `tests/test_claude_template_live_parity.py`).\n  Expected change site: `.claude/hooks/gh_api_write_guard.py`, through the master session's `[claude-twin-sync]` commit.\n  Evidence of absence:\n  - Searching `.claude/hooks` for `_BARE_HELP_ARGS` or `_is_bare_gh_api_help` finds nothing.\n  - CI job tests-hooks-and-orchestrator fails `test_live_copies_match_their_templates` on `hooks/gh_api_write_guard.py`.\n  - The new tests in `tests/test_gh_api_write_guard.py` load the live copy at `GUARD_PATH`, so `test_bare_help_is_a_read` and `test_template_parity` cannot pass until the sync commit lands.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/hooks/gh_api_write_guard.py:179-190, 1503-1505 | severity=critical | confidence=5\n  PROBLEM: The live `.claude/hooks/gh_api_write_guard.py` is not synchronized with the updated template `workflow-templates/.claude/hooks/gh_api_write_guard.py`.\n  WHY: The live guard lacks the bare `--help` / `-h` handling added to the template. CI continues to fail the live-template parity test, and interactive sessions still prompt for permission on `gh api --help`.\n- TASK_GAP\n  Requirement: \"Make the smallest loosening that removes this prompt [for bare gh api --help].\" (Bare --help / -h counts as a read; any other arguments beside it keep the call unreadable.)\n  Expected change site: `.claude/hooks/gh_api_write_guard.py` (live copy)\n  Evidence of absence: The PR modifies `workflow-templates/.claude/hooks/gh_api_write_guard.py` (the template) but leaves the live file `.claude/hooks/gh_api_write_guard.py` unchanged, causing the `tests/test_claude_template_live_parity.py` failure and the continued prompting for bare help commands in active sessions. The issue's \"Delivery constraints\" state: \"This is a protected-path change (.claude/hooks/**). Deliver it twin-first under Q40 / CLAUDE.md \u00a728.C: edit workflow-templates/.claude/hooks/gh_api_write_guard.py only. The master session copies the file into .claude/ in a [claude-twin-sync] commit.\"\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Class a `gh api` call as **read** only when its arguments are exactly one of `--help` or `-h`, with nothing else: no endpoint, no other flag, and no `--`.\" \u2014 the requirement applies to the live guard that Bash actually invokes, not just to the template.\n  Expected change site: `.claude/hooks/gh_api_write_guard.py` (the live copy) must be byte-identical to the updated `workflow-templates/.claude/hooks/gh_api_write_guard.py`.\n  Evidence of absence: `grep` for `_is_bare_gh_api_help` or `_BARE_HELP_ARGS` against `.claude/hooks/gh_api_write_guard.py` returns zero matches (only the template carries them, lines 184-189 and 1503-1505). `tests/test_gh_api_write_guard.py` loads the guard from the live copy via `GUARD_PATH = REPO_ROOT / \".claude\" / \"hooks\" / \"gh_api_write_guard.py\"` (tests/test_gh_api_write_guard.py:27), so the new `test_bare_help_is_a_read`, `test_help_with_other_arguments_still_asks`, `test_bare_help_piped_to_grep_gets_no_decision`, and `test_literal_loop_over_bare_help_gets_no_decision` cases cannot pass against the unmodified live copy \u2014 they exercise behaviour that only the shortcut implements. `tests/test_claude_template_live_parity.py::test_live_copies_match_their_templates` is already red on run 38057718480 with `hooks/gh_api_write_guard.py` listed as drift, which is the visible CI consequence. The issue's delivery constraint delegates this copy to the master session in a `[claude-twin-sync]` commit, but the PR cannot merge until that hand-off lands.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Update CLAUDE.md \u00a723.H (the 'read' row of the class table) and the matching agents.md / README.md guard notes, plus one `changelog.d/` fragment (`changed`).\"\n  Expected change site: `CLAUDE.md`, `agents.md`, `README.md`, and `changelog.d/6668-gh-api-guard-bare-help.md`.\n  Evidence of absence: All four edits are present in the PR. `CLAUDE.md:1267` extends the `read` row with the bare-help clause and the `#6668` cross-reference; `agents.md:530-533` adds the matching guard paragraph; `README.md:1189-1191` adds the bare-help note inside the existing guard parenthetical; `changelog.d/6668-gh-api-guard-bare-help.md` is the `<!-- changelog: changed -->` fragment citing the operator decision (Q1: A, 2026-09-30).\n  SEVERITY: NIT (satisfied \u2014 included here so the completeness check is positive rather than absent)\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "f087c145bee77edaa9d0dbe7202f66340251bb8659878fbcab79b5e83c19a611",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6674,
+    "run_id": "38057718728",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38057718728",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010142150_08fca4220e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6674,
+    "run_id": "38057718728"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T14:21:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

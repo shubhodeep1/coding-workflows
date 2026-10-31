@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8080,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8080\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8081\",\"pr_number\":8081,\"branch\":\"ai/issue-8080\",\"run_id\":\"40125890689\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40125890689\",\"changed_files\":[\".github/workflows/ci.yml\",\"agents.md\",\"changelog.d/8080-orchestrate-poll-single-file-modules-to-group-1.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "846dd98d9976e4fffb6f6a12454201176e3edb75773a93979c568a4162d6f660",
+  "lineage": {
+    "issue_number": 8080,
+    "parent_ids": [],
+    "pr_number": 8081,
+    "run_id": "40125890689",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40125890689",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8081"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261024195143_1cdafb546e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8080,
+    "level": "run",
+    "pr_number": 8081,
+    "run_id": "40125890689"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8080: https://github.com/shubhodeep1/coding-workflows/pull/8081",
+  "timestamps": {
+    "created_at": "2026-10-24T19:51:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

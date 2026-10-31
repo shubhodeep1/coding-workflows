@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_agents_fragment_contract.py:CI check-run failure | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Contract test failure: `test_instructions_point_at_fragments`\n  WHY: The CI pipeline is failing due to contract violations, blocking PR validation and stable release automation. The reviewer rated it BLOCKER, which is mapped to critical.\n- tests/test_changelog_fragment_contract.py:CI check-run failure | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Contract test failures (`test_assembler_and_fragment_directory_exist`, `test_gitattributes_carries_the_union_backstop`)\n  WHY: CI pipeline failing blocks PR validation and stable release automation. The reviewer rated it BLOCKER, which is mapped to critical.\n- tests/test_implement_post_codex_recovery.py:CI check-run failure | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Multiple test failures (e.g., `test_review_pipeline_integration_chain_module_runs_clean`, `test_staged_support_guard_marks_only_auto_release_safe_conflicts`)\n  WHY: CI pipeline failing blocks PR validation and stable release automation. The reviewer rated it BLOCKER, which is mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_agents_fragment_contract.py:CI check-run failure | severity=BLOCKER | confidence=5\n  PROBLEM: Contract test failure: `test_instructions_point_at_fragments`\n  WHY: The CI pipeline is failing due to contract violations, blocking PR validation and stable release automation.\n- tests/test_changelog_fragment_contract.py:CI check-run failure | severity=BLOCKER | confidence=5\n  PROBLEM: Contract test failures (`test_assembler_and_fragment_directory_exist`, `test_gitattributes_carries_the_union_backstop`)\n  WHY: CI pipeline failing blocks PR validation and stable release automation.\n- tests/test_implement_post_codex_recovery.py:CI check-run failure | severity=BLOCKER | confidence=5\n  PROBLEM: Multiple test failures (e.g., `test_review_pipeline_integration_chain_module_runs_clean`, `test_staged_support_guard_marks_only_auto_release_safe_conflicts`)\n  WHY: CI pipeline failing blocks PR validation and stable release automation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "06f703d739e533a0506c0b5a2ec221a112ebe72fa710a3ab6698e739cfcaff59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8379,
+    "run_id": "40955153475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40955153475",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029215805_14921fabdb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8379,
+    "run_id": "40955153475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T21:58:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: overwrite the e2e smoke canary file\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue spells out the full content of one existing file and forbids touching any other file. Nothing should be added or removed, so the scope stays as written.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a content change to one data file.\n\n## Data structures affected\nThe file `tests/e2e_smoke_canary.txt` will hold exactly these three lines, each ending in a newline (`\\n`):\n```\nstatus: ok\nrun_id: 40147488993\nupdated-by: ai-pipeline\n```\nThe file has no comments, no header and no blank lines.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: Replace the whole file, for example with `printf 'status: ok\\nrun_id: 40147488993\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n- Alternatives considered: Editing individual lines in place.\n- Why: The issue requires exact content. A full replace guarantees that, whatever the file contains now.\n\n## Security considerations\n- Trust boundaries: none touched.\n- Authorization: no new endpoints or surfaces.\n- External input: none is read; the content comes straight from the issue.\n- Abuse cases: none. The file holds no secrets.\n\n## Risks and edge cases\n- The file must end with exactly one trailing newline, with no extra blank line after it.\n- No other file may change, including any changelog fragment. This is a smoke fixture, so no changelog entry is needed.\n\n## Testing considerations\n- Check the exact bytes, for example: `printf 'status: ok\\nrun_id: 40147488993\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt`.\n- `git diff --stat` should list only this one file.\n\n## Pre-execution self-check\nThe plan changes only the one file the issue allows, and the target content is fully specified.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "5a28bab3605637a93f557919c2f8c97e61471c0d507e5405caa9df366ae51d8d",
+  "lineage": {
+    "issue_number": 8084,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40147954823",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40147954823",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8084"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261025005359_625f378787",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8084,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40147954823"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8084",
+  "timestamps": {
+    "created_at": "2026-10-25T00:53:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

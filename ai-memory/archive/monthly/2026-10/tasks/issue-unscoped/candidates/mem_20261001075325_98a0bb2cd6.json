@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/edit_comment.py:122-128, 188-194, 207-208 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The helper trusts `CLAUDE_CODE_SESSION_ID` from its environment as caller identity, so a classifier-approved invocation that overrides it with a sibling session ID can read and publish that sibling's scratchpad file when both sessions share a uid.\n  WHY: The environment override can satisfy the session-path check while the shared uid satisfies the ownership check; severity is high based on the MAJOR ratings, though DeepSeek and Qwen rated it NIT and GLM-5_2 rejected it as a code defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/edit_comment.py | severity=NIT | confidence=3\n  PROBLEM: _caller_scratchpad_identity reads CLAUDE_CODE_SESSION_ID from os.environ without verifying that it is the harness-set variable rather than a user-supplied override.\n  WHY: A classifier-approved env-prefixed invocation could supply a sibling session ID, and because both sessions share a uid, the path and file-owner checks could permit reading the sibling's scratchpad.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/scripts/edit_comment.py (also workflow-templates twin) | severity=MAJOR | confidence=4\n  PROBLEM: The helper trusts CLAUDE_CODE_SESSION_ID from os.environ as caller identity and combines it only with the calling uid.\n  WHY: A same-uid process that sets the environment variable to a sibling session id can pass both the session-component and file-owner checks if the classifier permits the invocation.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/edit_comment.py | severity=MAJOR | confidence=4\n  PROBLEM: The helper treats `CLAUDE_CODE_SESSION_ID` from its environment as trusted caller identity, but does not authenticate where that value came from.\n  WHY: A caller can set it to a sibling session's ID; the sibling path passes `is_own_scratchpad_path` and the file-owner check passes when both sessions share a uid, while the allowlist sends the prefixed command to the Auto-mode classifier rather than deterministically denying it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/edit_comment.py | severity=NIT | confidence=3\n  PROBLEM: _caller_scratchpad_identity trusts CLAUDE_CODE_SESSION_ID from os.environ as the caller's session identity.\n  WHY: A same-uid process can override it with a sibling session id; if the Auto-mode classifier permits the prefixed command, the helper reads and publishes the sibling's file.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "664715f1262799d2fafbb0a16f56a5282c4025909b28e9aef907de948f0d737f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5713,
+    "run_id": "36829910738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36829910738",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001075325_98a0bb2cd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5713,
+    "run_id": "36829910738"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T07:53:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

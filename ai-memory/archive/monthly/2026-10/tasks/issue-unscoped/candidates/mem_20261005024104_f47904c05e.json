@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The root command and template are not byte-identical, causing the strict parity assertion to fail.\n  WHY: The parity failure leaves `tests-hooks-and-orchestrator` and the aggregate lint check red.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR head must produce a green `lint` aggregate (i.e., `tests-hooks-and-orchestrator` must pass).\n  expected_change_site: `.claude/commands/audit-plans.md`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The CI run at `6cf6818444b0930e750793811e2b81f698090425` (run 37254616959) reports `tests-hooks-and-orchestrator: failure` and `CI jobs that did not succeed: tests-hooks-and-orchestrator`; the diff between the root `.claude/commands/audit-plans.md` and the template is the cited cause; the current LAST RUN DIFF (13 lines across `scripts/security_audit.sh` and `tests/test_security_audit_workflow_contract.py`) does not touch either copy of the command and cannot close the gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR head must produce a green `lint` aggregate (i.e., `tests-hooks-and-orchestrator` must pass).\n  Expected change site: `.claude/commands/audit-plans.md` (root) must be byte-identical to `workflow-templates/.claude/commands/audit-plans.md` per `tests/test_audit_plans_command.py::test_template_parity`.\n  Evidence of absence: The CI run at `6cf6818444b0930e750793811e2b81f698090425` (run 37254616959) reports `tests-hooks-and-orchestrator: failure` and `CI jobs that did not succeed: tests-hooks-and-orchestrator`. The diff between the root `.claude/commands/audit-plans.md` and the template is the cited cause. The current LAST RUN DIFF (13 lines across `scripts/security_audit.sh` and `tests/test_security_audit_workflow_contract.py`) does not touch either copy of the command and cannot close the gap. This was BLOCKED in prior rounds because the editor workspace excludes the root command file.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_audit_plans_command.py:29-30 | severity=BLOCKER | confidence=5\n  PROBLEM: The root command and template are not byte-identical. The root describes the new command as a user-run implementation hand-off, while the template describes it as an orchestrator hand-off.\n  WHY: The strict parity assertion fails in tests-hooks-and-orchestrator, leaving the aggregate lint check red on the reported PR head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "414c8361f7088d949b970388db44349d7bd8d4f0aa8e006f5bbfc2b0d75fefff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37253221388",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37253221388",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005024104_f47904c05e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37253221388"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T02:41:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

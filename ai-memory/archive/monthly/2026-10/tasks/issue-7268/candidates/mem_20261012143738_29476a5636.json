@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7268,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7268\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7271\",\"pr_number\":7271,\"branch\":\"ai/issue-7268\",\"run_id\":\"38260483740\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38260483740\",\"changed_files\":[\"changelog.d/7268-poller-api-dedup.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "d862ad49cd057397f5a401adfc11c053c24ad42c74e16876d3348e5ad04220a9",
+  "lineage": {
+    "issue_number": 7268,
+    "parent_ids": [],
+    "pr_number": 7271,
+    "run_id": "38260483740",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38260483740",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7271"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261012143738_29476a5636",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7268,
+    "level": "run",
+    "pr_number": 7271,
+    "run_id": "38260483740"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7268: https://github.com/shubhodeep1/coding-workflows/pull/7271",
+  "timestamps": {
+    "created_at": "2026-10-12T14:37:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

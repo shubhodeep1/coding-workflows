@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:2748 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The README.md:2748 `WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED` row says a report that claimed no run is skipped quietly with `WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=marker_guard` (exit 0, no alert). In fact that skip lives inside `_open_issue` (scripts/workflow_failure_heal_intake.sh:2765-2766) and the pre-diagnosis skip at scripts/workflow_failure_heal_intake.sh:2282 applies only to `engine_fallback`. A run-less label-only report classified `already-fixed`, `transient` or `consumer-config` takes the arms at scripts/workflow_failure_heal_intake.sh:2984-3027, so no `stage=marker_guard` line is emitted and a Telegram note is produced.\n  WHY: An operator reading the row would think every run-less report is dropped silently with `stage=marker_guard`, which contradicts actual behavior and the sibling row at README.md:2735. The reviewer rated the severity NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:2748 | severity=low (source: NIT) | confidence=3\n  PROBLEM: The README.md:2748 `WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED` row says a report that claimed no run is skipped quietly with `WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=marker_guard` (exit 0, no alert). In fact that skip lives inside `_open_issue` (scripts/workflow_failure_heal_intake.sh:2765-2766) and the pre-diagnosis skip at scripts/workflow_failure_heal_intake.sh:2282 applies only to `engine_fallback`. A run-less label-only report classified `already-fixed`, `transient` or `consumer-config` takes the arms at scripts/workflow_failure_heal_intake.sh:2984-3027, so no `stage=marker_guard` line is emitted and a Telegram note is produced.\n  WHY: An operator reading the row would think every run-less report is dropped silently with `stage=marker_guard`, which contradicts actual behavior and the sibling row at README.md:2735.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "83bcc507659545e303b710f9e49a8ca11341aa73b7f251baf5d663b66dac46cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8185,
+    "run_id": "40289524997",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40289524997",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026084122_44e60fc188",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8185,
+    "run_id": "40289524997"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T08:41:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: issue (CI triage gen 2, PR #6976 `REVIEW_SUPPORT_SHA` count)\n\n**Planning ref:** `main` at `5968f15502db2ee032b08d248cfa95ef8e1162e3`. `main` has moved past the `121c36f8` recorded in the planning context; I checked the claims below against the newer commit. There is no integration branch metadata, so there is no mismatch.\n\n**Answer mapping:** Q1 was answered A. Close this issue as already done and commit nothing. PR #6976 gets the fix when it syncs with or merges `main`.\n\nScope-mode: Hold Scope\nReuse-audit: extends test_review_autofix_passes_support_sha_to_every_marker_site\nScope-mode justification: The fix this triage asks for is already on `main`. In `tests/test_workflow_failure_heal.py`, `test_review_autofix_passes_support_sha_to_every_marker_site` (around lines 3619\u20133631) already asserts `wf.count(\"REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}\") == 3`. Its docstring already says the third export belongs to the deterministic-skip-merge freshness-helper verification. `.github/workflows/review_autofix.yml` has exactly three such exports, at lines 2144, 2478 and 2813. The test also still checks the merge-helper verification (`git -C .codex-freshness-src rev-parse HEAD ... = \"${REVIEW_SUPPORT_SHA:-}\"`). The approved answer (Q1: A) says not to commit anything. Editing the same line again on `ai/issue-6969` (option B) would only add a merge-conflict risk, and this triage chain is already at generation 2 of 3. So the complete and correct scope here is zero file changes.\n\n### 1. Files likely to change\n- None. `tests/test_workflow_failure_heal.py` and `.github/workflows/review_autofix.yml` on `main` already agree with each other.\n\n### 2. Functions or modules to implement\n- None. The implement phase should make no edits. The expected terminal outcome is that this issue is closed as already done, with no PR opened.\n\n### 3. Data structures affected\n- None.\n\n### 4. API or interface changes\n- None. The `REVIEW_SUPPORT_SHA` env exports and the `needs.gate.outputs.review_support_sha` gate output stay as they are.\n\n## Decisions\n\n### D1 \u2014 Resolve this triage as already done on `main` instead of editing a branch\n- **Chosen:** No code change. Close the issue as already done. PR #6976 (`ai/issue-6969`, head `5f2a5d0a`) picks up `main`'s version of the test through the merge-base freshness gate (`update-branch`) or a merge of `main`.\n- **Alternatives considered:** (B) Apply the same one-line `== 2` \u2192 `== 3` edit on `ai/issue-6969` through an `Integration branch:` line. (C) Run implement on `main` and accept a no-op run.\n- **Why:** The approved Q1 answer is A. `main` already holds the correct assertion. Option B duplicates that edit and can conflict when the branch syncs with `main`. Option C spends a run that does nothing and moves the lineage toward the gen-3 cap for no benefit. Removing the third workflow export is not an option at all: it would break the merge-helper SHA verification at `review_autofix.yml` around lines 2206\u20132212.\n\n## Security considerations\n- **Trust boundaries:** None are touched. The verified-support-SHA check in the deterministic-skip-merge job stays in place, and it should: it stops an unverified `.codex-freshness-src` checkout from authorizing auto-merge.\n- **Authorization / new surfaces:** None.\n- **External input validation:** Not applicable.\n- **Abuse cases:** The one relevant risk would be \"fixing\" the CI by deleting the third `REVIEW_SUPPORT_SHA` export. That would weaken the freshness-helper verification. This plan rules it out.\n\n### 5. Risks and edge cases\n- **Conflict note:** The triage body says the test \"expects two\" exports. That is true only of the stale copy on `ai/issue-6969`. `main` already expects three, so the triage's \"Affected files\" points at a fix that has already landed on the default branch.\n- If PR #6976 still fails this test after syncing with `main`, the branch copy has diverged. The documented fallback is to reopen this issue with `Integration branch: ai/issue-6969` and apply option B.\n- The pipeline's no-op implementation handling may label the issue rather than close it. The implement agent and any reviewer should treat \"no diff\" as the intended result here, not a failure to re-issue.\n\n### 6. Testing considerations\n- Static check on `main`: `grep -n 'REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}' .github/workflows/review_autofix.yml` returns exactly 3 lines (2144, 2478, 2813), which matches the test's `== 3`.\n- **UNVERIFIED:** I could not run `pytest tests/test_workflow_failure_heal.py::test_review_autofix_passes_support_sha_to_every_marker_site` because pytest is not installed in the planning environment. CI on `main` and on PR #6976 after its sync is the authoritative check.\n\n### 7. Pre-execution self-check\n- Requirements: covered. Q1: A means no commit and closing as done; the plan does exactly that.\n- Grounding: I read the test assertion and docstring and grepped the workflow exports on the current `main`.\n- No new scripts, scheduler wiring, supervisor or DB work, so the \u00a720 registry does not apply.\n- Assumption: PR #6976's CI will re-run on a tree that contains `main`'s test after the freshness gate or a manual sync. I did not inspect the `ai/issue-6969` copy of the test directly.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d4bcf9b489599d0b93f6e864020c239781c1706463069e29adacb3a01097902c",
+  "lineage": {
+    "issue_number": 6977,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37988112758",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37988112758",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6977"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261009204258_d821a460e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6977,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37988112758"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6977",
+  "timestamps": {
+    "created_at": "2026-10-09T20:42:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

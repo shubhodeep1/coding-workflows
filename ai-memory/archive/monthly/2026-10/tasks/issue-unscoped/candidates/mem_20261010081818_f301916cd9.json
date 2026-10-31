@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1645-1650 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Prefixing summarized test output with `    | ` does not neutralize workflow command sequences in the output, potentially allowing workflow command injection.\n  WHY: Gemini rates this major; minimax_minimax-m3 and qwen_qwen3_7-plus dispute the finding, citing the leading-space prefix and a test that verifies injected commands remain prefixed.\n- .github/workflows/ci.yml:1642 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `[A-Za-z0-9_]+` test-name regex excludes parameterized test names containing characters such as brackets or colons, suppressing their names in the error annotation.\n  WHY: Gemini rates this major; minimax calls the impact a nit because the FAIL-line block still displays the names.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1645-1650 | severity=high | confidence=4\n  PROBLEM: Inadequate sanitization of test output allows potential workflow command injection.\n  WHY: The `sed` commands `sed 's/^/    | /'` only prefix the start of each line from the test log. They do not escape or neutralize any workflow command sequences (e.g., `::error::`, `::set-output::`) that might exist mid-line or on subsequent lines of multi-line test output. A malicious or accidentally formatted test failure could inject workflow commands that the runner would interpret.\n- .github/workflows/ci.yml:1642 | severity=high | confidence=4\n  PROBLEM: The regex `[A-Za-z0-9_]+` is too restrictive for identifying failing test names.\n  WHY: Parameterized tests (e.g., `test_func[a:b]`) often use characters beyond `[A-Za-z0-9_]`. If a test failure does not match the strict regex, it will not be included in the `::error::` annotation, potentially causing confusion or masking which specific tests failed, even if the failure is printed in the log tail.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "772fc748f036391630395b30c893acd0b8254ae12abcd641a02a46d95f587649",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6953,
+    "run_id": "38035482560",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38035482560",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010081818_f301916cd9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6953,
+    "run_id": "38035482560"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T08:18:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

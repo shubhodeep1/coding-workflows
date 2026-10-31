@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_refresh_runner.py:392\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_clone_repository` retries `CommandFailure` but not `subprocess.TimeoutExpired`, so a timed-out clone bypasses the retry budget.\n  WHY: A hanging `gh repo clone` can escape the retry loop and mark the repository as `error`, blocking the release.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_refresh_runner.py:62-63\n  PROBLEM: The clone retry parameters are fixed rather than configurable through environment variables.\n  WHY: The reviewer recommends making `CLONE_ATTEMPTS` and `CLONE_RETRY_DELAYS_SECS` configurable using the existing `_env_int` and `_env_str` pattern.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validation_refresh_runner.py:392\n  PROBLEM: A hanging `gh repo clone` raises `subprocess.TimeoutExpired`, which is not caught by the new retry loop.\n  WHY: The timeout bypasses the retry budget and can leave a consumer repository marked as `error`, blocking the release.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/validation_refresh_runner.py:62-63\n  PROBLEM: There is no operator override for clone retry count or delays.\n  WHY: During a provider outage, retries use the fixed delay schedule for each repository.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ff04446e146537f90212b9be78f8ed4b7c5ce22c6edb197372f1b8633e0cd645",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7270,
+    "run_id": "38262859481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38262859481",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012144430_521a71f9ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7270,
+    "run_id": "38262859481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-12T14:44:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

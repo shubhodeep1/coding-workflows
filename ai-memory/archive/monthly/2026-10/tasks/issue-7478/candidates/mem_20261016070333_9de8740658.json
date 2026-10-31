@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for #7478: rewrite `tests/e2e_smoke_canary.txt` with three new lines\n\nPlanning ref: `main` at `6517343763944feba149dcdf3d42e05391e2552c`. The \"Integration branch mismatch\" line reads `unknown`, not `true`, and the issue declares no integration branch, so this is not blocked.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for exactly one file to get exactly three lines and nothing else. The file already exists, so this changes it rather than creating new code or structure. No helper, pattern or new interface is involved. A fuller option would cost nothing extra and add nothing, so the scope stays as written. This follows \u00a76 (correctness first, then backward compatibility).\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data file.\n\nData structures affected: The three plain-text lines in the file. Today they are `status: ok`, `run_id: 26151428977` and `updated-by: ai-pipeline`, each ending in LF. After the change they will be:\n```\nstatus: ok\nrun_id: alt-38863287484\nupdated-by: ai-pipeline\n```\nKeep LF line endings and one final newline, matching the current file.\n\nAPI/interface changes: None.\n\n## Decisions\n### D1 \u2014 Line endings and final newline\n- Chosen: LF line endings with a single final newline, the same as the current file.\n- Alternatives considered: No final newline; CRLF line endings.\n- Why: This keeps the file's current format, and \"exactly three lines\" is most naturally read as three newline-terminated lines.\n\n### D2 \u2014 Leave tests and other files alone\n- Chosen: Change only the canary file.\n- Alternatives considered: Also update `tests/test_e2e_editor_smoke_canary.py`.\n- Why: The issue says to change only this file. That test only compares content when `E2E_EXPECTED_RUN_ID` is set, which the smoke harness does.\n\n## Security considerations\n- Trust boundaries: none touched. This is a static text fixture and no code reads it as instructions.\n- Authorization: no new endpoint or surface.\n- External input: the new content comes from the issue text, and none of it is executable.\n- Abuse cases: none. The change adds no secrets or markers.\n\n## Risks and edge cases\n- Conflict with the test's expectations: `tests/test_e2e_editor_smoke_canary.py` lines 97-99 reject an `E2E_EXPECTED_RUN_ID` that is not all digits. `alt-38863287484` is not all digits, so this run is probably not graded by that byte-exact test. This plan sets no expectation either way; the issue text decides the content.\n- The editor may add extra text, such as an `E2E_EDITOR_BAIT_` comment, or drop the final newline. The file must contain exactly the three lines above.\n\n## Testing considerations\n- Check that the file's bytes are exactly the three lines, with LF endings and one final newline.\n- Check that `git diff --stat` shows only this one file changed.\n- No other test needs to change. The canary test skips when its environment variables are unset.\n\n## Pre-execution self-check\n- Every requirement in the issue is covered: one file, exact content.\n- The file and the test cited above exist at this ref.\n\nPLAN_SELF_CHECK: WARNING: `run_id: alt-38863287484` is not numeric, so `tests/test_e2e_editor_smoke_canary.py` would reject it as `E2E_EXPECTED_RUN_ID` if that test were used to grade this run; use the issue text as written.\nSTATUS: CLEAR\n\nAssumptions: LF line endings and a single final newline.\nMissing context: none.\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "a9c770f47760453dbf75365e0c496691bf45ea6dff05bb1a9949b4ecfcf56adc",
+  "lineage": {
+    "issue_number": 7478,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38863935402",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38863935402",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7478"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261016070333_9de8740658",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7478,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38863935402"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7478",
+  "timestamps": {
+    "created_at": "2026-10-16T07:03:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

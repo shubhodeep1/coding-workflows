@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which fix should close the user-manager escape route?\nChoices:\nA) Option 1: make `cgroupfs` the default for `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE` and keep `auto` as an opt-in value. Linger and `systemd --user` never start in the default mode, so no user manager is reachable. Update the #7063 tests, README.md, an `agents.d/` correction fragment and a `changelog.d/` fragment. (RECOMMENDED)\nB) Option 2: keep `auto` (systemd first) as the default, and run the rootless daemon in a mount namespace that exposes only the bus runc's systemd driver needs. Prove that `systemd-run --user` cannot be used from a container.\nC) Both: make `cgroupfs` the default (A) and also harden opt-in `auto` mode (B).\n**Note:** B and C need proof that the narrowed bus cannot start transient units, because runc's systemd driver itself starts transient scopes through that bus. That proof may not exist.\nQ2: How should `selfcheck` treat an operator who sets `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE=auto` (systemd user session) after the default changes?\nChoices:\nA) Fail closed in that mode: `selfcheck` probes from a container started through the rootless daemon. If the sandbox uid's user manager is running, or a user-manager socket other than `docker.sock` is reachable, it fails with a named reason such as `user_manager_reachable_from_container` (exit 3, `harness_error`). Opt-in `auto` then works only where no user manager starts. The default `cgroupfs` mode is unaffected, and the daily `harness-sandbox-check` keeps running the default. (RECOMMENDED)\nB) In `auto` mode, allow the documented residual: `selfcheck` logs a warning naming it and passes. `selfcheck` fails closed only when the route is reachable in `cgroupfs` mode, for example through a linger left from an earlier provision.\nC) Remove systemd mode entirely: treat `auto`, like any other value, as `cgroupfs` with a warning, so the route never exists.\n**Note:** B conflicts with the acceptance criterion \"selfcheck fails closed \u2026 when that route is reachable in the active mode\". Choosing B requires dropping that criterion for opt-in `auto`.",
+  "fingerprint": "3554e383c35c60d61497963eb8fa00d4aa734512c4d37787658d7f58c225440e",
+  "lineage": {
+    "issue_number": 7380,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38562030851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38562030851",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261014121831_57c5309ca1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7380,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38562030851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7380 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-14T12:18:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

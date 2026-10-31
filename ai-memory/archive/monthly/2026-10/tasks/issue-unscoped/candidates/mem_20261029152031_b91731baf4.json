@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate.yml:1522-1533 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: Model-controlled `LOCAL_ID` is interpolated raw into the `::warning::` line (1531), the `Deferring` echo (1533) and the `::error::` line (1579), and may contain CR/LF.\n  WHY: An injected newline can spoof workflow commands or annotations. Severity disagreement: gemini MAJOR, glm NIT; highest used. anthropic_claude-sonnet-5_5 raised this only as a hardening suggestion.\n- tests/test_orchestrate_lib.py:3959 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When `jq` or `bash` is missing, `_wave1_tools_available` prints SKIP and the test returns normally, counting as passed.\n  WHY: A misconfigured environment would pass without checking deferral-reason logging or the error path. Severity given as MAJOR.\n- .github/workflows/orchestrate.yml:1579 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `exit 1` in the `create_issues` loop stops further child creation after one failure, leaving already-created child issues orphaned.\n  WHY: The orchestrator assumes atomic child creation per wave, so this leaves unmanaged state. Severity given as MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nHardening only: .github/workflows/orchestrate.yml:1522 | `LOCAL_ID` is model-controlled and may contain CR/LF, and is echoed raw into the `Deferring`, `::warning::` and `::error::` lines. Suggested fix: strip `\\r\\n` from it. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate.yml:1533 | severity=high | confidence=4\n  PROBLEM: `${LOCAL_ID}` is used directly in an echo statement that feeds a log line potentially parsed as a workflow command.\n  WHY: `LOCAL_ID` comes from untrusted model output, so an injected newline could spoof workflow annotations (e.g. `::error::`).\n- tests/test_orchestrate_lib.py:3959 | severity=high | confidence=3\n  PROBLEM: When `jq` or `bash` is missing, `_wave1_tools_available` prints SKIP and the test returns normally, counting as passed.\n  WHY: A misconfigured environment would pass without verifying the deferral-reason logging or error-path behavior.\n- .github/workflows/orchestrate.yml:1579 | severity=high | confidence=3\n  PROBLEM: The `exit 1` in the `create_issues` loop stops further child creation if one creation fails.\n  WHY: Already-created child issues remain on GitHub as orphans with no parent tracking record, and the orchestrator assumes atomic child creation per wave.\n- Hardening: .github/workflows/orchestrate.yml:1522 | `LOCAL_ID` may break downstream commands. Suggested fix: strip `\\r\\n` from it. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/orchestrate.yml:1522, 1531, 1533, 1579 (validate_decomposition at scripts/orchestrate_lib.py:112-117) | severity=low | confidence=4\n  PROBLEM: `LOCAL_ID` comes from model-authored JSON and `validate_decomposition` does not restrict its characters. It is still interpolated raw into three workflow-command lines, although the jq stderr text was sanitized.\n  WHY: An id containing CR/LF or a crafted `::error::` payload can break out of the intended single log line, enabling log and annotation spoofing with no code-execution path.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a2097ba7971ba91631a65ec64e46c46abb1f88538bd129d05969b5d626876d5c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8324,
+    "run_id": "40884328449",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40884328449",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029152031_b91731baf4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8324,
+    "run_id": "40884328449"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T15:20:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

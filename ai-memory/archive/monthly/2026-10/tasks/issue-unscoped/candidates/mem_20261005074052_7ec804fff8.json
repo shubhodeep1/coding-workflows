@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:271-279 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The FD-position calculation leaves adjacent numeric file descriptors such as `2` in the push arguments when parsing redirects.\n  WHY: `_push_targets` can treat the FD as another refspec, causing the new regression test and the existing push-guard test to fail.\n- .claude/hooks/pr_merge_status_guard.py:274 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The adjacency check relies on shlex stream positions matching one specific lookahead and pushback behavior.\n  WHY: A change in Python's shlex position semantics could make the guard misparse adjacent or spaced numeric refspecs without a test catching the shift.\n- tests/test_pr_merge_status_guard.py:961-968 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The redirect-parsing tests omit multi-digit file descriptors and additional redirect/refspec combinations, including multiple redirects and a mixed numeric refspec with an FD redirect.\n  WHY: The untested cases could allow future parser changes to regress FD removal or numeric refspec checking; reviewers classified this as NIT-level or low-risk test-coverage hardening.\n- .claude/hooks/pr_merge_status_guard.py:84-96 and 274-279 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The position-arithmetic rewrite lacks tests for quoted or escaped adjacent-FD cases that motivate replacing the prior regex check.\n  WHY: Without those tests, a future change could reintroduce the parsing bug or create another one.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_pr_merge_status_guard.py, lines 961-965 | HARDENING_SUGGESTION\n  ISSUE: The test_adjacent_fd_redirect_does_not_create_numeric_refspec test tests single-digit fd 2 but omits multi-digit file descriptors.\n  SUGGESTED MINIMAL FIX: Add \"git push origin HEAD:feature/open 12>/dev/null\" to the test_adjacent_fd_redirect_does_not_create_numeric_refspec test cases.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:271-279 (`_shell_segments_with_operators` redirect-stripping block) | severity=MAJOR | confidence=3\n  PROBLEM: The position-based FD detection can leave adjacent numeric FDs in the push arguments due to its `raw_start` calculation.\n  WHY: `_push_targets` may extract `2` as another refspec, causing the adjacent-FD regression test and the existing push-guard test to fail.\n- .claude/hooks/pr_merge_status_guard.py:274 (`previous_end == token_end - len(token)`) | severity=MAJOR | confidence=3\n  PROBLEM: The adjacency condition depends on shlex stream positions matching one specific pushback behavior.\n  WHY: A future Python change to shlex positions could silently regress parsing of adjacent FD redirects or spaced numeric refspecs without an in-repo test detecting the shift.\n- tests/test_pr_merge_status_guard.py:961-968 (test_adjacent_fd_redirect_does_not_create_numeric_refspec) | severity=NIT | confidence=3\n  PROBLEM: The test covers only single-digit FDs, leaving symmetric multi-digit FD handling untested.\n  WHY: A command such as `git push origin 12>file` could be misparsed as a refspec and produce a spurious warning or false-positive block.\n- .claude/hooks/pr_merge_status_guard.py:84-96 (imports) and 274-279 (function body) | severity=NIT | confidence=2\n  PROBLEM: The position-arithmetic rewrite lacks regression tests for the quoted or escaped adjacent-FD cases that motivate replacing the prior regex.\n  WHY: Without that coverage, a future change could reintroduce the original bug or introduce a new one.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_pr_merge_status_guard.py, After line 968 (test_adjacent_fd_redirect_does_not_create_numeric_refspec) | HARDENING_SUGGESTION\n  ISSUE: Coverage omits multi-digit file descriptors, multiple redirects in one command, and mixed numeric refspecs with FD redirects.\n  SUGGESTED MINIMAL FIX: Add parametrized cases for `12>/dev/null` and `2>out 2>&1`; add `(\"2\", \"git push origin 2 3>/tmp/out\")` to test_numeric_push_refspec_before_redirect_is_checked.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_pr_merge_status_guard.py, test_adjacent_fd_redirect_does_not_create_numeric_refspec (line 961-968) | HARDENING_SUGGESTION (optional NIT-level test-coverage hardening)\n  ISSUE: The test matrix omits multi-digit adjacent FDs, multiple redirects, and mixed refspec+FD cases.\n  SUGGESTED MINIMAL FIX: Add cases for `12>/dev/null`, `2>out 2>&1`, and `(\"2\", \"git push origin 2 3>/tmp/out\")`, asserting `lookups == [\"2\"]` for the mixed case.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "410c1df0c858758846de81b208a4f8ae630bbd1cf1d60e9d0c00aa2606a19bb2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6271,
+    "run_id": "37275684857",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37275684857",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005074052_7ec804fff8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6271,
+    "run_id": "37275684857"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:40:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

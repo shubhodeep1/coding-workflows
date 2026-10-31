@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md:whole file (lines 1-23) | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: This fragment duplicates the #6985 entry already present in CHANGELOG.md at lines 2534\u20132555, and describes a different CI step for the test.\n  WHY: The next changelog fold will add a duplicate entry with conflicting wording; severity was rated MAJOR by anthropic_claude-sonnet-5_5 and NIT by openai_gpt-6-luna.\n- .github/workflows/ci.yml:line 613 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: This adds another invocation of test_clarify_sandbox_base_image_preseed.py, which already runs at lines 577, 658, and 939.\n  WHY: CI repeats the same test suite without additional coverage, adding redundant work.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md:whole file (lines 1-23) | severity=MAJOR | confidence=4\n  PROBLEM: The same entry is already in `CHANGELOG.md` at line 2534, under `## [Unreleased]` (line 8). That copy ends differently (line 2555): the test \"runs in the `Regression tests wired by the CI wiring guard (part 1)` step of `ci.yml`\". This fragment says it runs in \"`ci.yml`'s isolated-agent test step\". The text above that sentence is identical in both.\n  WHY: Release automation folds `changelog.d/*.md` into `CHANGELOG.md` and deletes the fragment. The next fold will add a second, near-identical \"Clarify gets its sandbox base image from a mirror first\u2026\" entry to `[Unreleased]`. The two copies will disagree about where the test runs. The previous autofix run edited that sentence in the fragment, but the fragment should not exist while the folded entry is in `CHANGELOG.md`.\n- .github/workflows/ci.yml:line 613 | severity=NIT | confidence=4\n  PROBLEM: `tests/test_clarify_sandbox_base_image_preseed.py` is already run at lines 577, 658 and 939 of `ci.yml`. This change adds a fourth run. The wiring guard was already satisfied before this PR, so the addition does not fix the failure described in linked issue #7222.\n  WHY: CI repeats the same test file in another step. This is a small cost and does not break anything.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md:line 23 | severity=NIT | confidence=5\n  PROBLEM: This fragment duplicates the #6985 entry already present in CHANGELOG.md at lines 2534\u20132555, and describes a different CI step for the test.\n  WHY: scripts/assemble_changelog.py folds every nonempty fragment into CHANGELOG.md without checking for an existing entry, so the next release adds a duplicate with conflicting wording.\n- .github/workflows/ci.yml:line 613 | severity=NIT | confidence=5\n  PROBLEM: This adds another invocation of test_clarify_sandbox_base_image_preseed.py, which already runs at lines 577, 658, and 939.\n  WHY: CI executes the same 13-test suite four times, including multiple times in the same job, adding redundant work without additional coverage.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cbf6b9374988455705e9cb65aa7ad0306a33e2239cdb7a1b9ef65b8d7e2af804",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7235,
+    "run_id": "38439276208",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38439276208",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013174203_bf8f9d4c2b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7235,
+    "run_id": "38439276208"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T17:42:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

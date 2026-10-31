@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/pin-ai-review-template-checkout.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The changelog sentence implies all three scheduled support jobs held GH_PAT, OPENROUTER_API_KEY and TG_BOT_SECRET, but only the provider-outage job holds all three.\n  WHY: The text is folded into CHANGELOG.md on release and overstates per-job secret exposure (severity NIT in all sources).\n- agents.d/pin-ai-review-template-checkout.md and changelog.d/pin-ai-review-template-checkout.md:filenames | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The fragment filenames lack the `<issue-or-pr>-` prefix (e.g. `8176-pin-ai-review-template-checkout.md`).\n  WHY: This is convention drift with no runtime failure, though same-slug fragments from other PRs could collide (severity NIT in all sources; confidence ranged 3-5).\n- tests/test_update_workflows_guardrails.py:301-302 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The exemption for `shubhodeep1/coding-workflows/.github/workflows/` refs accepts mutable refs such as `@main`.\n  WHY: The renderer only pins `@stable` refs, so a mutable ref would pass the guard and ship to consumers. Nothing fails today because all refs are `@stable`. These were hardening suggestions, and the Sonnet reviewer considered the point and chose not to report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/pin-ai-review-template-checkout.md and changelog.d/pin-ai-review-template-checkout.md:filenames | severity=NIT | confidence=3\n  PROBLEM: The fragment names have no `<issue-or-pr>-` prefix.\n  WHY: Convention drift only, since the fragments are keyed on markers and still fold correctly.\n- changelog.d/pin-ai-review-template-checkout.md:2 | severity=NIT | confidence=4\n  PROBLEM: The sentence implies every job holds all three secrets. Only the provider-outage job references OPENROUTER_API_KEY and TG_BOT_SECRET (lines 172 and 178). The backfill job (line 92) and the sweep job (line 130) reference only GH_PAT.\n  WHY: The text is published into CHANGELOG.md and overstates per-job secret exposure.\n- Hardening: the `@stable` suffix check on the coding-workflows exemption was judged optional and not needed. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/pin-ai-review-template-checkout.md:2 | severity=NIT | confidence=4\n  PROBLEM: The changelog entry overstates the secret exposure per job.\n  WHY: Only `provider-outage-resume` holds all three secrets, and the others hold only GH_PAT. This misleads auditors.\n- agents.d/pin-ai-review-template-checkout.md, changelog.d/pin-ai-review-template-checkout.md:N/A (filename) | severity=NIT | confidence=5\n  PROBLEM: The filenames lack the mandatory `<issue-or-pr>-` prefix required by \u00a730.A and \u00a720.B.\n  WHY: This violates repository naming conventions but is not a runtime failure.\n- tests/test_update_workflows_guardrails.py:301-302 | severity=NIT | confidence=3\n  PROBLEM: The exemption allows any `shubhodeep1/coding-workflows/.github/workflows/` ref, including mutable ones such as @main.\n  WHY: It does not fail today because all internal refs are @stable. A future mutable internal ref would bypass the pinning guard.\n- Hardening: require internal refs to end in `@stable` before skipping them (about 4 lines changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/pin-ai-review-template-checkout.md:line 2 | severity=NIT | confidence=4\n  PROBLEM: The lead sentence overstates which jobs hold all three secrets. Only `provider-outage-resume` does (env lines 169-180). `non-retryable-backfill` (lines 91-98) holds only GH_TOKEN from GH_PAT. `security-hold-sweep` (lines 128-135) holds `github.token` and `SECURITY_HOLD_FINDING_AUTHOR_TOKEN` from GH_PAT.\n  WHY: The fragment is folded verbatim into CHANGELOG.md, so readers get the wrong picture of credential exposure for two of the three jobs.\n- agents.d/pin-ai-review-template-checkout.md and changelog.d/pin-ai-review-template-checkout.md:filenames | severity=NIT | confidence=3\n  PROBLEM: Both fragment filenames lack the PR number prefix. The expected name is `8176-pin-ai-review-template-checkout.md`.\n  WHY: This is convention drift. The convention exists so concurrent PRs do not collide on the same fragment path.\n- tests/test_update_workflows_guardrails.py:301 (`test_wrapper_template_third_party_actions_are_sha_pinned`) | hardening\n  PROBLEM: The exemption accepts any ref on the `shubhodeep1/coding-workflows/.github/workflows/` prefix, but `scripts/workflow_wrapper_refs.py` `_REUSABLE_WORKFLOW_REF_RE` (lines 13-18) only pins refs ending in `@stable`.\n  WHY: A template ref such as `@main` would pass the guard and ship mutable to every consumer. Suggested fix: require `@stable` (about 4 lines). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/pin-ai-review-template-checkout.md and changelog.d/pin-ai-review-template-checkout.md:fragment filenames; both files begin at line 1 | severity=NIT | confidence=3\n  PROBLEM: The fragment filenames omit the required issue-or-PR number prefix. For PR #8176 the format is `8176-pin-ai-review-template-checkout.md`.\n  WHY: Another PR creating a fragment with the same slug would use the same path and conflict on merge.\n- tests/test_update_workflows_guardrails.py:301-302 | hardening\n  PROBLEM: The exemption accepts any `shubhodeep1/coding-workflows/.github/workflows/` ref, but the renderer only pins `@stable` refs (`scripts/workflow_wrapper_refs.py`, lines 13-17).\n  WHY: A ref such as `@main` would pass the guard and stay mutable after rendering. Suggested fix: require `@stable` or a 40-hex SHA (2-4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "2051824b001a8a277d8563cbbb3d5a8ea72e5e678750bf1360305315f9fd5b8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8264,
+    "run_id": "40704545950",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40704545950",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028143905_5662308bdd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8264,
+    "run_id": "40704545950"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T14:39:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan\n\n**Planning ref:** `main` at `b08018870a01854c2868aa643bb3cd36e51888d5`. No integration branch was specified; no branch mismatch is established.\n\n**Automation:** Extend the existing `scripts/operator_step_issue.py` writer; add no script or supervisor. The existing entry points remain `.github/workflows/issue_pr_status.yml` on merged default-branch PRs and `.github/workflows/orchestrate_poll.yml` on scheduled project polling. No database gate or future-removal entry applies.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/operator_step_issue.py` and the existing label-creation pattern in `scripts/label_helpers.sh`  \nScope-mode justification: Keep label creation inside the shared writer, immediately before its create-issue branch; existing-tracker updates need no new label call. Correcting the registered description is necessary to make first-run creation work. This is the complete small fix rather than a workflow-specific shortcut: under `unattended_system_instructions.md` \u00a76, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\n### Files likely to change\n- `scripts/operator_step_issue.py` \u2014 ensure the label before creating a new tracker.\n- `.github/ai/label_contract.v1.json` and `scripts/label_helpers.sh` \u2014 shorten the *same* `ai:operator-step` description in both registries, preserving its meaning and registered color.\n- `tests/test_activation_verify.py` \u2014 extend its existing fake-GitHub and writer tests.\n\n### Functions or modules to implement\n- In `upsert`, after the existing issue listing establishes that no tracker can be updated, create `ai:operator-step` using the registered color and description, then perform the existing issue creation. Follow `label_helpers.sh::ensure_label_exists`: an already-existing label is success; any other label-creation failure stops before issue creation. Do not use `--force`, which would overwrite an existing label.\n- Read the registration from the trusted support checkout and fail closed if its metadata is missing or invalid. Keep the existing bounded issue reconciliation and verification unchanged.\n\n### Data structures affected\nOnly the registered `ai:operator-step` description changes; its name, color, issue marker, entry format, and writer JSON output remain unchanged.\n\n### API/interface changes\nNo new CLI arguments or output fields. The writer gains a label-create call **only on the no-tracker path**, before its existing `POST repos/{owner}/{repo}/issues`. GitHub\u2019s label-create contract is `POST repos/{owner}/{repo}/labels` with `name`, six-hex-character `color`, and `description`; the description must be at most 100 characters. `gh label create <name> --repo <owner/repo> --color <hex> --description <text>` supplies those fields without `--force`. ([docs.github.com](https://docs.github.com/en/rest/issues/labels?apiVersion=2022-11-28&utm_source=openai))\n\n### Risks and edge cases\n**Codebase conflict:** Both registries currently give `ai:operator-step` a **101-character** description, exceeding GitHub\u2019s 100-character limit. Shorten both identically before using that registration for creation. ([docs.github.com](https://docs.github.com/en/rest/issues/labels?apiVersion=2022-11-28&utm_source=openai))\n\nTreat an already-existing label as success, including a concurrent creator winning the race. Do not interpret unrelated validation, permission, or rate-limit errors as \u201calready exists\u201d; those must leave the tracker uncreated and preserve the writer\u2019s existing failure result. Existing trusted trackers, stale post-create listings, and duplicate reconciliation retain their current paths.\n\n### Security considerations\nThe writer crosses from trusted workflow support into GitHub issue and label writes. Preserve its `OWNER/REPO` and entry-key validation, use only trusted registered label metadata, and require the workflow\u2019s existing authorized GitHub token for both writes. An untrusted repository slug, malformed registration, or label-create failure must not cause an unlabeled or mislabelled tracker to be filed. Do not log credentials or introduce an endpoint exposed to callers beyond the existing writer CLI. GitHub documents Issues write permission for issue creation. ([docs.github.com](https://docs.github.com/en/rest/issues/issues?utm_source=openai))\n\n### Testing considerations\nExtend the representative `tests/test_activation_verify.py` fake-GitHub path to reject tracker creation until the label exists. Cover first-run creation and call order; registered color/description; pre-existing-label race; non-existence errors stopping issue creation; and no label-create call when updating an existing tracker. Assert the two registries remain identical and the description fits GitHub\u2019s limit. Run the focused tests on the repository\u2019s pinned test environment, then applicable lint and CI contract checks.\n\n## Decisions\n\n### D1 \u2014 Ensure the label in the shared writer\n- **Chosen:** Create it only before the writer files a new tracker.\n- **Alternatives considered:** Rely on label-sync workflow setup or add ensures separately to PR and project verification.\n- **Why:** The writer serves both routes, and the source repository has no automatic sync-labels wrapper on which first-run filing can depend.\n\n### D2 \u2014 Preserve existing label customizations\n- **Chosen:** Accept an already-existing label without forcing an update.\n- **Alternatives considered:** Use `gh label create --force`.\n- **Why:** Forcing creation also changes an existing label\u2019s metadata; the requested fix is to make filing possible, not to overwrite operator customization. ([cli.github.com](https://cli.github.com/manual/gh_label_create?utm_source=openai))\n\n**Pre-execution self-check:** The clarified task has no unanswered questions. The planned files cover the writer, its invalid registration, and focused regression tests; no new scheduler wiring is needed.  \nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0bdaf5af40cb45d2bfb9391e11c986472a55c61320753440f795ab70321f2b23",
+  "lineage": {
+    "issue_number": 6210,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37217175484",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37217175484",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6210"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261004164005_bcf75b8dbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6210,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37217175484"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6210",
+  "timestamps": {
+    "created_at": "2026-10-04T16:40:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

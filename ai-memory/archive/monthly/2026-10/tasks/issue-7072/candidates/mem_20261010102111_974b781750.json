@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The issue asks for a one-time follow-up that runs from the default branch. That rules out C, which is the \"already satisfied\" path the gap was filed against. It also rules out A: `tests/test_ci_job_split_contract.py::test_lint_needs_every_other_job` (line 85) would force any new `ci.yml` worker job into `lint.needs`, which changes the aggregate gate the issue says to keep intact. A dedicated workflow that checks a marker and runs on `push` to `main` plus `workflow_dispatch` keeps `ci.yml` untouched. It also runs without anyone starting it (\u00a720.B) and is easy to remove later (\u00a720.F).\nQ2: The postmortem (lines 31-39 and 108-116) names exactly this as what would settle the question: fetch the failed job log, take the `FAIL` / `TEST_CASE_EVENT ... \"status\":\"fail\"` lines, and rerun only those tests where `jq` and PyYAML are present. #6576 merged on 2026-10-09, so its Actions logs are still inside the default 90-day retention. The fallback to a full rerun at the recorded head covers an expired or unfindable log. B leaves the failure unreproduced. C throws away the cheaper and more precise evidence.\nQ3: A records the full result where the issue's audience will see it. The marker comment it posts is the same signal the one-time guard checks. A real defect on current `main` goes through the normal clarify \u2192 plan \u2192 implement flow, which matches the issue's \"fixes only a reproduced defect\". B adds a workflow that writes to the repo and opens a PR against a docs file, which is more surface for no gain. C leaves no lasting record and no fix path.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. All three decisions are letters. The notes below are binding constraints for the planner, taken from the repo files read:\n\n- **New workflow file.** Add `.github/workflows/pr6576-shard-followup.yml` (the name may vary but must be unique; it is a new top-level workflow, not a split of `ci.yml`).\n  - Triggers: `push` to `main` and `workflow_dispatch`.\n  - `permissions`: `contents: read`, `actions: read`, `issues: write`.\n  - Use `secrets.GH_PAT` for the marker read and write, so the marker author is the pipeline account.\n  - Indent with 2 spaces (YAML).\n  - Do not change `.github/workflows/ci.yml` or `tests/test_ci_job_split_contract.py`.\n- **Step 1: guard.** Read this issue's comments once, paginated. If a comment authored by the `GH_PAT` login (resolved with `gh api user`) contains `<!-- ai:pr6576-shard-followup:v1 -->`, log a skip and exit 0.\n  - This issue is #7072 according to memory record `mem_20261010101230_2018707db0`. The planner must confirm the number from the issue context and pass it through `env:`.\n  - If identity or the comment read fails, fail the run with no side effects. Do not post a duplicate marker.\n- **Step 2: resolve the recorded head.** Read the head SHA from `GET repos/{repo}/pulls/6576` (`.head.sha`), not from the `ai/issue-6573` branch tip (GITHUB FACTS shows that branch still exists at `11f954f90433`, which may differ from the recorded head).\n  - List `CI` runs with `head_sha=<that sha>` and `conclusion=failure`.\n  - Find their `orchestrate-poll (*)` jobs and download each job log.\n- **Step 3: extract and rerun.** Pull failing test names with the patterns above. Then:\n  - If any names are found, set up Python 3.12 and run the same \"Install Python CI dependencies\" commands `ci.yml` uses (PyYAML; `jq` is on `ubuntu-latest`). Run `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py <names...>` on current `main`.\n  - If no log or no names are found, check out the recorded head SHA. Run the four-group partition from the postmortem (lines 55-66: sorted `test_*` names, fast-fail split, `awk 'NR % 4 == g'`, then 4 local shards) against that tree's test module.\n- **Step 4: report.**\n  - Upload the logs as an artifact.\n  - Write a job summary.\n  - Post one marker comment on this issue with: run links, the evidence source (log or fallback), failing tests, pass/fail per group or test, and whether each failure reproduces on `main`.\n- **Step 5: file a fix only for a reproduced defect.** Only if a test fails on current `main`, open one standalone issue (no `ai:orchestrator-*` labels) with the failing test names, a redacted log excerpt, and a `<!-- ai:pr6576-shard-followup-defect:v1 -->` marker.\n  - Check for that marker first so a rerun cannot file the issue twice.\n  - A failure that appears only at the old head is recorded in the comment, with no fix filed.\n- **Registry entry.** Add a `single-use` entry to `docs/scripts-pending-removal.md` (`## Entries`, following the `## Template` fields):\n  - Removal trigger: \"marker comment posted on #<issue> by the GH_PAT account, and any defect issue it filed closed.\"\n  - Preflight checks:\n    - `gh api --paginate repos/{repo}/issues/<issue>/comments` shows the marker authored by the pipeline login.\n    - `gh issue list --search \"ai:pr6576-shard-followup-defect\"` shows no open issue.\n  - Owner: `shubhodeep1`.\n- **Also update:**\n  - the `workflows` TREE block in `agents.md` (via `make generate`);\n  - `docs/INVENTORY.md`, if it lists workflows;\n  - a changelog fragment at `changelog.d/<issue>-pr6576-shard-followup.md`.\n- **Reversibility.** Deleting the workflow file and its registry entry removes the follow-up entirely. The marker makes reruns no-ops.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone. The workflow uses the existing `GH_PAT` secret.",
+  "fingerprint": "63d39ca9e0b303ac33a93cbdb9b3f59724128b2e92112c53cb463dd5e5d61171",
+  "lineage": {
+    "issue_number": 7072,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38044045273",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38044045273",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7072"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010102111_974b781750",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7072,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38044045273"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7072",
+  "timestamps": {
+    "created_at": "2026-10-10T10:21:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

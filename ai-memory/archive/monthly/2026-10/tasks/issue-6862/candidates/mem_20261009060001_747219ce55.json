@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How will the required `files_touched` grant get into this issue body? It must be in the body, not a comment, and authored or edited by a trusted account.\nChoices:\nA: A repository operator edits this issue body and adds a `- files_touched:` block listing the exact paths from Q2, then removes any `ai:scope-blocked` label and re-runs the pipeline. (RECOMMENDED)\nB: Close this issue and have the pipeline account file a replacement whose body already contains the `- files_touched:` block.\nC: Shrink the change so it touches no automation paths (`scripts/`, `.github/`, `prompts/`, `.claude/`, `workflow-templates/`). **Note:** this can't work. The flag gate has to live in `scripts/review_conflict_resolve.sh` / `scripts/review_untrusted_workspace.py`, and choosing C will bounce back for re-clarification.\nQ2: Which exact paths should the grant list? Entries must be exact, with no globs or trailing `/`. The general `files_touched` guard also applies to paths outside the automation directories, so list every file.\nChoices:\nA: `scripts/review_conflict_resolve.sh`, `scripts/review_untrusted_workspace.py`, `tests/test_review_conflict_resolve_sandbox_only.py`, `.github/workflows/ci.yml`, `README.md`, `changelog.d/6806-conflict-hook-template-resolve.md` (RECOMMENDED)\nB: Option A plus `.github/workflows/review_autofix.yml`, to forward the flag as a repo variable. The helper's own default of `false` still applies (\u00a78).\nC: Option A without `.github/workflows/ci.yml`, if the existing CI step already collects the test file without registering it.",
+  "fingerprint": "29afe1f23ea145bf7986ce8ce9782f6e40fe4bf868dedaf56119400e5160182d",
+  "lineage": {
+    "issue_number": 6862,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37890872494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37890872494",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009060001_747219ce55",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6862,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37890872494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6862 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T06:00:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

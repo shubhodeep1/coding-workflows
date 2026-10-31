@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:578-584, 705, 721 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: When a linked run's log fetch fails, the placeholder file enters LOG_FILES, producing the shared `no-error-lines` signature instead of reaching the source-keyed signature.\n  WHY: Two reports can share a fingerprint if they have the same workflow name, failing step and unreadable logs; this behavior predates the PR.\n- scripts/workflow_failure_heal_intake.sh:721 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: Fingerprints for run-less label reports change shape, so an already-open heal issue using the old `label:<label>` fingerprint will no longer match.\n  WHY: One duplicate heal issue can be filed during the transition; the effect is bounded by the existing `WORKFLOW_HEAL_MAX_OPEN_ISSUES` and per-day caps.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cA report with no readable run logs (and not a phase/autofix report) is fingerprinted on label:<label>|source:<repo>#<n>.\u201d\n  expected_change_site: scripts/workflow_failure_heal_intake.sh, fingerprint-signature selection around lines 705-721\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The implementation only routes to the source-keyed signature when LOG_FILES is empty; when fetching a selected job log fails, the intake writes \u201c(job log unavailable)\u201d to a filtered-log file and adds that file to LOG_FILES (lines 578-583); `error_signature` returns \u201cno-error-lines\u201d for that placeholder, so reports with unreadable logs do not get the required per-item fingerprint.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh:578-584, 705, 721 | severity=NIT | confidence=3\n  PROBLEM: When a linked run's log fetch fails, the placeholder file is still added to LOG_FILES. The fingerprint then takes the `elif [ \"${#LOG_FILES[@]}\" -gt 0 ]` branch and gets an `error-signature` of `no-error-lines`. It never reaches the new `label:<label>|source:<repo>#<n>` signature. The README and changelog describe that signature as covering reports that \"still link no run\", and in this case a run is linked, so the claim is accurate as written. Two such reports can still share a fingerprint if they have the same workflow name, failing step and unreadable logs.\n  WHY: Only the narrow case of a linked run with an unreadable job log is affected. The fingerprint still includes the run's workflow name and failing step, which separates most unrelated failures. Before this PR the same case collapsed the same way, so it is not a regression. binance-blessings#249 is also not affected: it carried no runs, so it takes the new path.\n- scripts/workflow_failure_heal_intake.sh:721 | severity=NIT | confidence=2\n  PROBLEM: Fingerprints for run-less label reports change shape. An already-open heal issue that used the old `label:<label>` fingerprint will no longer match, so one duplicate heal issue can be filed during the transition.\n  WHY: The effect is bounded by the existing `WORKFLOW_HEAL_MAX_OPEN_ISSUES` and per-day caps. The change is intentional, since the old shared fingerprint was the incident's root cause.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"A report with no readable run logs (and not a phase/autofix report) is fingerprinted on label:<label>|source:<repo>#<n>.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh, within the branch handling failed log fetches for reports containing runs.\n  Evidence of absence: The PR updates the fingerprinting logic in the fallback case (where no runs are found for an issue), but does not update the fingerprinting logic for reports that contain failed runs where the log fetch returned \u201cjob log unavailable\u201d. These reports continue to use a signature that can lead to fingerprint collisions across repositories.\n  severity=MAJOR | confidence=5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cA report with no readable run logs (and not a phase/autofix report) is fingerprinted on label:<label>|source:<repo>#<n>.\u201d\n  Expected change site: scripts/workflow_failure_heal_intake.sh, fingerprint selection around the LOG_FILES check.\n  Evidence of absence: When fetching a selected job log fails, the intake writes \u201c(job log unavailable)\u201d to a filtered-log file and adds that file to LOG_FILES (lines 578-583). The fingerprint branch then takes the LOG_FILES path (lines 705-710), where error_signature returns \u201cno-error-lines\u201d for that placeholder. It reaches the source-keyed label signature only when LOG_FILES is empty (lines 715-721). Thus reports with unreadable logs do not get the required per-item fingerprint and can still share a lineage.\n  severity=MAJOR | confidence=5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: PR description, Change section \u2014 \"Intake: a report with no readable run logs (and not a phase/autofix report) is fingerprinted on `label:<label>|source:<repo>#<n>`.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh, the fingerprint-signature selection around lines 705-721 (the `LOG_FILES` branch vs the run-less `else` branch).\n  Evidence of absence: The implementation only routes to the source-keyed signature when `LOG_FILES` is empty, which happens only when the payload has no run refs at all. When a report links runs but every job-log fetch fails, the intake writes the literal placeholder `(job log unavailable)` into each `FILTERED_LOG` (scripts/workflow_failure_heal_intake.sh:580) and still appends those files to `LOG_FILES` (:582-584), so the `[ \"${#LOG_FILES[@]}\" -gt 0 ]` branch (:705-710) runs `error-signature` over the placeholder. `error_signature` returns the shared constant `no-error-lines` for it (scripts/workflow_failure_heal.py:1889-1903), so the fingerprint is `f(workflow, step, \"no-error-lines\")` \u2014 identical for different escalated items with the same failing workflow, exactly the cross-item lineage sharing this PR set out to eliminate. \"A report with no readable run logs\" includes this path; it is not fingerprinted on the label and source item. The README bullet is worded more narrowly (\"A report that still links no run\") and matches the shipped code, so only the PR-description deliverable is unmet.\n  severity=MAJOR | confidence=4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9e3bdff12a6d630c1fc1cbcc182a732976280ac7b02ca195516edb1db8d14101",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7152,
+    "run_id": "38117172032",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38117172032",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011064653_a82e629941",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7152,
+    "run_id": "38117172032"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T06:46:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:1635 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test fails because the guard emits a `permissionDecision: \"ask\"` response, while the test asserts that no permission decision is output.\n  WHY: The merged-PR guard logic treats commits with `config_override=True` and a warning as an \"ask\" situation, causing a CI validation failure.\n- .github/workflows/check_failure_triage.yml:\"Diagnose check failure\" job definition | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The diagnosis job lacks container isolation settings.\n  WHY: The job runs in the default runner environment with full network access and workspace write privileges, despite the task requiring a network-isolated, read-only workspace.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run diagnosis in a network-isolated, read-only workspace\"\n  expected_change_site: .github/workflows/check_failure_triage.yml (Diagnose check failure job)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The workflow job definition for \"Diagnose check failure\" lacks container isolation settings (`container:` block) necessary to enforce network isolation and read-only workspace access, nor does the PR include any changes to the workflow definition to implement these settings.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_pr_merge_status_guard.py:1635 | severity=critical | confidence=5\n  PROBLEM: The test fails because the guard emits a `permissionDecision: \"ask\"` response, while the test asserts that no permission decision is output.\n  WHY: The merged-PR guard logic in `.claude/hooks/pr_merge_status_guard.py` treats commits with `config_override=True` and a warning as an \"ask\" situation, causing a CI validation failure.\n- .github/workflows/check_failure_triage.yml:\"Diagnose check failure\" job definition | severity=high | confidence=4\n  PROBLEM: The diagnosis job lacks container isolation settings.\n  WHY: Despite restricting environment variables, the job still runs in the default runner environment with full network access and workspace write privileges.\n- Requirement: \"Run diagnosis in a network-isolated, read-only workspace\"\n  Expected change site: .github/workflows/check_failure_triage.yml (Diagnose check failure job)\n  Evidence of absence: The workflow job definition for \"Diagnose check failure\" lacks container isolation settings (`container:` block) necessary to enforce network isolation and read-only workspace access, nor does the PR include any changes to the workflow definition to implement these settings.\n  SEVERITY: high\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===",
+  "fingerprint": "f10e6b89c1a3bd0cb9ffa64c5e16e3f84bd839874cc9ca6dff1a90a4e99e086f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6647,
+    "run_id": "37666875494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37666875494",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007184849_7a250be76e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6647,
+    "run_id": "37666875494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T18:48:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

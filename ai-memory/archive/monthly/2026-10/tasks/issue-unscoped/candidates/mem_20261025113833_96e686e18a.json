@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:22264-22281 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The second harness `_run_poller_subprocess(...)` (truncated-comment-JSON test, line 22281) sets `GH_TOKEN`/`GITHUB_REPOSITORY` but does not install `_write_poller_curl_shim`, so the new comment claiming no poller test can reach the network is not fully true.\n  WHY: If that path reaches `curl_gh_api` (`scripts/tg_helpers.sh:455-470`), the real `curl` runs with unbounded timeouts and can reproduce the 180-second hang under a network stall. Source severity was NIT.\n- changelog.d/poller-test-curl-shim.md:1 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The changelog fragment name lacks the `<issue-or-pr>` number prefix required by the `changelog.d/<issue-or-pr>-<slug>.md` convention (suggested name `8124-poller-test-curl-shim.md`).\n  WHY: This is convention drift with no runtime failure, and concurrent PRs could collide on the filename. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Linked issue suggested fix 1: \"Bound `curl_gh_api` in `scripts/gh_helpers.sh` ... Add `--connect-timeout` and `--max-time` from new variables with defaults inside the helper (`CURL_GH_API_CONNECT_TIMEOUT_SECS`, default 15; `CURL_GH_API_MAX_TIME_SECS`, default 60)\"\n  expected_change_site: `scripts/gh_helpers.sh` `curl_gh_api` (definition at gh_helpers.sh:1464; the unbounded curl invocation at gh_helpers.sh:1483)\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: No PR hunk touches `scripts/gh_helpers.sh`, `pr_changed_files.txt` lists only the changelog fragment and two test files, no `--connect-timeout`/`--max-time` or `CURL_GH_API_*` variables exist, and no follow-up issue is created for the deferred fix. Source severity was MAJOR.\n- requirement: Linked issue suggested fix 3a: \"a new test for the `curl_gh_api` timeout (for example `tests/test_gh_helpers_curl_timeout.py`), wired into an existing CI step.\"\n  expected_change_site: new `tests/test_gh_helpers_curl_timeout.py` (or equivalent)\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: No such test is in the diff and no hunk references `CURL_GH_API_MAX_TIME_SECS` or a `curl_gh_api` timeout. Source severity was MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:22264-22281 | severity=NIT | confidence=3\n  PROBLEM: The second harness `_run_poller_subprocess(...)` (line 22281) sets `GH_TOKEN`/`GITHUB_REPOSITORY` but has no curl shim, unlike `_run_poller`.\n  WHY: If it reaches `curl_gh_api` (`scripts/tg_helpers.sh:455-470`), the real `curl` runs with unbounded timeouts and can hang.\n- changelog.d/poller-test-curl-shim.md:1 | severity=NIT | confidence=3\n  PROBLEM: The fragment filename drops the issue-number prefix required by `changelog.d/<issue-or-pr>-<slug>.md`.\n  WHY: This is convention drift and risks collisions between concurrent PRs.\n- TASK_GAP 1\n  Requirement: Suggested fix 1 in the linked issue, bounding `curl_gh_api` with `--connect-timeout`/`--max-time` and `CURL_GH_API_CONNECT_TIMEOUT_SECS` (default 15) / `CURL_GH_API_MAX_TIME_SECS` (default 60).\n  Expected change site: `scripts/gh_helpers.sh` `curl_gh_api` (gh_helpers.sh:1464, curl at gh_helpers.sh:1483)\n  Evidence of absence: No PR hunk touches `scripts/gh_helpers.sh`, and no follow-up issue is filed for the deferred fix.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP 2\n  Requirement: Suggested fix 3a in the linked issue, a new test for the `curl_gh_api` timeout (for example `tests/test_gh_helpers_curl_timeout.py`).\n  Expected change site: new `tests/test_gh_helpers_curl_timeout.py` (or equivalent)\n  Evidence of absence: No such test is in the diff, and no hunk references `CURL_GH_API_MAX_TIME_SECS`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "91f957af3360c548b2cb8c9ef959ce64956a442d8dc49a16d6e98f0fa451e615",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8131,
+    "run_id": "40188149035",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40188149035",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025113833_96e686e18a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8131,
+    "run_id": "40188149035"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T11:38:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The finding's recommendation is to never auto-waive high, critical or unrated findings at the round cap, and to fail closed. Converting those `keep_fixing` rows to `fail` does that. It reuses the existing `failed_count > 0` path at `scripts/orchestrate_poll_process.sh:6879` and its existing recovery routes, and adds no new knob. B adds a new variable to solve a problem the existing terminal path already covers. C brings back the endless loop from project #3965, because `MAX_SECURITY_PASS_JUDGE_ROUNDS` defaults to `0` (no limit).\n\nThe judge's verdict check (around line 6816) rejects a verdict that mixes `fail` with other actions, and the comment at line 6851 relies on that. So when the rewrite produces any `fail`, every decision in that verdict must become `fail`. Otherwise a verdict that passed validation would turn mixed after the rewrite.\n\nQ2: If only the cap conversion is fixed, the judge can still waive a high-severity finding through `accept_with_followup` in any round. The prompt currently encourages this: `prompts/mode-judge-security-pass-exhaustion.txt` lines 26\u201327 and 38. That leaves the same privilege-escalation path open. Enforcing the rule in the poller means it does not depend on the model following the prompt. Updating the prompt as well keeps the judge's choices in line with what the poller enforces. A human `/security-pass-waive` is an explicit operator decision, so it stays allowed.\n\nEXECUTION PLAN (required for any non-letter decision):\nThese are letter decisions. The constraints below bind the implementer.\nQ1/Q2 (combined):\n  inputs:\n    - scripts/orchestrate_poll_process.sh, function `security_pass_exhaustion_judge`:\n      - `keep_fixing_capped` is set at lines 6699\u20136701.\n      - Normalization ends at line 6844, and each decision row carries `.finding` with the finding's `severity`.\n      - The cap rewrite is at lines 6852\u20136871, and the counts at lines 6873\u20136879.\n    - prompts/mode-judge-security-pass-exhaustion.txt: lines 26\u201327, 31, 38 and 41.\n  steps:\n    - Define \"blocking severity\" as follows: lowercased `.finding.severity` is `critical` or `high`, or it is missing, empty, or not one of `critical`, `high`, `medium`, `low` (that is, unrated).\n    - After normalization (line 6844) and before the existing cap block, add a poller rewrite that runs every round:\n      - If `keep_fixing_capped` is false: any `accept_with_followup` row with blocking severity becomes `keep_fixing`.\n      - If `keep_fixing_capped` is true: any `accept_with_followup` or `keep_fixing` row with blocking severity becomes `fail`.\n      - Prefix the justification with a fixed note, in the same way line 6861 does.\n    - Change the existing cap conversion at line 6861 so it converts only rows that are not blocking severity (medium or low) from `keep_fixing` to `accept_with_followup`.\n    - Keep the no-mixing rule. If any row is `fail` after the rewrites, set every row to `fail`, so the existing terminal branch at line 6879 handles the whole verdict and no waivers are written.\n    - Add a stable log line, for example `SECURITY_PASS_JUDGE_SEVERITY_BLOCKED tracking_issue=<N> round=<r> to_keep_fixing=<n> to_fail=<n>`. Register it in agents.md under \"Stable log prefixes\", with a matching `LOG_PREFIX.name=` line.\n    - If any rewrite fails, return 1 (fail closed), matching the existing `keep_fixing_cap_rewrite_failed` handling.\n    - Update the prompt:\n      - State that `accept_with_followup` is not allowed for critical, high or unrated findings.\n      - When `keep_fixing_available` is false, such findings must be `fail`.\n      - Change line 38 so it says the poller converts only medium/low `keep_fixing` rows to advisories.\n    - Leave the `/security-pass-waive` handling as it is.\n    - Add contract tests in tests/test_orchestrate_poll_process.py (or the existing security-pass exhaustion judge test module). Cover these cases:\n      - A capped round with high `keep_fixing` gives a whole-verdict `fail` and `ai:security-pass-failed`.\n      - A capped round with only medium/low `keep_fixing` behaves as it does today (converted to advisories).\n      - An uncapped round with high `accept_with_followup` becomes `keep_fixing` and opens a fix issue.\n      - A missing or unknown severity is treated as blocking.\n    - Add a changelog fragment under `changelog.d/`.\n    - Target the integration branch `claude/replace-claude-sessions-phase-5c`, as the issue specifies. GitHub facts show the branch exists at 8ad31bff932b.\n  reversibility: The rewrite sits in one block and is easy to revert. Operators can still clear a terminalized project with `/re-security-pass`, `/security-pass-waive <finding_id>`, or the automatic reset when the engine changes (`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE`). `ENABLE_SECURITY_PASS=false` remains the kill switch.",
+  "fingerprint": "6e3c1cfb36db8aeee7b2788b6e1377549a090171f3d53b616d5c37e4366cdc90",
+  "lineage": {
+    "issue_number": 6517,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37431313662",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37431313662",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6517"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006075148_d244042120",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6517,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37431313662"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6517",
+  "timestamps": {
+    "created_at": "2026-10-06T07:51:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

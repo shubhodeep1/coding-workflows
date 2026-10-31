@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: issue #7464, fix the broken `test_agents_fragment_registers_log_prefix` test\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/agents_doc.py::agents_text\nScope-mode justification: The failure comes from one test that opens a fragment file the release fold has already merged into `agents.md` and deleted. The fix is to have that test read `agents.md` with any pending fragments merged in, using the existing helper `tests/agents_doc.py::agents_text()`. Other tests already use it (`tests/test_orchestrate_poll_process.py:29` and `tests/test_review_rb_judge_label_propagation.py`). No production code, workflow, `agents.md` text or fragment changes. CI wiring stays as it is (`.github/workflows/ci.yml:1408` already runs this file). The only other tests that mention `\"agents.d\"` (`tests/test_assemble_agents.py`, `tests/test_check_failure_triage_workflow_security.py`) pass in the failing run, so they stay out of scope.\n\n**Planning ref:** `git rev-parse HEAD` = `65737a868a784548a9c0a682f7bbac36c1375015`, branch `ai/issue-7434` (integration branch metadata `ai/issue-7434`, mismatch `false`). The fix goes onto PR #7463's head branch.\n\n## Files likely to change\n- `tests/test_branch_rebuild_threshold_decision_log.py`\n\n## Functions or modules to implement\n- In `tests/test_branch_rebuild_threshold_decision_log.py`:\n  1. Add `import sys`. After the path constants, add `sys.path.insert(0, str(Path(__file__).resolve().parent))` and then `from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402`. This is the same import style as `tests/test_orchestrate_poll_process.py` lines 27\u201329.\n  2. Remove the `FRAGMENT` constant (line 20). Nothing else uses it.\n  3. Rewrite `test_agents_fragment_registers_log_prefix` (lines 86\u201392), keeping its name so CI selection and history stay stable:\n     ```python\n     def test_agents_fragment_registers_log_prefix() -> None:\n         text = _agents_text_with_fragments()\n         heading = \"## Stable log prefixes (contractual)\"\n         assert heading in text\n         section = text.split(heading, 1)[1]\n         assert f\"- `{LOG_KEY}`\" in section\n         assert f\"LOG_PREFIX.name={LOG_KEY}\" in section\n     ```\n     Optionally update the docstring or a comment to say the registry entry may be in a pending `agents.d/` fragment or already merged into `agents.md`.\n- Keep the other four tests in the file as they are.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone. This changes only a test.\n\n## Decisions\n### D1 \u2014 Read the merged agents text instead of the fragment file\n- Chosen: assert on `agents_text()` from `tests/agents_doc.py`, which returns `agents.md` with pending `agents.d/*.md` fragments merged in.\n- Alternatives considered: recreate `agents.d/7355-dead-values-cleanup.md`; skip the test when the fragment is missing; read `agents.md` directly.\n- Why: Recreating the fragment would add a duplicate registry entry and the next release fold would delete it again. A skip would weaken the contract. Reading `agents.md` directly would fail during the time an entry is still pending in a fragment. The helper handles both states and is the convention the repo already uses (`tests/agents_doc.py` docstring, CLAUDE.md \u00a730).\n\n### D2 \u2014 Check the entry after the stable-prefix heading\n- Chosen: split on `## Stable log prefixes (contractual)` and look for both the `` - `BRANCH_REBUILD_THRESHOLD_DECISION` `` bullet and `LOG_PREFIX.name=BRANCH_REBUILD_THRESHOLD_DECISION` after it.\n- Alternatives considered: search the whole document.\n- Why: this keeps the original intent, which is that the prefix is registered in the stable-prefix registry and not just mentioned somewhere. The heading is at `agents.md:3418`, and both strings appear after it (lines 3727 and 4054).\n\n## Security considerations\n- No trust boundary, endpoint, credential or money path is touched. The helper reads repository files only and makes no network or GitHub API call.\n- The contract is not weakened: the assertion still fails if someone drops the log prefix from the registry.\n\n## Risks and edge cases\n- Small conflict with the issue text: the issue says `agents.d/` is empty. It actually contains `README.md`, which `iter_fragment_paths` skips via `FRAGMENT_EXCLUDED_NAMES`. This has no effect on the fix.\n- Splitting on the heading also includes the sections after it. That is acceptable: the `LOG_PREFIX.name=` lines live only in that registry, so the check matches the original.\n- Importing `agents_doc` loads `scripts/assemble_agents.py`, which is already proven in CI by other tests. A malformed pending fragment would show up in this test as well as those, which is the intended shared behaviour.\n- The same failure probably exists on `main`. That cannot be confirmed from here. The fix is correct either way.\n\n## Testing considerations\n- Run `python3 -m pytest tests/test_branch_rebuild_threshold_decision_log.py -q`. All 5 tests should pass. `test_bait_injection_drops_blob_content` and `test_orchestrate_summary_drops_wave_count` skip only if PyYAML is missing.\n- Run `ruff check tests/test_branch_rebuild_threshold_decision_log.py` (E402 is suppressed with `noqa`, as the sibling test file does).\n- Negative check, done by hand and not committed: temporarily remove `LOG_PREFIX.name=BRANCH_REBUILD_THRESHOLD_DECISION` from a scratch copy and confirm the assertion fails.\n- No changelog fragment is needed for a test-only fix. Optionally add `changelog.d/7464-fix-folded-fragment-test.md` if the reviewer asks for one.\n\n## Pre-execution self-check\n- One file, a root-cause fix (the test now reads through the pipeline's own merged view), no suppression, the test name is unchanged, and the new import alias `_agents_text_with_fragments` is unique in the file.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "a96901e6830c23309705eb7d601f35b8739f612070c8432d87a7beb63b418a20",
+  "lineage": {
+    "issue_number": 7464,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38837118589",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38837118589",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7464"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261016015708_03f4465183",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7464,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38837118589"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7464",
+  "timestamps": {
+    "created_at": "2026-10-16T01:57:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

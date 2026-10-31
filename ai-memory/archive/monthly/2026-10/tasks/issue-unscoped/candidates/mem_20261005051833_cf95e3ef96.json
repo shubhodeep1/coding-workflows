@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR's CI must be green for the PR to be merged. The PR description states: \"**This PR's CI inherits `main`'s red `tests-hooks-and-orchestrator` job until #6288 merges.**\"\n  expected_change_site: `.claude/commands/audit-plans.md` and `.claude/hooks/pr_merge_status_guard.py`, or rebase this PR onto #6288 after its template-sync work merges\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `PR_CHECK_RUNS_CONTEXT` shows the `lint` aggregate and `tests-hooks-and-orchestrator` failing on PR head `f932e3eeae5352fe8fdc844b19d95f83d61d8e40`; the diff does not touch `.claude/commands/audit-plans.md` or `.claude/hooks/pr_merge_status_guard.py`; the `c544c2e` revert is cited as the reason those hunks are absent\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR's CI must be green for the PR to be merged. Per the PR description's own narrative, the test parity contract (`test_audit_plans_command.py::test_template_parity` at line 30 and `test_pr_merge_status_guard.py::test_template_copies_are_identical` at line 1000) is the contract the editor sandbox is being fixed to satisfy. The PR's own CI is red on this contract.\n  Expected change site: Either (a) the live `.claude/commands/audit-plans.md` and `.claude/hooks/pr_merge_status_guard.py` need to be re-synced with their `workflow-templates/.claude/...` twins inside this PR (per the PR description, an earlier commit on this branch did exactly that and was reverted by `c544c2e` to \"avoid duplicating #6288\"), or (b) this PR must be rebased onto #6288 and only land after the template-sync work merges. Without one of those, the PR head SHA carries the same defect the sandbox change is supposed to make repairable.\n  Evidence of absence: PR_CHECK_RUNS_CONTEXT shows the `lint` aggregate and the `tests-hooks-and-orchestrator` job both failing on PR head `f932e3eeae5352fe8fdc844b19d95f83d61d8e40`; the failure log ends with `5 failed, 172 passed in 6.46s` and the only failing-job stdout visible in the log_tail is `pr_merge_status_guard.py` source. The cross-pollination consensus (openai/gpt-6-luna) classifies this as a BLOCKER with confidence 5. The PR description explicitly states: \"**This PR's CI inherits `main`'s red `tests-hooks-and-orchestrator` job until #6288 merges.**\" The diff does not contain any hunk that touches `.claude/commands/audit-plans.md` or `.claude/hooks/pr_merge_status_guard.py`; the `c544c2e` revert is the explicit reason those hunks are absent. The first author's prior AI-autofix summary (`PR_ALL_COMMENTS_CONTEXT` entry from `shubhodeep1`) confirms the choice: \"The `pr_merge_status_guard.py` template-parity failure is confirmed, but it predates this PR and the PR description assigns that separate repair to #6288. I did not change the guard files outside this PR's sandbox fix.\"\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n\n- scripts/review_untrusted_workspace.py:39-52\n  PROBLEM: Nested paths such as `.claude/commands/sub/foo.md` and non-Markdown paths such as `.claude/commands/foo.txt` are rejected silently when the twin check is skipped.\n  WHY: A warning on transfer failure explaining that an `.md` file at the second level with a workflow-templates twin is required would make the rejection actionable for editors.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "82408fed631b722d8a268d9e370afcdd6386a015f9a794fddc41017b1aa02cb2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6299,
+    "run_id": "37265246649",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37265246649",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005051833_cf95e3ef96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6299,
+    "run_id": "37265246649"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T05:18:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_force_tick.sh:334-343, 392-417, 425 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The 300-second follow-up cooldown is bypassed when the memory ledger is disabled or its read or claim fails.\n  WHY: In those cases the helper proceeds to dispatch without enforcing the documented interval, allowing repeated progress ticks to queue back-to-back runs; reviewers rated this MAJOR.\n\n- scripts/orchestrate_poll_process.sh:3045-3094 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `record_poll_progress_if_advanced` only persists the first tracking issue encountered when multiple tracking issues advance in one poll tick.\n  WHY: Other advanced issues may not receive a fast-follow poll.\n\n- .github/workflows/orchestrate_poll.yml:1144 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The follow-up step forwards only the first recorded tracking issue, so a cooldown on that issue can suppress a follow-up for another issue that advanced in the same tick.\n  WHY: The other project then waits for cron instead of receiving the intended fast-follow; reviewers rated this NIT.\n\n- scripts/orchestrate_force_tick.sh:346-349, 413-414, 416, 429 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: Cooldown skips and dispatch failures do not consistently emit the documented `POLL_FOLLOW_UP` outcome, and disabling memory can produce a misleading memory-failure warning.\n  WHY: Searches of the registered log prefix cannot reliably identify these skip or failure outcomes; reviewers rated this NIT.\n\n- google_gemini-3_1-flash-lite:3088 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `poll_progress_tracking_issues` file is not cleared after processing.\n  WHY: The reviewer reports that old tracking issue IDs remain and may prevent the same issue from being recorded and receiving a fast-follow later.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_force_tick.sh:334-343, 392-417, 425 | severity=high | confidence=3\n  PROBLEM: The 300-second cooldown is held in the AI-memory ledger and is bypassed when the ledger is disabled or a read or claim fails.\n  WHY: Repeated progress ticks can queue back-to-back runs; the reviewer did not confirm that any current code path flaps.\n\n- .github/workflows/orchestrate_poll.yml:1144 | severity=low | confidence=4\n  PROBLEM: Only the first recorded tracking issue is forwarded to the helper, so a cooldown on that issue can suppress a follow-up for another project that advanced in the same tick.\n  WHY: The second project waits for cron; the reviewer notes the dispatch is not per project and nothing breaks.\n\n- .github/workflows/orchestrate_poll.yml:1163; scripts/orchestrate_force_tick.sh lines 346-349, 413-414, 416, 429 | severity=low | confidence=4\n  PROBLEM: The step logs `outcome=request` before the helper decides, while cooldown skips, peer-claim skips, and dispatch failures do not use the `POLL_FOLLOW_UP` prefix.\n  WHY: Searches on the stable prefix show requests without outcomes, and disabling memory can produce a misleading memory-failure warning.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:3045-3094 | severity=high | confidence=4\n  PROBLEM: `record_poll_progress_if_advanced` only persists the first tracking issue encountered if multiple tracking issues advance in a single poll tick.\n  WHY: Other tracking issues that advanced may not receive a fast-follow poll.\n\n- scripts/orchestrate_poll_process.sh:3088 | severity=high | confidence=4\n  PROBLEM: The `poll_progress_tracking_issues` file is not cleared after processing.\n  WHY: Old tracking issue IDs remain in the file and may prevent the same issue from being recorded and receiving a fast-follow poll later.\n\n- scripts/orchestrate_force_tick.sh:346-349 | severity=high | confidence=3\n  PROBLEM: The 300-second follow-up cooldown is bypassed when the memory ledger is disabled or its read or claim fails.\n  WHY: Repeated progress ticks can queue back-to-back polls, increasing load and cost beyond the documented intent.\n\n- scripts/orchestrate_force_tick.sh:346-349, 416, 425-429 | severity=low | confidence=4\n  PROBLEM: Follow-up logs do not consistently emit the documented `skip` outcome for cooldown skips or dispatch failures, and disabling memory can produce a misleading memory-failure warning.\n  WHY: Automated analysis of follow-up failures is unreliable.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/orchestrate_poll.yml:1144-1169; scripts/orchestrate_force_tick.sh:345-349 | severity=low | confidence=4\n  PROBLEM: The step selects only the first advanced tracking issue, so a cooldown on that issue suppresses the follow-up for other projects that advanced in the tick.\n  WHY: The other projects wait for cron.\n\n- .github/workflows/orchestrate_poll.yml:1120-1124; scripts/orchestrate_force_tick.sh:335-349, 393-417 | severity=high | confidence=5\n  PROBLEM: The documented 300-second cooldown is not enforced when the memory ledger is disabled or cannot be read or claimed.\n  WHY: Repeated ticks that record progress can queue consecutive runs without the stated cooldown; the concurrency group does not enforce the 300-second interval between runs.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1d7622af9081080fe8c5b903175721774c48dc2b7ca2b4247266e01fe5a81e4c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7246,
+    "run_id": "38232367487",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38232367487",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012102558_398b459cb7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7246,
+    "run_id": "38232367487"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T10:25:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

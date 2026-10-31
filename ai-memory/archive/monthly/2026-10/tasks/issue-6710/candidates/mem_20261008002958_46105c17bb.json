@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix land on?\nChoices:\nA. `orchestrator/project-6664`, the head branch of PR #6667 where CI failed. The plan treats it as the integration branch, and the fix PR targets it so the project's CI turns green before its final merge. (RECOMMENDED)\nB. The default branch (`main`). **Note:** `scripts/ai_engine_fallback_report.sh` is not on this branch, and the expanded sandbox role list in `scripts/review_untrusted_sandbox.sh` may not be either. The inventory, role-list and heal-fixture fixes would then be no-ops or wrong.\nC. Both: fix `orchestrator/project-6664` first, then bring the same changes to `main` with the existing integration-to-default merge. Nothing is edited on `main` directly.",
+  "fingerprint": "312c7c11ed85a946518ab9cca0b180039163d648120ff133bc4176e9af1a3fc2",
+  "lineage": {
+    "issue_number": 6710,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37707723460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37707723460",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008002958_46105c17bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6710,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37707723460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6710 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T00:29:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

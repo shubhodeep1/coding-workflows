@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:lines 548-552 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: A failed untitled dispatch from a different PR can block every pending-checks merge in the repo whose marker predates that dispatch.\n  WHY: Because untitled dispatches carry no PR binding, the failure keeps blocking merges on every hourly tick until a fresh marker is posted.\n- .github/workflows/review_autofix.yml:line 8 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new run-name expression changes workflow display metadata and lets the sweep bind finished dispatches to their PRs.\n  WHY: This has no runtime failure path; a title that does not parse as `[pr:N]` is treated as untitled and fails closed.\n- scripts/claude_fixer_pending_checks.py:666-677 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The re-read marker is checked for comment ID equality, but the base-binding check uses the original marker's binding fields rather than the re-read marker's fields.\n  WHY: The reviewer says this is unreachable under the bot-comment trust rule because GitHub does not let PR authors edit the bot's comment, so no code change is needed.\n- scripts/claude_fixer_pending_checks.py:669 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The stated API budget may be read as counting only one comments fetch, while the implementation fetches comments again after reading review runs.\n  WHY: The re-read is intentional and documented later in the module docstring; the reviewer identifies only a possible documentation gap.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py:lines 548-552 | severity=high | confidence=[4]\n  PROBLEM: A failed untitled dispatch from a different PR can block every pending-checks merge in the repo whose marker predates that dispatch.\n  WHY: Because untitled dispatches carry no PR binding, the failure keeps blocking merges on every hourly tick until a fresh marker is posted.\n- .github/workflows/review_autofix.yml:line 8 | severity=low | confidence=[2]\n  PROBLEM: The new run-name expression changes workflow display metadata and lets the sweep bind finished dispatches to their PRs.\n  WHY: This has no runtime failure path; a title that does not parse as `[pr:N]` is treated as untitled and fails closed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_fixer_pending_checks.py:666-677 | severity=low | confidence=[2]\n  PROBLEM: The re-read marker is checked for comment ID equality, but the base-binding check uses the original marker's binding fields rather than the re-read marker's fields.\n  WHY: The reviewer says this is unreachable under the bot-comment trust rule because GitHub does not let PR authors edit the bot's comment, so no code change is needed.\n- scripts/claude_fixer_pending_checks.py:669 | severity=low | confidence=[2]\n  PROBLEM: The stated API budget may be read as counting only one comments fetch, while the implementation fetches comments again after reading review runs.\n  WHY: The re-read is intentional and documented later in the module docstring; the reviewer identifies only a possible documentation gap.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "099d9c5742aec93400b9dec6b92312c294ce2b3cc481f36470258826efcddc2d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36824322625",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36824322625",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001064526_c3d469f7fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36824322625"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T06:45:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

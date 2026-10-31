@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py: lines 897 and 902 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, qwen_qwen3_7-plus]\n  PROBLEM: Process-substitution detection checks for `\"<(\"` and `\">(\"` within individual shlex tokens, so it fails to withhold commands that use process substitution.\n  WHY: The reviewers disagree on severity (deepseek and qwen: major; Gemini: blocker); using the highest severity, this can leave process-substitution command text in permission-prompt reports, with reviewers differing on whether the credential itself is masked or exposed.\n- workflow-templates/.claude/scripts/permission_prompts.py: lines 897 and 902 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, qwen_qwen3_7-plus]\n  PROBLEM: Process-substitution detection checks for `\"<(\"` and `\">(\"` within individual shlex tokens, so it fails to withhold commands that use process substitution.\n  WHY: The reviewers disagree on severity (deepseek and qwen: major; Gemini: blocker); using the highest severity, this can leave process-substitution command text in permission-prompt reports, with reviewers differing on whether the credential itself is masked or exposed.\n- .claude/scripts/permission_prompts.py; workflow-templates/.claude/scripts/permission_prompts.py: `_SHELL_COMMAND_RUNNERS` and `_SHELL_COMMAND_FLAG_RE` | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Nested credential scanning does not recognize Windows `cmd.exe /c` command strings, leaving the quoted inner command unscanned.\n  WHY: The reviewers disagree on severity (deepseek: nit; qwen: major; GPT: blocker); using the highest severity, a credential in `cmd.exe /c \"mysql -pS3cretPass app\"` can appear unmasked in the permission-prompt report.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py (and twin): `_command_line_credentials` function, the token-level checks `\"<(\" in token` and `\">(\" in token` near the `pipe = ...` line in the same loop (the diff inserts these at the `elif is_punctuation:` branch around lines 889-894 of the twin) | severity=high | confidence=[5]\n  PROBLEM: Process-substitution detection checks for `\"<(\"` and `\">(\"` on a single shlex token, but the punctuation characters are tokenized separately, so detection never fires.\n  WHY: Such commands are not withheld as claimed; a password may still be masked when its credential value is found.\n- .claude/scripts/permission_prompts.py (and twin): `_SHELL_COMMAND_RUNNERS` constant and `_SHELL_COMMAND_FLAG_RE` regex (new in diff) | severity=low | confidence=[4]\n  PROBLEM: Nested credential scanning does not recognize Windows `cmd.exe /c` command strings.\n  WHY: The quoted inner command remains opaque, so a password may be posted unmasked in the permission-prompt report.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/scripts/permission_prompts.py: lines 897 and 902 | severity=critical | confidence=[5]\n  PROBLEM: Process-substitution operators are checked as substring containment against single tokens, but shlex tokenizes their punctuation characters separately.\n  WHY: The intended `ValueError(\"text piped into a shell\")` is never raised, so `_sanitize_bash_command` fails to withhold the command and the raw password can be posted in permission-prompt reports.\n- workflow-templates/.claude/scripts/permission_prompts.py: lines 897 and 902 | severity=critical | confidence=[5]\n  PROBLEM: Process-substitution operators are checked as substring containment against single tokens, but shlex tokenizes their punctuation characters separately.\n  WHY: The twin shares the defect, so `_sanitize_bash_command` fails to withhold the command and the raw credential can be posted in permission-prompt reports.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py; workflow-templates/.claude/scripts/permission_prompts.py: `_SHELL_COMMAND_RUNNERS` at line 245; `_SHELL_COMMAND_FLAG_RE` at lines 251-260; nested command handling in `_segment_credentials()` at lines 794-806 | severity=critical | confidence=[5]\n  PROBLEM: Windows `cmd.exe /c` command strings are not included in nested credential scanning.\n  WHY: `cmd.exe` is unrecognized and `/c` does not match the command-flag patterns, so the quoted inner command is never scanned and the permission-prompt report can include the raw password.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/scripts/permission_prompts.py (and workflow-templates twin): `_command_line_credentials()` around the process-substitution detection (`\"<(\" in token` and `\">(\" in token` checks) | severity=high | confidence=[4]\n  PROBLEM: Process-substitution detection checks for `\"<(\"` and `\">(\"` on individual tokens, but shlex tokenizes the punctuation characters separately.\n  WHY: Commands using process substitution are not detected as feeding a shell; the credential may be extracted from the inner segment, but the command is not withheld as claimed.\n- workflow-templates/.claude/scripts/permission_prompts.py (and .claude twin): `_SHELL_COMMAND_RUNNERS` frozenset and `_SHELL_COMMAND_FLAG_RE` regex | severity=high | confidence=[5]\n  PROBLEM: Windows `cmd.exe /c` command strings are not recognized.\n  WHY: The quoted command remains opaque, so the inner credential flag is not scanned and the raw password can appear in the posted example.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d37b1e010bb4eee3f21e281d24d6b2d37d7b67bef8a58b13cc692fd237019320",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "37064292200",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37064292200",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002212811_d5dd5cdb94",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "37064292200"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T21:28:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_workflow_sync_skip.sh:Lines 34-40 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script can leave its temporary file in `/tmp` if it exits prematurely or is killed.\n  WHY: The success path removes the file, but there is no trap for exceptional exits; reviewers described the likely impact as limited to temporary-file accumulation on ephemeral runners.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cRetaining direct push only when the input is false\u201d; the standard consumer template should expose `update_via_pull_request` so users can select the documented direct-push option.\n  expected_change_site: `workflow-templates/ai-update-workflows.yml`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: Gemini: the template\u2019s `with:` block forwards only `allow_workflow_edits` and does not forward `update_via_pull_request`; GPT: the template\u2019s `with:` block forwards only `allow_workflow_edits`, and its `workflow_dispatch` declares no inputs.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_workflow_sync_skip.sh:Lines 34-40 | confidence=3\n  PROBLEM: The script creates a temporary file using `mktemp` but does not ensure it is removed if the script exits prematurely or is killed (e.g., due to an error, signal, or interruption during `python3` execution).\n  WHY: While the script attempts to clean up in the success path, it lacks a `trap` mechanism to handle cleanup in exceptional cases. Persistent leftover temporary files in `/tmp` can accumulate and potentially impact sandbox stability.\n\n- TASK_GAP\n  Requirement: \"Merge executable changes so the automatic promotion cycle can pick them up; scripts/promote_main_cycle.sh:147-157 excludes this plan's docs-only change.\"\n  Expected change site: scripts/promote_main_cycle.sh\n  Evidence of absence: The PR diff does not contain any modifications to scripts/promote_main_cycle.sh to update the promotion exclusion list as required to allow the new manifests/scripts to be picked up by the automation cycle.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\n- TASK_GAP\n  Requirement: \"Fix: Add a default-true update_via_pull_request input and implement creation or reuse of ai-sync/stable with merge after verification, retaining direct push only when the input is false. Give the consumer template pull-requests: write and the planned job gate so syncing cannot erase a consumer's hold.\"\n  Expected change site: workflow-templates/ai-update-workflows.yml\n  Evidence of absence: While the reusable workflow `update_workflows.yml` declares and uses the `update_via_pull_request` input, the consumer template `workflow-templates/ai-update-workflows.yml` only forwards `allow_workflow_edits` in its `with:` block. It does not forward `update_via_pull_request`, preventing consumers from opting out of the PR delivery path without manual template intervention.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cRetaining direct push only when the input is false.\u201d The README also says `update_via_pull_request: false` restores direct push.\n  Expected change site: `workflow-templates/ai-update-workflows.yml`, the reusable workflow call\u2019s `with:` block and its manual-dispatch inputs.\n  Evidence of absence: The template\u2019s `with:` block forwards only `allow_workflow_edits`; it does not forward `update_via_pull_request`. Its `workflow_dispatch` declares no inputs. Consequently, users of the standard consumer template cannot select the documented direct-push option.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "33ba4e302e852bcbe9b5cecc69f052dab1fe708e872de943c4692d8b85ebf4d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7135,
+    "run_id": "38334878920",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38334878920",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013023126_6b1b3daf69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7135,
+    "run_id": "38334878920"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T02:31:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

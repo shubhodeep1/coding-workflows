@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The issue body still has no parseable `files_touched:` block, and the block in the earlier answer would also fail to parse because its entries are not indented. How should the allowlist get into the body before planning and implementation run again?\nChoices:\nA) A trusted account (OWNER, MEMBER or COLLABORATOR, or the pipeline's GH_PAT account) edits this issue body and adds the block below on its own lines, outside prose and code fences. Each entry is indented two spaces deeper than the header. Nothing else changes: the `waiver-suppresses-distinct-nearby-finding` marker, the `ai:security` label, `Integration branch: claude/replace-claude-sessions-phase-7` and `Depends on: #6539` all stay as they are. (RECOMMENDED)\n```\nfiles_touched:\n  - scripts/orchestrate_poll_process.sh\n  - scripts/security_audit.sh\n  - tests/test_orchestrate_poll_process.py\n  - tests/test_security_audit_workflow_contract.py\n  - README.md\n  - docs/plans/security-pass-convergence-plan.md\n```\nB) Close this issue and have a trusted account open a replacement that carries the same marker, label, integration branch and dependency, plus the indented block from A.\nC) Proceed without the block and treat the plan's file list as the scope.\n   **Note:** this will be rejected by the automation-path guard for the `scripts/` edits, as #6814 was. `override_guard` cannot cover protected automation paths (`scripts/unblock_ledger.py`), so this repeats the failure.\nAssumptions:\n- The issue body shown in this context is the current live body; I could not re-fetch it.\n- The approved plan posted on 2026-10-09T22:09:46Z still applies once the block is in place; only the scope-block prerequisite is re-raised here.\nMissing context:\n- I could not confirm whether anyone edited the issue body after the 22:09 comment. If the indented block is already there, this question can be answered with A and planning can go ahead.",
+  "fingerprint": "43b697e46ba6357ecbf3b774e7f3142f42de9ef55e502c9c29b03967e4ca7a38",
+  "lineage": {
+    "issue_number": 6987,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37997681951",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37997681951",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009221450_f02cd79cea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6987,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37997681951"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6987 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T22:14:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

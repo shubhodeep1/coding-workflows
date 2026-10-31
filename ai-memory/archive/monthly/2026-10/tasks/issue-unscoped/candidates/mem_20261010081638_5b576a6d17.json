@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py (test_security_pass_cap_converts_low_keep_fixing_to_advisory) | severity=critical | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: The `test_security_pass_cap_converts_low_keep_fixing_to_advisory` test is failing in CI, causing the `lint` aggregate check to fail and blocking merge.\n  WHY: The failure blocks CI; reviewers disagree on severity (MAJOR vs. BLOCKER), and one reviewer says the test is pre-existing and not caused by this PR while the other reports it failing in the current PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py (not in diff \u2014 pre-existing), test `test_security_pass_cap_converts_low_keep_fixing_to_advisory` in shard 1 of orchestrate-poll (group 3) | severity=high | confidence=4\n  PROBLEM: CI run 37914057175 failed on this PR with `orchestrate-poll (3)` due to one failing test, which cascaded to the `lint` aggregate check; the failure is not caused by this PR's changes, and the new diagnostic annotation code works correctly.\n  WHY: The merged PR would fail CI on `main`; investigate whether this failure reproduces on `main` and, if so, whether the test or the poller code it exercises needs a fix.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory | severity=critical | confidence=4\n  PROBLEM: The test case `test_security_pass_cap_converts_low_keep_fixing_to_advisory` is failing in the current PR.\n  WHY: CI job orchestrate-poll (shard 1) reports this test as failed, which causes the lint job to fail and prevents merging.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "6b96549ffbc9b52f5d599f1a820be04aaab7dcec38a7f994c2818701913eb32a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6897,
+    "run_id": "38035419922",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38035419922",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010081638_5b576a6d17",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6897,
+    "run_id": "38035419922"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T08:16:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

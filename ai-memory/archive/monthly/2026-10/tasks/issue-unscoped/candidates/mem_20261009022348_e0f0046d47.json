@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:lines 1-3 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: No defect was identified; the file content matches the linked issue spec.\n  WHY: The file has the specified three lines with LF endings and a trailing newline, and only the declared file was modified.\n- .github/workflows/ci.yml:job tests-hooks-and-orchestrator | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The tests-hooks-and-orchestrator CI job failed with 1 test failure and 614 passed, causing the aggregate lint gate to fail.\n  WHY: The failing test is in the merged-PR guard hook and is described as pre-existing and outside this PR's allowed scope.\n- .claude/hooks/pr_merge_status_guard.py:lines 1816-1824, 2267-2270, 2285-2300 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The MCP push guard can use a cached PR snapshot instead of checking current PR state, allowing a push after the PR has merged.\n  WHY: An open-only snapshot can remain cached for 300 seconds after merge; severity disagreement: BLOCKER and MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:lines 1-3 | severity=NIT | confidence=1\n  PROBLEM: The file content matches the linked issue spec exactly: three lines with LF endings and a trailing newline, values are \"status: ok\", \"run_id: 37866821330\", \"updated-by: ai-pipeline\". Only the single declared file was modified.\n  WHY: No defect \u2014 the change is correct.\n- .github/workflows/ci.yml, job tests-hooks-and-orchestrator:CI check-run on head SHA 6650e458bba8423281a8ec862b32a6d95b9bfcd3, conclusion failure | severity=BLOCKER | confidence=5\n  PROBLEM: The tests-hooks-and-orchestrator CI job failed with 1 test failure and 614 passed. The log tail shows a failing test in the merged-PR guard hook (pr_merge_status_guard.py, _evaluate_mcp_push) asserting the MCP push path must not read the cached PR snapshot.\n  WHY: The failed test blocks CI. The lint job (aggregate gate) also fails because it depends on tests-hooks-and-orchestrator. These are pre-existing failures in files outside this PR's scope; the issue explicitly forbids touching any file other than tests/e2e_smoke_canary.txt.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/pr_merge_status_guard.py:_evaluate_mcp_push (lines 2267-2270, 2285-2300) and blocking_pull_request (lines 1816-1824) | severity=BLOCKER | confidence=5\n  PROBLEM: The hook incorrectly uses a cached PR snapshot for MCP pushes instead of querying the current PR state.\n  WHY: A cached PR snapshot containing only an \"OPEN\" PR can remain valid for 300 seconds after the PR has been merged. During this window, the live hook will find no merged PR, incorrectly allowing the MCP push, which bypasses the intended merged-PR safety guard.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:_evaluate_mcp_push, lines 2267-2270 and 2285-2300 | severity=MAJOR | confidence=5\n  PROBLEM: The MCP push guard uses a cached PR snapshot and only performs a fresh lookup when the cached snapshot already identifies a blocking PR.\n  WHY: If the cache contains an open PR and that PR merges before the 300-second cache expires, the cached snapshot has no merged PR to block the push. The guard returns allow at line 2298 without rechecking GitHub, so an MCP push can proceed to a branch whose PR has merged.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "5f127011a910bc3213f9c7c29e6059a7202ea42e81a01dc4d11be755439d8426",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6830,
+    "run_id": "37871916778",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37871916778",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009022348_e0f0046d47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6830,
+    "run_id": "37871916778"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T02:23:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

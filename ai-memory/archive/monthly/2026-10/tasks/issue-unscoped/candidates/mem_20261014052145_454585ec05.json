@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:1275-1282 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The `unknown)` arm of the hold `case` in `unblock_main` logs and returns without patching the hold comment, so its `updated_at` stays at the time the hold was posted.\n  WHY: The scan treats the hold marker as stale after `UNBLOCK_JUDGE_RETRY_HOURS` (6) and re-dispatches the judge repeatedly until the hold expires, causing many unnecessary judge runs. Reviewers estimated about 56 to 336 runs, and the `unmet` arm avoids this by patching the comment. All reviewers rated it MAJOR. The estimates differ on run frequency (6-hourly vs about hourly, bounded by the 60-minute in-flight cooldown).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_judge.sh:~1275-1282 (`unblock_main`, hold `case` arm `unknown)`) | severity=MAJOR | confidence=3\n  PROBLEM: When a hold's condition cannot be read and the hold is still inside its lifetime, the script logs `outcome=skip reason=hold_check_unavailable` and returns without refreshing the hold comment, so `updated_at` stays at the post time. The `unmet` arm patches the comment.\n  WHY: `scripts/unblock_scan.py` skips an item only while its newest trusted `ai:unblock-wait:v1` marker is younger than `UNBLOCK_JUDGE_RETRY_HOURS` (6). The poller feeds `.updated_at // .created_at` (`scripts/orchestrate_poll_process.sh:19113`), so the scan re-dispatches the judge on every scan, bounded only by `UNBLOCK_JUDGE_INFLIGHT_MINUTES` (60). That is about 300 runs per item until `UNBLOCK_JUDGE_WAIT_MAX_DAYS`.\n- HARDENING_SUGGESTIONS: in `scripts/unblock_judge.sh`, `unknown)` arm, call `unblock_patch_comment \"${hold_id}\"` with the \"Waiting for \u2026; condition unreadable; last checked ${now}\" body and the open marker before `return 0` (about 4 lines). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:1275-1282 | severity=MAJOR | confidence=4\n  PROBLEM: The `unknown` hold condition handler does not update the hold comment's timestamp.\n  WHY: `updated_at` stays fixed at the hold's creation time. The poller (`scripts/orchestrate_poll_process.sh`) uses it, so the hold looks stale after `UNBLOCK_JUDGE_RETRY_HOURS` (6) and is re-dispatched, causing up to about 330 unnecessary judge runs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:1275-1279 (`unblock_main`) | severity=MAJOR | confidence=5\n  PROBLEM: When a hold check returns `unknown` before the hold expires, the judge logs and returns without updating the hold comment. The poller uses `updatedAt` as the marker timestamp (`scripts/orchestrate_poll_process.sh:19021\u201319026`) and dispatches again once it is older than `UNBLOCK_JUDGE_RETRY_HOURS`. The 60-minute recent-run cooldown then permits a dispatch roughly hourly, not the documented six-hour recheck.\n  WHY: An unreadable condition, such as a GitHub API failure, leaves the marker stale, so the poller repeatedly starts judge runs until the hold expires. That is about 336 runs over the default 14-day lifetime.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh:1275-1282 (`unknown)` arm of the `hold_status` case) | severity=MAJOR | confidence=4\n  PROBLEM: The `unknown)` arm returns without patching the hold comment, so `updated_at` stays at the time the hold was posted.\n  WHY: After `UNBLOCK_JUDGE_RETRY_HOURS` (6) the scan sees the hold as stale and dispatches the judge again. The judge gets `unknown` again and returns. This repeats every 6 hours until `UNBLOCK_JUDGE_WAIT_MAX_DAYS` (14 days), about 56 unnecessary runs. The `unmet` arm avoids this by calling `unblock_patch_comment`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "daf8baeff5a193b594509dd0cb3ab930c0f0f4907ed10625d386a5ac7db839d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7361,
+    "run_id": "38511958198",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38511958198",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014052145_454585ec05",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7361,
+    "run_id": "38511958198"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T05:21:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

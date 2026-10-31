@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/apply-url.md:13,70 (twin: workflow-templates/.claude/commands/apply-url.md:13,70) | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The Bash Tool Access bullet (line 70) documents only the `python scripts/safe_fetch_url.py` invocation, while the PDF step (line 13) now tells users to fall back to `python3`.\n  WHY: A strict harness that matches the documented scope literally could refuse the `python3` form. Severity disagreement: the sources rate it MAJOR (gemini, minimax, openai) or NIT (sonnet, glm). The highest is kept, mapped to high. Sonnet notes the bullet is prose guidance and not an enforced allowlist.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/commands/apply-url.md (and workflow-templates/.claude/commands/apply-url.md):\"Bash\" Tool Access bullet (~line 70) vs PDF fetch bullet (~line 13) | severity=NIT | confidence=2\n  PROBLEM: The Bash bullet lists only the `python scripts/safe_fetch_url.py` form, while the PDF fetch step adds a `python3` fallback.\n  WHY: Nothing breaks, because the bullet is prose guidance and not an enforced allowlist. The reviewer would drop the finding unless a strict Bash permission rule is added later.\n- HARDENING_SUGGESTIONS: add \"(or `python3` if `python` is not on the PATH)\" to the bullet. HARDENING_RISK_SCORE: 1.\n- Task completeness: none. All deliverables in the PR description are covered.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/apply-url.md:70 | severity=MAJOR | confidence=4\n  PROBLEM: The Bash Tool Access bullet documents only the `python` invocation, which differs from the instruction body that allows `python3` as a fallback.\n  WHY: A strict harness may refuse the command if it is run as `python3`, because the bullet does not explicitly permit it.\n- workflow-templates/.claude/commands/apply-url.md:70 | severity=MAJOR | confidence=4\n  PROBLEM: The Bash Tool Access bullet documents only the `python` invocation, which differs from the instruction body that allows `python3` as a fallback.\n  WHY: A strict harness may refuse the command if it is run as `python3`, because the bullet does not explicitly permit it.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/apply-url.md:13,70 (twin workflow-templates/.claude/commands/apply-url.md, same lines) | severity=MAJOR | confidence=4\n  PROBLEM: The procedure body tells users to run the helper with `python3` when `python` is not on PATH, but the Bash Tool Access scope on line 70 documents only the literal `python` invocation.\n  WHY: On a system with only `python3`, a strict harness could deny the call. `test_apply_url_bash_permission_names_the_helper_not_curl` (tests/test_safe_fetch_url.py:326-331) does not catch the drift.\n- HARDENING_SUGGESTIONS: (1) change the bullet to cover both interpreters (2 lines changed, RISK_SCORE 2). (2) extend tests/test_safe_fetch_url.py (test_apply_url_bash_permission_names_the_helper_not_curl) to assert `python3` or `python[3]` in the bullet (2 lines changed, RISK_SCORE 2).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/apply-url.md; workflow-templates/.claude/commands/apply-url.md:13,70 | severity=MAJOR | confidence=4\n  PROBLEM: The documented `python3` fallback is outside the command's stated Bash access scope.\n  WHY: Where `python` is unavailable but `python3` exists, strict command-policy enforcement rejects the fallback and the PDF download cannot proceed.\n- HARDENING_SUGGESTIONS: include both interpreter forms in the Bash bullet and extend the contract test (3 lines changed, RISK_SCORE 1).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/commands/apply-url.md:13,70 (same drift in workflow-templates/.claude/commands/apply-url.md lines 13 and 70) | severity=NIT | confidence=3\n  PROBLEM: The PDF step (line 13, both copies) now instructs a `python3` fallback, but the Bash Tool Access bullet (line 70, both copies) documents only the `python` spelling.\n  WHY: A strict harness keyed to the spelled invocation could prompt or refuse `python3`. The reviewer downgraded the pass-1 \"high\" to NIT, because the bullet's scope wording still covers the operation and only the example lags.\n- HARDENING_SUGGESTIONS: extend the bullet to mention `python3`, keeping the `python scripts/safe_fetch_url.py` literal intact (2 lines changed, RISK_SCORE 1).\n- Task completeness: none. All deliverables are present. The reviewer notes the failing pre-push test `test_live_helper_matches_the_synced_template` comes from a sandbox path exclusion.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "086e239574f513fe8c9eb0850ad301564e02f63ede02a9cf76dd65dce906933c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8323,
+    "run_id": "40832330901",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40832330901",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029084333_9ded9ae91a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8323,
+    "run_id": "40832330901"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T08:43:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

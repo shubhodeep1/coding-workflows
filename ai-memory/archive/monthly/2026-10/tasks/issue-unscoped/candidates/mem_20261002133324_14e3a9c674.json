@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15817-15831 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3]\n  PROBLEM: In the alert-only branch of `_heal_rejected_merged_state`, notifications are sent before the `.merged_state_heal.alerted` marker is persisted, so a failed state write can cause duplicate alerts on subsequent poll cycles.\n  WHY: The marker remains unset when the write fails, allowing the same alert branch to run again; all three reporting reviewers classified this as NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=5\n  Line or code reference: 15818-15829, inside the alert-only branch of _heal_rejected_merged_state\n  PROBLEM: The Telegram alert and healing note fire before the state write that persists `.merged_state_heal.alerted`; a failed state write is silently swallowed.\n  WHY: If the write fails after notifications are sent, the marker remains unset and both alerts can fire again on each poll cycle.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=5\n  Line or code reference: lines 15817-15831\n  PROBLEM: In `_heal_rejected_merged_state`, `tg_notify` and `add_healing_note` run before persisting `.merged_state_heal.alerted = true` to `STATE_FILE`, and a state-write failure is swallowed.\n  WHY: If the write fails, the marker is not recorded and subsequent poll cycles can emit duplicate Telegram alerts and healing notes.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=4\n  Line or code reference: the alert path inside `_heal_rejected_merged_state` (the `if [ -n \"${_mhs_why}\" ]; then` branch, approximately lines 15818\u201315829 per the cross-pollination consensus)\n  PROBLEM: In the alert-only path, `tg_notify` and `add_healing_note` run before the write recording `merged_state_heal.alerted = true`.\n  WHY: If the state write fails, the marker remains unset and the next poll cycle re-enters the alert block, producing duplicate alerts and healing notes until the write succeeds.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "32bbd27b7a8a55254fd8a4920c4fecc8026b91cccefff880cfc31ee0e3833441",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "37010833700",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37010833700",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002133324_14e3a9c674",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "37010833700"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T13:33:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

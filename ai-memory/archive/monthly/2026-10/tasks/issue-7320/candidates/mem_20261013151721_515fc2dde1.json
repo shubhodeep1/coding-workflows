@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Plan for #7320: CI failure on PR #7229, test count for `plan.yml` (deliberately no code change)\n\n**Planning ref:** `main`, HEAD `82197765aa58afc922d0e36fa69eb67b88fa0ef7`. The sandbox shows a local `isolated` snapshot; that does not mean the ref is wrong.\n\n**Decision Q1: B** (auto-answered). This issue changes no code on the default branch. The test fix belongs on PR #7229's own branch, `ai/issue-7216`, and that PR's review/autofix loop delivers it.\n\nScope-mode: Hold Scope\nReuse-audit: extends PR #7229's review/autofix loop and the check-triage already-resolved gate (`scripts/check_triage_resolution.py gate`)\nScope-mode justification: Option B means this plan changes nothing on `main`. I checked the checkout. `tests/test_smoke_alert_silencing_contract.py` lines 65-67 expect five `plan.yml` declarations: `\"plan.yml\": [...] * 5`. `.github/workflows/plan.yml` on `main` has exactly five step-level `ALERT_MSG_LEVEL:` declarations, at lines 1564, 2091, 2218, 2456 and 2624. There is no \"Close superseded CI-repair issue\" step on `main`. That step, and the sixth declaration, come only from PR #7229's diff. Changing the count to six on `main` (option C) would turn `test_step_level_alert_level_declarations_are_pinned` red on `main` until #7229 merges. That breaks correctness and backward compatibility, which outrank speed in \u00a76. Doing nothing on `main` is the complete and correct fix. Boil the Lake does not apply, because the \"complete\" option would land on the wrong branch.\n\n## Files likely to change\n\nNone. No file in this repository changes through this issue.\n\nFor context only (not an action for this issue's implementer), this is the change PR #7229 needs on `ai/issue-7216`:\n- `tests/test_smoke_alert_silencing_contract.py`: change `EXPECTED_STEP_DECLARATIONS[\"plan.yml\"]` from `* 5` to `* 6`, and update the count comment on lines 65-66 to name the \"Close superseded CI-repair issue\" step. Keep the `env.ALERT_MSG_LEVEL`-first precedence assertion.\n\n## Functions or modules to implement\n\nNone. Nothing is added or edited.\n\n## Data structures affected\n\nNone. `EXPECTED_STEP_DECLARATIONS` on `main` stays at five `plan.yml` entries.\n\n## API or interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Leave the default-branch test count unchanged\n- **Chosen:** no edit to `tests/test_smoke_alert_silencing_contract.py` on `main`. PR #7229's review/autofix loop (or the review-blocked judge's `fix` path) updates the count on `ai/issue-7216`.\n- **Alternatives considered:** (A) send this issue to `ai/issue-7216` by adding a `Target branch:` line. Nothing in the pipeline adds that line after triage: the only writer, `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED`, is off by default. (C) change the count to six on `main`, which breaks `main`'s CI until #7229 merges.\n- **Why:** the failure exists only on PR #7229's head. The documented rule is that a PR-specific failure belongs to that PR's own review/autofix loop. A change on `main` would add a regression instead of fixing one.\n\n### D2 \u2014 Close this issue without an implementation PR\n- **Chosen:** close as superseded by PR #7229's loop. Failing that, let the check-triage already-resolved gate close it once #7229 merges and `CI` passes on a default-branch commit that contains the merge.\n- **Alternatives considered:** keep it open as a tracker. An open issue keeps de-duplication active for PR #7229 + `CI`, which would hide a later failure on that PR.\n- **Why:** closing it means that if #7229's loop does not fix the test, the next failing run files a new triage (generation 2 of 3).\n\n## Security considerations\n\n- **Trust boundaries:** none touched. No workflow, script, credential or GitHub write path changes.\n- **Authorization:** no new endpoint or surface.\n- **External input:** the triage body and the CI log are untrusted. The plan acts only on facts checked against the checkout: the five declarations on `main` and the missing step.\n- **Abuse cases:** none added. Keeping the exact-count assertion on `main` means a future edit still cannot silently drop or override a step-level alert-level declaration, including the smoke-test `SILENT` export.\n- **Money handling:** not applicable.\n\n## Risks and edge cases\n\n- **Conflict detection:** the issue's suggested fix (\"update to six entries\") conflicts with the codebase on the planning ref. `main` has five declarations, and the step that adds the sixth exists only on `ai/issue-7216`. That is why the fix must not land here.\n- **Empty implement run:** if this plan is auto-approved and implement runs, the implementer should make no edits and open no PR. The implement phase may record a no-change outcome, and the issue then needs closing by the gate or as superseded.\n- **PR #7229's loop never fixes the test:** the PR's CI stays red and a generation-2 triage is filed once this issue is closed. The lineage cap of 3 escalates to a human.\n- **PR #7229 is closed without merging:** the sixth declaration never reaches `main`, and five stays correct. This issue should then be closed as not planned.\n\n## Testing considerations\n\n- On `main`, nothing changes, so `tests/test_smoke_alert_silencing_contract.py` should keep passing unchanged. Optional check: `python3 -m pytest tests/test_smoke_alert_silencing_contract.py -q` passes on `main`.\n- On PR #7229 (not part of this issue), after the count change, `test_step_level_alert_level_declarations_are_pinned` should pass, along with the `tests-hooks-and-orchestrator` job and the `CI / lint` aggregate.\n\n## Pre-execution self-check\n\n- Every clarification answer is interpreted: Q1 maps to B, and its binding notes are followed (no change on `main`; the fix goes through PR #7229).\n- The facts are grounded in the checkout: test lines 65-67 say `* 5`, `plan.yml` has 5 declarations, and the new step is missing.\n- No new script, workflow, supervisor, database work or scheduler wiring, so \u00a720 has no registry entry to add.\n- No PR is opened, so the auto-close keyword check (\u00a721) does not apply.\n\nPLAN_SELF_CHECK: WARNING: this plan deliberately changes no files. If it is auto-approved, implement should end with no changes and no PR, and the issue should be closed as superseded by PR #7229, or later by the check-triage already-resolved gate.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "43dd7768845a5d8470ab37e465f9e33c3518ca157678637b623ada5e26be212c",
+  "lineage": {
+    "issue_number": 7320,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38419449460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38419449460",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7320"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261013151721_515fc2dde1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7320,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38419449460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7320",
+  "timestamps": {
+    "created_at": "2026-10-13T15:17:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

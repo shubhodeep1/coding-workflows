@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/settings.json:140-149 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The workflow template registers the `prepush_affected_tests.py` hook, but the live `.claude/settings.json` does not, and the live hook file is absent, breaking required live/template parity.\n  WHY: The parity tests fail, causing the `tests-hooks-and-orchestrator`, `tests-release-and-log-analysis`, and aggregate `lint` checks to fail and blocking auto-merge.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CI must pass on this PR's head SHA, including the parity checks for the live `.claude/` files and their `workflow-templates/.claude/` twins.\n  expected_change_site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Editor summaries from iterations 13-19 (issue comments 6141377736 through 6144914817) confirm `.claude/` is sandbox-excluded and no worktree write can land the fix; the `test_template_copies_are_identical` CI log shows a new `Bash` matcher block referencing `prepush_affected_tests.py`.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/.claude/settings.json:145 | severity=critical | confidence=5\n  PROBLEM: The template registers the pre-push test hook, but the live `.claude/settings.json` does not register it, and `.claude/hooks/prepush_affected_tests.py` does not exist.\n  WHY: Two byte-identity parity tests fail, making the aggregate `lint` check fail and blocking auto-merge.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: CI must pass on this PR's head SHA. The current head (11e61118) shows three failed checks (`lint`, `tests-hooks-and-orchestrator`, `tests-release-and-log-analysis`) and the failing test is `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical` (line 2451) plus a parity check in `tests/test_session_start_extract_repo_slug.py`. The root cause is the live `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py` not matching their `workflow-templates/.claude/` twins after a `main` sync added the pre-push hook to the template.\nExpected change site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py`, made byte-identical to `workflow-templates/.claude/settings.json` and `workflow-templates/.claude/hooks/prepush_affected_tests.py`.\nEvidence of absence: the editor summaries from iterations 13-19 (issue comments 6141377736 through 6144914817) all confirm `.claude/` is sandbox-excluded and no worktree write can land the fix; the CI log shows the precise diff in `test_template_copies_are_identical` is one new `Bash` matcher block referencing `prepush_affected_tests.py` (log_tail of `tests-hooks-and-orchestrator`). This is also the unanimous consensus finding from the pass-1 cross-pollination (claude-sonnet, gpt-6-luna, minimax, gemini, qwen) at confidence 5.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/settings.json (Lines 140-149) | severity=critical | confidence=5\n  PROBLEM: The workflow template and live Claude settings differ, and the live hook file is absent.\n  WHY: The parity tests fail, causing the `tests-hooks-and-orchestrator`, `tests-release-and-log-analysis`, and aggregate `lint` checks to fail.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f0704c8d815e69750498161d5d585ee34e83fe625745b8b25a43ac37554a974a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38394346736",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38394346736",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013121601_30a2ce1a10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38394346736"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T12:16:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

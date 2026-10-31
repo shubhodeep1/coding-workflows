@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/claude-elegant-mendel-editor-audit-count-labels.md:lines 14-17 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The changelog fragment omits the sixth added test, `test_short_total_label_needs_its_own_number`, and therefore undercounts the test surface.\n  WHY: The omission may mislead readers trying to confirm the short-label tightening tests.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/claude-elegant-mendel-editor-audit-count-labels.md | severity=NIT | confidence=3\n  PROBLEM: The changelog fragment enumerates five tests added by this PR but omits the sixth, `test_short_total_label_needs_its_own_number`, which was added in the last autofix run against `tests/test_validate_editor_audit.py:423-440`.\n  WHY: The \"For contributors\" section now undercounts the test surface and will mislead a future reader trying to confirm the short-label tightening tests.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "2639d49b715d367c5d78c47c0b27acdca81e354984c6e7cf844e751a7a18bdf5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6622,
+    "run_id": "37596744400",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37596744400",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007092919_f688d9c3d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6622,
+    "run_id": "37596744400"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T09:29:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

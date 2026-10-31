@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_anthropic_relay.py:178-184 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: The authorization-rejection test can raise `BrokenPipeError` while `connection.request()` sends its POST body because the relay closes the connection before the body is sent.\n  WHY: The test fails before reaching its assertion that the relay returned HTTP 400.\n- scripts/claude_anthropic_relay.py:102-104 | severity=critical | confidence=5\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: `_reject` sends the HTTP error and closes the connection without draining the request body.\n  WHY: The client can get `BrokenPipeError` while sending the body, preventing the test from reaching its HTTP 400 assertion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_claude_anthropic_relay.py:178-184 | severity=BLOCKER | confidence=5\n  PROBLEM: The test calls connection.request() with a POST body, but the relay server (in broker mode) calls self._reject(400) and closes the connection upon seeing the Authorization header at line 127 of scripts/claude_anthropic_relay.py. The _reject method calls send_error which sends the HTTP response and sets close_connection=True. The client-side HTTPConnection.request() then tries to send the body bytes over the already-closed socket.\n  WHY: BrokenPipeError is raised at line 182 during connection.request() body transmission, preventing the test from reaching the assert at line 183 that verifies the expected 400 status. CI job tests-hooks-and-orchestrator confirms this failure on the current head.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_claude_anthropic_relay.py:connection.request(\"POST\", \"/v1/messages\", body, {\"Content-Type\": \"application/json\", \"Authorization\": \"Bearer mine\"}) (line 182) | severity=BLOCKER | confidence=5\n  PROBLEM: The authorization-rejection test fails with BrokenPipeError because the broker relay closes the Unix domain socket immediately upon rejecting the client's Authorization header in Relay.do_POST without consuming or draining the incoming request body.\n  WHY: In the tests-hooks-and-orchestrator CI check, connection.request() raises BrokenPipeError: [Errno 32] Broken pipe while writing the payload to the socket already closed by the server, terminating test_broker_rejects_client_authorization prematurely before connection.getresponse() can read and assert the expected HTTP 400 status.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- CI observation (out of PR scope, blocking the merge, not actionable by this PR): The current head SHA `ee1ce04` has the `lint` and `tests-hooks-and-orchestrator` jobs red. The `lint` failure is downstream of the test failure: it reports `tests-hooks-and-orchestrator: failure` from CI_NEEDS_JSON. The failing test is `tests/test_claude_anthropic_relay.py::test_broker_rejects_client_authorization`, which raises `BrokenPipeError: [Errno 32] Broken pipe` inside `connection.request(\"POST\", \"/v1/messages\", body, ...)` at line 182. The cross-pollination consensus (Gemini-3.8-flash + gpt-6-luna) attributes the failure to the relay closing the socket before the client finishes sending the request body after seeing the `Authorization` header. Neither `tests/test_claude_anthropic_relay.py` nor `scripts/claude_anthropic_relay.py` appears in the PR's changed files (it is not in `pr_changed_files`, the symbol diff summary, or any of the LAST RUN DIFF hunks), so this PR neither introduced nor interacts with the failure. The fix is in the test (wrap the request/response in `try/except BrokenPipeError`, or use a different transport), not in the dispatch-head / safe-path / symlink-guard work in this PR. The PR's own work passes: the dispatched PR-head regression tests, the safe-path contract, the static-context symlink guards, and the OpenCode rejection guard are all in the diff and the corresponding test modules are wired into `.github/workflows/ci.yml`. Operator decision needed: fix the test in a follow-up (or accept the regression) before this PR can move past `lint`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_claude_anthropic_relay.py:182; rejection path in scripts/claude_anthropic_relay.py:102-104, 111-127 | severity=BLOCKER | confidence=5\n  PROBLEM: The test assumes `connection.request()` completes when submitting a request with a client-supplied Authorization header.\n  WHY: The relay rejects that header before reading the request body and closes the connection. The client can encounter `BrokenPipeError` while sending the body, before the test reaches its expected 400-response assertion. This occurred in the supplied `tests-hooks-and-orchestrator` CI run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_anthropic_relay.py:lines 102-104, `_reject` method | severity=BLOCKER | confidence=5\n  PROBLEM: The `_reject` method calls `self.send_error(status)` which writes the HTTP error response and then sets `self.close_connection = True`, but it does not drain the request body first. When the broker rejects a request that carries a body (e.g. the `Authorization` is not None), the server writes the 400 response and closes the socket before the client has finished sending its POST body. The client's `http.client.HTTPConnection.request()` then raises `BrokenPipeError` on `sock.sendall(body)` because the server end of the socket is already closed.\n  WHY: The CI job `tests-hooks-and-orchestrator` fails on `test_broker_rejects_client_authorization` with `BrokenPipeError: [Errno 32] Broken pipe` at `connection.request(\"POST\", \"/v1/messages\", body, ...)` (test_claude_anthropic_relay.py:182). The test cannot reach `connection.getresponse()` to assert the 400 status. This is a real CI failure on the PR head (run 37303611016, job 111741924051). The fix is for `_reject` to drain the request body (via `self.rfile.read(int(length))` when Content-Length is a valid integer) before calling `send_error`, so the client can finish sending before the server writes the rejection and closes.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "27b538affe43459f23a7bf03f56e7b2b54b5ece4acd910037591d7dfe7fdd8f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6135,
+    "run_id": "37303638908",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37303638908",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005115906_2f6d36f7b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6135,
+    "run_id": "37303638908"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T11:59:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:9842 | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The test expects `cross_repository`, but the changed PR snapshot is observed by the post-judge recheck, which emits `head_repo_mismatch`.\n  WHY: The expected reason makes the assertion fail at runtime; severity disagreement: minimax_minimax-m3 rates this MAJOR and qwen_qwen3_7-plus rates it BLOCKER, so the highest severity is used.\n- tests/test_orchestrate_poll_process.py:9875 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The test expects `cross_repository`, but the changed PR snapshot is observed by the post-judge recheck, which emits `head_repo_mismatch`.\n  WHY: The assertion will fail because the reviewer says the changed `headRepoFullName` is only observed by the post-judge recheck at `scripts/orchestrate_poll_process.sh:21898-21912`, which emits `head_repo_mismatch`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nThe consensus pass-1 claim about line 9842 being incorrect is wrong: the current code at line 9842 correctly expects `head_repo_mismatch`; the fixture reaches the post-judge recheck guard (`scripts/orchestrate_poll_process.sh:21902`), which emits `head_repo_mismatch`, not the initial identity guard (`scripts/orchestrate_poll_process.sh:21020`) which emits `cross_repository`. Line 9875 correctly expects `cross_repository` because the merged-fix-target path hits the initial identity guard. Both assertions are correct as-is. The editor was right to reject the suggested change.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:9842 | severity=high | confidence=[5]\n  PROBLEM: The LAST RUN's autofix pass changed the expected rejection reason from `head_repo_mismatch` to `cross_repository`, but the test's PR sequence (6 unchanged + 1 changed, per the test's own comment) is structured so that the post-judge recheck at `scripts/orchestrate_poll_process.sh:21852` reads the 7th entry.\n  WHY: The corresponding log line at `scripts/orchestrate_poll_process.sh:21922` emits `REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_repo_mismatch`, not `cross_repository`; the test fails.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py:9842, 9875 | severity=critical | confidence=[5]\n  PROBLEM: The last run changes the expected rejection reason from `head_repo_mismatch` to `cross_repository` for two test fixtures that supply a changed `headRepoFullName`.\n  WHY: The initial identity guard sees the unchanged PR on the first read and passes; the changed `headRepoFullName` is only observed by the post-judge recheck at `scripts/orchestrate_poll_process.sh:21898-21912`, which emits `head_repo_mismatch` (not `cross_repository`). The tests will fail.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "5e304c3a55259a42a921a0006f2acb0c7aa681b5dff19cdfe4f885ef621b9d4b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6445,
+    "run_id": "37405556677",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37405556677",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006031902_132d74cfd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6445,
+    "run_id": "37405556677"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T03:19:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

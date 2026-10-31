@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/7072-remove-pr6576-shard-followup.md:1-12 (with changelog.d/7072-pr6576-followup-guard-result-only.md:2-6) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The pending guard-fix fragment says \"No result comment was ever posted\" and promises the follow-up runs on the next push to `main`. The new removal fragment says the result was posted and the workflow is deleted, so the assembled changelog contradicts itself.\n  WHY: The changelog assembler folds both pending fragments verbatim into the same release. All five reviewers rated this NIT, with anthropic_claude-sonnet-5_5 at confidence 2 and the others at 5. anthropic_claude-sonnet-5_5 judged it harmless and did not ask for an edit. minimax_minimax-m3 suggests deleting the older fragment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/7072-remove-pr6576-shard-followup.md (with changelog.d/7072-pr6576-followup-guard-result-only.md) | severity=NIT | confidence=2\n  PROBLEM: Both fragments sit in `changelog.d`, so the next changelog assembly lists them together. The older \"fixed\" entry carries a forward-looking operator note about a workflow this PR deletes.\n  WHY: Nothing fails at runtime. The entries are in order in time and the removal fragment explains the outcome. The older fragment is not part of this PR, so no edit is requested.\n- Other categories: NONE. A search for `pr6576[-_]shard[-_]followup` and `PR6576_FOLLOWUP` found no live reference to the deleted artefacts, only historical ones.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/7072-remove-pr6576-shard-followup.md | severity=NIT | confidence=5\n  PROBLEM: Contradictory changelog entries exist when combined with the pending fragment changelog.d/7072-pr6576-followup-guard-result-only.md.\n  WHY: The release process folds both fragments. The new one says the workflow was removed, while the existing one implies it is still active and promises future execution.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/7072-pr6576-followup-guard-result-only.md:2-6 | severity=NIT | confidence=5\n  PROBLEM: This pending fragment from the prior guard-fix PR describes the workflow as alive. It promises operators that the next push to `main` runs it once. The new fragment `changelog.d/7072-remove-pr6576-shard-followup.md` says the workflow ran, posted its result on 2026-10-26 (run 40280336599) and is removed.\n  WHY: `scripts/assemble_changelog.py` folds both pending fragments into `CHANGELOG.md` without reconciling them. The older fragment's operator guidance is now factually wrong. The suggested fix is to delete `changelog.d/7072-pr6576-followup-guard-result-only.md` in this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/7072-remove-pr6576-shard-followup.md:4 (conflicts with changelog.d/7072-pr6576-followup-guard-result-only.md lines 2 and 6) | severity=NIT | confidence=5\n  PROBLEM: The new fragment says the result comment was posted and the follow-up is removed. The existing fragment says no result comment was posted and promises the workflow runs on the next push to main.\n  WHY: scripts/assemble_changelog.py:117-137 discovers and includes both fragments, and lines 140-166 copy their bodies verbatim. The next changelog assembly publishes contradictory status and an obsolete instruction to run a deleted workflow.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/7072-remove-pr6576-shard-followup.md:1-12 (with changelog.d/7072-pr6576-followup-guard-result-only.md lines 2 and 6) | severity=NIT | confidence=5\n  PROBLEM: The pending `fixed` fragment is still unfolded and makes two false claims at release time. Line 2 says \"No result comment was ever posted\", which contradicts this PR's fact that the comment was posted on 2026-10-26 (run 40280336599). Line 6 tells operators that the next push to `main` runs the follow-up once, which describes `.github/workflows/pr6576-shard-followup.yml` and `scripts/pr6576_shard_followup.py`, both deleted by this PR.\n  WHY: `scripts/assemble_changelog.py` folds all pending fragments at the next release, so the same `CHANGELOG.md` carries contradictory claims and an operator instruction that can never execute.\n- Verification notes: the leftover `pr6576` references are historical only (analysis/*, CHANGELOG.md history, the two changelog fragments). `docs/INVENTORY.md`, `agents.md`, `docs/scripts-pending-removal.md` and the checkout-audit exemption are updated. CI on head c4898973 shows 0 failed and 0 incomplete check runs.\n- Other categories: NONE. Issue #7072's deliverables are satisfied historically.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4526a8fee8105169906501b544089b0ce7f79436f422813f2b2be33fd7ea570f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8289,
+    "run_id": "40789113054",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40789113054",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028235823_5db68379f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8289,
+    "run_id": "40789113054"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T23:58:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

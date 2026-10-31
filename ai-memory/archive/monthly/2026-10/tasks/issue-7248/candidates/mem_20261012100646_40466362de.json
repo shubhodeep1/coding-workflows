@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The GitHub facts confirm that PR #7076 is open, unmerged, based on `main`, with head `ai/issue-7072`, and that the branch exists at `8db02fe56238`. The branch check therefore passes. `scripts/resolve_integration_ref.sh` reads the \"Target branch:\" line from the body of the issue being planned. The line pattern is `^\\s*(?:-\\s*)?(?:\\*\\*Target branch:\\*\\*|Target branch:)\\s*...`. So the line `- Target branch: ai/issue-7072` must go in this issue's body, not in #7077, which is closed as not planned. Option B edits #7077 and would leave planning on `main`. Option C drops the binding unblock-judge plan. A comment or `/answer`, including this one, cannot add the line. Until the body carries it, the issue stays blocked, as the specification requires.\nQ2: The decisions carried over from #7077 are unchanged. Base the fix on `ai/issue-7072`. Add only `pr6576-shard-followup.yml` to `ALLOWLIST_EXCEPTIONS` in `tests/test_workflow_checkout_integration_ref_audit.py`, with a written rationale. Keep the classification assertion as it is, and require the audit test and CI to pass. Make no change on `main`. Re-deciding these would repeat the earlier failure without fixing the real prerequisite, which is the missing body line.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered options.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- Edit the issue body (one-time operator or unblock-judge action). Add the standalone line `- Target branch: ai/issue-7072` to **this** issue's body, not #7077's. Then read the body back and check that `scripts/resolve_integration_ref.sh` selects `ai/issue-7072`. Until that is done, planning resolves to `main`. The issue then stays blocked, and no allowlist exception is added on `main`.",
+  "fingerprint": "c76ddd95fab3035a1fbc8a0110ba2875585b7303ae454c7f1e12ef032fc0b904",
+  "lineage": {
+    "issue_number": 7248,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38232999126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38232999126",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7248"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261012100646_40466362de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7248,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38232999126"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7248",
+  "timestamps": {
+    "created_at": "2026-10-12T10:06:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

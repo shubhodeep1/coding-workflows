@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh: security_pass_sync_final_pr_if_unmergeable(), last command (around line 11721 in the new file, just before the closing `}) | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The function relies on implicit Bash exit-status propagation, so adding a command after the sync call could cause a sync failure to stop propagating and break the caller's failure gate.\n  WHY: The suggested explicit return would preserve the failure status if future edits add commands after the sync call.\n- scripts/orchestrate_poll_process.sh:650-652; 19927-19929 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Smoke-fixture classification treats any tracking title containing `[E2E ` as a smoke fixture, even without the fixture label or a known fixture title.\n  WHY: A legitimate project title containing `[E2E ` can cause the tracking issue to be classified as a smoke fixture, suppressing project alerts through `tg_notify` and the direct-send guards.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh\n  Location: security_pass_sync_final_pr_if_unmergeable(), last command (around line 11721 in the new file, just before the closing `}`)\n  Issue: The function relies on bash's natural exit-status propagation \u2014 its return value is whatever `sync_default_into_integration_branch` last returned, because no other command follows it. The new test (`test_sync_failure_is_returned_so_the_tick_stops_for_the_project`) does pin the current behavior, but a future edit that adds any command after the sync call (logging, an additional check, a trailing `return 0`) silently breaks the `if ! security_pass_sync_final_pr_if_unmergeable ...` gate at the call site (the `continue` branch becomes unreachable, so a sync failure no longer skips the project for this tick).\n  Suggested minimal fix: Replace the trailing `sync_default_into_integration_branch \"${integration_branch}\" \"${default_branch}\"` with `sync_default_into_integration_branch \"${integration_branch}\" \"${default_branch}\" || return $?` (or `... || return 1`) to make the propagation explicit and survive future edits. Existing test still passes; no other call site changes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:650-652; 19927-19929 | severity=MAJOR | confidence=4\n  PROBLEM: Smoke-fixture classification treats any tracking title containing `[E2E ` as a smoke fixture, even without the fixture label or a known fixture title.\n  WHY: A legitimate project titled, for example, `[Orchestrator] Add [E2E tests] for payments` matches this substring check. Its tracking issue is added to `SMOKE_FIXTURE_TRACKING_NUMS`, so project alerts are suppressed by `tg_notify` and the direct-send guards.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3e5598e172ac87750984e6aee1c7c9a56b868f82e79dd36bff347a78b9c60b09",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7031,
+    "run_id": "38028014754",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38028014754",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010064133_53015e9f52",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7031,
+    "run_id": "38028014754"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T06:41:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py: invocation loop in evaluate(), live copy | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The live hook lacks the bare-help handling present in the template, so `gh api --help` is still classified as a write.\n  WHY: The resulting forced prompt remains, and the live/template drift causes CI parity and bare-help tests to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The master session copies the file into `.claude/` in a `[claude-twin-sync]` commit\" and CI must pass before merge.\n  expected_change_site: .claude/hooks/gh_api_write_guard.py\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: No PR diff hunk touches .claude/hooks/gh_api_write_guard.py; the live copy lacks the #6668 changes; `test_live_copies_match_their_templates` reports drift on hooks/gh_api_write_guard.py and the aggregate `lint` check fails; the new bare-help tests load the live copy through GUARD_PATH and cannot pass until the twin-sync commit lands.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/hooks/gh_api_write_guard.py: invocation loop in evaluate(), live copy | severity=critical | confidence=5\n  PROBLEM: The live hook is the file Claude Code runs in this repo. It is also the file tests/test_gh_api_write_guard.py loads, through GUARD_PATH (`.claude/hooks/gh_api_write_guard.py`, spec_from_file_location at line 39). It still lacks all three #6668 hunks.\n  WHY: In this repo, `gh api --help` still reaches parse_gh_api_args, raises Unreadable(\"unknown gh api flag `--help`\") and is classed as a write. The forced prompt the issue asks to remove still happens. CI fails: tests/test_claude_template_live_parity.py::test_live_copies_match_their_templates reports drift ['hooks/gh_api_write_guard.py'] in the tests-hooks-and-orchestrator job. That makes the aggregate `lint` check fail too.\n- TASK_GAP\n  Requirement: \"The master session copies the file into `.claude/` in a `[claude-twin-sync]` commit.\" The live hook must match the template for the loosening to take effect here and for the parity test and the new tests to pass.\n  Expected change site: .claude/hooks/gh_api_write_guard.py\n  Evidence of absence:\n  - No PR diff hunk touches .claude/hooks/gh_api_write_guard.py, and it contains no `_is_bare_gh_api_help`.\n  - The CI check-run \"tests-hooks-and-orchestrator\" fails with drift on hooks/gh_api_write_guard.py.\n  - The issue gives this copy to the master session, not the implementer. So it is not an implementer defect, but the PR cannot merge green until that commit lands. The review editor's sandbox excludes .claude/hooks/**, so it cannot make the copy.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"The master session copies the file into `.claude/` in a `[claude-twin-sync]` commit\" and CI must pass before merge.\n  Expected change site: .claude/hooks/gh_api_write_guard.py (the live copy)\n  Evidence of absence: The PR only edits `workflow-templates/.claude/hooks/gh_api_write_guard.py` (the template). The live copy `.claude/hooks/gh_api_write_guard.py` is not updated. CI fails with `test_live_copies_match_their_templates` (in `tests-hooks-and-orchestrator`) and the aggregate `lint` check. The new bare-help tests in `tests/test_gh_api_write_guard.py` also fail because they load the live copy through `GUARD_PATH`, which lacks the #6668 changes. The review autofix editor cannot sync the live copy due to sandbox restrictions (`.claude/hooks/**` is excluded from the sandbox transfer). The PR is stuck: it cannot merge with red CI, but the live copy sync that would fix CI is assigned to the master session per the issue description.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"The master session copies the file into `.claude/` in a `[claude-twin-sync]` commit\" and CI must pass before merge.\n  Expected change site: .claude/hooks/gh_api_write_guard.py\n  Evidence of absence: No PR diff hunk touches .claude/hooks/gh_api_write_guard.py. The live file lacks the three #6668 hunks (_BARE_HELP_ARGS frozenset at line 179, _is_bare_gh_api_help function at line 183, and the invocation loop shortcut at line 1503). CI fails at tests-hooks-and-orchestrator (test_live_copies_match_their_templates reports drift ['hooks/gh_api_write_guard.py']) and the aggregate lint check. The new bare-help tests (test_bare_help_is_a_read, test_bare_help_piped_to_grep_gets_no_decision, test_literal_loop_over_bare_help_gets_no_decision) also fail because they load the live copy through GUARD_PATH, which lacks the #6668 changes.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "162ba97b9f8d63585b5800a6550df8f52db51d38104d2dc8614f9446e028c0f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6674,
+    "run_id": "38072158044",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38072158044",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010174421_d71021fef2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6674,
+    "run_id": "38072158044"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T17:44:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

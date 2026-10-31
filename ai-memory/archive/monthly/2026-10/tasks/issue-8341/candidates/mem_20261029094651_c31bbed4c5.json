@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8341,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8341\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8351\",\"pr_number\":8351,\"branch\":\"ai/issue-8341\",\"run_id\":\"40844686261\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40844686261\",\"changed_files\":[\".github/workflows/check_failure_triage.yml\",\".github/workflows/clarify.yml\",\".github/workflows/orchestrate_clarify_respond.yml\",\".github/workflows/plan.yml\",\".github/workflows/unblock_judge.yml\",\"README.md\",\"agents.d/stuck-states-p9a-clarify-snapshot-all-text.md\",\"changelog.d/stuck-states-p9a-clarify-snapshot-all-text.md\",\"scripts/clarify_isolated_run.sh\",\"tests/test_check_failure_triage_workflow_security.py\",\"tests/test_clarify_isolated_run.py\"]}",
+  "fingerprint": "f366883ae164b41dd6e3fbe2d8089c35e6d3e21152a9a05458176d0db10a25c2",
+  "lineage": {
+    "issue_number": 8341,
+    "parent_ids": [],
+    "pr_number": 8351,
+    "run_id": "40844686261",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40844686261",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8351"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261029094651_c31bbed4c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8341,
+    "level": "run",
+    "pr_number": 8351,
+    "run_id": "40844686261"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8341: https://github.com/shubhodeep1/coding-workflows/pull/8351",
+  "timestamps": {
+    "created_at": "2026-10-29T09:46:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

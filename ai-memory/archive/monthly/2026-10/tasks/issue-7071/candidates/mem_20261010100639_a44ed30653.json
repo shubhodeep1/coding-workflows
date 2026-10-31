@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix for the four failing heal-intake test assertions target?\nChoices:\nA. Target PR #7065's head branch `ai/issue-7059`. The fix PR stacks on it and edits only `tests/test_workflow_failure_heal.py`, changing the four negative `issues_created` assertions to `not state_after.get(\"issues_created\")` and the `comments_posted` read to `.get(\"comments_posted\", [])`. The intake guard in `scripts/workflow_failure_heal_intake.sh` stays unchanged. (RECOMMENDED)\nB. Make no separate fix PR. Close this issue as superseded and let PR #7065's own review/autofix loop fix the test assertions (the failed check-runs are already given to its editor through `CHECK_RUNS_AUTOFIX_ENABLED`).\nC. Target the default branch `main` as the issue currently implies. **Note:** this is not workable on its own. The four failing tests are not on `main`, so the change would have nothing to edit there.",
+  "fingerprint": "e66bfdeaef70b5e8992ae5a6bc82042f6382b0e1f8d54cdfd2af139f1f3d3554",
+  "lineage": {
+    "issue_number": 7071,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38043492763",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38043492763",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010100639_a44ed30653",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7071,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38043492763"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7071 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T10:06:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

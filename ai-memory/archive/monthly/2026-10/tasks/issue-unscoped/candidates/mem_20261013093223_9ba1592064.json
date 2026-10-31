@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/settings.json: the PreToolUse Bash entry that runs `python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prepush_affected_tests.py hook` | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The template registers a pre-push Bash hook that is absent from the live settings, leaving the template and live copy out of sync.\n  WHY: The parity failure keeps required CI checks red and blocks merging.\n- scripts/pr_checks_lib.sh: PR_CHECKS_JQ_SUPERSEDE_DEFS (line 94) | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `group_by(.name // \"\")` may group check runs with missing or null names incorrectly when superseding cancelled runs.\n  WHY: Incorrect grouping could prevent cancelled runs from being superseded.\n- tests/test_pr_merge_status_guard.py:2451 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The live `.claude/settings.json` lacks the registered `prepush_affected_tests.py` Bash hook present in the workflow template.\n  WHY: CI fails the equality assertion and reports the same parity failure in another check, leaving the PR checks failing.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The parity test failure in `tests-hooks-and-orchestrator` must be addressed to permit CI to pass.\n  expected_change_site: Live `.claude/` files or the parity test\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The parity test (`test_template_copies_are_identical`) is still failing, preventing CI from passing; the drift between `.claude/settings.json` and its template has not been reconciled.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/.claude/settings.json: the PreToolUse Bash entry that runs `python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prepush_affected_tests.py hook` (timeout 30) | severity=BLOCKER | confidence=5\n  PROBLEM: The template has this hook, but the live `.claude/settings.json` does not, and `.claude/hooks/prepush_affected_tests.py` does not exist in the live tree.\n  WHY: `CLAUDE_PARITY_PR_BASE_SHA` is empty in the failing logs, so parity does not defer the drift; required CI checks stay red and the PR cannot merge.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh: PR_CHECKS_JQ_SUPERSEDE_DEFS (line 94) | severity=MAJOR | confidence=3\n  PROBLEM: The new logic for superseding cancelled runs uses `group_by(.name // \"\")`.\n  WHY: If a check-run name is missing or null, it may group incorrectly or produce unexpected results, potentially failing to correctly supersede a cancelled run.\n- Requirement: The parity test failure in `tests-hooks-and-orchestrator` must be addressed to permit CI to pass.\n  Expected change site: Live `.claude/` files or the parity test.\n  Evidence of absence: The parity test (`test_template_copies_are_identical`) is still failing, preventing CI from passing; the drift between `.claude/settings.json` and its template has not been reconciled.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_pr_merge_status_guard.py:2451 | severity=BLOCKER | confidence=5\n  PROBLEM: The live `.claude/settings.json` does not match `workflow-templates/.claude/settings.json`; the live settings lack the registered `prepush_affected_tests.py` Bash hook.\n  WHY: CI run 38374434817 fails this equality assertion, and `tests-release-and-log-analysis` independently reports the same parity failure. The PR head therefore has failing checks.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No task was provided; the message contains only the unattended-system-instructions header with an unresolved `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder and no actual work item. It requests a concrete task (issue reference, plan, or change request) to proceed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5b5181456d5fd78e4d3215cde01cb2cf90ef4403f2e5af8afeff1af2e2a5b93c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38374439765",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38374439765",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013093223_9ba1592064",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38374439765"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T09:32:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

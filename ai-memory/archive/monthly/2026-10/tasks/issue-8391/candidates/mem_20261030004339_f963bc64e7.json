@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Clarification required\n\nClarification required. Planning ref: `stable` @ `2ad4b6b64a09c922a8cd7dd2c771ebc1b868bdbb` (symbolic `heads/stable`). Integration branch mismatch: `false`.\n\nThe auto-selected answer `Q1: A` cannot be acted on. Its own condition was \"answer A only after #8376's port PR has merged into `stable`\", and this tree does not meet it. #8376 has merged, but it did not bring the port the re-plan was supposed to build on:\n\n- **What #8376 actually shipped:** `changelog.d/8376-implement-stall-diagnostics.md` describes `stall-diag` logging that runs only when the implement phase gives up. It says plainly that the 30-minute limit is unchanged. It also says the newer tracker that follows the working run is on the default branch but not on `stable` yet.\n- **`IMPL_RUN_ID_WORKING` is missing:** it does not appear anywhere in `.github/workflows/test-and-mark-stable.yml`, the test files or `changelog.d/`.\n- **The step-name signal still reads the newest run:** it uses `IMPL_RUN_ID_LATEST` (around lines 1634-1636). That variable is set to the most recently created run, not a running one (around line 1527). A `pending` duplicate therefore still hides the run doing the work.\n- **No gate-step limit:** there is no 35-minute allowance for `Pre-push affected-test gate`. The timer resets only when the state string on line 1643 changes.\n- **No main-branch copy here:** this workspace is not a git repository, so `isolated-base` does not exist. I cannot read the `main` code from #8243 or #8259 to port it hunk for hunk.\n\n**What each path means for the replay of run 40932430968:**\n\n- **D1 alone:** the window opens at 19:01:15, so working run 40936238289 is counted. The step signal still reads pending run 40936365554, though, so Phase 3b would still stop at about 19:37. The counterfactual would be FAIL.\n- **D1 with the working-run choice but no gate-step limit:** the 30 min 42 s gate step would still trip the 30-minute limit at about 19:44:54.\n- **Only D1, the working-run choice and a gate-step limit of 35 minutes or more together** meet acceptance item 3 from your direction.\n\n> **Q1: #8376 merged into `stable` without porting `IMPL_RUN_ID_WORKING` or the 35-minute gate-step limit. Only its stall diagnostics landed. How should this heal proceed?**\n>\n> Choices:\n> - **A** \u2014 Proceed now against current `stable` and include all three pieces in this PR. D1 sets `approved_at` to the earliest trusted `/approved`. A working-run choice for the step-name signal prefers an `in_progress` run, falls back to the newest one, and uses the name `IMPL_RUN_ID_WORKING` so it matches `main`. The step-name signal also gets a 35-minute limit for `Pre-push affected-test gate`. The full replay test from your direction is included, and the PR body carries a \"Port to main\" note for the D1 change only. The reason for dropping D2 earlier was that #8376 would port it, which no longer holds, and #8376 is merged, so the two cannot conflict. Risk: the code is written from the issue's description because `main` cannot be read here, so it may differ textually from #8243/#8259 on `main`. (RECOMMENDED)\n> - **B** \u2014 Proceed now with D1 only, as directed. The replay test checks only that `approved_at` equals the plan's auto-approval time (19:01:15) and that the working run is inside Phase 3b's window. The counterfactual will be `FAIL`, because the step signal still reads the pending duplicate, so a human has to approve the plan.\n> - **C** \u2014 Keep waiting. A separate PR first ports `IMPL_RUN_ID_WORKING` and the gate-step limit from `main` to `stable`. Answer only after that PR has merged into `stable`, and name the PR or commit in the answer. Do not pick this option through a stall auto-answer: on the current tree it would loop again.\n>\n> Reply: `Q1: A`\n\nReply with:\n/answer\n\nPLAN_SELF_CHECK: BLOCKER: Q1=A required #8376's port of IMPL_RUN_ID_WORKING and the gate-step limit to be on stable, but stable@2ad4b6b6 has only #8376's stall diagnostics, so the precondition is false\nSTATUS: NOT_CLEAR\nReply with:\n/answer",
+  "fingerprint": "8cdeb5edd261e9a90b05e7bbab1b78db24710b16969488abcde8f1e53d1419bd",
+  "lineage": {
+    "issue_number": 8391,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40980719902",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40980719902",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8391"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261030004339_f963bc64e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8391,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40980719902"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Plan requested re-clarification for issue #8391",
+  "timestamps": {
+    "created_at": "2026-10-30T00:43:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

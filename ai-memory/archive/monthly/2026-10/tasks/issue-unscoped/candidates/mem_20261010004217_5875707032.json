@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `pull-requests: write` to the job permissions only.\"\n  expected_change_site: `.github/workflows/update_workflows.yml`, `jobs.update-wrappers.permissions`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Neither the workflow-level nor the job-level permissions block in `.github/workflows/update_workflows.yml` contains `pull-requests: write`; the job has no `permissions` block granting `pull-requests: write`; the contract test `tests/test_update_workflows_pr_delivery.py::test_no_pull_requests_permission_is_requested` asserts this permission is absent; the workflow comment at `.github/workflows/update_workflows.yml:803-810` and the new bullet in `agents.md` document this as a deliberate deviation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: Add `pull-requests: write` to the job permissions only.\n  Expected change site: `.github/workflows/update_workflows.yml`, `jobs.update-wrappers.permissions`.\n  Evidence: The cross-pollination summary flags this gap, but the deviation is documented at `.github/workflows/update_workflows.yml:803-810` and in `agents.md`, and pinned by `test_no_pull_requests_permission_is_requested`. A reusable workflow job cannot request permissions the caller does not grant; every PR operation authenticates with `GH_PAT`. No action needed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Add `pull-requests: write` to the job permissions only.\"\n  Expected change site: `.github/workflows/update_workflows.yml`, `jobs.update-wrappers.permissions`\n  Evidence of absence: Neither the workflow-level nor the job-level permissions block in `.github/workflows/update_workflows.yml` contains `pull-requests: write`. The contract test `tests/test_update_workflows_pr_delivery.py::test_no_pull_requests_permission_is_requested` asserts the literal absence of `pull-requests` in both scopes; the step comment at `.github/workflows/update_workflows.yml:803-810` and the new bullet in `agents.md` document this as a deliberate deviation: a reusable job cannot raise the caller's `contents: write` grant, every PR call authenticates with `GH_PAT`, and granting the permission in the caller (`workflow-templates/ai-update-workflows.yml`) is out of scope for this slice because it only takes effect after the next stable release and consumer sync.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cAdd `pull-requests: write` to the job permissions only.\u201d\n  Expected change site: `.github/workflows/update_workflows.yml`, `jobs.update-wrappers.permissions`.\n  Evidence of absence: The job has no `permissions` block granting `pull-requests: write`. The PR adds a contract test that asserts this permission is absent. The workflow comment documents the deviation, but the requested permission is not implemented.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c5f43c3c0ed6593677142392046c49425f8351a7d5e9b14198da7d801ef8532d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6993,
+    "run_id": "38008693108",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38008693108",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010004217_5875707032",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6993,
+    "run_id": "38008693108"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T00:42:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

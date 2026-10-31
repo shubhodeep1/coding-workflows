@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/8228-validation-discovery-superseded-log.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `VALIDATION_DISCOVERY_SUPERSEDED` registry bullet names only `scripts/validation_refresh_runner.py` as the source, but the `outcome=list_truncated limit=100` variant is printed by `list_open_discovery_prs` in `scripts/validation_discovery_bootstrap.py` (lines 1007-1010; reviewers cite 1007, 1008-1010, 1009).\n  WHY: The registry is contractual, so someone grepping the named file for that variant will not find the emitter. All reviewers rated it NIT with no runtime failure. z-ai_glm-5_3-flash also notes that the `list_truncated` line carries only `repository=`, so the bullet's uniform field shape does not hold for that variant.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/8228-validation-discovery-superseded-log.md:2 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The `VALIDATION_DISCOVERY_SUPERSEDED` registry bullet names only `scripts/validation_refresh_runner.py` as the source. The `list_truncated` line is printed by `list_open_discovery_prs` in `scripts/validation_discovery_bootstrap.py` (line 1009).\n  WHY: This causes no runtime failure. Someone grepping `validation_refresh_runner.py` for `list_truncated` will not find the emitter.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/8228-validation-discovery-superseded-log.md:2 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The log-prefix registry attributes the `outcome=list_truncated` variant to `scripts/validation_refresh_runner.py`.\n  WHY: The variant is printed by `scripts/validation_discovery_bootstrap.py` in `list_open_discovery_prs` (line 1007). The registry must attribute variants to the right source files so operators can grep for them.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/8228-validation-discovery-superseded-log.md:2 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The registry bullet names `scripts/validation_refresh_runner.py` as the source for every variant. The `outcome=list_truncated limit=100` variant is printed by `list_open_discovery_prs` in `scripts/validation_discovery_bootstrap.py:1007-1010`. The last run diff touched this bullet to add the `[replacement=<url>]` clause and did not correct the attribution.\n  WHY: The registry is contractual. A consumer grepping only the runner file will miss the truncated-listing line. There is no runtime bug, only a misleading contract.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/8228-validation-discovery-superseded-log.md:2 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The registry attributes `outcome=list_truncated` to `scripts/validation_refresh_runner.py`. The event is emitted by `list_open_discovery_prs` in `scripts/validation_discovery_bootstrap.py` at lines 1007-1010.\n  WHY: Following the registered source file to investigate or update the event leads to the wrong module. The log is still emitted, but its source documentation is inaccurate.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/8228-validation-discovery-superseded-log.md:2 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The registry bullet attributes every variant to `scripts/validation_refresh_runner.py`. The `outcome=list_truncated limit=100` variant is printed by `scripts/validation_discovery_bootstrap.py` inside `list_open_discovery_prs` (scripts/validation_discovery_bootstrap.py:1008-1010). The `list_truncated` line carries only `repository=`, so the bullet's single file attribution and uniform field shape do not hold for that variant.\n  WHY: The registry is contractual. A consumer grepping the named file, or parsing lines that expect `pr=`/`branch=` on every variant, will miss or fail to parse the bootstrap-script variant. The only effect is mis-attributed observability.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4df26d3c3cbc52e404041dcfb3d415ceb40ba7b894bf4b999132cbdfabfcc16c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8228,
+    "run_id": "40465171473",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40465171473",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027072207_492fe445e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8228,
+    "run_id": "40465171473"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T07:22:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

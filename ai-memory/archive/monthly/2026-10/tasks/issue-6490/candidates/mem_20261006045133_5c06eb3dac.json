@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which decomposer engine paths should move into the credential-free sandbox?\nChoices:\nA) Claude path only (`claude_run ORCHESTRATE`, line 818). The Codex fallback at line 827 stays on the host with `danger-full-access`.\nB) Both paths. Claude runs through the credential-free Anthropic relay. Codex runs through the existing OpenRouter broker in the same container, following the `clarify_isolated_run.sh` engine handling. Neither model process can read pool token files, `OPENROUTER_API_KEY` or `GH_PAT`. (RECOMMENDED)\nC) Claude path only, and the host Codex fallback is removed: when Claude is unavailable, the decomposer fails instead of running Codex.\nQ2: What should the decomposer do when the sandbox cannot be set up (Docker missing, image build fails, relay or broker fails to start)?\nChoices:\nA) Fail closed. Count it as a failed decomposer attempt within the existing retry loop. Never fall back to a host model process (this matches the clarify and poller-judge isolation precedent). After the existing retries run out, the run fails, using the job's existing failure handling and Telegram alert. (RECOMMENDED)\nB) Fall back to the current host execution, log a `::warning::` and continue.\nC) Fall back to host Codex only, never host Claude.\n**Note:** B and C keep the exposure this finding reports, and C also contradicts Q1:B. Choosing B, or Q1:B together with Q2:C, will need re-clarification.",
+  "fingerprint": "e890ff33403ccb9fe045c713bb013f10f50173d6af4cad1f730f85127e11a1e2",
+  "lineage": {
+    "issue_number": 6490,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37415261766",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37415261766",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006045133_5c06eb3dac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6490,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37415261766"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6490 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T04:51:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

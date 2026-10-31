@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:549-554; workflow-templates/.claude/scripts/permission_prompts.py:549-554 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: When a redirection follows `env -S` / `--split-string`, shape handling fails to consume the split-string command, allowing script-like command text containing credentials to remain verbatim.\n  WHY: The resulting command shape can expose plaintext credentials in permission-prompt reports and GitHub issue text; severity was reported as MAJOR by deepseek_deepseek-v4-pro and BLOCKER by google_gemini-3_8-flash and openai_gpt-6-luna.\n- .claude/scripts/permission_prompts.py:694-697, 733-737, 790-799; workflow-templates/.claude/scripts/permission_prompts.py:694-697, 733-737, 790-799 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: Parsing `env -S` split strings with POSIX `shlex` instead of GNU `env` split-string rules mis-tokenizes `\\_` as an escaped underscore rather than a space, causing credential flags to go undetected.\n  WHY: For `env -S 'mysql\\_-pS3cretPass app'`, the scanner misses the password and can return the original command for posting; severity was reported as BLOCKER by openai_gpt-6-luna and NIT by z-ai_glm-5_2.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/permission_prompts.py:549, 694 | severity=high | confidence=5\n  PROBLEM: The `env -S` handlers in `_segment_shape()` and `_segment_credentials()` do not skip redirection tokens before parsing the split-string command, so command text containing credentials can remain exposed.\n  WHY: For `env -S 2>/dev/null 'mysql -pS3cretPass ./run.sh'`, the shape preserves the command text and sanitization does not collect the password.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/scripts/permission_prompts.py:549-554 | severity=critical | confidence=5\n  PROBLEM: A redirection token immediately following `env -S` / `--split-string` prevents the split-string command argument from being absorbed, leaving script-like command text verbatim in the command shape.\n  WHY: The shape can expose plaintext credentials in permission-prompt GitHub issue titles, pattern lines, and withheld command notices; the same defect is present in `workflow-templates/.claude/scripts/permission_prompts.py:549-554`.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/permission_prompts.py; workflow-templates/.claude/scripts/permission_prompts.py:549-554 and 564-567 | severity=critical | confidence=5\n  PROBLEM: `env -S` shape handling does not consume the split-string argument when a redirection follows `-S`, leaving the command string to be treated as a positional script-like token.\n  WHY: `command_shape()` includes `mysql -pS3cretPass ./run.sh` in the shape, exposing the password in permission-prompt report titles and pattern text.\n- .claude/scripts/permission_prompts.py; workflow-templates/.claude/scripts/permission_prompts.py:694-697; 733-737; 790-799 | severity=critical | confidence=5\n  PROBLEM: The `env -S` argument is parsed with POSIX `shlex` instead of GNU `env` split-string rules, so `\\_` is parsed as an escaped underscore rather than a space.\n  WHY: For `env -S 'mysql\\_-pS3cretPass app'`, the scanner misses the password and returns the original command for posting.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/scripts/permission_prompts.py (and workflow-templates/.claude/scripts/permission_prompts.py): line 697, `_command_line_credentials(words[index], depth + 1)` for the `env -S` split-string path, and line 733, the shlex lexer in `_command_line_credentials` | severity=low | confidence=2\n  PROBLEM: GNU `env -S` treats `\\_` as a space separator, but POSIX `shlex` treats it as an escaped underscore and can miss credential flags in the split string.\n  WHY: For `env -S 'mysql\\_-pS3cretPass app'`, no credential is collected and the password remains visible in text returned for posting.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d73d84bf352df5e18e0b4e0289a0f7e828a833f4839e24f5882a581c04188edd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5401,
+    "run_id": "36988898701",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36988898701",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002094646_bad8ce4f93",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5401,
+    "run_id": "36988898701"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T09:46:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

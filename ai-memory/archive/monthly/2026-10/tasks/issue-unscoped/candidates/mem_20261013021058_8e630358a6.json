@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1081-1091 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The deterministic-skip-merge step does not pass `FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS` to the helper, so the documented repository variable cannot configure the retry sleep.\n  WHY: The helper always uses its 5-second default; severity was rated NIT by three reviewers and MAJOR by minimax_minimax-m3, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml: the `deterministic-skip-merge` \"Enable auto-merge\" step `env:` block (around lines 1081-1088) | severity=low | confidence=[4]\n  PROBLEM: The step env does not map `FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS`, so setting it as a repository variable has no effect.\n  WHY: The helper always waits the 5-second default between marker POST attempts; the default is safe and the retry still works.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml: env: block (lines 1081-1088) | severity=low | confidence=[5]\n  PROBLEM: The `FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS` repository variable is not mapped into the workflow step environment.\n  WHY: Users cannot configure the retry sleep duration as documented in README.md, and the script relies on its default value of 5 seconds.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml: lines 1081-1091 (the env block of the deterministic-skip-merge step) | severity=high | confidence=[5]\n  PROBLEM: The deterministic-skip-merge step does not forward `FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS` to the helper.\n  WHY: The helper always uses 5 seconds regardless of the repository variable setting, and the test does not assert this mapping.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml: lines 1081-1088 (env mapping in deterministic-skip-merge job) | severity=low | confidence=[4]\n  PROBLEM: `FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS` is documented as configurable via repository variable, but the workflow does not map it into the step environment.\n  WHY: The helper always uses the 5-second default, so an operator setting `FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS=10` gets no change in behavior.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2d84ea39350912841a09dbca3eb4a70870623d725361c0b9b1357270e3abcd9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7292,
+    "run_id": "38332210514",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38332210514",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013021058_8e630358a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7292,
+    "run_id": "38332210514"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T02:10:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

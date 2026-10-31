@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:188-195 | severity=nit | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `hidden_build_output_dirs` skips any prefix containing a dot directory (`part.startswith(\".\")`, line 192). `allowed()` admits `.github/actions` and `.github/workflows`, but a committed `.github/actions/<name>/dist/` is still hidden from the copy and never named in the note.\n  WHY: An agent in a repo that commits a JS action bundle sees no `dist` and gets no note, which is the #4770 failure the PR targets. Reviewers rated it NIT with confidence 3 to 4. Anthropic noted it is a coverage gap rather than a regression.\n- scripts/review_untrusted_workspace.py:188 | severity=nit | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The search uses `parts[:-1]`, so a tracked regular file named `build`, `dist` or `coverage` is hidden by `allowed()` (line 134) but never reported.\n  WHY: The agent cannot see the file and is not told about it. Such files are rare. Confidence was 2 from anthropic_claude-sonnet-5_5 and 4 from minimax_minimax-m3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_untrusted_workspace.py:192 | severity=nit | confidence=3\n  PROBLEM: `hidden_build_output_dirs` skips any path under a dot directory, including `.github/actions/<name>/dist/`. `allowed()` (lines 134 and 144) admits `.github/actions` but still hides its `dist`, so it is neither copied nor named in the note.\n  WHY: An agent in a repo that commits an action's `dist/` sees neither the directory nor the note. The README states the dot-directory skip, so this is a coverage gap rather than a regression.\n- scripts/review_untrusted_workspace.py:188 | severity=nit | confidence=2\n  PROBLEM: The search leaves out the last path component (`parts[:-1]`), so a tracked regular file named `build`, `dist` or `coverage` is hidden by `allowed()` (line 134) but never reported.\n  WHY: The agent cannot see the file and is not told about it. Such files are rare, so the impact is small.\n- Other lenses: NONE. A dropped pass-1 `os.path.lexists` performance finding and a dropped suggestion to reject `..` components in `hidden_build_note` are noted. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py:192 (vs line 144 in `allowed()`) | severity=nit | confidence=4\n  PROBLEM: `allowed()` admits `.github/workflows/**` and `.github/actions/**` past its dot-directory rule. The new filter in `hidden_build_output_dirs` applies `part.startswith(\".\")` to the whole prefix with no such exemption. A committed `.github/actions/<name>/dist/index.js` bundle is dropped from the sandbox copy (line 134, `dist` in `EXCLUDED`) and also skipped by the note.\n  WHY: The agent sees no `dist` and receives no note entry, so it reaches the #4770 conclusion the PR exists to prevent. The suggested fix is to mirror `allowed()`'s rule and skip the dot test for those prefixes.\n- scripts/review_untrusted_workspace.py:188 | severity=nit | confidence=4\n  PROBLEM: The search skips the last path component (`parts[:-1]`), but `allowed()` line 134 rejects a path when any component is in `EXCLUDED`. A tracked file whose basename is `dist`, `build` or `coverage` is excluded from the copy and never reported in the sidecar or note.\n  WHY: The copy is missing the file and the note is silent, so the same \"hidden, therefore missing\" inference applies. Verified against the code path.\n- HARDENING_SUGGESTIONS: scripts/review_untrusted_workspace.py, `hidden_build_note`, line 213. The reader filters keys only by character class and length, so a corrupted sidecar entry such as `../../etc/dist` or `/abs/dist` would be rendered into the prompt. The suggested fix is to add `and not any(part in (\".\", \"..\") for part in PurePosixPath(key).parts)` (1 line). HARDENING_RISK_SCORE: 1.\n- Other lenses: NONE. Verification notes found no defect in the applied fixes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_untrusted_workspace.py:192-195 | severity=nit | confidence=3\n  PROBLEM: `hidden_build_output_dirs` skips any path whose prefix contains a dot-directory component, including `.github/actions/<name>/dist/`. That directory is hidden from the sandbox copy by `allowed()`, so the agent sees it missing and gets no note.\n  WHY: A repo that commits a JS Action's `dist/` gets no note, and the agent may file a fix issue to restore it (the #4770 failure mode). The suggested fix is to exempt `.github` and `.claude` from the `startswith(\".\")` check.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "54765f572361656b9da04752efb215e7c803015a1647ef8a5f987d580c574b90",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7921,
+    "run_id": "39901766932",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39901766932",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023053527_a32ff53530",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7921,
+    "run_id": "39901766932"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T05:35:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

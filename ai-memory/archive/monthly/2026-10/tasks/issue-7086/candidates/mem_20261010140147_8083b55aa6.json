@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: According to GITHUB FACTS, PR #6655 is still open and unmerged, and its head branch `ai/issue-6633` exists at `68a354ca730c`. The CI run 38056260114 failed on that commit. Everything the fix touches lives only on that branch: the extracted `review_autofix_step_assemble_failure_evidence.sh`, the `provider_outage.py` support entry, and the `ai:provider-outage` label use. Option B would therefore block, and a fix based on `main` could not repair it. Option A is the only choice that delivers a working fix now. Option C would drop a diagnosed, actionable fix and rely on a single autofix loop that has already let this failure through.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. The decision is a letter.\n\nBinding notes for the planner:\n- Add the line `Integration branch: ai/issue-6633` so the implement phase checks out and targets PR #6655's head branch. The fix PR should merge into `ai/issue-6633`, not `main`.\n- If PR #6655 merges or closes before implementation starts, the existing merged-base retargeting (`RETARGET_MERGED_BASE_ENABLED`, default `true`) moves the fix onto the merged PR's base. No extra handling is needed.\n- Keep the scope to the issue's listed fixes:\n  - Restore `--support-sha` and the sandbox-prepare `--evidence-file` input in `scripts/review_autofix_step_assemble_failure_evidence.sh`, keeping the existing fingerprint gate.\n  - Add `ai:provider-outage` to both catalogs in `scripts/label_helpers.sh`. Also add it to `.github/ai/label_contract.v1.json` if it is missing there, and check that file on the branch before editing.\n  - Update the affected tests:\n    - Read step bodies through `expanded_review_autofix_text()`.\n    - Accept `provider_outage.py` as a trusted support script.\n    - Pin the new alert-level declarations.\n    - Do not weaken any safety assertion.\n- Re-run the failing shard test `test_contract_helper_guard_in_poller_tests`. Its exact assertion was cut off in the log, so the label-catalog fix must be confirmed by running it. Do not assume it passes.\n- The `files_touched` list must name the exact automation paths (`scripts/...`, `.github/ai/label_contract.v1.json` if edited, and tests). Otherwise the implement automation-path guard will reject the commit.\n- If PR #6655's own review loop fixes the same failures first, the reviewer should check whether this fix PR still adds anything. If it does not, close the fix PR as no longer needed.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone.",
+  "fingerprint": "65fcf6cc6bfad9295dfccc3f92f35bc57ec030831fe56d5ec902034a7e342c81",
+  "lineage": {
+    "issue_number": 7086,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38057502744",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38057502744",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7086"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010140147_8083b55aa6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7086,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38057502744"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7086",
+  "timestamps": {
+    "created_at": "2026-10-10T14:01:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

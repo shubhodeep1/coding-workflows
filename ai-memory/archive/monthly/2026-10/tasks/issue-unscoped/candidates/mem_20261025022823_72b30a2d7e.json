@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2477-2486 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The comment estimates this step costs about one minute more than the fast-fail subset, but it derives that from group totals (group 0 15m09s, group 3 15m08s) that are not like-for-like and do not isolate either step's duration.\n  WHY: This is a documentation-accuracy issue only, and the `if: strategy.job-index == 0` guard is correct. The comment is also silent on whether group 1 stays at or above the 900 s budget-watch threshold (NIT in all three reviews).\n- .github/workflows/ci.yml:2465-2472 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The wording \"(below; moved to group 0 in #8091)\" is confusing now that the step runs in group 0. The glm reviewer also says the text \"group 1 carries no moved-in steps since #7766, so it has the most headroom\" is stale (lines 2471-2472).\n  WHY: This is a comment-only issue with no runtime impact (NIT). The reviewers cite slightly different line ranges: 2465-2469 and 2468. The minimax reviewer judged the wording accurate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, `orchestrate-poll` matrix step-to-group guards (group 1's movable steps)\n  confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash, anthropic_claude-sonnet-5_5]\n  EVIDENCE: The diff moves only the unblock step from group 1 to group 0, and the comments say step timings were unavailable and the placement is an estimate, so it is not shown to be the slowest step or to target the group with the most headroom. The glm reviewer adds that the heavier \"Orchestrate poll single-file module tests\" step stays in group 1 (ci.yml:2500-2501), so group 1 likely stays at or above the 900 s threshold. Severity disagreement: MAJOR (openai, glm) vs NIT with confidence 2 (anthropic). The highest severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:2477-2486 | severity=NIT | confidence=3\n  PROBLEM: The cost estimate \"about one minute more than the fast-fail subset\" comes from group totals that are not like-for-like.\n  WHY: This is a documentation-accuracy concern only, and the step guard is correct. The comment does not note that group 1 stays at or above the 900 s threshold if the step costs less than about 69 s.\n- .github/workflows/ci.yml:2465-2469 | severity=NIT | confidence=2\n  PROBLEM: \"below\" in \"(below; moved to group 0 in #8091)\" is slightly confusing now that the step runs in group 0.\n  WHY: It is a comment only.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: the `orchestrate-poll` matrix step-to-group guards in `.github/workflows/ci.yml`\n  Evidence of absence: The step was moved unchanged, and the constraints are met. The step timings were unreadable, so the choice of step and group is an estimate. The reviewer found no measurement that makes this a gap, and group-1 headroom is unconfirmed until the next CI run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2480-2483 | severity=NIT | confidence=3\n  PROBLEM: The comment estimates that this step costs about one minute more than the fast-fail subset by comparing total runtimes for groups 0 and 3.\n  WHY: No runtime failure is demonstrated. The group totals include different test workloads, so the estimate can mislead future CI rebalancing.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, `orchestrate-poll` matrix step-to-group assignments.\n  Evidence of absence: The diff moves only the unblock-test step from group 1 to group 0. The comments at lines 2478-2486 say step timings were unavailable and the placement is an estimate, so the diff does not establish that the moved step is among the slowest or that group 0 has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml orchestrate-poll matrix, the step-to-group assignments of group 1's movable steps.\n  Evidence of absence: The diff moves only the ~28s unblock step (ci.yml:2459: \"this step (unblock) 28.2s\"). The heavier \"Orchestrate poll single-file module tests\" step stays in group 1 (ci.yml:2500-2501, `if: strategy.job-index == 1`). The comment at ci.yml:2482-2483 says the single-file modules cost more (test_run_substate_ledger.py alone took 139s locally). Group 1 therefore likely stays at or above the 900 s budget-watch threshold that filed #8091. The slower step could have been moved under every stated constraint.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- .github/workflows/ci.yml:2477-2486 | severity=NIT | confidence=3\n  PROBLEM: The derivation \"group 0 took 15m09s with the single-file modules (#8080), group 3 took 15m08s with this step (#8072)\" does not support the one-minute cost estimate. The comment also omits that removing only this step leaves group 1 at about 15m or more.\n  WHY: No runtime failure, documentation accuracy only. The `if: strategy.job-index == 0` guard is correct.\n- .github/workflows/ci.yml:2468 | severity=NIT | confidence=2\n  PROBLEM: \"(below; moved to group 0 in #8091)\" is confusing after the move. The text at lines 2471-2472 (\"group 1 carries no moved-in steps since #7766, so it has the most headroom\") is stale.\n  WHY: Historical narrative only, with no execution impact.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "58dbfc85c0daf405bd4ed381a962aebbd5478fc35925f2c7063e775d272ab62e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8093,
+    "run_id": "40153269988",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40153269988",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025022823_72b30a2d7e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8093,
+    "run_id": "40153269988"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T02:28:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:625-627 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The superseded decision accepts a disabled named-CI check as evidence that the owning PR\u2019s checks passed.\n  WHY: When `AUTO_MERGE_REQUIRED_CI_CHECK` is unset, an unrelated successful check can leave the named check absent and `PR_CHECKS_LAST_CI_STATE` disabled, allowing the issue to be superseded without verifying the required check passed.\n- agents.d/7032-unblock-reissue-ci-owner.md:1 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fragment targets the `Integration-sync verifier + bootstrap contract` section instead of the Unblock judge section.\n  WHY: Fragment assembly places unblock-judge documentation among unrelated integration-sync content. Severity disagrees: some reviewers rated this MAJOR and others NIT; the highest severity is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add regression tests for merged PRs and branch metadata embedded in a sentence.\"\n  expected_change_site: tests/test_unblock_judge.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `test_open_owner_pr_reissue_records_its_head_branch` exists, but no specific regression test asserts that branch metadata embedded in a sentence (e.g., \"Integration branch: foo\" as part of a sentence) is ignored by the parser.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:625-627 | severity=high | confidence=[4]\n  PROBLEM: A disabled named-CI check is accepted as evidence that the owning PR\u2019s checks passed.\n  WHY: When `AUTO_MERGE_REQUIRED_CI_CHECK` is unset (default in many consumer repositories), `PR_CHECKS_LAST_CI_STATE` can be `disabled` if the required CI check is absent but an unrelated check succeeds, potentially allowing a CI-failure issue to be marked superseded and closed without verifying that the required CI check actually passed.\n- agents.d/7032-unblock-reissue-ci-owner.md:1 | severity=high | confidence=[4]\n  PROBLEM: The fragment uses the incorrect section marker `Integration-sync verifier + bootstrap contract`.\n  WHY: Folding the fragment appends unblock-judge prose to the conflict-resolver fingerprint documentation section.\n- Requirement: \"Add regression tests for merged PRs and branch metadata embedded in a sentence.\"\n  Expected change site: tests/test_unblock_judge.py\n  Evidence of absence: The PR includes `test_open_owner_pr_reissue_records_its_head_branch`, but there is no specific regression test asserting that branch metadata embedded in a sentence (e.g., \"Integration branch: foo\" as part of a sentence) is ignored by the parser, as requested in the linked issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/7032-unblock-reissue-ci-owner.md:1 | severity=low | confidence=[4]\n  PROBLEM: The fragment marker targets `Integration-sync verifier + bootstrap contract`, but the fragment body documents unblock-judge CI-failure reissue behavior.\n  WHY: Fragment assembly places the content under an unrelated heading, separated from existing Unblock judge content by unrelated bullets.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:625-627 | severity=high | confidence=[5]\n  PROBLEM: The superseded decision accepts `PR_CHECKS_LAST_CI_STATE=disabled` as proof of passing checks.\n  WHY: When `AUTO_MERGE_REQUIRED_CI_CHECK` is unset, an unrelated successful check-run can leave the required CI check absent while the shared gate returns `ok`, allowing the issue to be superseded without establishing that required checks passed.\n- agents.d/7032-unblock-reissue-ci-owner.md:1 | severity=low | confidence=[5]\n  PROBLEM: The fragment targets \u201cIntegration-sync verifier + bootstrap contract,\u201d not \u201cUnblock judge (Phase 7).\u201d\n  WHY: Fragment assembly places the unblock-judge behavior among unrelated integration-sync verifier details.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7032-unblock-reissue-ci-owner.md:1 | severity=high | confidence=[5]\n  PROBLEM: The fragment targets the wrong section; the content describes the unblock judge's CI-failure reissue behavior, but the marker points to `Integration-sync verifier + bootstrap contract` instead of `Unblock judge (Phase 7)`.\n  WHY: Folding the fragment appends unblock-judge prose into the integration-sync verifier section, leaving the Unblock judge section unchanged.\n- scripts/unblock_judge.sh:625-627 | severity=high | confidence=[4]\n  PROBLEM: A disabled named-CI check is accepted as evidence that the owning PR's checks passed.\n  WHY: In consumer repositories where `AUTO_MERGE_REQUIRED_CI_CHECK` is unset, a merged PR with any green check but no actual CI run can be marked `superseded`, closing the issue without verifying the required CI check passed.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ad6611c8647228ca477d689de03ed8d365afb6ece5f3a9f949f5afe63b4a93e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7040,
+    "run_id": "38246563853",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38246563853",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012123651_a614851047",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7040,
+    "run_id": "38246563853"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T12:36:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, the `static-checks` job and the destination job `tests-release-and-log-analysis`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The PR moves only one step (\"Regression tests wired by the CI wiring guard (part 1)\") although the issue says \"steps\", .github/workflows/ci.yml:1357-1362 says step timings were not readable and the step was chosen by test count and subprocess count, the destination job's headroom is unmeasured (the 535-604s figure predates the move). Severity disagreement: openai_gpt-6-luna rated it MAJOR; anthropic_claude-sonnet-5_5 and qwen_qwen3_7-plus rated it NIT. The two NIT reviewers note that the editor deferred it and that `budget-watch` files an `ai:ci-budget` issue if `static-checks` still runs past 11m15s.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: the `static-checks` job in `.github/workflows/ci.yml` and the destination job `tests-release-and-log-analysis`.\n  Evidence of absence: The PR moves one step, although the issue says \"steps\" and points at per-step timings. The comment at `ci.yml:1357-1362` says the timings were not readable and that the step was picked by test count and subprocess count. The destination's roughly 9-10 minute baseline predates the move, so its remaining headroom (20-minute timeout, 15-minute budget-watch line) is unmeasured. The constraints themselves are met: names kept, no timeout raised, no job added. This is a residual-risk note. The editor already deferred it, and `budget-watch` files a new `ai:ci-budget` issue if `static-checks` still runs past 11m15s.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps from `static-checks` and their placement in the destination job.\n  Evidence of absence: The PR moves only \"Regression tests wired by the CI wiring guard (part 1)\". The comments at `.github/workflows/ci.yml:1357-1362` say the run's step timings were not readable and that this step was selected by test count and subprocess count instead. The diff does not establish that it was the slowest step or that `tests-release-and-log-analysis` had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, the static-checks job and destination job tests-release-and-log-analysis\n  Evidence of absence: The issue uses plural \"steps\" and references \"the run's step timings\". The PR moves only one step. The comment at ci.yml:1357-1359 says \"Step timings were not readable when this was planned\" and the step was chosen by test count and subprocess count. The destination job's headroom is unverified (ci.yml:1359-1361 says it \"measured about 535-604s\" before this step was added). The editor deferred moving more steps because, without timing data, it risks pushing tests-release-and-log-analysis past its 15-minute budget-watch threshold, and the budget-watch system will file a new ai:ci-budget issue if static-checks still exceeds 11m15s. Described as a conservative, safety-net-backed approach rather than a true gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5ad9b1a8781703269bb712927782982f48e17770bb9b59df5cd1be97b0063bd0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7385,
+    "run_id": "38573998043",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38573998043",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014141243_293c2ad924",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7385,
+    "run_id": "38573998043"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T14:12:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

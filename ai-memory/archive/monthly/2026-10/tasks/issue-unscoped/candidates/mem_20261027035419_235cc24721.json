@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml`, a preflight step in the E2E jobs or at the top of `resolve-version`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No diff hunk adds a preflight step, the capacity-wait fail-fast logic lives only inside the existing wait loops (clarify, plan, implement, alt-model, orchestrate-decompose), the capacity-tracker check at `.github/workflows/test-and-mark-stable.yml:4500-4510` is reachable only in the orchestrate-decompose failure path after no tracking issue is found. Severity NIT per all reviewers; the issue marks the item optional.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: Issue item 4, \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`)\". It should stop the gate at once when a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, in the E2E jobs or `resolve-version`.\n  Evidence of absence: No diff hunk adds a preflight step. The issue marks it \"Optional but recommended\", and the in-loop fail-fast checks already stop each job within one poll. The prior editor summary recorded it as deferred.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n(All other checklist categories: NONE. The changelog edit was verified accurate against results rows at lines 3414, 3423, 3432, 3441.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Implement a preflight step in the E2E jobs (or resolve-version) that stops the gate at once if a trusted, open ai:provider-outage tracker with the kind=capacity marker exists.\n  Expected change site: .github/workflows/test-and-mark-stable.yml or a new preflight step in the release gate.\n  Evidence of absence: The PR diff implements the capacity-wait fail-fast logic inside the existing wait loops (clarify, plan, implement, alt-model, orchestrate-decompose), but does not implement a dedicated preflight check. The issue listed this as optional but recommended.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, a preflight step before the e2e job bodies begin (or at the top of `resolve-version`); same tracker pattern as the orchestrate-step fallback (test-and-mark-stable.yml:4501-4506).\n  Evidence of absence: No diff hunk introduces a preflight step before `e2e-smoke-test`, `e2e-alt-model-test`, or `orchestrate-decompose-test` start their phase waits. The capacity-tracker check in the orchestrate path (test-and-mark-stable.yml:4500-4506) is only reachable after the bootstrap run has failed to create a tracking issue, so the other two live E2E jobs still burn a full poll before their per-step check fires.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n(Informational notes: changelog correction is accurate; all other checklist categories: NONE.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, in an E2E job or `resolve-version` preflight.\n  Evidence of absence: The PR checks for an open capacity tracker only in the orchestrate-decompose failure path after no tracking issue is found (`.github/workflows/test-and-mark-stable.yml:4500-4510`). There is no preflight check before the live phases start.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b7e1e8da9e41e8b0a17d3de3e618e8136c52a9effb9c22bcadaa3accce38d8b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8221,
+    "run_id": "40444737015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40444737015",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027035419_235cc24721",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8221,
+    "run_id": "40444737015"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T03:54:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

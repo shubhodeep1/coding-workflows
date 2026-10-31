@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/nightly-validation-selftest.yml:198-210 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The job-level concurrency group serializes status jobs, but each job checks out its own triggering SHA and does not refresh the base, so a queued run can compute the streak from a stale status file and open a PR that conflicts with main.\n  WHY: Severity disagreement: sonnet rated it NIT (confidence 2), minimax and luna rated it MAJOR (confidence 4); the highest is used. z-ai_glm-5_3-flash explicitly did not adopt this claim, arguing that checkout runs after the previous job finishes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Then open a PR into main.\"\n  expected_change_site: .github/workflows/nightly-validation-selftest.yml, the `gh pr create` call in \"Commit validation self-test status\"\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `TARGET_BRANCH` is set from `github.ref_name` at line 323 and passed as the PR base at line 443, so a `workflow_dispatch` from a non-main branch opens the PR against that branch, not main.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/nightly-validation-selftest.yml: job-level `concurrency` group `nightly-validation-selftest-status-${{ github.ref }}` and the `actions/checkout` step of `commit-selftest-status` | severity=NIT | confidence=2\n  PROBLEM: The concurrency group makes two status jobs take turns, but each job checks out the commit its own run was triggered on. If an earlier status PR merges before a queued second run reaches this job, the second run finds no open status PR and computes the streak from its stale checkout.\n  WHY: The second PR carries a streak computed from the pre-merge status and can conflict with main's copy. The overlap is rare and the next night's run corrects the status. The reviewer rated it low, against a pass-1 ledger rating of high.\n- All other checklist sections: NONE. The reviewer reported HARDENING_SUGGESTIONS NONE and HARDENING_RISK_SCORE 1. The task completeness section found every deliverable present.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/nightly-validation-selftest.yml:198-202 | severity=MAJOR | confidence=4\n  PROBLEM: The concurrency block only serializes status-delivery jobs and does not synchronize a second run's checkout with the first run's PR merge. Run B's branch is based on pre-merge main, so its PR can target a stale base and conflict on `analysis/validation-selftest-status.json`.\n  WHY: Run A's job completion unblocks run B, but the PR merge happens asynchronously and can take several minutes. Run B's checkout takes seconds, so the race window is large whenever a second status job is queued.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/nightly-validation-selftest.yml:200-210, 229-263, 306-318, 424, 443 | severity=MAJOR | confidence=4\n  PROBLEM: The concurrency group serializes status jobs, but checkout still uses the workflow run's triggering SHA (`fetch-depth: 1`) and does not refresh the base branch.\n  WHY: If a queued run starts after an earlier status PR has merged, the seed step finds no open PR and computes from its stale checkout. It then opens a PR changing the same status file, which conflicts and leaves the latest status undelivered.\n- TASK_GAP:\n  Requirement: \"Then open a PR into main.\"\n  Expected change site: .github/workflows/nightly-validation-selftest.yml, the `gh pr create` call in \"Commit validation self-test status.\"\n  Evidence of absence: `TARGET_BRANCH` is set from `github.ref_name` at line 323 and passed as the PR base at line 443. Dispatching from a non-main branch opens the PR against that branch, not main.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c191ff5362997ebaef855191ca4bdec8f1b9a17125a04b27d6f35610e590183f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8230,
+    "run_id": "40457658819",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40457658819",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027062017_bfe7ec1fb6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8230,
+    "run_id": "40457658819"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T06:20:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

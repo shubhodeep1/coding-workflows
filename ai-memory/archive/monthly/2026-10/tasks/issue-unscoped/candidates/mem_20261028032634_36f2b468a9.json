@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: when the merged head has no successful runtime validation, the completion comment and Telegram message must say so; the notice is silent when ENABLE_VALIDATION is off\n  expected_change_site: external_finalize_validation_notice and the external-finalize completion block in scripts/orchestrate_poll_process.sh\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: with ENABLE_VALIDATION != true the outcome is `skipped` and nothing is appended; the reviewer treated this as a deliberate, documented choice pinned by test_external_finalize_validation_disabled_adds_no_notice and did not count it as a gap (severity NIT)\n- requirement: \"Name the merged SHA and the last validated SHA, if any.\" in the notice\n  expected_change_site: mark_validation_complete budget-ineligible deferral return in scripts/orchestrate_poll_process.sh (lines 16477-16480)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/orchestrate_poll_process.sh lines 16462-16469 record the passed integration SHA in the local state file, but the budget-ineligible deferral return at lines 16477-16480 does not call post_state_comment, so the SHA may not persist across poll ticks; severity NIT, the Sonnet reviewer rated confidence 2 and judged it display-only and previously accepted\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: when the merged head has no successful runtime validation, the completion comment and Telegram message must say so; silent when ENABLE_VALIDATION is off.\n  Expected change site: `external_finalize_validation_notice` and the external-finalize completion block in `scripts/orchestrate_poll_process.sh`.\n  Evidence of absence: with ENABLE_VALIDATION != true the outcome is `skipped` and nothing is appended; deliberate choice, pinned by `test_external_finalize_validation_disabled_adds_no_notice`, not counted as a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- Requirement: name \"the last validated SHA, if any\" in the notice.\n  Expected change site: budget-ineligible deferral return in `mark_validation_complete` (around lines 16477-16480).\n  Evidence of absence: `validation_last_passed_sha` is written to the local state file, but that return path does not call `post_state_comment`; the field only affects wording and the next validation pass records it again.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Name the merged SHA and the last validated SHA, if any.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, mark_validation_complete state update and its budget-ineligible deferral path.\n  Evidence of absence: mark_validation_complete records the passed integration SHA in the local state file at lines 16462-16469, but when finalization returns budget-ineligible (lines 16477-16480), it returns without calling post_state_comment, so the SHA is not reliably persisted across poll ticks.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ed371d880dd1583ea27a766a5c7ca9937ca3fc12f33a137b3610bbc7090fa19f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8236,
+    "run_id": "40625200368",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40625200368",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028032634_36f2b468a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8236,
+    "run_id": "40625200368"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T03:26:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

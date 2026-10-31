@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 2 (cheaper reasoning medium).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- I\u2019m checking the current workflow and test code against the supplied diff, focusing on whether the verifier\u2019s early-execution boundary is actually enforced.\n- (No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Reviewing PR #5647: \"Pin the guard differential verifier to the base branch \u2014 conformance fix 3/3\". The PR moves the guard differential check to run immediately after dependency installation, before any PR code executes, and adds `-P` flags to prevent checkout code from being imported; the change closes a demonstrated bypass where a PR could plant a `.pth` file to control the verifier's exit code.\n- (No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- The last run diff is a progress-log-only update recording post-intervention review round 1 (no code findings). The substantive code changes were reviewed across six prior rounds and convergence was reached: 5 of 6 pass-1 reviewers reported nothing, minimax failed with a non-retryable infrastructure error, and Copilot reported none. The progress-log update itself introduces no code, behavioral change, or contract drift. The out-of-scope item, `docs/INVENTORY.md` missing `scripts/guard_differential.py`, is explicitly deferred to issue #5185 in the log's Notes.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "661879a5cc08f3aa40a5be2f97c3a5dedc6e12b77e7f97b7109b727211002770",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5647,
+    "run_id": "36818932674",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36818932674",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001055728_ec81ccea8c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5647,
+    "run_id": "36818932674"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T05:57:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

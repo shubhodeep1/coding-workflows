@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: The issue asks for an \"exact\" grant of four paths, and its previous run was rejected for exactly that reason. `scripts/files_touched_scope_guard.py` auto-allows only lockfiles (`LOCKFILE_BASENAMES`, `is_lockfile`, line 193); it has no exemption for `tests/` or `changelog.d/`. So option A's new `tests/test_release_ci_gate.py` and changelog fragment would be blocked by the guard again, while option B meets \"Test both gates and SHA mismatches\" with no new paths. `.github/workflows/ci.yml` does not check for a changelog fragment, so leaving the fragment out will not fail CI.\nQ2: Both release paths can start right after `stable` moves, while the `push` CI run on that SHA is still going. Failing at once (B) would turn a normal race into failed attempts against `AUTO_RELEASE_STABLE_MAX_ATTEMPTS` (`auto-release-stable.yml:55`, default 3) and `PROMOTE_CYCLE_MAX_ATTEMPTS`, and could hold a healthy tip. A bounded wait that still fails closed when time runs out keeps the security property and avoids those false failures.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 (B, recorded because it changes where tests live):\n  strategy: reframe\n  inputs:\n    - scripts/release_ci_gate.sh (new; one of the four granted paths)\n    - .github/workflows/ci.yml (granted; holds the test step)\n    - .github/workflows/test-and-mark-stable.yml, .github/workflows/mark-stable.yml (granted; both call the gate)\n    - scripts/files_touched_scope_guard.py (only lockfiles are exempt from the grant)\n  steps:\n    - Write `scripts/release_ci_gate.sh`. It takes the repo and the exact SHA being released. It reads the check-runs for that commit with `gh api --paginate` and selects the `CI / lint` check-run produced by GitHub Actions. It passes only when `head_sha` equals the requested SHA, `status` is `completed` and `conclusion` is `success`. Every other case exits non-zero with a structured `RELEASE_CI_GATE` log line: missing, pending after the wait, cancelled, failed, timed out, unreadable or malformed API output, or a SHA mismatch.\n    - Call the gate in both `test-and-mark-stable.yml` and `mark-stable.yml` before any tag or release write, passing the exact SHA that will be tagged. Pass all `${{ }}` values through `env:`, never inline in `run:`.\n    - Add one step to an existing `ci.yml` test job (not a new job, so the `lint` aggregate's `needs` list does not change). The step puts a stub `gh` on `PATH` that returns fixture JSON for each case: success, missing, pending past a 0-second wait, cancelled, failure, unreadable or malformed, a check-run from a non-Actions app, a `head_sha` mismatch, and pending that then completes with success inside the wait. It checks the gate's exit code and log line for each case, and greps both release workflows to confirm each one calls the gate with the released SHA.\n    - Do not add a changelog fragment in this PR; the grant does not cover `changelog.d/`. Mention it in the PR body so a later PR can add the fragment.\n  replaces_acceptance_criterion: tests live in `tests/*.py`, per repo convention\n  equivalence_argument: The same failure modes, both gates and the SHA-mismatch cases are run in CI on every PR. Only the place the tests live changes.\n  reversibility: The inline step can later move to `tests/test_release_ci_gate.py` under a widened grant, and the gate script does not change.\nQ2 (A):\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/auto-release-stable.yml:55 (attempt budget)\n    - .github/workflows/promote-main-to-stable.yml:141 (existing bounded-wait pattern `PROMOTE_CYCLE_GATE_WAIT_SECS`)\n  steps:\n    - Inside the script, read `RELEASE_CI_GATE_WAIT_SECS` (default 1800) and `RELEASE_CI_GATE_POLL_SECS` (default 30). Invalid values fall back to the defaults with a `::warning::`, and `0` means no wait.\n    - Wait only while the check-run is missing, queued or in progress. Stop at once and fail closed on any completed result that is not `success`.\n    - When the wait runs out, fail closed with `reason=wait_timeout`.\n  reversibility: Setting `RELEASE_CI_GATE_WAIT_SECS=0` gives option B's behaviour.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- Before dispatch, an operator must confirm that the four-path grant in the issue metadata comes from a trusted source and that workflow edits are allowed for this run (`ALLOW_WORKFLOW_EDITS` is not `false`). The issue's own instruction says to confirm this, not bypass the guard. Until it is confirmed, the scope guard will block the implementation again, as it did on #6532.\n\nNote: according to the GitHub facts, #6532 is already closed (`not_planned`). The issue wanted it kept open until the fix passes validation, so an operator may want to reopen it. That falls outside these two questions.",
+  "fingerprint": "5682ff36528926d3740ee45ea416e77c1c06727780c8a15044d32f52be2f421a",
+  "lineage": {
+    "issue_number": 6797,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37830046644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37830046644",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6797"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008192136_758ae8e5c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6797,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37830046644"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6797",
+  "timestamps": {
+    "created_at": "2026-10-08T19:21:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

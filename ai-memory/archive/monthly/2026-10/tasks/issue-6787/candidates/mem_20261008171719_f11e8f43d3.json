@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The spec also asks to \"rerun trusted intake against the original failure evidence\" and to carry Q1:C / Q2:A into the new heal issue. Neither can be done in a code PR. The original run IDs and report payload live only in #6779, and a new heal issue is created by an intake run, not by an implement commit. What is in scope for this issue?\nChoices:\n- A: Only the intake refusal change and its regression tests (refusal when the marker is unresolved, and the success path with a verified marker). The intake rerun for #6779's evidence happens afterwards, through the existing `workflow-failure-heal` repository_dispatch path, outside this PR. The new heal issue gets Q1:C / Q2:A from its own clarify cycle. (RECOMMENDED)\n- B: As A, plus a scheduled or poller-driven automatic re-dispatch of intake for heal reports whose filing was refused, once a valid marker can be rendered. This adds new automation surface, a \u00a720 registry entry and new tests.\n- C: As A, but this issue stays open and blocked until someone confirms the rerun produced a verified heal issue.\nQ2: When the scope marker is unresolved, the intake will no longer create the issue. That case includes transient failures, such as an unreadable consumer tree or a missing frozen scope snapshot. How should the refusal be surfaced?\nChoices:\n- A: Log a stable line (for example `WORKFLOW_HEAL skip reason=scope_unresolved`), send a CRITICAL Telegram alert naming the source and run, and fail the intake job so it shows red and can be rerun. (RECOMMENDED)\n- B: Same log line and CRITICAL alert, but exit 0 (the job stays green), like the existing `phase_report_unverified` skip.\n- C: Same as A, and also post a refusal comment on the reporting source issue/PR when one exists (one extra API write).",
+  "fingerprint": "4d54a978afa6a47dbd80fe6ea5c15b9ad0d1d7a334ad8062ad50a62f17782d42",
+  "lineage": {
+    "issue_number": 6787,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37814587748",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37814587748",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008171719_f11e8f43d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6787,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37814587748"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6787 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T17:17:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml: lines 2482 and 2509 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Both deterministic-skip-merge paths pass an empty base ref to `_pr_wait_for_required_checks`, so non-CI bases are treated as requiring `lint`.\n  WHY: For PRs targeting bases where `ci.yml` does not run, no `lint` check appears and the wait times out, refusing auto-merge.\n- scripts/pr_checks_lib.sh: lines 437-447 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The check-name resolver defaults to `lint` for an empty base ref, requiring a CI check for PRs targeting bases where CI does not run.\n  WHY: Such PRs wait for a `lint` check that never appears and eventually time out, refusing auto-merge.\n- scripts/pr_checks_lib.sh: lines 531-536 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_pr_wait_for_required_checks` calls `_pr_head_ci_runs_pending` within the polling loop, triggering a GitHub API call on every iteration.\n  WHY: This may cause excessive API requests that risk hitting rate limits and blocking auto-merge; severity is high per Gemini, while Claude explicitly judged the per-poll read not to be a defect because the loop reuses the single read and the old code already made it once per poll.\n- scripts/pr_checks_lib.sh: `_pr_auto_merge_required_ci_check_name` comment block, lines 419-431 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The comment's description of the `lint` default for an unknown base as \u201cfailing closed\u201d is ambiguous and could lead a future maintainer to change the behavior.\n  WHY: The implementation and test establish that an unknown base resolves to `lint`, but the comment could be read as saying the requirement is skipped.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml: job `deterministic-skip-merge`, lines 2482 and 2509 | severity=high | confidence=[4]\n  PROBLEM: Both calls to `_pr_wait_for_required_checks` pass an empty base ref, so the resolver requires `lint` for bases where CI does not run.\n  WHY: Such PRs never receive a `lint` check-run, causing the wait to time out and refuse the merge.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh: _pr_auto_merge_required_ci_check_name, lines 437-447 | severity=high | confidence=[4]\n  PROBLEM: The check-name resolver defaults to `lint` when the base ref is empty, incorrectly requiring a CI check for PRs targeting bases where CI does not run.\n  WHY: PRs targeting bases without CI wait for a `lint` check that never appears and ultimately time out, refusing the merge.\n- scripts/pr_checks_lib.sh: _pr_wait_for_required_checks, lines 531-536 | severity=high | confidence=[5]\n  PROBLEM: The function calls `_pr_head_ci_runs_pending` within the polling loop, triggering a GitHub API call on every iteration.\n  WHY: This causes excessive API requests that risk hitting GitHub rate limits and blocking auto-merge functionality.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml: lines 2482 and 2509 (deterministic-skip-merge job, `Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge` step) | severity=high | confidence=[5]\n  PROBLEM: The deterministic-skip-merge job passes an empty base ref to `_pr_wait_for_required_checks`.\n  WHY: For bases where CI does not run, no `lint` check-run appears, so the wait times out and refuses the merge.\n- scripts/pr_checks_lib.sh: `_pr_auto_merge_required_ci_check_name` comment block, lines 419-431 (in `_pr_wait_for_required_checks`'s \"Named CI check\" doc-comment) | severity=low | confidence=[3]\n  PROBLEM: The comment's description of the `lint` default for an unknown base as \u201cfailing closed\u201d is ambiguous and could be read as saying the requirement is skipped.\n  WHY: A future maintainer could change the empty-base behavior to `none`, silently re-breaking deterministic-skip-merge PRs whose base is not tracked.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml; scripts/pr_checks_lib.sh: review_autofix.yml:2482, 2509; pr_checks_lib.sh:444-445 | severity=high | confidence=[5]\n  PROBLEM: Both deterministic-skip auto-merge paths pass an empty base ref, which the CI-check resolver maps to `lint`.\n  WHY: A deterministic-skip PR targeting a base where CI is not triggered waits for a `lint` run that never appears, times out, and refuses auto-merge.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml: lines 2482 and 2509 (deterministic-skip-merge job) | severity=high | confidence=[4]\n  PROBLEM: The job passes an empty base ref to `_pr_wait_for_required_checks`, which the resolver treats like `main|stable|orchestrator/project-*` and resolves to `lint`.\n  WHY: A PR targeting a non-CI base never gets a `lint` check-run, so the wait times out and refuses auto-merge.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9b176a92a20af7d705dfe3e3119f7fc1133b3ccf646e6b3586bd46f9071b9099",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6965,
+    "run_id": "38188509354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38188509354",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012011003_98ccdcf411",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6965,
+    "run_id": "38188509354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T01:10:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

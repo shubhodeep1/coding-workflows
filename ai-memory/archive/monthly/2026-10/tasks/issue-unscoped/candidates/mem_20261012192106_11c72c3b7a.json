@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cIf the issue body lacks explicit target-branch metadata, block planning rather than defaulting to main.\u201d\n  expected_change_site: `.github/workflows/plan.yml`, `Check-triage target-branch guard`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The guard passes `resolver_status=routed` with `reason=pr_head_routed`. That is an `ai:check-triage` issue with no `Target branch:` or `Integration branch:` line in its body, planned on a branch the resolver took from the body's PR URL and branch marker. `tests/test_plan_check_triage_branch_guard.py` (`test_enabled_guard_passes_verified_pr_head_route_with_its_own_reason`) pins this behaviour.; The guard passes `resolver_status=routed` at lines 1214\u20131216 without requiring explicit branch metadata in the issue body. `tests/test_plan_check_triage_branch_guard.py` lines 159\u2013165 explicitly expects an `ai:check-triage` issue with no branch metadata to pass when its status is `routed`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"if the issue body lacks explicit target-branch metadata, block planning rather than defaulting to main \u2026 Do not infer a branch from issue prose.\"\n  Expected change site: `.github/workflows/plan.yml`, step \"Check-triage target-branch guard\", around lines 1211-1216.\n  Evidence of absence: The guard passes `resolver_status=routed` with `reason=pr_head_routed`. That is an `ai:check-triage` issue with no `Target branch:` or `Integration branch:` line in its body, planned on a branch the resolver took from the body's PR URL and branch marker. `tests/test_plan_check_triage_branch_guard.py` (`test_enabled_guard_passes_verified_pr_head_route_with_its_own_reason`) pins this behaviour.\n  Why I rate it low:\n  - The branch is a verified, open, same-repository PR head, and it only happens when `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` is on.\n  - The resolver exits 3 on any failed check, so this path never falls back to `main`. The issue's stated purpose is to stop the `main` fallback.\n  - The previous editor deliberately kept this behaviour and documented it in the README, changelog and `agents.d` fragment.\n  - A strict reading of \"lacks explicit target-branch metadata\" would block it. A reviewer who wants that reading should say so explicitly.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cIf the issue body lacks explicit target-branch metadata, block planning rather than defaulting to main.\u201d\n  Expected change site: `.github/workflows/plan.yml`, `Check-triage target-branch guard`.\n  Evidence of absence: The guard passes `resolver_status=routed` at lines 1214\u20131216 without requiring explicit branch metadata in the issue body. `tests/test_plan_check_triage_branch_guard.py` lines 159\u2013165 explicitly expects an `ai:check-triage` issue with no branch metadata to pass when its status is `routed`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "907b335ba554f7ba797ecf8088abcc127dc5c46e541dc4323692ad844c018e50",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7068,
+    "run_id": "38292452097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38292452097",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012192106_11c72c3b7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7068,
+    "run_id": "38292452097"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T19:21:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md:line 4 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The changelog fragment omits `status=skipped_empty` as a scenario where manual secret setup is required.\n  WHY: Operators reading the changelog might not know to add secrets manually if they encounter this status, even though the updated README and seed-repo instructions advise them to do so.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog fragment must accurately describe the `/seed-repo` onboarding change: manual secret setup is requested in three cases (a failed run, `status=skipped_empty` for a secret, or an explicit `no-register` seed).\n  expected_change_site: changelog.d/6712-propagate-consumer-secrets-schedule.md line 4\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  EVIDENCE: The fragment names only a failed run and a `no-register` seed; README.md (line 52), README.md lines 49-53, README.md:49-53, both `seed-repo.md` copies (steps 6 and 8, and checklist item 2), `.claude/commands/seed-repo.md step 6 and step 8`, `.claude/commands/seed-repo.md step 6/8, workflow-templates/.claude/commands/seed-repo.md, and the script's log-key documentation name `status=skipped_empty`; scripts/propagate_consumer_secrets.sh:175 logs it and counts it as skipped, and scripts/propagate_consumer_secrets.sh:212-213 show the script exits 1 only when `failed_count > 0`, so the run can stay green without copying the secret.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: The changelog fragment for #6712 should accurately describe the new `/seed-repo` behaviour: manual secret setup only after a failed run or a `no-register` seed. The linked issue says to \"instruct manual consumer secret setup only after a failed run or an explicit no-register seed.\"\n  Expected change site: `changelog.d/6712-propagate-consumer-secrets-schedule.md`, the body paragraph that ends \"...asks for manual setup only after a failed run or a `no-register` seed.\"\n  Evidence of absence: The PR diff of `README.md` (line 52), both `seed-repo.md` copies (steps 6 and 8, and checklist item 2) and the script's log-key documentation all add a third case: the run logs `status=skipped_empty` for a secret, which means the library secret is unset. In that case the script counts the secret as skipped rather than failed, so the run stays green and the consumer still lacks the secret. The changelog fragment lists only two cases and never mentions `skipped_empty`. A reader of the release notes would not know to add that secret by hand. The fix is one phrase: \"...only after a failed run, a `status=skipped_empty` line for a secret, or a `no-register` seed.\"\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md | line 4 | severity=MAJOR | confidence=5\n  PROBLEM: The changelog fragment omits status=skipped_empty as a scenario where manual secret setup is required.\n  WHY: Operators reading the changelog to understand the user-visible changes will be misinformed, as they might not know to add secrets manually if they encounter this status, even though the updated README and seed-repo instructions correctly advise them to do so.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The changelog fragment must accurately reflect what changed in `/seed-repo` and the `README.md` onboarding note: manual secret setup is requested in three cases, not two.\n  Expected change site: changelog.d/6712-propagate-consumer-secrets-schedule.md line 4\n  Evidence of absence: The fragment says \"asks for manual setup only after a failed run or a `no-register` seed\" but the implementation in the same PR adds a third case \u2014 `status=skipped_empty` for a secret (the library secret is unset) \u2014 explicitly named in README.md lines 49-53, .claude/commands/seed-repo.md step 6 and step 8, and workflow-templates/.claude/commands/seed-repo.md. The fragment was sandbox-excluded in prior editor runs, so the wording mismatch persists. Operators reading the changelog at release time would not know to add a secret manually when the run logs `status=skipped_empty`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: The changelog fragment must accurately describe the `/seed-repo` onboarding change this PR ships: manual secret setup is requested in three cases (failed propagation run, a `status=skipped_empty` line for a secret, or a `no-register` seed), not two.\n  Expected change site: changelog.d/6712-propagate-consumer-secrets-schedule.md line 4, the sentence ending \"...asks for manual setup only after a failed run or a `no-register` seed.\"\n  Evidence of absence: The fragment on the current head (line 4) still names only two cases. The PR's own README.md Quickstart note (README.md:49-53) and both byte-identical seed-repo copies (.claude/commands/seed-repo.md step 6/8 and workflow-templates/.claude/commands/seed-repo.md) explicitly name the third case. scripts/propagate_consumer_secrets.sh:175 logs `skipped_empty` and counts it as skipped, and the script exits 1 only when `failed_count > 0` (lines 212-213), so a consumer can end the run green without the secret. The editor deferred this fix across at least five runs as a sandbox-excluded path; it remains unfixed on the reviewed head. Fix is one phrase: \"only after a failed run, a `status=skipped_empty` line for a secret, or a `no-register` seed.\"\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash===",
+  "fingerprint": "806704ae0145d9bbd6a40faa5ff7ed4a3d9c82101e3d440947c4d33f5f97efbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6722,
+    "run_id": "38086358838",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38086358838",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010214937_9e54161065",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6722,
+    "run_id": "38086358838"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T21:49:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:2778-2782 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: When the computed deadline ceiling is earlier than the base retry deadline, the workflow raises the ceiling to the base deadline, allowing retries to exceed the documented job-budget cap.\n  WHY: This can consume time reserved for later phases and finalization; severity is critical because deepseek_deepseek-v4-pro rated it BLOCKER while the other reviewers rated it MAJOR.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:433-458 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The queue-extension test sets E2E_JOB_STARTED_EPOCH to 0 while the workflow uses real time, so its cap assertions do not reliably verify the intended deadline behavior and can fail in CI.\n  WHY: With the selected environment values, the ceiling fallback yields a zero cap, while removing that fallback yields a cap above the asserted maximum; the test has no fake clock to make these values consistent.\n- .github/workflows/test-and-mark-stable.yml:2934-2949 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When retry status changes from queued to in_progress and back to queued, clearing RETRY_LAST_QUEUED_TS causes the first queued interval after the flicker not to be counted.\n  WHY: Repeated status flickers can undercount time spent genuinely queued and cause a retry timeout even when the run might otherwise succeed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:2780-2781 | severity=critical | confidence=5\n  PROBLEM: When the computed RETRY_DEADLINE_CEILING is below the base DEADLINE, the code raises the ceiling to the base deadline instead of enforcing the stated cap.\n  WHY: If earlier phases consume more than 215 minutes, Phase 4b can run past the 240-minute boundary, risking a job timeout before later phases and finalization complete.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:433-447 | severity=high | confidence=4\n  PROBLEM: The test sets E2E_JOB_STARTED_EPOCH to 0 while the workflow calculates DEADLINE using real time, triggering the ceiling bump and making the asserted cap inconsistent with the output.\n  WHY: The test does not reliably verify that the deadline is capped, and its loop can run for the full 25-minute base deadline despite the subprocess timeout of 30 seconds.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:2778-2782 (within the diff hunk 2763-2788) | severity=high | confidence=4\n  PROBLEM: When the computed cap is earlier than the base retry deadline, the code raises RETRY_DEADLINE_CEILING to DEADLINE, permitting the retry deadline to exceed the documented cap.\n  WHY: The retry can consume time reserved for Phase 6, Phase 7, and finalization, undermining the serial-budget check.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:433-458 (test_phase4b_queue_extension_stops_at_the_job_budget_ceiling) | severity=high | confidence=4\n  PROBLEM: The test sets E2E_JOB_STARTED_EPOCH to 0 but computes DEADLINE from real time, so the cap assertions fail with or without the ceiling fallback.\n  WHY: Without clock injection, the computed cap is either zero or 2700 seconds, neither of which satisfies the test's asserted range.\n- .github/workflows/test-and-mark-stable.yml:2934-2949 (within the diff hunk 2931-2956) | severity=low | confidence=2\n  PROBLEM: When retry status flickers from queued to in_progress to queued, the `*)` arm clears RETRY_LAST_QUEUED_TS, so the first queued poll after the flicker contributes no time to RETRY_QUEUED_SECS.\n  WHY: A genuinely queued run can lose counted queue time and reach retry_timeout even when it could have been allowed to succeed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:2780-2782 | severity=high | confidence=4\n  PROBLEM: When the calculated deadline ceiling is earlier than the base retry deadline, the code raises the ceiling to the base deadline.\n  WHY: If Phase 4b starts more than 215 minutes after the recorded job start, the retry can consume time reserved for Phase 6, Phase 7, and finalization.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml:2778-2782 (RETRY_DEADLINE_CEILING fallback) | severity=high | confidence=4\n  PROBLEM: When the computed deadline ceiling is earlier than the base retry deadline, the code raises the ceiling instead of enforcing the cap.\n  WHY: This permits the retry to run past minute 240, reducing time reserved for Phase 6, Phase 7, and finalization below their configured budgets.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a08e7e9b88d6d8948f3303f7810f36406ab647f42f0247b9f05fc8c4588d86aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6606,
+    "run_id": "37566939993",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37566939993",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007035828_27240cc273",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6606,
+    "run_id": "37566939993"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T03:58:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: `.github/workflows/ci.yml` selection and destination of steps moved from `tests-release-and-log-analysis`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/ci.yml` (moved steps and their destination jobs), `changelog.d/8278-release-job-steps-moved.md:9`, `.github/workflows/ci.yml:910-914`, `.github/workflows/ci.yml:1907-1910`: the selection was an estimate from recorded history and test counts, not from the step timings of run 40750326439, because the network-isolated sandbox could not read them. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT (confidence 2); the others rated it MAJOR (confidence 5). The highest severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, in how the moved steps and their destination jobs were chosen.\n  Evidence of absence: The picks were made from recorded history and test counts, not from the step timings of run 40750326439. `changelog.d/8278-release-job-steps-moved.md` and the `ci.yml` comments both say the choice is an estimate. Decisions AD-1 and AD-2 accepted this. The structural requirements are met (steps moved unchanged with names kept, no `timeout-minutes` changed, no job added or renamed, coverage gates kept in the source job, `MovedRelease8278StepsContractTest` pins where each step runs).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\nAll other categories: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, selection and destination of the steps moved from tests-release-and-log-analysis\n  Evidence of absence: The step selection was based on historical run timings and estimates rather than the step timings of run 40750326439, because that data was inaccessible in the network-isolated environment.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nAll other categories: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml` selection and destination of steps moved from `tests-release-and-log-analysis` (issue #8278).\n  Evidence of absence: `changelog.d/8278-release-job-steps-moved.md:9` (and the comments at `.github/workflows/ci.yml:910-914` and `.github/workflows/ci.yml:1907-1910`) state the selection is an estimate, not based on run 40750326439. A 326-second duration from run 36382913289 is cited for the promote-cycle step. The comment rewording at `.github/workflows/ci.yml:1683-1685` does not address the gap. AD-1/AD-2 accepted the estimate.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nAll other categories: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` and their destination jobs.\n  Evidence of absence: `changelog.d/8278-release-job-steps-moved.md:9` states the selection is an estimate, not based on run 40750326439's step timings. It cites a promote-cycle duration from a different run and historical budget-watch data. The PR description does not supply the requested timing-based selection or headroom comparison.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nAll other categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "577b9642c94b60df1cc286ee08aa9408782a2e0b78b114483390af0cc5add2f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8284,
+    "run_id": "40795297808",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40795297808",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029005157_8cdd8c84f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8284,
+    "run_id": "40795297808"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T00:51:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

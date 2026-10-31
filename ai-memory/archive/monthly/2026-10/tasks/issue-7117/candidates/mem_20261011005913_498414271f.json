@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for the E2E smoke canary (`canary-a`, tracking #7116)\n\n**Planning ref:** `orchestrator/project-7116` at `04bf619ad2a5463a698aae93eac23cf84f99cdd8`. This matches the integration branch named in the issue metadata.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for exactly one file to change and gives exact acceptance criteria. The file already exists, so the smallest correct change is to edit it in place. No helper or new code is needed.\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (only this file).\n- `tests/e2e_smoke_canary_b.txt` must not be touched; a sibling issue owns it.\n\n### 2. Functions or modules to implement\nNone. This is a plain-text edit.\n\n- **Current content (3 lines):**\n  - `status: ok`\n  - `run_id: 26151428977`\n  - `updated-by: ai-pipeline`\n- **Edit:**\n  - Keep line 1 as exactly `status: ok`.\n  - Insert `decompose-run: 38099435388` as a new line 2.\n  - Leave the existing `run_id: ...` and `updated-by: ...` lines unchanged, now on lines 3 and 4.\n  - Do not reflow anything and keep the trailing newline.\n\n### 3. Data structures affected\nNone.\n\n### 4. API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Insert line 2 instead of overwriting the existing line 2\n- **Chosen:** Insert `decompose-run: 38099435388` after line 1 and keep the existing lines below it.\n- **Alternatives considered:** Replace `run_id: 26151428977` with the new line.\n- **Why:** The issue says to put the new line \"directly after\" line 1 and says \"do not reformat or reflow any other content\". Inserting keeps the other content intact and still meets every acceptance check.\n\n## Security considerations\n- **Trust boundaries:** None crossed. This is a static test fixture.\n- **Authorization:** No new endpoint or surface.\n- **External input:** No external input; the run id is a literal taken from the issue.\n- **Abuse cases:** None. No secrets are involved.\n\n### 5. Risks and edge cases\n- If line 1 were not `status: ok`, it would need replacing; it already is.\n- The file must still end with a newline after the edit.\n- A run with a different run id would change line 2 again, which is expected for a smoke canary.\n\n### 6. Testing considerations\nRun these checks:\n- `head -n 1 tests/e2e_smoke_canary.txt` should print `status: ok`.\n- `sed -n '2p' tests/e2e_smoke_canary.txt` should print `decompose-run: 38099435388`.\n- `git diff --name-only` should list only `tests/e2e_smoke_canary.txt`.\n\n### 7. Pre-execution self-check\n- The edit meets all three acceptance criteria.\n- Only the one allowed file changes.\n- The branch matches the integration branch metadata.\n\n**Assumptions:** Existing lines 2\u20133 (`run_id: ...` and `updated-by: ...`) are kept, as described in decision D1.\n\n**Missing context:** None.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "b1bca0927e253a10de8421023baa958a6838e613ff4e636a7a5a69e4655fb651",
+  "lineage": {
+    "issue_number": 7117,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38099854449",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38099854449",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7117"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261011005913_498414271f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7117,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38099854449"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7117",
+  "timestamps": {
+    "created_at": "2026-10-11T00:59:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

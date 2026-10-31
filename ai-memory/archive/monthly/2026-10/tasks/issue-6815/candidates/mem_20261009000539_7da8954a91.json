@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The failing code is only on PR #6564's head branch. The default-branch checkout has no `bind_report_claims` and no `no_bound_runs` in `scripts/`. GITHUB FACTS show `ai/issue-6559` exists at 7e6d7c2f7e80 and the PR is open and unmerged with CI red. So option B has nothing to fix on `main`. Option C relies on the PR's own loop, which this issue cannot direct.\nQ2: The failing tests encode the intake's existing provenance contract: verify a run's repository, status, workflow path and link to the PR before reading its jobs or logs, and fail closed with a specific reason. Option B would trade that fail-closed security behaviour for a vaguer rejection. Option C would accept fallback rejections that the contract allows for verified runs. Both are worse.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/resolve_integration_ref.sh: the routing parser reads only the issue body. It matches `Integration branch:` first, then the `Target branch:` alias. An answer comment does not change routing.\n    - scripts/check_failure_triage.sh:676: triage issues record the PR only as `<!-- check-failure-triage:pr=6564 -->`. Nothing else in `scripts/` routes on that marker.\n  steps:\n    - Plan and implement against `ai/issue-6559`. The issue body must carry `Integration branch: ai/issue-6559` so `resolve_integration_ref.sh` checks that branch out. That branch exists, so the resolver's existence check passes.\n    - Open the fix PR against `ai/issue-6559`, not `main`. Use a non-closing reference to #6564, such as `Refs #6564`. #6815 may use a closing keyword because it is a standalone issue, not a tracking issue.\n    - If planning runs and the resolved ref is `main`, do not invent a fix there: the failing code is absent. Emit `BLOCKED: Integration branch: ai/issue-6559 line missing from issue #6815 body`.\n    - Before editing, check that `bind_report_claims` exists on the checked-out head. If PR #6564's own review/autofix loop has already turned CI green on a newer head, finish as a no-op that says the fix is already in place.\n  replaces_acceptance_criterion: none\n  equivalence_argument: Fixing on the PR head is the only place the 14 failures can be reproduced and fixed. It also turns #6564's CI green, which is what this triage issue is for.\n  reversibility: The fix PR targets an unmerged feature branch. If a human disagrees, they close it, and `main` is untouched.\n\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/workflow_failure_heal_intake.sh (PR head): the binding block (~lines 356-380), the provenance gate (~390-445) and the current-run evidence path (~482-503), as cited in the triage evidence.\n    - scripts/workflow_failure_heal.py::bind_report_claims (PR head, ~1526-1551).\n    - tests/test_workflow_failure_heal.py: test_intake_phase_provenance_filters_earlier_refs_and_checks_pending_job, test_intake_phase_current_jobs_failure_does_not_fetch_older_logs, test_autofix_intake_reads_successful_review_job_when_no_job_failed, and the `state[\"calls\"]` site near lines 4332-4340.\n  steps:\n    - Move run binding after the provenance gate. Bind only refs that passed provenance, and reuse their verified metadata and fetched jobs. Never query jobs for a rejected or not-yet-verified ref.\n    - When a current phase run's jobs cannot be read, keep the fail-closed `detail=current_run_jobs_unavailable`. Binding must not silently drop that run and turn it into `no_bound_runs`.\n    - In `bind_report_claims`, accept the successful-review-job fallback for an autofix report only when the run is already verified as failed, in the right repository and workflow path, and linked to the PR. Unverified runs stay rejected.\n    - Run `pytest tests/test_workflow_failure_heal.py` in the sandbox to get the full traceback for `KeyError: 'calls'`. Change the test to `state.get(\"calls\", [])` only if the traceback confirms the mock creates that key lazily. Otherwise fix the code path that should have made no call.\n    - Change no other test expectations. If one still fails after these steps, fix the code, not the assertion, unless the assertion contradicts this decision. Record any such case in the PR body.\n  replaces_acceptance_criterion: none\n  equivalence_argument: This keeps every existing contract the tests pin: fail-closed reasons, no reads from unverified runs, and the review-job fallback. It also keeps the new binding's purpose of rejecting reports that claim runs they cannot back.\n  reversibility: The edits are confined to three files on the PR branch. A reviewer who prefers the new rejection semantics can drop the commit, and the earlier binding commit stays intact.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- ISSUE_6815_INTEGRATION_BRANCH_LINE (resource): someone adds the line `Integration branch: ai/issue-6559` to the body of issue #6815, because routing is read only from the issue body. Until it is there, the plan must stop with the `BLOCKED:` line above rather than implement against `main`, where the failing code does not exist.",
+  "fingerprint": "8c33190f072ac6b4aae569656f3016495d4474c3f4c3ddb98ecf0a50b6b81ac1",
+  "lineage": {
+    "issue_number": 6815,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37862187397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37862187397",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6815"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009000539_7da8954a91",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6815,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37862187397"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6815",
+  "timestamps": {
+    "created_at": "2026-10-09T00:05:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

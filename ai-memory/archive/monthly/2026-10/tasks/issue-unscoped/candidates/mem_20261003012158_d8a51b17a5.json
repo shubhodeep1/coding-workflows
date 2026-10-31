@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:2769-2789 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The validation-dispatch gate downgrades a rejected merged PR in `pr_states_json` but can still accept stale stored `merged` status or an `ai:merged` label, allowing validation dispatch or wave advancement based on a rejected PR.\n  WHY: `check-wave-status` prioritizes stored terminal status and the `ai:merged` label over the downgraded PR state, and the main reconciliation/healing loop runs after the gate has made its decision.\n- scripts/orchestrate_poll_process.sh:20312-20315 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `_rcl_hold_why` chain sets `merge_unverified` whenever the candidate fetch did not fail, without checking whether `_rcl_merge_unverified` is true.\n  WHY: Operators can be misdirected by an incorrect `why=merge_unverified` diagnostic; the finding is rated MAJOR despite the wave-hold behavior itself remaining correct.\n- scripts/orchestrate_poll_process.sh:15783 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_heal_rejected_merged_state` sets `MERGED_HEAL_WAVE_HOLD` without a `declare -g` declaration, unlike the other two globals.\n  WHY: Bash's default global scope makes this work, but the inconsistency can make the intended global write unclear to maintainers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/orchestrate_poll_process.sh: lines 15781-15782\n  PROBLEM: `MERGED_HEAL_WAVE_HOLD` is assigned inside `_heal_rejected_merged_state` and caller loops without an explicit top-level `declare -g` statement, unlike `MERGED_HEAL_LABELS_JSON` and `MERGED_HEAL_STATE_CHANGED`.\n  WHY: The suggestion is to make the exported variable scope explicit and consistent.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:20312-20315 (the `_rcl_hold_why` chain) | severity=MAJOR | confidence=[4]\n  PROBLEM: The line `[ \"${_rcl_candidate_fetch_failed}\" = \"true\" ] || _rcl_hold_why=\"merge_unverified\"` overwrites `_rcl_hold_why` to `merge_unverified` whenever the candidate fetch did not fail, regardless of whether `_rcl_merge_unverified` is true.\n  WHY: Operators reading `MERGED_STATE_STALE \u2026 why=merge_unverified` can be misled; the wave-hold still fires correctly, but the diagnostic reason is wrong.\n- scripts/orchestrate_poll_process.sh:15783 (the `_heal_rejected_merged_state` function header) | severity=NIT | confidence=[5]\n  PROBLEM: The function sets `MERGED_HEAL_WAVE_HOLD=\"true\"` at runtime without a `declare -g` declaration.\n  WHY: Bash's default global-scope semantics make it work, but the inconsistency makes the global write less explicit.\n- scripts/orchestrate_poll_process.sh: line 2746-2747 (ahead_by default)\n  PROBLEM: When `integration_branch` is empty, `ahead_by` is set to `\"0\"` hard-coded, but the comment does not explain why.\n  WHY: The suggestion is to explain that `\"0\"` makes the wave-status check treat the branch as not ahead of default.\n- tests/test_orchestrate_poll_process.py: line 20314-20315 assertion gap\n  PROBLEM: No test asserts the `why=` value of the `MERGED_STATE_STALE` log line in the wave-hold path.\n  WHY: Tests check whether `wave_hold=true` is present or absent, but not the diagnostic reason.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: `refresh_validation_dispatch_wave_gate()` lines 2769-2788; validating caller lines 19040-19050 | severity=MAJOR | confidence=[5]\n  PROBLEM: The validation gate downgrades a rejected merged PR in `pr_states_json` but does not clear a previously stored `merged` status or `ai:merged` label.\n  WHY: `check-wave-status` prioritizes stored terminal status and then the `ai:merged` label over the downgraded PR state (`scripts/orchestrate_lib.py:2293-2304`). For a child marked merged by an earlier poll, the gate can therefore still report the wave complete and allow validation dispatch. The validating branch then continues at line 19050, skipping the later current-wave healer, so the project can proceed on merged state backed only by a rejected PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: 2769-2789 (refresh_validation_dispatch_wave_gate), orchestrate_lib.py:2293-2304 (check-wave-status stored-terminal rule) | severity=MAJOR | confidence=[4]\n  PROBLEM: The validation-dispatch gate downgrades a rejected merged PR to `merged: false` in `pr_states_json`, but `check-wave-status` still treats previously stored `status: merged` or an existing `ai:merged` label as authoritative.\n  WHY: The gate runs before the main reconciliation/healing loop, so a wave can advance or validation can dispatch based on stale state for one poll cycle.\n- scripts/orchestrate_poll_process.sh: line 1582-1583 (declare -g for MERGED_HEAL_LABELS_JSON and MERGED_HEAL_STATE_CHANGED) and line 15866 (MERGED_HEAL_WAVE_HOLD=\"true\" inside _heal_rejected_merged_state)\n  PROBLEM: `MERGED_HEAL_WAVE_HOLD` is set inside `_heal_rejected_merged_state` as a bare variable assignment, unlike the other two exported variables.\n  WHY: The suggestion is to declare and reset it alongside the other exported variables so the scope is explicit and the function starts from a known false value.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh: line 20170 (MERGED_HEAL_WAVE_HOLD=\"false\") vs lines 15797-15798 (declare -g MERGED_HEAL_LABELS_JSON / MERGED_HEAL_STATE_CHANGED)\n  PROBLEM: `MERGED_HEAL_WAVE_HOLD` is initialized and set without `declare -g`, while the other two exported heal variables use `declare -g`.\n  WHY: Bash bare assignment is global, so there is no runtime bug, but the inconsistency can mislead maintainers about scope.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "221c46bb266f8d07e5e177d8f555252f7511575355f28e3a103594ce66a1f508",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "37084718421",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37084718421",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003012158_d8a51b17a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "37084718421"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T01:21:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

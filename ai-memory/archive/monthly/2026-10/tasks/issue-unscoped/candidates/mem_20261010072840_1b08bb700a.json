@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Read the default branch at most once per run or tick.\"\n  expected_change_site: `.github/workflows/review_autofix.yml` retrigger steps and `scripts/gh_helpers.sh::_autofix_review_default_branch_prime`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The memo is shell-local, and the post-commit and editor-changes-lost retrigger steps run in separate shells; their conditions can both be satisfied when `CONFLICT_RESOLVED` and `EDITOR_CHANGES_LOST` are true (`review_autofix.yml:5995, 6135`), so each step can independently read the default branch during the same workflow run. The new test `test_default_branch_is_read_once_per_shell` only validates the per-shell invariant; the cross-step case is not pinned by any test. The new tests at `tests/test_retrigger_default_branch_dispatch.py:521-532` do not exercise the cross-step case.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: \"Read the default branch at most once per run or tick.\"\nExpected change site: `scripts/gh_helpers.sh` `_autofix_review_default_branch_prime` and the two retrigger steps in `.github/workflows/review_autofix.yml` (lines 5974 \"Re-trigger review via workflow_dispatch\" and 6114 \"Re-dispatch review on editor-changes-lost\").\nEvidence of absence: The new memo at `scripts/gh_helpers.sh:1339-1360` is per-shell (the leading comment at line 1330-1338 explicitly notes \"per shell\"). Each GitHub Actions `run:` block sources the step script in its own fresh shell, so the post-commit step (`review_autofix_step_post_commit_retrigger.sh`) and the editor-changes-lost step (`review_autofix_step_changes_lost_redispatch.sh`) do not share the memo. The two steps' `if:` conditions are not mutually exclusive: the post-commit step at `review_autofix.yml:5995` runs when `DID_COMMIT == 'true' || CONFLICT_RESOLVED == 'true'`, with no `env.EDITOR_CHANGES_LOST != 'true'` guard; the changes-lost step at `review_autofix.yml:6135` runs when `EDITOR_CHANGES_LOST == 'true'`. When both `CONFLICT_RESOLVED=true` and `EDITOR_CHANGES_LOST=true` hold (the conflict resolver sets `CONFLICT_RESOLVED=true` and the editor reports no change in the same run, which is the failure shape the second step was added to recover from) both steps run in separate shells, each calls `autofix_retrigger_has_inflight_peer` or `autofix_changes_lost_head_retry_consumed`, each calls `_autofix_review_default_branch_prime`, and each read hits GitHub's `repos/<repo>` API. The new test `test_default_branch_is_read_once_per_shell` only validates the per-shell invariant; the cross-step case (one workflow run, two separate step shells both reading the default branch) is not pinned by any test. The PR's own task statement at issue body and AD-1 specify \"at most once per run or tick\"; the per-shell memo satisfies per-tick for the merge train and sweep (single step, single shell) and per-process for the poller, but it leaves the retrigger pair at per-step-shell. The new tests at `tests/test_retrigger_default_branch_dispatch.py:521-532` do not exercise the cross-step case.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cRead the default branch at most once per run or tick.\u201d\nExpected change site: `.github/workflows/review_autofix.yml` retrigger steps and `scripts/gh_helpers.sh::_autofix_review_default_branch_prime`.\nEvidence of absence: The memo is shell-local. The post-commit retrigger and editor-changes-lost retrigger run in separate `run:` steps and each can prime the memo independently. Their conditions can both be satisfied when `CONFLICT_RESOLVED` and `EDITOR_CHANGES_LOST` are true (`review_autofix.yml:5995, 6135`), so the same workflow run can read the default branch more than once.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nRequirement: \"Read the default branch at most once per run or tick.\"\nExpected change site: `scripts/gh_helpers.sh` and the two retrigger steps in `.github/workflows/review_autofix.yml`\nEvidence of absence: The per-shell memo in `_autofix_review_default_branch_prime` prevents multiple reads within one step shell, but the post-commit step and editor-changes-lost step are separate shells. When both conditions are met (productive commit and editor changes lost with conflict resolution), each step independently reads the default branch once, totaling two reads per workflow run. The issue specifies \"once per run or tick\", and while the implementation reduces reads from potentially many to at most two, it does not achieve a single read across the entire workflow run. A file-based memo (like the poller's `_review_run_default_branch`) would be needed for cross-step deduplication.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "fee62f2e48e25dc4efeccdbddc9c0e46c3f576973a9efbbe7a3c8514a2aa6521",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6652,
+    "run_id": "38031561863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38031561863",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010072840_1b08bb700a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6652,
+    "run_id": "38031561863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T07:28:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

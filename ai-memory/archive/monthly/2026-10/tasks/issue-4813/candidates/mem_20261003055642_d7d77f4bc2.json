@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which merge destinations should permit `ai:merged` and issue closure?\nChoices:\nA. Only the repository\u2019s default branch.\nB. The default branch, the issue\u2019s declared integration or target branch, and any base for an orchestrator-managed child. (RECOMMENDED)",
+  "fingerprint": "415d7a65733b6db427a03e8101c9e90319646ac5ddbb3d3d8d8d9a2697311443",
+  "lineage": {
+    "issue_number": 4813,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37101228091",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37101228091",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261003055642_d7d77f4bc2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4813,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37101228091"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #4813 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-03T05:56:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

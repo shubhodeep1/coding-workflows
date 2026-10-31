@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix target?\nChoices:\nA. PR #6951's head branch `claude/elegant-mendel-5pli2i-claude-pool-health-alert`. The plan records it as the target branch, so the fix PR stacks on it and merges into it. (RECOMMENDED)\nB. The default branch (`main`). This only works after PR #6951 merges. Before that, the change breaks the inventory and contract checks on `main`.\nC. No pipeline fix. Close this issue and let the PR #6951 author push the two-line fix to the PR branch directly.\nQ2: If the PR #6951 branch already passes these two checks when planning starts (for example, the author fixed them after the triage run), what should happen?\nChoices:\nA. Make no changes and close this issue as already fixed, after confirming that `docs/INVENTORY.md` lists the script and the `orchestrate_poll.yml` count matches the workflow. (RECOMMENDED)\nB. Edit the files anyway to match the triage diagnosis.",
+  "fingerprint": "b49938896e02003ee2967d714c4a7c5a3c33047c4f92a802ebecb92f7fb12ead",
+  "lineage": {
+    "issue_number": 6954,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37945541837",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37945541837",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009144606_b10c67598a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6954,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37945541837"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6954 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T14:46:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

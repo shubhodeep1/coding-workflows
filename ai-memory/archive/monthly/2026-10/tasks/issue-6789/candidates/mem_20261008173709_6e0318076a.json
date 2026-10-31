@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix be implemented against?\nChoices:\nA. PR #6786's head branch `ai/issue-6782`, which has the failing test (head `64251aea3161e7764df0cb02bf57cae98fef3040`). Fix the test there so PR #6786's CI goes green. (RECOMMENDED)\nB. The default branch `main`. The fix would only apply after PR #6786 merges, and implement would find nothing to change today.\nC. Close this issue as superseded and let PR #6786's own review/autofix loop fix the test on its branch.",
+  "fingerprint": "5fd8e270b512d41527e12ef43c97b31b5825bd32535f1e9e81577cabaab82be7",
+  "lineage": {
+    "issue_number": 6789,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37817252419",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37817252419",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008173709_6e0318076a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6789,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37817252419"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6789 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T17:37:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

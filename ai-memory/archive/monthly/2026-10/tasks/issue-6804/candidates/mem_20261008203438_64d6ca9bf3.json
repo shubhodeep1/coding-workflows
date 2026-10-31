@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where does the trusted exact-path grant for this fix-up come from? Without one, implementation hits `ai:scope-blocked` again with `reason=no_allowlist`.\nChoices:\nA. Before `/approved`, a trusted person (OWNER, MEMBER, COLLABORATOR or the pipeline account) edits this issue's body to add one `- files_touched:` block. It must list exactly `.github/workflows/plan.yml`, `scripts/orchestrate_poll_process.sh`, and any other `scripts/` file the plan needs (for example `scripts/files_touched_scope_guard.py` if the classifier needs a plan-mode entry point). Planning goes ahead on that assumption, and the plan lists those exact paths so they can be copied in. (RECOMMENDED)\nB. The person adds the grant to #6790's body instead, and #6790 is unblocked and re-run. This fix-up only tracks the operator step and makes no code change.\nC. Proceed without a grant. **Note:** implementation will be refused again at the commit-time guard; this only repeats the failed #6790 run.\nQ2: When the flag is off, or a protected path is not granted, what state should a plan stay in after automatic `/approved` is held back, including on later poller ticks?\nChoices:\nA. Keep `ai:awaiting-approval` and post one deduplicated, marker-keyed comment that lists the protected or ungranted paths. Both stall-recovery branches (managed and standalone) treat that marker as an intentional wait, like `ai:merge-queued`: no `/approved`, and no climb up the ladder to the stall judge or `close_and_reissue`. A human `/approved` still works, and the commit-time guard is unchanged. (RECOMMENDED)\nB. Keep `ai:awaiting-approval` and the hold comment, but let the stall ladder carry on to its later actions once the auto-approve step is skipped.\nC. Add `ai:needs-human` so the existing human-gate handling takes over.",
+  "fingerprint": "82e81f2f6ca7a8eb4f5bdeac54362e9f5bbfc5187169d2a4aaff337b2d61a9ca",
+  "lineage": {
+    "issue_number": 6804,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37839824678",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37839824678",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008203438_64d6ca9bf3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6804,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37839824678"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6804 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T20:34:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

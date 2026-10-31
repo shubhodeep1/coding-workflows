@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6658,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6658\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6670\",\"pr_number\":6670,\"branch\":\"ai/issue-6658\",\"run_id\":\"37629925910\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37629925910\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".claude/hooks/pr_merge_status_guard.py\",\"changelog.d/6658-merge-guard-live-copy-parity.md\"]}",
+  "fingerprint": "c424e2aada903058af41b916d5487d3fb1bf0f104775e379633bb693c3a70d5f",
+  "lineage": {
+    "issue_number": 6658,
+    "parent_ids": [],
+    "pr_number": 6670,
+    "run_id": "37629925910",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37629925910",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6670"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261007135605_f98271a700",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6658,
+    "level": "run",
+    "pr_number": 6670,
+    "run_id": "37629925910"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6658: https://github.com/shubhodeep1/coding-workflows/pull/6670",
+  "timestamps": {
+    "created_at": "2026-10-07T13:56:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

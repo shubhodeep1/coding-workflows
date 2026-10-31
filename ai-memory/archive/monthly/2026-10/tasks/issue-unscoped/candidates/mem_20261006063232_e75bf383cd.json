@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_anthropic_relay.py:105 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_reject` accesses `self.command` unconditionally, raising `AttributeError` when called on a partially initialized `Relay`.\n  WHY: The regression test constructs a `Relay` via `object.__new__` without setting `command`, so `_reject` fails before sending the rejection response; reviewers classify this as BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_anthropic_relay.py:105 | severity=BLOCKER | confidence=5\n  PROBLEM: _reject reads self.command unconditionally, but self.command is only set when the handler goes through do_POST.\n  WHY: The test test_rejection_still_attempts_reply_when_timeout_reset_fails at tests/test_claude_anthropic_relay.py:233 constructs a Relay via object.__new__(relay.Relay) which bypasses __init__, so command is absent and an AttributeError is raised before send_error can post the rejection reply.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ---\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_anthropic_relay.py:105 | severity=BLOCKER | confidence=5\n  PROBLEM: Unconditional access to self.command in _reject() raises AttributeError when the handler is not fully initialized.\n  WHY: Tests or alternative request flows may construct the object directly or bypass initialization, causing the request to fail before any error response is sent.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_anthropic_relay.py:105 | severity=BLOCKER | confidence=5\n  PROBLEM: `_reject` reads `self.command` unconditionally, raising `AttributeError` when the handler has not been initialized with that attribute.\n  WHY: The CI-verified test `test_rejection_still_attempts_reply_when_timeout_reset_fails` (tests/test_claude_anthropic_relay.py:228-238) constructs a `Relay` via `object.__new__(relay.Relay)`, sets only `connection` and a mocked `send_error`, then calls `handler._reject(400)`. The first line of `_reject` evaluates `self.command`, which is not set on the bare instance, so it raises `AttributeError: 'Relay' object has no attribute 'command'` before the rejection reply is even attempted.\n- scripts/claude_anthropic_relay.py:105\n  PROBLEM: `self._request_body_consumed` is also read without `getattr`, so a caller that has not gone through `BaseHTTPRequestHandler.parse_request()` or that bails before `do_POST` initializes the flag may hit `AttributeError` before the rejection reply is sent.\n  WHY: The suggested fix covers this access with `getattr(self, \"_request_body_consumed\", True)`, matching the existing `getattr(self, \"_unread_body_bytes\", int(length))` style.\n=== END FINDINGS FROM minimax_minimax-m3 ---\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_anthropic_relay.py:105 | severity=BLOCKER | confidence=5\n  PROBLEM: _reject() accesses self.command before its error-response handling, but the failing regression test calls it on a Relay instance created with object.__new__, without setting command.\n  WHY: tests/test_claude_anthropic_relay.py:233-237 reaches this branch and raises AttributeError before send_error runs; CI confirms this test fails, leaving the tests-hooks-and-orchestrator job and aggregate lint check red.\n=== END FINDINGS FROM openai_gpt-6-luna ---\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_anthropic_relay.py:105 | severity=BLOCKER | confidence=5\n  PROBLEM: `_reject` reads `self.command` unconditionally, but the test `test_rejection_still_attempts_reply_when_timeout_reset_fails` constructs a `Relay` handler via `object.__new__(relay.Relay)` without setting `command`, then calls `_reject(400)` directly.\n  WHY: `AttributeError: 'Relay' object has no attribute 'command'`. The CI log confirms this is the sole test failure in `tests-hooks-and-orchestrator` (run 37421609513): `FAILED tests/test_claude_anthropic_relay.py::test_rejection_still_attempts_reply_when_timeout_reset_fails`. All five pass-1 reviewers flagged this independently.\n=== END FINDINGS FROM qwen_qwen3_7-plus ---\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_anthropic_relay.py:105 | severity=BLOCKER | confidence=5\n  PROBLEM: `_reject` reads `self.command` unconditionally. `command` is only populated by `BaseHTTPRequestHandler.parse_request()` during `do_POST`/`do_GET` dispatch.\n  WHY: The pre-existing test `test_rejection_still_attempts_reply_when_timeout_reset_fails` (tests/test_claude_anthropic_relay.py:228-238) constructs a `Relay` via `object.__new__(relay.Relay)` and calls `_reject(400)` directly, so `self.command` is absent and the method raises `AttributeError` before reaching `send_error`. This fails the required `tests-hooks-and-orchestrator` job and the aggregate `lint` check, blocking the PR.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d4907a9f58b234a1d42ed8c7051b1587508c99e1d36d3c1811635145d1530695",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37421630890",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37421630890",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006063232_e75bf383cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37421630890"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T06:32:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

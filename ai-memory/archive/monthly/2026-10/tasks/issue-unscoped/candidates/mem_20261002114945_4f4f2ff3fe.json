@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:2098 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The description says \u201cMost sessions the pickup resumes per wake\u201d for a configured cap, which can mislead operators into reading it as a typical count rather than a maximum.\n  WHY: The cap is the `--limit N` default, clamped to 1..40, and remaining items are reported as `limit_pending`; the reviewer reported no runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- README.md:2098 | severity=MAJOR | confidence=5\n  PROBLEM: The description says \"Most sessions the pickup resumes per wake\" for a variable that is a configured cap (clamped to 1..40). \"Most\" reads as a majority or a typical count rather than \"up to this configured maximum,\" which is the actual semantics: `--limit N` defaults to this variable, clamped to 1..40, and the rest are reported as `limit_pending`. An operator reading this row could misinterpret the cap as a descriptive statistic.\n  WHY: not a runtime failure, but the ambiguous wording misleads operators about the variable's purpose \u2014 it is a cap, not a count.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===",
+  "fingerprint": "42729241a4894d436a396f8bd6fa5371da7a9cf066bdfc9c3a419722d74dc4d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6085,
+    "run_id": "37002397224",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37002397224",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002114945_4f4f2ff3fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6085,
+    "run_id": "37002397224"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T11:49:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

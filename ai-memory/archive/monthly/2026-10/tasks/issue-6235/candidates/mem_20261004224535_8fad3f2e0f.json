@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should the main fix be?\nChoices:\nA) Hardening without a new container, in three layers:\n   - Remove or deny the risky `git` forms in `READ_PROFILE_ALLOW`: `--output`, `-O`/`--open-files-in-pager`, `--ext-diff`, `--textconv`, and their abbreviations.\n   - Make the support checkout non-writable before the model runs.\n   - Fail closed right before any support script runs if the support checkout is not clean at the approved commit (`git status --porcelain` empty and HEAD equals the approved SHA). (RECOMMENDED)\nB) Full OS sandbox: run read-profile Claude calls in a read-only, network-isolated container with the host-side model broker, the same way `scripts/clarify_isolated_run.sh` does. No change to the allow list or the integrity checks.\nC) Both A and B in this issue. This is a much larger change across several workflows.\nQ2: Which callers should get the fix?\nChoices:\nA) All host-side read-profile roles. The allow-list hardening applies everywhere anyway, because `READ_PROFILE_ALLOW` is shared. The integrity check goes before support-script execution in every workflow that runs a read-profile Claude call on the host and then runs support scripts: `security-audit.yml` (SECURITY_AUDIT), the orchestrator poller (SECURITY_JUDGE), and workflow-failure-heal intake (WORKFLOW_HEAL). (RECOMMENDED)\nB) Only the security-audit path named in the finding: the shared allow-list change plus the integrity check in `security-audit.yml`. Other callers get separate follow-up issues.",
+  "fingerprint": "6ea920c79b817e08f792df3ee7d44a668e80f65d1cf1a11162a8f8159e378cb9",
+  "lineage": {
+    "issue_number": 6235,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37240917111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37240917111",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261004224535_8fad3f2e0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6235,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37240917111"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6235 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-04T22:45:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:765-771 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The confirming-read branch classifies every merged PR as `merged_unreviewed_base`, including a PR that merged into the reviewed base with `outcome == \"held\"`.\n  WHY: After a moved or unreadable re-read leads to revoking auto-merge, a merge into the reviewed base before confirmation is misreported as an unreviewed-base merge and triggers a false sweep warning; severity was rated MAJOR by five reviewers and NIT by openai_gpt-6-luna.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py: 768 | severity=MAJOR | confidence=4\n  PROBLEM: The confirming read returns `merged_unreviewed_base` when `confirm[\"merged\"]` is True without checking whether the merge was into the reviewed base.\n  WHY: If the earlier pair was unreadable and the PR merged into the reviewed base during the disable window, `confirm[\"outcome\"]` is `held` with `merged=True`, but the code treats it as a merge into an unreviewed base.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/claude_fixer_pending_checks.py: lines 768-771 | severity=MAJOR | confidence=5\n  PROBLEM: `evaluate()` returns `merged_unreviewed_base` for a merged PR without verifying whether `confirm[\"outcome\"] == \"held\"`.\n  WHY: A PR merged into the reviewed head and base ref can be falsely classified as an unreviewed-base merge, triggering a spurious sweep warning.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_fixer_pending_checks.py: lines 765-770, the `confirm` branch after the post-disable recheck | severity=MAJOR | confidence=5\n  PROBLEM: `evaluate` returns `merged_unreviewed_base` for any merged PR without requiring `confirm[\"outcome\"] == \"merged_elsewhere\"`.\n  WHY: `outcome=\"held\", merged=True` means the PR merged into the reviewed base, but the caller reports it as an unreviewed-base merge and the sweep emits a false alarm.\n- tests/test_claude_fixer_pending_checks.py: alongside the existing `test_issue_5905_a_merge_between_the_re_read_and_the_disable_is_reported`\n  PROBLEM: The PR's test surface does not exercise the `pair` was `moved`/`unreadable` AND `confirm` was `held, merged=True` path.\n  WHY: Without a test for that path, the false-alarm bug at line 765-770 remains uncovered. Suggested minimal fix: Add a single test that drives `pr_sequence=[_pr(), _pr(), _pr(base=RETARGETED), _pr(state=\"closed\", merged=True, base={**_pr()[\"base\"], \"sha\": OTHER_BASE_SHA})]`, asserts `result[\"state\"] == \"merge_enabled\"`, `fake_gh.merges() == [SQUASH_MERGE, DISABLE_AUTO_MERGE]`, and `fake_gh.pr_reads() == 4`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_fixer_pending_checks.py: 768, `if confirm[\"merged\"]` | severity=NIT | confidence=5\n  PROBLEM: The branch reports `merged_unreviewed_base` for any merged PR, including `outcome == \"held\"` when it merged into the reviewed head and base.\n  WHY: If the first post-enable re-read is unreadable and the PR merges into the reviewed base before the confirming read, the code labels the correctly reviewed merge as unreviewed and triggers the sweep warning.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_fixer_pending_checks.py: evaluate() at lines 768-770 (the `if confirm[\"merged\"]:` check after `revoke_auto_merge`) | severity=MAJOR | confidence=4\n  PROBLEM: When the confirming read returns `outcome=\"held\"` with `merged=True`, the code reports `merged_unreviewed_base`, despite the PR merging into the reviewed head and base ref.\n  WHY: A moved or unreadable first re-read can trigger revocation, after which a merge into the reviewed base before confirmation triggers a false sweep alarm.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_fixer_pending_checks.py: line 768, `if confirm[\"merged\"]:` | severity=MAJOR | confidence=4\n  PROBLEM: The post-revoke confirm check reports `merged_unreviewed_base` for a PR that merged into the reviewed base.\n  WHY: When the pair re-read is unreadable and auto-merge fires into the reviewed base before the disable lands, the bare `merged` check produces a false alarm.\n- TASK_GAP (explicitly described by this reviewer as accepted, not a gap):\n  Requirement: \"automatically cancel authorization and trigger re-review on retarget\" (linked issue #5905 Recommendation)\n  Expected change site: scripts/claude_fixer_pending_checks.py::evaluate, the `auto_merge` early-return at lines 678-685\n  Evidence of absence: After `evaluate` returns `merge_enabled` (line 750), a subsequent retarget while auto-merge stays pending hits the `pr.get(\"auto_merge\")` check at line 678 and returns `not_eligible` at line 681 before any revoke helper runs. This is the AD-2 accepted residual: the plan's Risks & Mitigations bullet 2 and the code comment at lines 679-684 document it as accepted because GitHub disables auto-merge for non-write retargets and write-access users can merge directly. The last commit (0d49bce) added the explanatory comment but no behavior change. The reviewer states: \u201cCited as explicitly accepted, not a gap.\u201d\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8f949d3845af766d4671ea7da6dab857354aa982e60040d67e58e848d7be7015",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5915,
+    "run_id": "36884174794",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36884174794",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001155126_99baf154d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5915,
+    "run_id": "36884174794"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T15:51:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

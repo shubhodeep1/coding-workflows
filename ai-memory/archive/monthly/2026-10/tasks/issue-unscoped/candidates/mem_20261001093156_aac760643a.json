@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_evidence.py:294-300 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The default-branch routing accepts a run without verifying that its head repository matches the trusted repository, allowing a fork branch named `main` to bypass the fork-origin check.\n  WHY: The run\u2019s `repository` can identify the base repository while `head_repository` identifies the fork, so the fork\u2019s evidence can be accepted for unattended merge or judge decisions; severity differed from MAJOR to BLOCKER, and z-ai_glm-5_2 described practical exploitability as very low because the expected artifact would be missing.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Evidence from a pull-request-head run with no head repository is now rejected\"\n  expected_change_site: scripts/review_claude_fixer_evidence.py around line 294-307 (the branch-routing block)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The new `head_repository.full_name == repo` check is nested inside the `elif pr_head_ref and run_branch == pr_head_ref and ...` branch; The `if run_branch == default_branch: pass` branch at line 294-295 has no `head_repository` check; A regression test for \"a run on the default branch with a missing or fork head_repository\" is absent (`tests/test_review_claude_fixer_evidence.py` covers only the PR-head-branch case); The `test_missing_head_repository_on_a_pr_head_run_is_rejected` test at line 179 hardcodes `head_branch=PR_REF` so it never exercises the `if` branch\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_claude_fixer_evidence.py:294-295 | severity=MAJOR | confidence=[5]\n  PROBLEM: The default-branch routing accepts any run whose `head_branch` equals the default branch name without verifying `head_repository.full_name` matches the expected repository.\n  WHY: A fork owner who names their working branch `main`, configures their fork's secrets, and runs review_autofix on that branch can produce evidence the verifier trusts for unattended merge and judge decisions on the base repository.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_claude_fixer_evidence.py:294-295 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The default-branch `pass` branch bypasses the `head_repository.full_name == repo` check, allowing a fork PR whose source branch is named `main` to proceed to the library-reference and artifact checks.\n  WHY: A fork user's `fork/main` PR to `repo/main` can have valid evidence accepted for unattended merge and judge decisions.\n\n- TASK_GAP\n  Requirement: \"Evidence from a pull-request-head run with no head repository is now rejected\" (PR description finding 2, p. 2 of the Findings fixed table).\n  Expected change site: scripts/review_claude_fixer_evidence.py around line 294-307 (the branch-routing block).\n  Evidence of absence: The new `head_repository.full_name == repo` check is nested inside the `elif pr_head_ref and run_branch == pr_head_ref and ...` branch. The `if run_branch == default_branch: pass` branch at line 294-295 has no `head_repository` check, so the documented \"reject when no head repository\" behavior only triggers for runs from the PR head branch. A regression test for \"a run on the default branch with a missing or fork head_repository\" is absent (`tests/test_review_claude_fixer_evidence.py` covers only the PR-head-branch case). The `test_missing_head_repository_on_a_pr_head_run_is_rejected` test at line 179 hardcodes `head_branch=PR_REF` so it never exercises the `if` branch.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: BLOCKER\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_claude_fixer_evidence.py:294-300 | severity=BLOCKER | confidence=[4]\n  PROBLEM: The `run_branch == default_branch` branch accepts the run without checking `head_repository`.\n  WHY: A fork PR whose source branch is `main` bypasses the same-repository check, and its evidence can pass the caller-trust check and be consumed by the judge or merge-check verifier.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_claude_fixer_evidence.py:294-295 | severity=BLOCKER | confidence=[5]\n  PROBLEM: A fork PR whose source branch is also named `main` enters the default-branch `pass` branch, skipping the `head_repository` fork-origin check and the `_changed_files` caller-workflow check.\n  WHY: The base repository check passes for fork PR runs, so evidence from a run originating from a fork can authorize unattended merge and judge decisions.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_claude_fixer_evidence.py:294-295\n  PROBLEM: The default-branch path does not verify `head_repository` matches the base repo, while the docstring (line 38-40) says both paths should be \"of this repository (not a fork)\".\n  WHY: A fork PR whose branch is named the same as the default branch enters this path without a fork-origin check; practical exploitability is very low because a fork PR would not produce a claude-fixer-evidence artifact and verification would fail at artifact_missing.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1b4a806011c232bce5062d8363ceb1960069ed9d83ead74ea6dd0c71114dc181",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5893,
+    "run_id": "36838133214",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36838133214",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001093156_aac760643a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5893,
+    "run_id": "36838133214"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T09:31:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

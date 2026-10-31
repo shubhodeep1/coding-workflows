@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for the E2E smoke canary (`canary-a`, tracking #6851)\n\n**Planning ref:** HEAD `f6b48d379aa34b095438456638eca6b21899108d` on `orchestrator/project-6851`, which matches the integration branch metadata.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names exactly one file and its exact final content, and forbids any other change. The file already exists, so the change rewrites it in place. No helper, workflow or other file is involved.\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (exists; rewrite in place). It currently has three lines:\n  - `status: ok`\n  - `run_id: 26151428977`\n  - `updated-by: ai-pipeline`\n\n### 2. Functions or modules to implement\nNone. This is a static file edit.\n\n### 3. Data structures affected\nThe canary file's contents. The file must end up with exactly two lines and one trailing newline:\n```\nstatus: ok\ndecompose-run: 37880663268\n```\nLines 2 and 3 of the current file are replaced. Line 1 stays the same.\n\n### 4. API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the whole file rather than editing individual lines\n- Chosen: Overwrite the file with exactly the two required lines.\n- Alternatives considered: Change line 2 and keep line 3 (`updated-by: ai-pipeline`).\n- Why: The issue says the file \"should contain only these two lines\", so line 3 has to go.\n\n## Security considerations\n- No trust boundaries, endpoints, external input, secrets or money state are involved.\n- Abuse case: an editor changes other files. The scope rules and the `files_touched` guard limit the change to this one path.\n\n### 5. Risks and edge cases\n- The issue says \"create the file if it does not exist\", but the file already exists with different content. The plan rewrites it rather than creating it.\n- A missing trailing newline would fail the \"one trailing newline\" requirement. A doubled trailing newline or CRLF line endings would add an extra line or change the bytes.\n- `tests/e2e_smoke_canary_b.txt` belongs to the sibling issue and must not be touched.\n\n### 6. Testing considerations\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 37880663268`.\n- `wc -l` reports 2.\n- `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n\n### 7. Self-check\nThe plan is ready to implement. The single file is in scope, and the edit is fully specified by the issue.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2489bf6d08c95fb88743941ba2e9b5b0769b0fc3440e3d8be7a8a7ee8070e257",
+  "lineage": {
+    "issue_number": 6852,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37881523286",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37881523286",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6852"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261009040329_6d31d7a598",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6852,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37881523286"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6852",
+  "timestamps": {
+    "created_at": "2026-10-09T04:03:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

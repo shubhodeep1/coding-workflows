@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7387,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7387\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7388\",\"pr_number\":7388,\"branch\":\"ai/issue-7387\",\"run_id\":\"38591352073\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38591352073\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/7387-ci-heal-job-workflow-heal-step-move.md\"]}",
+  "fingerprint": "7f3a2983211e1cb2b39dfc98c579674996e26ee9b8be9c51e312a4397dcc92a3",
+  "lineage": {
+    "issue_number": 7387,
+    "parent_ids": [],
+    "pr_number": 7388,
+    "run_id": "38591352073",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38591352073",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7388"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261014160106_05753bbd73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7387,
+    "level": "run",
+    "pr_number": 7388,
+    "run_id": "38591352073"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7387: https://github.com/shubhodeep1/coding-workflows/pull/7388",
+  "timestamps": {
+    "created_at": "2026-10-14T16:01:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

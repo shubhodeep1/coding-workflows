@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_update_workflows_guardrails.py:305 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The assertion message \"third-party actions must be pinned to a 40-hex SHA\" is stale because _TEMPLATE_PINNED_ACTION_RE now also accepts docker://...@sha256:<64-hex> references.\n  WHY: A developer with an unpinned docker reference sees a misleading remediation hint, though pass/fail behavior is unchanged. All reviewers rated it NIT, mapped here to low.\n- tests/test_update_workflows_guardrails.py:289-292 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The docker://...@sha256:<64-hex> alternation added to _TEMPLATE_PINNED_ACTION_RE is not exercised by any test, positively or negatively.\n  WHY: A later typo that loosens the digest check would not be caught by CI. All reviewers rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_update_workflows_guardrails.py:305 | severity=NIT | confidence=4\n  PROBLEM: The assertion message \"third-party actions must be pinned to a 40-hex SHA\" is misleading when a docker image reference is unpinned, as the validator now supports both git-sha and docker-digest pin formats.\n  WHY: Developers adding a docker image reference would see a confusing error message, which may lead to incorrect remediation.\n- tests/test_update_workflows_guardrails.py:289-292 | severity=NIT | confidence=4\n  PROBLEM: The newly added docker digest alternation in _TEMPLATE_PINNED_ACTION_RE is not exercised by any test case in the suite.\n  WHY: Not a runtime failure, but an untested validation path that could harbor typos or overly permissive regex errors undetected by CI.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_update_workflows_guardrails.py:289-292 | severity=NIT | confidence=4\n  PROBLEM: The docker://[A-Za-z0-9._/:-]+@sha256:[0-9a-f]{64} alternation in _TEMPLATE_PINNED_ACTION_RE has no positive or negative test coverage, and no current template uses a docker:// ref.\n  WHY: A future typo in the alternation would not be caught by CI, so a later docker:// action could get a false-pass or false-fail.\n- tests/test_update_workflows_guardrails.py:305 | severity=NIT | confidence=4\n  PROBLEM: The assertion message says \"40-hex SHA\" but the regex now also accepts docker://...@sha256:<64-hex>, so the message is stale for docker unpinned-reference failures.\n  WHY: It affects only diagnosability; the next template author may waste time hunting for a 40-hex SHA when the fix is adding a sha256 digest.\n- HARDENING_SUGGESTIONS (2 related items):\n  1. tests/test_update_workflows_guardrails.py (around line 308): add two fixture assertions with re.fullmatch for \"docker://ubuntu@sha256:\" + \"a\"*64 (expect True) and \"docker://ubuntu:latest\" (expect False). Estimated lines changed: 2. HARDENING_RISK_SCORE: 1.\n  2. tests/test_update_workflows_guardrails.py (line 305): replace the message with one naming both forms, e.g. f\"third-party actions must be pinned: <owner>/<repo>@<40-hex-sha> or docker://<image>@sha256:<64-hex>; got: {unpinned}\". Estimated lines changed: 1. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_update_workflows_guardrails.py:305 (assertion message) and 289-292 (regex) | severity=NIT | confidence=4\n  PROBLEM: The assertion message says \"third-party actions must be pinned to a 40-hex SHA\" but _TEMPLATE_PINNED_ACTION_RE now also accepts docker://...@sha256:<64-hex> references.\n  WHY: The test still rejects unpinned docker refs correctly, but the error message does not describe all accepted pin formats.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_update_workflows_guardrails.py:289-292 | severity=NIT | confidence=4\n  PROBLEM: The docker://\u2026@sha256:<64-hex> alternation is accepted by no current template (zero docker:// uses lines in workflow-templates/*.yml) and no test in this file exercises it.\n  WHY: A later typo that loosens the digest shape, such as dropping the 64-hex bound, would ship without CI catching it.\n- tests/test_update_workflows_guardrails.py:305 (assertion message) vs 289-292 | severity=NIT | confidence=4\n  PROBLEM: The failure message says \"third-party actions must be pinned to a 40-hex SHA\" although the regex also accepts docker://\u2026@sha256:<64-hex>.\n  WHY: Accept/reject behavior is correct, but the diagnostic is stale and misleading.\n- HARDENING_SUGGESTIONS: tests/test_update_workflows_guardrails.py line 305: extend the message to \"must be pinned to a 40-hex SHA (or docker://\u2026@sha256:<64-hex>)\". Estimated lines changed: 1. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d21dd2e0449e5effada67b63b81af0116429e552e0a3b195c9f75260b33dce5c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8176,
+    "run_id": "40268756783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40268756783",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026044643_95f0d9b8ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8176,
+    "run_id": "40268756783"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T04:46:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs\" (issue #8248), combined with \"Use ids already fetched: no new API calls\"\n  expected_change_site: .github/workflows/test-and-mark-stable.yml Clarify stall error (line 1017) and Plan stall errors (lines 1125 and 1316)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The Clarify and Plan `::error::` lines carry no watched-run URL, and there are no `e2e_note_watched_run` calls in the Clarify or Plan wait blocks. The Clarify and Plan waits hold no run id while polling. agents.d/8248-heal-intake-linked-runs.md documents this as a justified narrowing, because adding URLs would need a new run lookup. Severity disagreement: sonnet=NIT, gemini=NIT, minimax=MAJOR.\n- requirement: \"print the watched run URLs\" in every stall / timeout `::error::` line (issue #8248)\n  expected_change_site: scripts/stable_e2e_step_wait_review.sh line ~839 (\"No review workflow run \u2026 ever appeared\")\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The \"No review workflow run \u2026 ever appeared\" error is left bare. anthropic_claude-sonnet-5_5 disputes this gap: no review run has been watched at that point, so an append would print nothing, and the sibling \"pin was advanced\" error already gets the append.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs\" for the phase wait loops, including Phase 1 Clarify and Phase 2 Plan.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml` Clarify stall error (line 1017) and Plan stall errors (lines 1125 and 1316).\n  Evidence of absence: Those three `::error::` lines carry no watched-run URL. `capture_run_id \"Clarif\"` is called only at line 990, and `capture_run_id \"Plan\"` only at lines 1209 and 1219. The Plan polling read at line 1190 fetches only the status. The agents.d fragment records the narrowing. The issue constrains the change to \"no new API calls\". The motivating failure in #8241 was an Implement stall.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"When a scoped run id is first seen, and in every stall / timeout ::error:: line, print the watched run URLs.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml Phase 1 Clarify and Phase 2 Plan polling and stall paths.\n  Evidence of absence: The Clarify and Plan polling loops do not implement the watched-run URL append. Status: Deferred, as documented in agents.d/8248-heal-intake-linked-runs.md. Adding the URLs would require a new run lookup, which violates the \"no new API calls\" requirement. The reviewer calls the deferral justified and accepted.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs\" (issue #8248, \"What to change\" \u00a71) combined with \"Use ids already fetched: no new API calls (CLAUDE.md \u00a715)\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml` Clarify/Plan wait blocks, and `scripts/stable_e2e_step_wait_review.sh` line ~839 (\"No review workflow run \u2026 ever appeared\").\n  Evidence of absence: `e2e_note_watched_run`/`e2e_watched_run_urls` appear only in the Implement and Review sections of the diff. The Clarify (line ~1017) and Plan (lines ~1125, ~1316) stall errors, and the \"No review workflow run \u2026 ever appeared\" line, are left bare. The narrowing is documented in `agents.d/8248-heal-intake-linked-runs.md` and is consistent with the API budget constraint, but against the literal \"every stall / timeout `::error::` line\" wording it remains unmet for those four error lines.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e2444ceee0bde37d82e4a389c95c2cfff6bdf474eaa2c51e5ca241b9791477e4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8256,
+    "run_id": "40672365161",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40672365161",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028104234_b8b47ce927",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8256,
+    "run_id": "40672365161"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T10:42:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

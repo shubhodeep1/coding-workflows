@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:42-51 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The implement-profile `.env.example` allowance is unreachable because the earlier `.env` prefix exclusion rejects the file first.\n  WHY: `.env.example` files are excluded from snapshot and transfer; severity was rated MAJOR by deepseek_deepseek-v4-pro and minimax_minimax-m3, and NIT by openai_gpt-6-luna and z-ai_glm-5_2.\n- .github/workflows/implement.yml:2951-2978, 4278-4304 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: OPENROUTER_API_KEY is not removed from the host-side environment for the editor launches, so child editor processes can inherit it.\n  WHY: A compromised editor or command could read the key through `/proc/PID/environ`; qwen_qwen3_7-plus and z-ai_glm-5_2 say the key is intentionally retained on the host for broker setup.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Isolate both the main implementation and post-Codex syntax-repair editor launches, including Claude and Codex fallback.\"\n  expected_change_site: `.github/workflows/implement.yml` both editor launch sites\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The reviewer reports both launch sites, `scripts/implement_untrusted_sandbox.sh`, and `scripts/review_sandbox/Dockerfile` are present and address the requirement.\n- requirement: \"Keep credentials outside the editor's isolation boundary and copy only validated edits back to the host.\"\n  expected_change_site: `scripts/implement_untrusted_sandbox.sh` broker setup\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The reviewer reports host-side brokers, restricted container environment variables, and protected-path transfer logic are present.\n- requirement: \"Fail the step if isolation or transfer fails; never fall back to running the editor on the host.\"\n  expected_change_site: `scripts/implement_untrusted_sandbox.sh` fail helper\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The reviewer reports the failure marker, workflow checks after both launches, and Codex host-fallback guard are present.\n- requirement: \"Treat other editor phases as follow-ups.\"\n  expected_change_site: n/a (deferred)\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The reviewer reports this is an explicit deferral and that plan, implement-diagnose, and validate phases are out of scope.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_untrusted_workspace.py:42, 51 | severity=high | confidence=4\n  PROBLEM: The implement-profile allowance for `.env.example` files is unreachable because the `.env` prefix exclusion rejects the file first.\n  WHY: Consumers' `.env.example` files are excluded from snapshot, resync, and transfer, leaving the editor without access to them.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:2951-2978 and 4278-4304 | severity=high | confidence=4\n  PROBLEM: OPENROUTER_API_KEY is not scrubbed from the host-side environment during editor launches.\n  WHY: The editor runs as a child process of the runner and can read the inherited key through `/proc/PID/environ` if compromised.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py:42, 51 | severity=high | confidence=5\n  PROBLEM: The `.env.example` allowance is unreachable because the earlier `.env` prefix exclusion rejects the file first.\n  WHY: The editor cannot snapshot or transfer `.env.example` files, so the PR's intent to allow them does not take effect.\n- .github/workflows/implement.yml:2965-2978 and 4278-4291 | severity=high | confidence=3\n  PROBLEM: OPENROUTER_API_KEY is not removed from the `env -u` lists at the two editor-launch sites.\n  WHY: The host `codex_thread_reuse.sh` process inherits the key, although the broker setup needs it on the host.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_untrusted_workspace.py:42, 51 | severity=low | confidence=5\n  PROBLEM: The implement profile's `.env.example` allowance is unreachable because the earlier exclusion rejects path components starting with `.env`.\n  WHY: `.env.example` files are excluded before the allow condition runs, preventing the implement editor from snapshotting or transferring edits to them.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Isolate both the main implementation and post-Codex syntax-repair editor launches, including Claude and Codex fallback.\"\n  Expected change site: `.github/workflows/implement.yml` both editor launch sites, `scripts/implement_untrusted_sandbox.sh`, `scripts/review_sandbox/Dockerfile`\n  Evidence of absence: Both launch sites, the Dockerfile Codex installation, and sandbox Claude wiring are reported present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Keep credentials outside the editor's isolation boundary and copy only validated edits back to the host.\"\n  Expected change site: `scripts/implement_untrusted_sandbox.sh` broker setup, `scripts/review_untrusted_workspace.py` transfer logic\n  Evidence of absence: Host-side brokers, restricted container environment, and protected-path transfer logic are reported present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Fail the step if isolation or transfer fails; never fall back to running the editor on the host.\"\n  Expected change site: `scripts/implement_untrusted_sandbox.sh` fail helper, `implement.yml` editor-launch steps, `scripts/codex_thread_reuse.sh` codex resolution\n  Evidence of absence: The failure helper, workflow checks, and Codex host-fallback guard are reported present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Treat other editor phases as follow-ups.\"\n  Expected change site: n/a (deferred)\n  Evidence of absence: The reviewer reports this is an explicit deferral; plan, implement-diagnose, and validate phases are out of scope.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_untrusted_workspace.py:42, 51 | severity=low | confidence=4\n  PROBLEM: The `.env.example` allowance is unreachable because the `.env` prefix exclusion rejects the file before the allowance is evaluated.\n  WHY: `.env.example` files are rejected by snapshot and transfer, so the editor cannot read or modify them.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "39e3e906efa7a0542c37adede39f538c8ebdf663e954d0f2a255d82b3f489a7a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6452,
+    "run_id": "37422752872",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37422752872",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006065419_3fbd715afb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6452,
+    "run_id": "37422752872"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T06:54:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:19216-19221, 19934-19939; .github/workflows/review_autofix.yml:1911-1914, 1988-1991 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The refreshed PR reads and head/ref validation run unconditionally, so transient read failures or incomplete responses defer otherwise eligible non-`claude/*` merges and withhold deterministic-skip merge authorization.\n  WHY: This contradicts the plan\u2019s guarantee that non-`claude/*` heads are unaffected; a failed refresh delays an eligible merge until a later poll cycle.\n- .github/workflows/review_autofix.yml:1969-1970 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `merge_hold_gate_allows()` warning uses the snapshot `PR_HEAD_REF` instead of the refreshed head ref.\n  WHY: After a branch rename to `claude/*`, a gate refusal logs the old ref and misleads diagnosis.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml, Line or code reference: 1970 | severity=low | confidence=[4]\n  PROBLEM: The `merge_hold_gate_allows()` warning uses `${PR_HEAD_REF}` rather than the refreshed `ready_label_current_head_ref`.\n  WHY: After a branch rename from a non-`claude/*` name to `claude/*` without a new commit, the warning reports the stale pre-rename ref and misdirects debugging.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh (and .github/workflows/review_autofix.yml auto-merge-enabled branch), Line: 19216-19221 (prior-wave gate); 19934-19939 (current-wave gate); review_autofix.yml ~1985 (`elif ! deterministic_skip_head_is_current ...` branch) | severity=low | confidence=[4]\n  PROBLEM: The `_pw_gate_pr_json` / `_rtm_gate_pr_json` refresh and `deterministic_skip_head_is_current` refresh run unconditionally, not only for `claude/*`.\n  WHY: A transient `pulls/{n}` read failure or empty head ref defers every ready-to-merge PR, contradicting the PR description\u2019s \u201cNon-`claude/*` heads are unchanged\u201d statement.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:19216-19221, 19934-19939; .github/workflows/review_autofix.yml:1911-1914, 1988-1991 | severity=low | confidence=[5]\n  PROBLEM: The plan promises that non-claude/* heads have no extra API call and are unaffected, but the refreshes run before determining whether the head is claude/*.\n  WHY: A transient pulls/{n} read failure, or a response without a head SHA/ref, prevents an otherwise eligible non-Claude PR from merging in that cycle and withholds deterministic-skip merge authorization; this contradicts the plan\u2019s non-Claude guarantee at docs/completed/issue-5564-hold-gate-ready-labels-and-poller-merge-plan.md:22.\n- .github/workflows/review_autofix.yml, Location: Line 1970, warning emitted by merge_hold_gate_allows() | severity not stated; confidence not stated\n  PROBLEM: When the refreshed PR ref triggered the gate after a rename, the refusal warning still prints snapshot PR_HEAD_REF, which can identify the old branch name and mislead diagnosis.\n  WHY: Suggested minimal fix: Report ready_label_current_head_ref when available, falling back to PR_HEAD_REF.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml, Location: Line 1969 (merge_hold_gate_allows function) | severity not stated; confidence not stated\n  PROBLEM: The warning message logs ${PR_HEAD_REF} from the job environment snapshot, which can be stale if the branch was renamed to claude/* after the gate job ran.\n  WHY: The function has access to the refreshed ref via deterministic_skip_pr_json but does not use it in the diagnostic. Suggested minimal fix: Pass the refreshed ref as a parameter to merge_hold_gate_allows() and use it in the warning: `echo \"::warning::${gate_refused_what} on PR #${PR_NUMBER} (head ref '${gate_current_ref:-${PR_HEAD_REF}}'): ...\"`\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/review_autofix.yml, Line or code reference: `merge_hold_gate_allows()` function, warning line: `echo \"::warning::${gate_refused_what} on PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}'): ...\"` | severity=low | confidence=[4]\n  PROBLEM: The warning message references `PR_HEAD_REF` (the gate job's snapshot ref) instead of the freshly-read `ready_label_current_head_ref`.\n  WHY: When a branch is renamed to `claude/*` without a new commit and the gate refuses, the warning reports the pre-rename ref name, not the `claude/*` ref that actually triggered the gate.\n- scripts/orchestrate_poll_process.sh, Line or code reference: Prior-wave merge block (~line 19210-19221) and current-wave merge block (~line 19928-19939) | severity=low | confidence=[3]\n  PROBLEM: The freshness re-read `_pw_gate_pr_json=\"$(_fetch_pr_json \"${PW_PR}\")\"` / `_rtm_gate_pr_json=\"$(_fetch_pr_json \"${RTM_PR}\")\"` and subsequent head/ref validation run unconditionally for every ready-to-merge PR, not only `claude/*` heads.\n  WHY: A transient `_fetch_pr_json` failure or empty head/ref for a non-`claude/*` PR defers its merge to the next poll tick, contrary to the completed plan\u2019s Goal 3 at docs/completed/issue-5564-hold-gate-ready-labels-and-poller-merge-plan.md:22.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "53e2d9db318298ae1408c924c60cde3fcb0bd7f210b95c871629f8307b7b4640",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5572,
+    "run_id": "36819024897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36819024897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001055756_839d037235",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5572,
+    "run_id": "36819024897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T05:57:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

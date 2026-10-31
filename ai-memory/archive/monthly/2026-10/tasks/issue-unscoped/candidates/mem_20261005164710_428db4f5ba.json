@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:337 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A failing redirection in a shell command can leave the effective working directory uncertain, but the guard may still allow a subsequent `git push` without checking the directory where it actually runs.\n  WHY: The push can run in the original directory and bypass the merged-PR check if that directory has no repository or contains a repository not on a merged branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The guard must not assume shell commands succeeded from their text alone; an uncertain effective directory must not permit an unchecked push.\"\n  expected_change_site: .claude/hooks/pr_merge_status_guard.py\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: While the implementation now tracks `redirect_may_fail` for `cd` and `exit`, it does not explicitly block or ask for confirmation after the guard fails to determine the working directory for a `git push` that follows an uncertain command. The diff hunk for lines 1480-1502 shows it adds confirmation reasons but the logic inside `_guarded_git_invocations` still relies on `working_directory` becoming `None` and then checking `invocation.warning` later. It is not fully clear if this chain guarantees that an uncertain directory pushes always ask for confirmation rather than proceeding based on `invocation.warning` alone or some other implicit state.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/pr_merge_status_guard.py:337 | severity=BLOCKER | confidence=5\n  PROBLEM: The logic assumes that if `_shell_segments_with_redirects` does not raise a `ValueError` and `_guarded_git_invocations` returns a list, the commands are safe to process sequentially. However, if a redirection fails (e.g., `cd /tmp >/missing`), the subsequent `git push` runs in the original directory, not the intended one. The guard does not correctly mark the working directory as uncertain in this specific failure case.\n  WHY: An attacker or a misconfiguration can use a failing redirection to bypass the directory guard, causing `git push` to run in the wrong directory and potentially bypass the merged-PR check if the wrong directory does not contain a repository or contains a repository not on a merged branch.\n- TASK_GAP\n  Requirement: \"The guard must not assume shell commands succeeded from their text alone; an uncertain effective directory must not permit an unchecked push.\"\n  Expected change site: .claude/hooks/pr_merge_status_guard.py\n  Evidence of absence: While the implementation now tracks `redirect_may_fail` for `cd` and `exit`, it does not explicitly block or ask for confirmation *after* the guard fails to determine the working directory for a `git push` that follows an uncertain command. The diff hunk for lines 1480-1502 shows it adds confirmation reasons but the logic inside `_guarded_git_invocations` still relies on `working_directory` becoming `None` and then checking `invocation.warning` later. It is not fully clear if this chain guarantees that an uncertain directory pushes *always* ask for confirmation rather than proceeding based on `invocation.warning` alone or some other implicit state.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a0fce79697f7e94f4fa984a7a76438cd48e9af9bc41c0ffa498ba0a9b77ba0a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6294,
+    "run_id": "37328907559",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37328907559",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005164710_428db4f5ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6294,
+    "run_id": "37328907559"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T16:47:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

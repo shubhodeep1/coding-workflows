@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:432-436 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: When the default branch cannot be resolved, a valid CI run on the default branch is rejected as `ci_not_default_branch_push`.\n  WHY: An unavailable default branch is treated the same as a run on a non-default branch, obscuring the cause and rejecting legitimate runs; the severity was reported as NIT by google_gemini-3_1-flash-lite and not stated by minimax_minimax-m3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:432-436 | severity=NIT | confidence=4\n  PROBLEM: If GITHUB_EVENT_PATH is missing, inaccessible, or does not contain a repository default_branch, PROVENANCE_DEFAULT_BRANCH remains empty.\n  WHY: When the default branch cannot be determined, legitimate CI workflow_run reports on the default branch are rejected with ci_not_default_branch_push.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_intake.sh:432-436\n  PROBLEM: When neither `WORKFLOW_HEAL_DEFAULT_BRANCH` is set nor the event file yields a non-empty default_branch (or the file is unreadable), a valid CI push on the default branch is rejected with `ci_not_default_branch_push`.\n  WHY: The reason string conflates \"default branch unknown\" with \"run not on default branch\" \u2014 operators triaging the rejection cannot tell which case fired.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ea27d4e6174e1ec3b6efc7a4eb3dd287726f514802bdee05780d9ccd44ba9fce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6581,
+    "run_id": "37903884160",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37903884160",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009084226_1706c99d5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6581,
+    "run_id": "37903884160"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T08:42:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

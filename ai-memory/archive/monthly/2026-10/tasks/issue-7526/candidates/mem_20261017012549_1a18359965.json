@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The real cause (who swapped #7511's labels) is unknown and outside this issue's allowed paths. What should this heal deliver?\nChoices:\n- A: Make the failure path degrade cleanly in `plan.yml`. When `Checkout repository` did not run, or a helper file or `RUNTIME_DIR` is missing, the failure-path steps that source `scripts/memory_helpers.sh`, `label_helpers.sh` or `tg_helpers.sh` skip with a `::warning::` instead of erroring. Add a regression test in `tests/` that fails on `9ad0b28e` and passes with the fix. Add a `changelog.d/` fragment stating that #7513 does not cover managed issues without a tracking line, such as #7511. Leave the resolver unchanged. The label-swap root cause stays with #7516, and the #7511 relabel stays an operator step (named in the PR body). (RECOMMENDED)\n- B: Only the `changelog.d/` correction and a test pinning that #7511's exact label and body shape stays fail-closed with `label_missing`. No `plan.yml` change.\n- C: Close this heal as not fixable in scope (no PR). Leave everything to #7516 and a manual relabel of #7511.\nQ2: How should `plan.yml`'s failure-path steps behave when the support scripts are absent? This only applies if you choose Q1:A.\nChoices:\n- A: Skip each affected step with a `::warning::` naming the missing helper, and change no identifiers. The plan-failed issue comment, which already uses inline fallbacks, still posts. The label rollback is skipped; it isn't needed when the resolver refuses before any label changes. (RECOMMENDED)\n- B: Keep the label rollback and the DEBUG Telegram alert working without the helpers, using inline `gh` / `curl` fallbacks in the workflow.\n  **Note:** this makes `plan.yml` larger and duplicates helper logic. Pick A unless you specifically need the rollback and alert on early refusals.",
+  "fingerprint": "973283ca3db0d2fa84df8d008d9347ff72d155189e2432de3d6ef718ea9f45d4",
+  "lineage": {
+    "issue_number": 7526,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38990466332",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38990466332",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261017012549_1a18359965",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7526,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38990466332"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7526 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-17T01:25:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

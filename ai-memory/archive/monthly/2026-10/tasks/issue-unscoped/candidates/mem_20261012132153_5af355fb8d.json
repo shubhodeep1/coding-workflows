@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:about line 826-line 837 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The `update-wrappers` job's \"Commit and push updates\" step has a `run:` body containing `${{ }}` expressions that is 19,821 characters, exceeding the 18,000-character guard.\n  WHY: The guard fails `tests-promote-stall-and-review`, causing the aggregate `lint` check to fail; both reviewers classify this as pre-existing and unrelated to the reviewed changes.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/update_workflows.yml:about line 826 | severity=MAJOR | confidence=5\n  PROBLEM: `tests/test_workflow_file_size_limit.py::test_interpolated_run_bodies_below_expression_guard` fails because the step's `run:` body contains `${{ }}` and is 19,821 characters, over the 18,000-character guard.\n  WHY: CI stays red on this head until that step is fixed, which blocks auto-merge. This PR does not touch the file, so the failure was already on `orchestrator/project-7126`. It needs its own change on the integration branch: move the body into `scripts/` and pass each `${{ }}` value through `env:` (\u00a724). I am not asking for an edit inside this PR's scope (issue #7172 `files_touched`).\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/update_workflows.yml:line 837 | severity=MAJOR | confidence=5\n  PROBLEM: The run body contains `${{ }}` expressions and is 19,821 characters, exceeding the 18,000-character guard in `tests/test_workflow_file_size_limit.py`.\n  WHY: `tests-promote-stall-and-review` fails this guard, which causes the `lint` aggregate to fail on the reviewed head. This failure is in an unchanged file and is unrelated to the latest autofix changes.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e67c714610a8b977cffc819eeb8a18aabdf684b7f55bc940ba7e2be0c8645f07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7211,
+    "run_id": "38253366992",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38253366992",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012132153_5af355fb8d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7211,
+    "run_id": "38253366992"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T13:21:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

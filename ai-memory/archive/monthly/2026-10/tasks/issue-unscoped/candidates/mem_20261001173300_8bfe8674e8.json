@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:463-682 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Attempt reads are capped per run, but there is no aggregate cap per evaluation, allowing a backlog of successful re-runs to trigger thousands of GitHub API reads in one sweep evaluation.\n  WHY: This can consume the shared API quota and leave later candidates unevaluated; all reviewers rated the concern NIT.\n- scripts/claude_pr_sweep.py:44-45 | severity=low | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The API-budget sentence is grammatically awkward.\n  WHY: The corresponding sentence in `claude_fixer_pending_checks.py:90` is clearer.\n- docs/plans/issue-5904-block-merge-on-any-failed-newer-review-plan.md:49,64 | severity=low | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: G4 and the Constraints section say there are no new GitHub API calls, which is no longer literally true after bounded attempt reads were added.\n  WHY: Updating the historical plan would improve consistency for future readers; the module docstring and changelog fragment describe the actual cost.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 3 (failback minimax/minimax-m2.5).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_fixer_pending_checks.py | severity=low | confidence=[4]\n  PROBLEM: Attempt reads are capped per run, but there is no aggregate limit per evaluation. The two bound-run listings can each return nearly 1,000 newer runs, and the loop can read up to five earlier attempts for every successful re-run.\n  WHY: A PR with a backlog of rerun reviews can trigger close to 10,000 GitHub API reads in one evaluation. The hourly sweep evaluates open candidates in sequence, so this fan-out can consume the shared API quota and cause later candidates\u2019 reads to fail.\n  File: scripts/claude_fixer_pending_checks.py\n  Line or code reference: check_review_runs(), lines 656\u2013677; _earlier_unsuccessful_attempt(), lines 484\u2013490.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_fixer_pending_checks.py | severity=low | confidence=[4]\n  PROBLEM: The per-run attempt cap (MAX_EARLIER_REVIEW_RUN_ATTEMPTS = 5) bounds reads for a single run, but there is no aggregate cap across all newer runs in one evaluation. The branch listing can hold up to 1,000 runs newer than the marker, and each re-run at attempt 6 triggers 5 attempt reads.\n  WHY: A repository with a large backlog of re-run reviews could consume a significant share of the shared GitHub API quota in one evaluation. A read failure then leaves that PR's auto-merge unevaluated until the next hourly tick. The reviewer rated this a low-severity concern.\n  File: scripts/claude_fixer_pending_checks.py\n  Line or code reference: `_earlier_unsuccessful_attempt()` at lines 463-490, called from the loop at lines 676-682\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_fixer_pending_checks.py | severity=low | confidence=[3]\n  PROBLEM: There is no per-evaluation aggregate cap on attempt reads; with up to 999 newer runs all at `run_attempt` 6, one evaluation could issue ~5,000 attempt reads against the shared GitHub API quota during the hourly catch-all sweep.\n  WHY: A PR with an unusually long review history could consume a disproportionate share of the hourly GitHub API budget, leaving other PRs unevaluated when the quota is exhausted. The reviewer rated the practical risk low.\n  File: scripts/claude_fixer_pending_checks.py\n  Location: check_review_runs(), lines 676-679 \u2014 the re-run attempt-read loop iterates every run in `newer` (up to 999 before the MAX_PAGINATED_API_PAGES guard trips) and calls `_earlier_unsuccessful_attempt` for each, which reads up to MAX_EARLIER_REVIEW_RUN_ATTEMPTS (5) earlier attempts per run.\n- scripts/claude_pr_sweep.py:44-45 | severity=low | confidence=[4]\n  PROBLEM: The API-budget sentence reads \"1 attempt read per earlier attempt of each re-run one\" which is grammatically awkward.\n  WHY: The corresponding sentence in claude_fixer_pending_checks.py:90 reads \"each one that was re-run\" which is clearer.\n- docs/plans/issue-5904-block-merge-on-any-failed-newer-review-plan.md:49,64 | severity=low | confidence=[4]\n  PROBLEM: G4 (\"No new GitHub API calls (\u00a715)\") and the Constraints section (\"\u00a715: zero added reads\") are no longer literally true after the implementation evolved through review rounds 1 and 2 to add bounded attempt reads.\n  WHY: The plan is a historical document; updating G4/Constraints to match would improve consistency for future readers. The module docstring and changelog fragment correctly describe the actual cost.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c6a157737e8e108cf08cdaf310e6600e13f76dbbd4e3891227e1247540d8fb51",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5914,
+    "run_id": "36892691769",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36892691769",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001173300_8bfe8674e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5914,
+    "run_id": "36892691769"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T17:33:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

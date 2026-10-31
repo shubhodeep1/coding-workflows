@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a data-only edit: replace the whole contents of `tests/e2e_smoke_canary_b.txt` with exactly these two lines and a trailing newline:\n```\nstatus: ok\ndecompose-run: 39969947939\n```\n\n## Data structures affected\nOnly the smoke canary text file. Line 1 stays `status: ok`. Line 2 changes from `decompose-run: 25567947079` to `decompose-run: 39969947939`.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Rewrite the whole file\n- Chosen: overwrite the full file with the two required lines and a trailing newline.\n- Alternatives considered: change only the run ID on line 2.\n- Why: rewriting the whole file guarantees the exact content and the trailing newline, and the diff is the same size.\n\n## Security considerations\n- Trust boundaries: none. This is a static test fixture with no code paths, credentials or external input.\n- Authorization: no new endpoint or surface.\n- Abuse cases: the only risk is touching files outside scope, and the `files_touched` allowlist limits the change to this one file.\n\n## Potential risks or edge cases\n- A missing trailing newline, an extra blank line, or CRLF line endings would break exact-content checks. Write the file with LF endings and exactly two lines.\n- The issue says the current content holds the old run ID `25567947079`. I did not re-read the file; the rewrite gives the right result either way.\n- No dependency on the canary-a fix-up.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary_b.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` prints `decompose-run: 39969947939`.\n- `wc -l` prints `2`.\n- `git diff --stat` shows only this file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue names exactly one file and its exact contents, so the plan edits that existing fixture and nothing else. No helpers, patterns or new code apply. Planning is on `orchestrator/project-7981` at `310ad7f1301dbf7f7822d36d90924733a44098b4`, and the integration branch mismatch line reads `false`.\n\n## Pre-execution self-check\nThe plan covers every acceptance criterion and stays inside the `files_touched` allowlist. No external inputs are needed.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "6047b1527f13371b442a8deff9d8f960075cdd67d0a5546105b1b75241f629c0",
+  "lineage": {
+    "issue_number": 7985,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39975910923",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39975910923",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7985"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261023152641_7a0f3b7bf1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7985,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39975910923"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7985",
+  "timestamps": {
+    "created_at": "2026-10-23T15:26:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

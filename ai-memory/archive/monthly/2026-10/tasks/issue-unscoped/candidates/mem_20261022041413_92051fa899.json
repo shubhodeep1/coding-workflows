@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1976 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The third `/actions/jobs/{id}/logs` fetch in `review_run_checked_out_bait()` (line 1976, `gh_api_safe_quiet_print \"repos/${TEST_REPO}/actions/jobs/${coverage_job_id}/logs\"`) is not gated by the cooldown, and `live_log_fetch_record` is not called for its outcome.\n  WHY: The bait-coverage fetches keep running at full poll cadence while the two gated fetches are paused, so the cooldown does not cover every fetch of that endpoint. Severity was reported as MAJOR (mapped to high). The reviewer's cited ranges are 1904-1929, 2333-2341 and 2496-2509, and the test's `_loop_text()` excludes the function body.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"After 3 consecutive failures, skip the `/actions/jobs/{id}/logs` fetch for 300 seconds\" and \"the cooldown covers every fetch of that endpoint.\"\n  expected_change_site: `review_run_checked_out_bait()` in .github/workflows/test-and-mark-stable.yml (the `coverage_log` fetch at line 1976)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The cooldown gates the `JOB_ID` fetch (line 2333) and the `LOG_SIZE` fetch (line 2500). The fetch at line 1976 in `review_run_checked_out_bait()` has no `live_log_fetch_allowed` check and no `live_log_fetch_record` call. The wait loop calls it through `require_bait_review_coverage()` at lines 2211, 2217, 2264 and 2381. `test_every_jobs_log_fetch_in_wait_loop_is_gated` does not see it because `_loop_text()` excludes the function body. Reviewers rated it MAJOR (gemini, minimax) and NIT (luna). Two other reviewers (anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus) judged it not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"After 3 consecutive failures, skip the `/actions/jobs/{id}/logs` fetch for 300 seconds\" so the cooldown \"covers every fetch of that endpoint.\"\n  Expected change site: review_run_checked_out_bait() in .github/workflows/test-and-mark-stable.yml\n  Evidence of absence: The PR diff gates direct log fetches in the wait loop, but does not gate the fetch in review_run_checked_out_bait(), which continues to probe the endpoint ungated upon failure.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:1904-1929, 2333-2341, 2496-2509, 1976 | severity=MAJOR | confidence=4\n  PROBLEM: The cooldown block and the gates on the `JOB_ID` and `LOG_SIZE` fetches are wired up, but the third `/actions/jobs/{id}/logs` fetch in `review_run_checked_out_bait()` (line 1976) is not gated. It is called from `require_bait_review_coverage()` at lines 2211, 2217, 2264 and 2381.\n  WHY: The bait-coverage fetches continue at full poll cadence while the gated fetches are paused. Coverage falls back to `BAIT_REVIEW_UNKNOWN_COUNTS` only after 3 retries per RUN_ID, which still spends the API budget the cooldown was meant to save.\n- TASK_GAP\n  Requirement: \"Apply the same gate to the `LOG_SIZE` live-log fetch if it runs inside the same loop iteration, so the cooldown covers every fetch of that endpoint. Share the counter rather than adding a second one.\" Combined with the lead-in: \"After 3 consecutive failures, skip the `/actions/jobs/{id}/logs` fetch for 300 seconds of `ELAPSED`.\"\n  Expected change site: `review_run_checked_out_bait()` in `.github/workflows/test-and-mark-stable.yml`, specifically the `gh_api_safe_quiet_print \"repos/${TEST_REPO}/actions/jobs/${coverage_job_id}/logs\"` call that already iterates over completed jobs from `$coverage_jobs`.\n  Evidence of absence: The diff gates two of the three fetches (the `JOB_ID` fetch at line 2333 and the `LOG_SIZE` fetch at line 2500). The third fetch at line 1976 has no `live_log_fetch_allowed` check, and `live_log_fetch_record` is not called for its outcome. The contract test `test_every_jobs_log_fetch_in_wait_loop_is_gated` only inspects fetches found by `_loop_text()` (which starts at `LOOP_START = \"          while true; do\\n\"` and so excludes the function body), so the missing gate is invisible to the test.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"After 3 consecutive failures, skip the `/actions/jobs/{id}/logs` fetch for 300 seconds\" and \"the cooldown covers every fetch of that endpoint.\"\n  Expected change site: `review_run_checked_out_bait()` in `.github/workflows/test-and-mark-stable.yml`, particularly its `coverage_log` fetch.\n  Evidence of absence: The cooldown gates the live-log shortcut and `LOG_SIZE` fetches, but `review_run_checked_out_bait()` still fetches `repos/${TEST_REPO}/actions/jobs/${coverage_job_id}/logs` without the gate at line 1976. The wait loop invokes that helper through `require_bait_review_coverage()` at lines 2211, 2217, 2264 and 2381. Failed reads leave coverage unknown and are retried on later polls, so this endpoint path bypasses the shared cooldown.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b06509f1fb5aebf6c8e0dba5a15262d4dbf986f4ca96b5017894eddc0df7e13b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7862,
+    "run_id": "39717221260",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39717221260",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022041413_92051fa899",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7862,
+    "run_id": "39717221260"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-22T04:14:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

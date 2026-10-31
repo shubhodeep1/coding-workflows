@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6943,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6943\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6949\",\"pr_number\":6949,\"branch\":\"ai/issue-6943\",\"run_id\":\"37938511581\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37938511581\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/test-and-mark-stable.yml\",\"agents.md\",\"changelog.d/6943-release-manifest-attest.md\",\"docs/INVENTORY.md\",\"scripts/release_manifest_publish.sh\",\"tests/test_release_manifest_workflow_contract.py\"]}",
+  "fingerprint": "ba3125b3d6c8708e640e7500a62c559e1fb40183066d03fcc72e28c9219a9c14",
+  "lineage": {
+    "issue_number": 6943,
+    "parent_ids": [],
+    "pr_number": 6949,
+    "run_id": "37938511581",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37938511581",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6949"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261009135949_e57a26d58c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6943,
+    "level": "run",
+    "pr_number": 6949,
+    "run_id": "37938511581"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6943: https://github.com/shubhodeep1/coding-workflows/pull/6949",
+  "timestamps": {
+    "created_at": "2026-10-09T13:59:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply workflow-optimization-2026-09-22-2 recommendations (verified subset)\",\"issues\":[{\"id\":\"post-merge-validate-dispatch-fail-closed\",\"title\":\"review_autofix: fail post-merge-validate-dispatch when required standalone validation could not be dispatched\",\"priority\":1},{\"id\":\"phase7-no-run-diagnostics\",\"title\":\"test-and-mark-stable Phase 7: back off the cancel-run poll and print a diagnostic when no run registers\",\"priority\":2},{\"id\":\"wfopt-0922-2-final-report\",\"title\":\"Record workflow-optimization-2026-09-22-2 verdicts and delete the source doc\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"post-merge-validate-dispatch-fail-closed\",\"to\":\"wfopt-0922-2-final-report\"},{\"from\":\"phase7-no-run-diagnostics\",\"to\":\"wfopt-0922-2-final-report\"}]}",
+  "fingerprint": "378762211485fa2d48dad5ec1e31cd58f5c01c30018da6df75d6b1455ad453de",
+  "lineage": {
+    "issue_number": 7731,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39399279469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39399279469",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261020092515_72751265fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7731,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39399279469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply workflow-optimization-2026-09-22-2 recommendations (verified subset)' into 3 issues (tracking #7731)",
+  "timestamps": {
+    "created_at": "2026-10-20T09:25:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

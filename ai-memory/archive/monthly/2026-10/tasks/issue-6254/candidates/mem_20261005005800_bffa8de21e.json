@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6254,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6254\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6259\",\"pr_number\":6259,\"branch\":\"ai/issue-6254\",\"run_id\":\"37248167889\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37248167889\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"agents.md\",\"changelog.d/6254-pr-tree-python-safe-path.md\",\"scripts/build_semble_wrapper.sh\",\"scripts/gh_helpers.sh\",\"scripts/install_semble.sh\",\"scripts/memory_helpers.sh\",\"scripts/opencode_helpers.sh\",\"scripts/review_agents_md_materiality.sh\",\"scripts/review_collect_pr_metadata.sh\",\"scripts/review_filter_uninteresting_files.sh\",\"scripts/setup_serena.sh\",\"scripts/transcript_archive.sh\",\"scripts/workspace_init.sh\",\"scripts/write_opencode_config.sh\",\"tests/test_review_pr_tree_python_isolation.py\"]}",
+  "fingerprint": "b86ecde07a715ae06af2ab337bc9e16e75eabdbee35a2d423d4902234c7bc9a1",
+  "lineage": {
+    "issue_number": 6254,
+    "parent_ids": [],
+    "pr_number": 6259,
+    "run_id": "37248167889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37248167889",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6259"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005005800_bffa8de21e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6254,
+    "level": "run",
+    "pr_number": 6259,
+    "run_id": "37248167889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6254: https://github.com/shubhodeep1/coding-workflows/pull/6259",
+  "timestamps": {
+    "created_at": "2026-10-05T00:58:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

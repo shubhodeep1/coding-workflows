@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: PR #8398 merged into `stable` at 2026-10-29T22:36:28Z, and the checkout has its changes. In `scripts/ai_engine_fallback_report.sh`, `report_pool_reason_token` (lines 86-97) reads the pool reason file with validation, lines 344-345 accept only `^[a-z0-9_]{1,60}$` and otherwise use `unavailable`, every dispatch and skip log line carries `pool_reason=` (lines 351-380), and so do the Telegram alert (lines 386-389) and the step summary (line 397). That fixes the defect the issue names: `no_credential` refusals no longer lose the pool step's reason. The two leftover items are the evidence line in `scripts/workflow_failure_heal.py` and the `agents.d/` log-prefix fragment. Neither is covered by the issue's `ai:workflow-heal-scope` marker, and the pipeline cannot widen that marker. Option B or C would stall at the scope gate until an operator acts, so the conservative choice is to close out the delivered scope and leave those items to a separately filed follow-up.\nQ2: The specific `no_credential` cause cannot be found from the repository, and no run logs are available. Under the data-provision guard, Option B needs an operator to paste log lines that no one can supply here. Option C goes against the issue's constraint that the failure is deterministic and a retry is not a fix. Option A is the safe fallback that still makes progress. Once a consumer is pinned to a release that includes #8398, the next occurrence will carry `pool_reason=<token>`, which tells apart the candidate causes the issue lists (`broker_refused_*`, `crashed`, `auth_failed`, `cli_missing`, `oidc_*`). A fresh heal issue can then target that specific cause with a scope marker that fits it.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered options.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "75e20fe642a091f66b4447a55904d2175d0db8bbf454f8349b7ccc5fdcda3cec",
+  "lineage": {
+    "issue_number": 8392,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40968219600",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40968219600",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8392"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029225233_a07b2b6fcf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8392,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40968219600"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8392",
+  "timestamps": {
+    "created_at": "2026-10-29T22:52:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

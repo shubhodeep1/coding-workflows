@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:413-424; .github/workflows/mark-stable.yml:281-292; .github/workflows/test-and-mark-stable.yml:4750-4761 | severity=low | confidence=3\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The new fallback treats a failed lookup as recoverable even when the pinned ShellCheck installation succeeded.\n  WHY: If the lookup fails, the step warns but still runs the unpinned binary. When that binary is an older version that ignores the poller\u2019s `extended-analysis=false` directive, the ShellCheck run can hit the same runner shutdown this change is intended to prevent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:413-424; .github/workflows/mark-stable.yml:281-292; .github/workflows/test-and-mark-stable.yml:4750-4761 | severity=NIT | confidence=3\n  PROBLEM: The new fallback treats a failed lookup as recoverable even when the pinned ShellCheck installation succeeded.\n  WHY: If the lookup fails, the step warns but still runs the unpinned binary. When that binary is an older version that ignores the poller\u2019s `extended-analysis=false` directive, the ShellCheck run can hit the same runner shutdown this change is intended to prevent.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "76709f6a960dcb59e4d2a5532833435ea3b6c3de51df6531cef2bc987792a22e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6682,
+    "run_id": "38167593477",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38167593477",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011205059_3e6ca3e0fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6682,
+    "run_id": "38167593477"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T20:50:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

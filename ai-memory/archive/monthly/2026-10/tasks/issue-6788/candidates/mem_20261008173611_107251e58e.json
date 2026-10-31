@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should \"the code-proven support-checkout fix\" change in `implement_heal_preflight.sh`?\nChoices:\nA. Split each `refuse unavailable` at lines 58-85 into its own reason, and log expected vs. actual SHAs and the ref. Change behaviour only for a defect that a failing test in `tests/test_implement_heal_preflight.py` demonstrates. Every check stays fail-closed. (RECOMMENDED)\nB. Option A, plus a dedicated fail-closed reason (e.g. `support_ref_fallback`). It applies when `.codex-workflow-src` was checked out from the `main` fallback in `implement.yml` (lines 975-983) instead of `SCRIPT_REF`. Exact-checkout verification stays mandatory and the fallback is still refused.\nC. A specific defect identified in #6778. Paste the failing run ID, or the exact mismatch (expected ref/SHA vs. actual HEAD), in a `/answer`.\nQ2: How should the `files_touched` allowlist reach the implement guard?\nChoices:\nA. Before `/approved`, the pipeline account or an OWNER/MEMBER/COLLABORATOR edits this issue's body so the block is multiline: a `files_touched:` line on its own, then one `- scripts/implement_heal_preflight.sh` line and one `- tests/test_implement_heal_preflight.py` line. (RECOMMENDED)\nB. The body is already multiline and only looked flattened in the clarify context, so proceed unchanged.\nC. Open a fresh issue with the correctly formatted block and close this one.\nQ3: Should the change stay strictly within the two listed files?\nChoices:\nA. Yes, only `scripts/implement_heal_preflight.sh` and the new `tests/test_implement_heal_preflight.py`. Add no changelog fragment and don't edit `docs/INVENTORY.md`, `agents.md` or the existing `tests/test_heal_isolated_editor.py`. This avoids a general `files_touched` scope rejection. (RECOMMENDED)\nB. Also add a `changelog.d/<issue>-heal-preflight-diagnostics.md` fragment, listed in `files_touched`.\n**Note:** B only works with Q2:A or Q2:C, because the fragment path has to be added to the allowlist in the body.",
+  "fingerprint": "47b7ad0f8ef33e7e7c9b4323b5e21b84e4eac8aca4e374692ba98527c0c67865",
+  "lineage": {
+    "issue_number": 6788,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37817087679",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37817087679",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008173611_107251e58e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6788,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37817087679"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6788 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T17:36:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

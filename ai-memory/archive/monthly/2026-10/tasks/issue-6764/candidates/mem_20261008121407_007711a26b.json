@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should the shared-workflow fix be for a conflict on the live hook `.claude/hooks/pr_merge_status_guard.py`?\nChoices:\n- A: Add a deterministic step in `scripts/review_conflict_prepare.sh` before the resolver runs, following the pattern of `CONFLICT_MANIFEST_UNION_ENABLED`. It applies only when each side's live hook equals that side's template copy and Git merged the template copy without a conflict. It then writes the merged template content over the live hook and stages it, so the model never sees or writes the live hook. Any other case keeps the current `sandbox_path_host_only` fail-closed path. A new kill switch turns the step off, and a regression test reproduces the PR #6549 conflict shape. (RECOMMENDED)\n- B: Keep the current behaviour and ship no change to the runtime path. Only improve diagnostics: log the hook's merge stages and its PR-head/base blob SHAs in the failure output, so a human can merge it. Then close this heal lineage as \"intended fail-closed, manual merge on PR #6549\".\n- C: Make no code change. Close this issue as not a shared-workflow defect, and have a human merge PR #6549 by hand.\nQ2: (Applies only if Q1 = A.) If the template copy is also conflicted, so Git could not merge it cleanly, what should happen to the live hook?\nChoices:\n- A: Keep failing closed with `sandbox_path_host_only`. A live safety hook is never copied from content the model resolved. (RECOMMENDED)\n- B: Let the model resolver merge the template copy inside the sandbox, then copy that result over the live hook on the host after transfer. **Note:** this lets model-written content reach the host-run hook, which the current exclusion exists to prevent.",
+  "fingerprint": "c6e86b2bf261516cb1588b68b1fe04c8385463f3479b3648699b578bc84d4fc1",
+  "lineage": {
+    "issue_number": 6764,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37774231137",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37774231137",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008121407_007711a26b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6764,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37774231137"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6764 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T12:14:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

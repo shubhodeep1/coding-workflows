@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7018,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7018\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7023\",\"pr_number\":7023,\"branch\":\"ai/issue-7018\",\"run_id\":\"38018170915\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38018170915\",\"changed_files\":[\"changelog.d/7018-failure-marker-trusted-scan.md\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_autofix_report.sh\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "9d901e5228200079fa68e3088b0cb33850e49361a81bb3995910ed94d6fd7f70",
+  "lineage": {
+    "issue_number": 7018,
+    "parent_ids": [],
+    "pr_number": 7023,
+    "run_id": "38018170915",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38018170915",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7023"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261010030751_32ca9d7e6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7018,
+    "level": "run",
+    "pr_number": 7023,
+    "run_id": "38018170915"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7018: https://github.com/shubhodeep1/coding-workflows/pull/7023",
+  "timestamps": {
+    "created_at": "2026-10-10T03:07:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

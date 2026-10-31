@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2504-2505 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Moving the ~860s unblock step (`if: strategy.job-index == 4`) into group 4 leaves group 4 at an estimated ~17m of its 20-minute budget, above the 75% (15m) `CI_BUDGET_JOB_WARN_RATIO` warn threshold.\n  WHY: The change relocates rather than removes the near-threshold load, so the next `budget-watch` run will likely open another `ai:ci-budget` job-duration issue for `orchestrate-poll (4)`; the reviewer rated it NIT (mapped to low) and said the job stays under its timeout.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2504-2505 | severity=low (source: NIT) | confidence=3\n  PROBLEM: Moving the ~860s unblock step (`if: strategy.job-index == 4`) into group 4 leaves group 4 at an estimated ~17m of its 20-minute budget, above the 75% (15m) `CI_BUDGET_JOB_WARN_RATIO` warn threshold.\n  WHY: The change relocates rather than removes the near-threshold load, so the next `budget-watch` run will likely open another `ai:ci-budget` job-duration issue for `orchestrate-poll (4)`; the job stays under its 20-minute timeout.\n- HARDENING_SUGGESTIONS: .github/workflows/ci.yml comment block above the unblock step (lines 2493-2503): the 860s figure comes from a failing run and the comment admits the move is an estimate; add one comment line stating the estimated post-move group-4 total and the 75% warn threshold it exceeds (est. 1 line changed). HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "59d0a18075bc443165f411283883308e69e2af3c938364b330e013e54aa98c76",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8120,
+    "run_id": "40180664828",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40180664828",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025095241_92af91241e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8120,
+    "run_id": "40180664828"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T09:52:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

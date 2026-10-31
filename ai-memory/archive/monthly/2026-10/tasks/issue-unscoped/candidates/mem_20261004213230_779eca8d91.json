@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_security_audit_workflow_contract.py:1105-1134 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The new test requires a `tmp_path` argument, but the file\u2019s standalone runner invokes each test with no arguments.\n  WHY: CI runs this file directly, so the runner raises `TypeError` before the test executes and fails the job; all reviewers rated this a blocker.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_security_audit_workflow_contract.py: the new function `test_security_audit_codex_preflight_only_on_fallback(tmp_path: Path)` introduced in the last autofix run, called by `main()` at lines 2281-2284 via `globals()[name]()` without arguments. | severity=BLOCKER | confidence=5\n  PROBLEM: The test requires a `tmp_path` argument, but the standalone runner calls every `test_*` function with no arguments.\n  WHY: CI runs the file directly, so this raises `TypeError` and aborts the test run.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_security_audit_workflow_contract.py: line 1105, def test_security_audit_codex_preflight_only_on_fallback(tmp_path: Path) -> None: | severity=BLOCKER | confidence=5\n  PROBLEM: The test requires pytest\u2019s `tmp_path` fixture, but the standalone runner invokes each `test_*` function with zero arguments.\n  WHY: Running the file directly raises `TypeError` and fails the `tests-heal-plan-and-validation` job.\n- scripts/security_audit.sh: lines 1272-1274\n  PROBLEM: `SECURITY_AUDIT_CODEX_HOME` directory and `config.toml` file checks run unconditionally before Claude execution.\n  WHY: If the script runs on Claude without pre-existing Codex configuration, it fails the preflight check before Claude is invoked.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_security_audit_workflow_contract.py: lines 1105-1134, `def test_security_audit_codex_preflight_only_on_fallback(tmp_path: Path)`; `main()` runner at file tail | severity=BLOCKER | confidence=5\n  PROBLEM: The test requires a `tmp_path` argument, but the standalone runner invokes every `test_*` callable with zero arguments.\n  WHY: CI runs the file directly, so the runner raises `TypeError` and aborts the step before any other test runs.\n- scripts/security_audit.sh: lines 1272-1274 (just before the new Claude branch: `SECURITY_AUDIT_CODEX_HOME=...`, `security_audit_require_directory ... \"${CODEX_OUTPUT_FILE}\"`, `security_audit_require_file ... \"${CODEX_ERROR_FILE}\"`, and the unchanged `security_audit_require_directory \"${SECURITY_AUDIT_CODEX_HOME}\"` + `security_audit_require_file \"${SECURITY_AUDIT_CODEX_HOME}/config.toml\"`)\n  PROBLEM: The script still requires Codex\u2019s `~/.codex/config.toml` and `~/.codex` directory when the SECURITY_AUDIT role is on Claude.\n  WHY: Codex\u2019s binary and config are unused on the Claude path, so missing Codex configuration causes an unnecessary failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_security_audit_workflow_contract.py: `test_security_audit_codex_preflight_only_on_fallback(tmp_path: Path)`; `main()` invokes discovered tests with `globals()[name]()`. | severity=BLOCKER | confidence=5\n  PROBLEM: The test requires a `tmp_path` argument, but the direct-script runner calls each test with no arguments.\n  WHY: CI runs this file directly, and the runner raises `TypeError`, failing `tests-heal-plan-and-validation` and the aggregate `lint` check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_security_audit_workflow_contract.py: lines 1105-1134 (new test `test_security_audit_codex_preflight_only_on_fallback`) | severity=BLOCKER | confidence=5\n  PROBLEM: The test expects pytest\u2019s `tmp_path` fixture, but the file\u2019s custom runner invokes each `test_*` function with zero arguments.\n  WHY: CI executes the file directly, so the test raises `TypeError` before its assertions run and fails the job.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_security_audit_workflow_contract.py: 1105-1134 (new test `test_security_audit_codex_preflight_only_on_fallback`), plus the `main()` runner at lines 2281-2289 | severity=BLOCKER | confidence=5\n  PROBLEM: The test requires pytest\u2019s `tmp_path` fixture, but the standalone runner invokes each `test_*` function with no arguments.\n  WHY: CI executes the file directly, so `main()` raises `TypeError` and aborts the file before subsequent tests run.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3284f64d7750b252479e4b9d53b62d497aab0863d3ec10e9dbcc8d32a262e353",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37232605511",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37232605511",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004213230_779eca8d91",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37232605511"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T21:32:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

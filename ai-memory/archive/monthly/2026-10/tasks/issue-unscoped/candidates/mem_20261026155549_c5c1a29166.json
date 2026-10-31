@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:1148-1153 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new check for `reviewer_static_context.txt` is missing a check for the `RUNTIME_DIR` existence or writability before attempting to write to `${RUNTIME_DIR}/reviewer_static_context.txt`.\n  WHY: If `RUNTIME_DIR` is not created or is unreachable, the assembly fails and the reviewer script errors out (source says SEVERITY: MAJOR, mapped to high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh:1148-1153 | severity=MAJOR | confidence=4\n  PROBLEM: The new check for `reviewer_static_context.txt` is missing a check for the `RUNTIME_DIR` existence or writability before attempting to write to `${RUNTIME_DIR}/reviewer_static_context.txt`. If `RUNTIME_DIR` is not created or is unreachable, the assembly will fail.\n  WHY: The reviewer script will error out, and the `REVIEWER_STATIC_CONTEXT_SOURCE` will default to \"shared\" but with a broken assembly step.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "98b16a3c88be996dd81a1afbf37f38617118f1803d647ea6ff872cddb937ca0a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8194,
+    "run_id": "40348099219",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40348099219",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026155549_c5c1a29166",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8194,
+    "run_id": "40348099219"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T15:55:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

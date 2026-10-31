@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How much of the call-site audit must this issue migrate?\nChoices:\nA. Migrate the named hot paths, ad-hoc retry implementations, and Python readers; leave other unlisted calls for follow-up. (RECOMMENDED)\nB. Audit and migrate all 172 unprotected calls and 39 ad-hoc implementations in this issue.",
+  "fingerprint": "d7c08db38ac66b423f5af9fa1b5f4959488efa3700b913ecc30efd9c2f43166a",
+  "lineage": {
+    "issue_number": 5873,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37100458530",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37100458530",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261003054846_efe19c6ed6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5873,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37100458530"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #5873 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-03T05:48:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

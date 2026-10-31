@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which clarify-respond modes should the completeness check cover? The finding is filed against standalone mode, but orchestrator-managed issues use the same \"Parse and post answer\" step and the same poster script, with the same nonempty-only check.\nChoices:\nA) Both modes: put the check in the shared path (the poster script or a step just before it), so orchestrator and standalone answers are validated the same way (RECOMMENDED)\nB) Standalone mode only, leaving orchestrator-managed issues unchanged\nC) Both modes, but orchestrator mode only logs a warning while standalone mode enforces the check\nQ2: What should happen when the worker's answer is incomplete? Incomplete means some question has no decision, or its decision is not one of that question's listed choices or `ESCALATE`.\nChoices:\nA) Fill the gaps from the RECOMMENDED options. Use `scripts/auto_decisions.py parse`, the same source as the existing \"Standalone RECOMMENDED fallback\" step, to supply the RECOMMENDED pick for each missing or invalid question. If any such question has no RECOMMENDED option, post nothing and page CRITICAL (or escalate to `ai:blocked`). Record filled-in picks as decided by \"RECOMMENDED fallback\" in the auto-decisions comment. (RECOMMENDED)\nB) Throw away the worker's whole answer and use the full RECOMMENDED fallback. Fail closed (post nothing, page CRITICAL) if any question has no RECOMMENDED option.\nC) Always fail closed: post nothing, set `ai:blocked`, and page a human. Never fill in decisions automatically.\nAssumptions:\n- Dependency #6338 has already been handled; the latest `/reclarify` comment carries `<!-- ai:security-dependency-released:6339 -->`.\n- The fix will target the integration branch named in the issue (`claude/eloquent-gauss-nhi442`).\n- As with similar changes in this repo, it will come with a contract test.\nMissing context: I didn't read `scripts/auto_decisions.py` or `scripts/clarify_data_provision_guard.py` in detail. Planning should check whether either already exposes a per-question parser that the completeness check can reuse.",
+  "fingerprint": "dbfe64b1047093921d49a865afa6e8255f4b32d95a3631d50a4939f5be9b657d",
+  "lineage": {
+    "issue_number": 6339,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37389513801",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37389513801",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005234228_7682b0f1c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6339,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37389513801"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6339 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T23:42:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

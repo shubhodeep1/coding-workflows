@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A new script under `scripts/` must have its entry in `docs/INVENTORY.md` in the same PR, or `tests/inventory_parity.py` (the `Inventory parity` CI step in the `tests-release-and-log-analysis` job, gated through `CI / lint`) fails.\n  expected_change_site: `docs/INVENTORY.md` \u2014 Scripts section\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: `docs/INVENTORY.md` is NOT in the PR changed files list (`pr_changed_files.txt`). The Scripts section has no `scripts/guard_differential.py` entry. `tests/inventory_parity.py` reports the missing script and the missing documentation references from `agents.md`, causing the `tests-release-and-log-analysis` CI job and `CI / lint` aggregate required check to fail.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Guard differential check: run base and PR guard hooks side by side before a guard change lands\" (issue #5174 plan, Goals G1-G6)\n  Expected change site: `scripts/guard_differential.py`, `tests/guard_corpus/*.txt`, `tests/test_guard_differential.py`, `.github/workflows/ci.yml`, `agents.md`, changelog fragments\n  Evidence of absence: All deliverables present in the PR diff \u2014 the script is complete (1383 lines), 4 corpus files shipped with adversarial shapes, the CI step is wired in `tests-hooks-and-orchestrator`, agents.md documents the full mechanism including the pinned verifier (issue #5327), settings-wiring check (issue #5328), base-branch policy (issue #5326), and warning-fail rule (issue #5325). Three changelog fragments shipped. Implement-plan logs for all 5 sub-projects present under `docs/implement-plan/` and `docs/completed/`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: A new script under `scripts/` must have its entry in `docs/INVENTORY.md` in the same PR, or `tests/inventory_parity.py` (the `Inventory parity` CI step in the `tests-release-and-log-analysis` job, gated through `CI / lint`) fails. This is documented as a lesson learned across multiple implement-plan logs in this very PR (e.g., `docs/implement-plan/issue-5325-fail-warned-guard-loosening.md` line 45: \"A new script under scripts/ needs its docs/INVENTORY.md entry in the same PR\"; `docs/implement-plan/issue-5326-guard-differential-trusted-loosening.md` line 48: \"A new `scripts/*.py` needs its `docs/INVENTORY.md` entry in the same PR, or `tests/inventory_parity.py` (`CI / Inventory parity`) fails on the next PR into `main`\"). The #5174 plan (`docs/plans/issue-5174-guard-differential-check-plan.md`) lists `scripts/guard_differential.py` [new] as a file to add but does not list `docs/INVENTORY.md`. Multiple conformance and validation notes explicitly defer the fix to this final PR: \"it is the #5174 project's defect and surfaces on its final PR #5185 into main, where CI runs inventory parity\" (`docs/implement-plan/issue-5325-fail-warned-guard-loosening.md` AD-4).\n  Expected change site: `docs/INVENTORY.md` \u2014 the \"Scripts\" section needs a new entry for `scripts/guard_differential.py` (alphabetically between `scripts/git_ref_health_check.sh` and `scripts/implement_commit_changes.sh`, or wherever fits the sort order), following the `- `path` \u2014 role` format used by every other script entry.\n  Evidence of absence: `docs/INVENTORY.md` is NOT in the PR changed files list (`pr_changed_files.txt`). I verified the file on the current ref: the Scripts section contains entries from `scripts/emit_event.sh` through `scripts/workspace_safety_check.sh` with no `scripts/guard_differential.py` entry. `tests/inventory_parity.py` classifies every file under `scripts/` into the \"Scripts\" section (`SECTION_ORDER[\"Scripts\"]` matches `path.parts[0] == \"scripts\"`) and reports `docs/INVENTORY.md: Scripts: missing scripts/guard_differential.py` for any tracked script not documented. Additionally, `agents.md` now references `scripts/guard_differential.py` extensively in the new \"Guard differential check\" section, so `validate_secondary_documents` will also report `agents.md:<line>: references scripts/guard_differential.py but docs/INVENTORY.md does not document it` for each reference. Both failures exit 1 from `tests/inventory_parity.py`, failing the `tests-release-and-log-analysis` CI job and the `CI / lint` aggregate required check. `ci.yml` runs on `pull_request` into `main` and `stable`, and this PR's #5174 plan specifies \"Base branch: main\".\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0920f9b3b4076794e34f769c21e029184b8aed5411df4c49e77390aa5a87ce57",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37100560770",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37100560770",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003055735_2ef912649e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37100560770"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-03T05:57:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

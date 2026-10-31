@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1880 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `python3 -c 'import json, sys; ...'` digest-count invocation lacks isolated mode (`-I`) while running from the audited repository root, so a checkout-controlled `json.py` can be imported and executed.\n  WHY: This turns a digest read into host-side execution of audited-repository code in a credential-bearing job (GH_TOKEN at .github/workflows/security-audit.yml:370); reviewer labelled it SEVERITY: BLOCKER, mapped here to critical.\n- scripts/security_audit.sh:2180-2185 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: In upstream_managed_status, the `resolved != candidate` check assumes `repo_root` is already resolved, but `git rev-parse --show-toplevel` may return an unresolved (symlinked) path. This is a hardening suggestion, not a defect finding (HARDENING_RISK_SCORE: 3).\n  WHY: If `repo_root` is unresolved, every regular synced file would differ after `resolve()` and be falsely reported as `modified`; resolving `repo_root` once would fix it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh:2180-2185 | severity=low | confidence=3\n  PROBLEM: In upstream_managed_status, the `resolved != candidate` check assumes `repo_root` is already resolved, but `git rev-parse --show-toplevel` may return an unresolved (symlinked) path. This was listed under HARDENING_SUGGESTIONS (HARDENING_RISK_SCORE: 3).\n  WHY: If `repo_root` is unresolved, every regular synced file would differ after `resolve()` and be falsely reported as `modified`; the suggested fix is to resolve `repo_root` once (about 2 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh:1880 | severity=critical | confidence=5\n  PROBLEM: The `python3 -c 'import json, sys; ...'` digest-count invocation lacks isolated mode (`-I`) while the script runs from the audited repository root (`cd \"${REPO_ROOT}\"` at line 554), so a repository-local `json.py` can be imported and executed. The preceding builder uses `python3 -I`.\n  WHY: A consumer checkout containing a `json.py` can execute its contents during this count step in a credential-bearing job (GH_TOKEN at .github/workflows/security-audit.yml:370). The reviewer labelled it SEVERITY: BLOCKER, mapped here to critical.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a5ec92a0c010b19697c03ffeb1b0dbf0edbedd5bcfc626b859cdecb3f4e28c6b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7546,
+    "run_id": "39015838950",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39015838950",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017083526_d5b9b6f147",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7546,
+    "run_id": "39015838950"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-17T08:35:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

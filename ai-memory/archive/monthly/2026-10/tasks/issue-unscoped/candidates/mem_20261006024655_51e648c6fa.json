@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_clarify_respond.yml:1127-1190 (in PR diff) | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The answer completeness guard can exit without setting `complete=false`, while downstream gates treat an unset output as passing and may post unchecked worker output.\n  WHY: This recreates the unchecked-answer bug when the guard fails; Qwen rates this BLOCKER, while DeepSeek and Gemini rate it MAJOR.\n- scripts/orchestrate_parse_and_post_answer.sh:61 (scripts/auto_decisions.py lines 78 and 88) | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The poster's ESCALATE regex excludes `Q0`, although the question and decision parsers accept it, so `Q0: ESCALATE` can be posted as `/answer`.\n  WHY: The explicit escalation is not detected, allowing the issue to advance.\n- .github/workflows/orchestrate_clarify_respond.yml:Answer completeness guard, blocked|unparseable arm, tg_send_phase_tracked invocation | severity=high | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: A transient `tg_send_phase_tracked` failure exits the step even though `complete=false` has already been written and the no-post guard is satisfied.\n  WHY: Telegram notification failure produces a failed workflow step despite the safety outcome; Qwen rates this MAJOR, while DeepSeek rates it NIT.\n- .github/workflows/orchestrate_clarify_respond.yml:1166-1169 (filled-case warning) | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: When only extra decisions are pruned, the warning says RECOMMENDED options were used even though no missing decisions were filled.\n  WHY: The operator-visible warning inaccurately implies that fallback fills occurred.\n- scripts/auto_decisions.py:266-273 (in the PR diff) | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `(pick in listed)` disjunct in `_permitted_pick` is unreachable for multi-letter picks and redundant for single-letter picks.\n  WHY: The dead code is misleading and creates a maintenance hazard if the regex is tightened.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/orchestrate_clarify_respond.yml:Answer completeness guard step, run block (lines 1137-1190 in the PR diff) | severity=high | confidence=[5]\n  PROBLEM: The step does not write a default `complete=false` output before early-exit paths; downstream conditions treat an unset output as passing and may run with unchecked worker output.\n  WHY: A helper failure, rejected JSON schema, or failed precondition can recreate the unchecked-answer bug and post unchecked worker output.\n- scripts/auto_decisions.py:_permitted_pick function (lines 266-273 in the PR diff) | severity=low | confidence=[2]\n  PROBLEM: The `(pick in listed)` disjunct is unreachable for multi-letter picks and redundant for single-letter picks.\n  WHY: The dead code is misleading and creates a maintenance hazard if the regex is tightened.\n- .github/workflows/orchestrate_clarify_respond.yml:Answer completeness guard, blocked|unparseable arm, tg_send_phase_tracked invocation | severity=low | confidence=[2]\n  PROBLEM: A transient `tg_send_phase_tracked` failure exits the step after `complete=false` has been written.\n  WHY: The guard has satisfied its no-post contract, but the step is marked failed and creates noise in the workflow summary.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_clarify_respond.yml:Answer completeness guard step | severity=high | confidence=[4]\n  PROBLEM: The guard fails open if it finishes without setting the `complete` output, because the downstream `!= 'false'` condition evaluates true for an empty output.\n  WHY: Downstream steps can proceed as if the completeness check passed.\n- .github/workflows/orchestrate_clarify_respond.yml:Answer completeness guard step, filled cases\n  PROBLEM: The warning can misleadingly imply that RECOMMENDED options filled missing decisions when extra decisions were only pruned.\n  WHY: The warning should distinguish actual fills from simple pruning of extra decisions.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_parse_and_post_answer.sh:Line 61; `scripts/auto_decisions.py` lines 78 and 88 | severity=high | confidence=[4]\n  PROBLEM: The updated ESCALATE check excludes `Q0` IDs, but the question and decision parsers accept them.\n  WHY: For a clarification containing `Q0`, `complete_answers` accepts `Q0: ESCALATE` as a permitted decision. The poster\u2019s `Q[1-9][0-9]*` regex does not detect it, so the poster skips its escalation branch and publishes `/answer`, advancing the issue despite the explicit escalation.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/orchestrate_clarify_respond.yml:Answer completeness guard step (lines 1127-1190 in PR diff) | severity=critical | confidence=[4]\n  PROBLEM: The guard does not write a default `complete=false` output before failure paths can exit; downstream predicates treat an unset output as passing and may run with unchecked worker output.\n  WHY: With `set -euo pipefail`, a helper failure, JSON shape rejection, or `tg_send_phase_tracked` failure can turn the fail-closed guard into a fail-open path that posts unchecked worker output.\n- .github/workflows/orchestrate_clarify_respond.yml:Answer completeness guard, `blocked|unparseable` arm, the `tg_send_phase_tracked` invocation | severity=high | confidence=[3]\n  PROBLEM: A transient Telegram failure exits the step even though `complete=false` has already been written.\n  WHY: The notification is best-effort; its failure marks the step failed despite the already-established no-post outcome.\n- .github/workflows/orchestrate_clarify_respond.yml:lines 1166-1169 (filled-case warning) | severity=low | confidence=[3]\n  PROBLEM: When status is `filled` but the only reason is `extra`, the warning says RECOMMENDED options were used although no fills happened.\n  WHY: An operator may investigate RECOMMENDED substitutions that did not happen.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bced216e048602377bd78f8cd79b83948d5a7446db8f2f6f0a0394e18ee19013",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6444,
+    "run_id": "37402956977",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37402956977",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006024655_51e648c6fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6444,
+    "run_id": "37402956977"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T02:46:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

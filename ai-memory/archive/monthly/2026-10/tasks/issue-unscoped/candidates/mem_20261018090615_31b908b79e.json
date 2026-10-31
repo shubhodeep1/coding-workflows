@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/memory_helpers.sh:90 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The `validation` matcher in `_memory_stderr_category` misses the `MemoryValidationError` \"memory_root_relative escapes repository root\" (raised at scripts/ai_memory_lib.py:208), so it is classified `other`. minimax_minimax-m3 and qwen_qwen3_7-plus also report other unmatched shapes: \"Retrieval profiles not found\", and for qwen only, \"month_yyyy_mm must match YYYY-MM\".\n  WHY: The telemetry line reports `stderr_category=other` instead of `validation`. Fail-open behaviour and the exit code are unaffected. All reviewers rated this NIT, which is mapped here to low.\n- scripts/memory_helpers.sh:90 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: \"Retrieval profiles not found: <path>\" is a `MemoryValidationError` that the `validation` matcher also misses. minimax cites scripts/ai_memory_lib.py:288 and qwen cites scripts/ai_memory.py:288.\n  WHY: It falls through to `stderr_category=other`. This is a classification gap only. The severity is NIT, mapped to low, with confidence 4 from minimax and 5 from the same entry in qwen.\n- scripts/memory_helpers.sh:90 | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: \"month_yyyy_mm must match YYYY-MM\" (scripts/ai_memory_lib.py:3011) is not matched by the `validation` regex.\n  WHY: It is classified `other` instead of `validation`. This is a classification gap, not a runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/memory_helpers.sh:90 (`_memory_stderr_category`, validation branch) | severity=NIT | confidence=5\n  PROBLEM: The matcher misses `memory_root_relative escapes repository root: '<path>'` (scripts/ai_memory_lib.py:208, printed by scripts/ai_memory.py line 2630).\n  WHY: The telemetry reports `stderr_category=other` instead of `validation`. Fail-open behaviour and the exit code are unaffected. The suggested fix is to add `escapes repository root` to the alternation, plus one test case.\n- HARDENING_SUGGESTIONS: the same item (2 lines changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/memory_helpers.sh:90 | severity=NIT | confidence=4\n  PROBLEM: The validation matcher misses `memory_root_relative escapes repository root` (scripts/ai_memory_lib.py:208) and `Retrieval profiles not found` (scripts/ai_memory_lib.py:288) (2 related items).\n  WHY: Both fall through to `stderr_category=other`, which defeats the goal of actionable categorisation. A targeted allowlist would close the gap without false positives from `MemoryGitError`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/memory_helpers.sh:90 (`_memory_stderr_category`) | severity=NIT | confidence=5\n  PROBLEM: The validation matcher misses `memory_root_relative escapes repository root`.\n  WHY: An invalid `AI_MEMORY_ROOT` such as `../outside` raises this error (scripts/ai_memory_lib.py:208, printed at scripts/ai_memory.py:2630), and telemetry reports `other` instead of `validation`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/memory_helpers.sh:90 (`_memory_stderr_category` validation branch) | severity=NIT | confidence=5\n  PROBLEM: The validation regex misses `memory_root_relative escapes repository root` (scripts/ai_memory_lib.py:208), `Retrieval profiles not found` (scripts/ai_memory.py:288) and `month_yyyy_mm must match YYYY-MM` (scripts/ai_memory_lib.py:3011) (3 related items).\n  WHY: They are recorded as `stderr_category=other` instead of `validation`. This is a classification gap, not a runtime failure, and the step still returns 0.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d099d0ad1217d277fd2363511db21910474d00c0c09b417541f8c3b5cd795248",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7619,
+    "run_id": "39112659288",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39112659288",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018090615_31b908b79e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7619,
+    "run_id": "39112659288"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T09:06:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

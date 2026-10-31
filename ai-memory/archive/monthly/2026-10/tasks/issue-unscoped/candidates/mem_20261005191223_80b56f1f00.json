@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_evidence.py:737-744 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_artifact_diagnostic_extract` retains full diagnostic lines, allowing credentials in free-form text without assignment syntax to pass through.\n  WHY: Such lines are written to the evidence folder and included in model-readable context; reviewers agree on severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Extract only allowlisted diagnostic fields from artifacts before caching them; exclude free-form stderr and environment assignments rather than relying on credential-pattern redaction.\"\n  expected_change_site: scripts/workflow_failure_heal_evidence.py, `_artifact_diagnostic_extract`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The implementation keeps the full line of every diagnostic match at lines 741-744; it does not extract bounded allowlisted fields, so free-form text containing credentials that evade assignment filters or known credential patterns remains in the evidence. The tests do not exercise inline bearer tokens or arbitrary `IDENT=value` pairs.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_evidence.py: lines 741-744 (the kept-line branch in `_artifact_diagnostic_extract`); the four denylist regexes in `_ARTIFACT_ENV_ASSIGNMENT_RES` (lines 112-117) | severity=MAJOR | confidence=4\n  PROBLEM: Diagnostic lines are retained verbatim when they contain credentials that the four denylist regexes do not catch, such as inline bearer tokens or arbitrary `IDENT=value` pairs.\n  WHY: An artifact\u2019s error line can be written to the evidence folder and `render_prompt_section` output with its credential intact.\n\n- TASK_GAP\n  Requirement: \"Extract only allowlisted diagnostic fields from artifacts before caching them; exclude free-form stderr and environment assignments rather than relying on credential-pattern redaction.\"\n  Expected change site: scripts/workflow_failure_heal_evidence.py \u2014 `_artifact_diagnostic_extract` and the `_ARTIFACT_ENV_ASSIGNMENT_RES` denylist\n  Evidence of absence: The implementation keeps the full line of every diagnostic match, and its denylist relies on credential-pattern redaction (the env assignment regexes) rather than dropping free-form stderr. Lines that match `_ERROR_LINE_RE` / `_ARTIFACT_ERROR_WORD_RE` / `_EXIT_CODE_RE` retain any free-form text after the match \u2014 including inline bearer tokens and arbitrary `IDENT=value` pairs whose identifier is not in the keyword list. The new tests (`test_artifact_extract_drops_environment_assignments`, `test_artifact_extract_keeps_allowlisted_diagnostics`, `test_artifact_extract_bounds_lines_and_line_length`, `test_collected_evidence_never_contains_artifact_assignment_secret`) only exercise the cases the denylist already catches; none of them feed a `::error::bearer \u2026` or `::error::value=secret` line and assert the secret is gone. The header `\u2026 environment assignments and free-form text dropped (\u2026)` in `_artifact_diagnostic_extract` is also misleading because the kept diagnostic lines are not \"free-form-text-dropped\".\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_evidence.py: 737-744 | severity=MAJOR | confidence=5\n  PROBLEM: The extractor stores full matching diagnostic-line contents, including free-form text that may contain credentials.\n  WHY: An artifact containing a credential in otherwise free-form diagnostic text is written to the evidence folder and included in model-readable context.\n\n- TASK_GAP\n  Requirement: \u201cExtract only allowlisted diagnostic fields from artifacts before caching them; exclude free-form stderr and environment assignments rather than relying on credential-pattern redaction.\u201d\n  Expected change site: scripts/workflow_failure_heal_evidence.py, _artifact_diagnostic_extract\n  Evidence of absence: The extractor filters whole lines by diagnostic patterns but stores each matching line\u2019s contents at lines 741-744. It does not extract bounded allowlisted fields from those lines, so free-form stderr containing a credential that does not match the assignment filters or known credential patterns remains in the evidence.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_evidence.py: _artifact_diagnostic_extract() lines 741-744 | severity=MAJOR | confidence=4\n  PROBLEM: The extractor retains the full content of diagnostic lines, including free-form text that may contain credentials without assignment syntax.\n  WHY: A line like `::error::authentication failed for token abc123` matches `_ERROR_LINE_RE` and is kept in full, including the credential value.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "947a2075916b4cfb7aac64ed888c34dfa0c655c0442ea0671c5c924a6736612e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6415,
+    "run_id": "37357415150",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37357415150",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005191223_80b56f1f00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6415,
+    "run_id": "37357415150"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T19:12:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

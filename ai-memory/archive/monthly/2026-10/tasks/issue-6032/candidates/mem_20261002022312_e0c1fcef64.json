@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `6ef54647e9467c3a38ee63762421e5fa4a416aea` on `orchestrator/project-6031`; it matches the issue\u2019s integration branch. No clarification questions were asked; the `/answer` comment confirms continuation.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `scripts/review_run_reviewers.sh` two-pass flow and its existing review-tier path classifier  \nScope-mode justification: Keep the change inside the established reviewer flow rather than add a competing review path. The complete skip path must publish every downstream artifact, not merely omit pass two. Under `unattended_system_instructions.md` \u00a76, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed; the cost saving does not justify treating incomplete evidence as a clean review.\n\n## Automation and lifecycle\n- **Change type:** Extend an existing script; no new script or manual operation.\n- **Entry point:** `.github/workflows/review_autofix.yml`, the existing `Run reviewer models` step on PR review triggers. No scheduler wiring change.\n- **Supervisor:** None required. **DB gate:** Not applicable. **Future-removal registry:** Not applicable.\n\n## Files likely to change\n- `scripts/review_run_reviewers.sh` \u2014 decision, artifact publication, telemetry.\n- `tests/test_review_autofix_review_pipeline_contract.py` \u2014 decision and downstream-contract tests.\n- `README.md` \u2014 update the existing `ENABLE_REVIEWER_TWO_PASS` description.\n- `agents.md` \u2014 register the additive stable log prefix `REVIEW_PASS_DECISION_V1`.\n\nNo workflow YAML change is planned; preserve its existing two-pass setting and trigger. Before editing, verify these paths against the issue\u2019s `files_touched` allowlist, which was not included in the supplied planning context.\n\n## Functions/modules to implement\nAfter pass-one consensus is produced or restored, add a fail-closed decision in `review_run_reviewers.sh`. Skip pass two **only** when at least two active slots exist, every active slot has a `success` status and a nonempty clean raw output, and the ledger has exactly the expected, well-formed empty findings and task-gap blocks and matching clean per-reviewer sections. A missing, failed, budget-skipped, or unaccounted-for slot retains pass two.\n\nReuse `reviewer_collect_review_tier_path_metadata` and its protected-path rules. Require affirmative, complete raw diff/path evidence for a small, unprotected, non-security-sensitive change; check both sides of renames. Missing or malformed paths, unavailable or inconsistent diff evidence, large changes, conflicts, a moved head, and uncertain merge state retain pass two. Do not make another GitHub API call to obtain evidence already available locally.\n\nOn a skip, publish pass-one raw outputs as the existing `review_*.txt` and `status_review_*.txt` artifacts and publish the validated ledger as `REVIEWER_CONSENSUS_FILE`. Preserve `REVIEWERS_SUCCESSFUL` and the editor\u2019s existing reviewer-bundle/manifest construction. Publication failure must not leave partial `success` artifacts that the resume path could reuse. Emit `REVIEW_PASS_DECISION_V1` with the decision and bounded reason; keep existing signals unchanged.\n\n## Data structures affected\nRuntime reviewer status/output files and the consensus ledger retain their current formats. No persistent schema changes.\n\n## API/interface changes\nOne additive log prefix. No new endpoint, env var, workflow input, or external API call.\n\n## Decisions\n### D1 \u2014 Require unanimous, verifiable first-pass evidence\n- **Chosen:** Skip only for two or more active reviewers when all slots and both consensus and raw outputs explicitly attest to no findings or task gaps.\n- **Alternatives considered:** Use a clean consensus alone, or permit a partially successful panel.\n- **Why:** The summariser can omit failed slots; neither absence of entries nor a partial panel proves a complete clean pass.\n\n### D2 \u2014 Reuse downstream review artifacts\n- **Chosen:** Publish the established `review_*` artifacts from validated pass-one results.\n- **Alternatives considered:** Teach each downstream consumer to read `pass1_*`, or emit only a consensus file.\n- **Why:** The editor\u2019s authoritative bundle, Claude-fixer floor, resume handling, and run summary already depend on `review_*`.\n\n## Security considerations\nPR paths, diffs, reviewer text, and model-produced consensus cross untrusted boundaries; none may authorize a skip through missing, malformed, or selectively omitted data. Validate every active slot and every path entry, including rename sources; reject unparseable entries rather than relying on counts alone. Protected/security-sensitive changes and uncertain head or conflict evidence retain full review. This adds no endpoint or authorization surface and must not log PR content or credentials in telemetry.\n\n## Risks and edge cases\nA restored pass-one ledger may be stale, a raw reviewer may report a `TASK_GAP` omitted by consensus, and an incomplete publication could be mistaken for a completed review. Treat each as \u201crun pass two\u201d or fail closed during publication. The issue names no `files_touched` entries in the supplied context; that is an implementation-time scope check, not a reason to invent an allowlist.\n\n## Testing considerations\nExtend the existing contract harness with clean-skip, finding, task-gap, failed/missing slot, malformed or stale ledger, protected/renamed path, and incomplete diff cases. Assert the skip\u2019s `review_*` statuses, bundle inputs, consensus, successful count, and telemetry; assert every rejected case still launches pass two. Run the repository\u2019s pinned shell checks and focused review-pipeline tests before broader CI.\n\n**Pre-execution self-check:** The checked-out ref matches integration metadata; the existing trigger, classifier, ledger, and artifact consumers were identified. The plan needs no unknown credential or new external interface and targets the requested \u226460-minute implementation.\n\nPLAN_SELF_CHECK: WARNING: The supplied context omits the issue\u2019s `files_touched` allowlist; verify it before editing the listed files.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9540d2c4a8d624fcf4d12b9a689b99c45e90e79e96c8e7ecf51cea3f66cc91bb",
+  "lineage": {
+    "issue_number": 6032,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36954815861",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36954815861",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6032"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261002022312_e0c1fcef64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6032,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36954815861"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6032",
+  "timestamps": {
+    "created_at": "2026-10-02T02:23:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

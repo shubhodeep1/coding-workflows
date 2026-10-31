@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:366-372 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The hold trust check accepts only OWNER/MEMBER/COLLABORATOR associations or the GH_PAT login, so a bot configured in AI_PIPELINE_APPROVER_LOGIN is treated as untrusted. The step then runs hold_skip_plan and exits 0 without writing the hold comment or the ai:blocked label, and without removing ai:planning.\n  WHY: The run ends green with no hold written, and the same check in clarify.yml has the same gap. Severity disagreement: google_gemini-3_1-flash-lite said MAJOR, while anthropic_claude-sonnet-5_5, minimax_minimax-m3 and openai_gpt-6-luna said NIT. The highest is used, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/plan.yml:366-370 | severity=NIT | confidence=3\n  PROBLEM: A bot set in AI_PIPELINE_APPROVER_LOGIN that has none of the OWNER/MEMBER/COLLABORATOR associations and is not the GH_PAT account falls into the untrusted-comment skip. That skip calls hold_skip_plan and exits 0 without writing the hold comment or the ai:blocked label.\n  WHY: In that opt-in setup the run ends green with no hold written and no ai:planning cleanup. Planning is still skipped. clarify.yml has the same check, so the fix belongs in both files in a separate change.\n- HARDENING_SUGGESTIONS: .github/workflows/plan.yml lines 366-370. Add HOLD_APPROVER_LOGIN from vars.AI_PIPELINE_APPROVER_LOGIN to the step env and treat that login as trusted. Make the same change in clarify.yml. Estimated lines changed: 3. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:366-370 | severity=MAJOR | confidence=4\n  PROBLEM: The hold trust check does not incorporate the configured AI_PIPELINE_APPROVER_LOGIN bot.\n  WHY: The bot is treated as untrusted unless it holds OWNER, MEMBER or COLLABORATOR association. The hold logic then skips or fails to authorize valid automated planning approvals.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:366-372 | severity=NIT | confidence=4\n  PROBLEM: The trust check accepts only the three associations or the GH_PAT login. A marker /answer from the AI_PIPELINE_APPROVER_LOGIN bot is therefore untrusted, and the step runs hold_skip_plan and exit 0. No hold comment, no ai:blocked label and no ai:planning cleanup result.\n  WHY: The comment never receives the <!-- ai:integration-ref-label-missing:v1 --> marker, so the unblock scan cannot see the hold and the next plan run repeats the same label_missing refusal. The PR mirrors the clarify.yml lines 261-262 pattern, so the fix is a follow-up that changes both files together.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/plan.yml:366-371 | severity=NIT | confidence=4\n  PROBLEM: The hold's trust check does not recognize the configured AI_PIPELINE_APPROVER_LOGIN bot as authorized unless its association is OWNER, MEMBER or COLLABORATOR, or its login matches the GH_PAT account. The job predicate at 42-49 does accept /answer comments from that bot.\n  WHY: When the bot triggers planning with /answer and the resolver returns reason=label_missing, the untrusted-comment branch sets SKIP_PLAN=true and exits successfully. It adds no ai:blocked, does not remove ai:planning and posts no hold comment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4d3c8b9031f7670d4b99eeac8c1e82e78c69e284a75728a06fe6352758d31c71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8169,
+    "run_id": "40234415174",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40234415174",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025214746_68e7d83ffc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8169,
+    "run_id": "40234415174"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T21:47:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

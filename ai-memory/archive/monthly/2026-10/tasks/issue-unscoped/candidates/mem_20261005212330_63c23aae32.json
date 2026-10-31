@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:21002-21016 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The pre-judge identity-rejection path continues without removing `RB_JUDGE_SEMBLE_QUERY_FILE`, leaving the temporary judge-query file behind.\n  WHY: Each rejection leaks a temporary file until the runtime directory is cleaned, unlike the two sibling rejection paths that explicitly remove it.\n- scripts/orchestrate_poll_process.sh:21383-21407 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The verified PR-head SHA can become stale if a concurrent push lands after `git fetch` and before `git worktree add`.\n  WHY: The worktree could be created from a SHA one push behind the current PR head; reviewers note that the window is narrow and a synchronize event starts a fresh review run.\n- scripts/orchestrate_poll_process.sh:15684-15687 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: `_pr_json_head_repo_is_origin` uses Bash 4.0+ lowercase parameter expansion, which fails under macOS's default Bash 3.2.\n  WHY: Sourcing the script in that environment can produce `bad substitution`; reviewers note the poller and test harness run under Bash 5.x, so this is a portability nit.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh (~line 21005\u201321016 in the PR-head revision) | severity=low | confidence=4\n  PROBLEM: The pre-judge identity-rejection `continue` path does not delete `RB_JUDGE_SEMBLE_QUERY_FILE`.\n  WHY: Each rejection leaves a temporary file in the runtime directory until cleanup.\n- scripts/orchestrate_poll_process.sh (lines ~21388\u201321400 in the PR-head revision) | severity=low | confidence=2\n  PROBLEM: A concurrent push can change the PR head after its SHA is verified but before `git worktree add` consumes it.\n  WHY: The worktree could use a stale SHA; the reviewer notes the window is narrow and a fresh synchronize review run supersedes it.\n- scripts/orchestrate_poll_process.sh (~line 15684) | severity=low | confidence=2\n  PROBLEM: `_pr_json_head_repo_is_origin` uses `${_head_repo_name,,}`, which requires Bash 4.0+.\n  WHY: Sourcing the script with macOS Bash 3.2 would fail with `bad substitution`; production and tests use Bash 5.x.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh, Around line 21012 | confidence=4\n  PROBLEM: The pre-judge gate rejects fork PRs and executes `continue` without cleaning up `RB_JUDGE_SEMBLE_QUERY_FILE`.\n  WHY: The temporary file remains in the runtime directory for each rejection until that directory is purged.\n- scripts/orchestrate_poll_process.sh, `_pr_json_head_repo_is_origin` | (severity and confidence not stated)\n  PROBLEM: `${_head_repo_name,,}` requires Bash 4.0+ and may fail under macOS default Bash 3.2.\n  WHY: The reviewer suggests ensuring Bash 4.0+ or using a portable lowercase conversion.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh, lines 21002-21015 | severity=low | confidence=4\n  PROBLEM: The pre-judge identity gate continues without removing `RB_JUDGE_SEMBLE_QUERY_FILE`.\n  WHY: Each fork-PR or unavailable-head rejection leaves the temporary file on disk until runtime-directory cleanup.\n- scripts/orchestrate_poll_process.sh, lines 21383-21407 | severity=low | confidence=2\n  PROBLEM: A concurrent push between SHA verification and `git worktree add` can go undetected.\n  WHY: The worktree could use a stale SHA; the reviewer notes a synchronize event starts a fresh review run and the window is narrow.\n- scripts/orchestrate_poll_process.sh, line 15687 | severity=low | confidence=1\n  PROBLEM: `_pr_json_head_repo_is_origin` uses `${var,,}`, a Bash 4.0+ feature.\n  WHY: Sourcing the script under macOS default Bash 3.2 would fail with `bad substitution`; the documented runtime and test harness use Bash 5.x.\n- TASK COMPLETENESS: Requirement: \"Before branch preparation, require the selected PR head repository to match GITHUB_REPOSITORY\"; \"Verify its head SHA against the fetched origin ref, and fail closed on a mismatch\"; \"Remove the unverifiable local-HEAD fallback\"; \"Fail closed on a mismatch\". Expected change site: `scripts/orchestrate_poll_process.sh` review-blocked handler. Evidence: The reviewer states all four deliverables are implemented in the PR diff and LAST RUN DIFF. ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Narration: \u201cLooking at the diff structure, I can see the `RB_JUDGE_SEMBLE_QUERY_FILE` is created at line 20802 (in the base), and the normal cleanup happens at line 21079. The PR adds three rejection paths with `continue`, but the pre-judge gate path doesn't include the cleanup.\u201d\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh, pre-judge gate `continue` path (inserted after the branch-preparation `fi`, before `rb_cleanup_combined_workspace`) | severity=low | confidence=4\n  PROBLEM: The pre-judge gate `continue` skips the normal cleanup of `RB_JUDGE_SEMBLE_QUERY_FILE`.\n  WHY: Each fork-PR rejection leaves the temporary file until runtime-directory cleanup; the two combined-mode rejection paths remove it explicitly.\n- TASK_GAP shape, but no gap reported: Requirement: \"Before branch preparation, require the selected PR head repository to match GITHUB_REPOSITORY, verify its head SHA against the fetched origin ref, and fail closed on a mismatch.\" Expected change site: `scripts/orchestrate_poll_process.sh` \u2014 review-blocked handler. Evidence of absence: All three sub-requirements are implemented; the reviewer concludes, \u201cNo gap.\u201d ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2187f66b2d1d97185a140859ff305024ce15322e9effe1c19ee1fabbf4192436",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6394,
+    "run_id": "37362137367",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37362137367",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005212330_63c23aae32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6394,
+    "run_id": "37362137367"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T21:23:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/ai-check-failure-triage.yml:14-19 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `workflow_run.workflows` filter `[\"*\"]` may not match arbitrary workflow names, preventing the consumer triage wrapper from being dispatched for their workflow runs.\n  WHY: If GitHub treats `*` as a literal workflow name, consumer failures will not be triaged; other reviewers dispute this finding, stating that GitHub supports `*` as a wildcard.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"**Trigger:** a failed (`failure` or `timed_out`) pull-request run of a GitHub Actions workflow, through `workflow_run: completed` (job `triage-workflow-run`) ... This repo's wrapper listens to the `CI` workflow; the consumer wrapper listens to every workflow (`\"*\"`) and skips the pipeline's own `AI \u2026` workflows, so each finished workflow also leaves a skipped wrapper run in the Actions tab.\" (PR description, \"Which workflows (Q55)\")\n  expected_change_site: tests/test_ci_failure_workflow_run_triggers.py:111-119 (test_consumer_wrapper_listens_to_every_workflow_but_its_own) and the consumer wrapper at workflow-templates/ai-check-failure-triage.yml:14-18.\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The shipped test asserts the configured string `workflows: [\"*\"]` and exercises the job-level `if:` condition with synthetic events, but never asserts that GitHub's `workflow_run` dispatcher actually delivers the wrapper for a non-AI, non-CI workflow name. The README claim \"each finished workflow ... leaves a skipped wrapper run in the Actions tab\" is not pinned by any contract test against the rendered workflow file or GitHub's documented behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/ai-check-failure-triage.yml: lines 14-18 (the `on.workflow_run.workflows: [\"*\"]` filter) | severity=MAJOR | confidence=4\n  PROBLEM: The consumer wrapper subscribes to workflow runs with `workflows: [\"*\"]`, but GitHub Actions' `workflow_run.workflows` filter is documented to accept workflow names or file names \u2014 not as a documented wildcard.\n  WHY: If `*` is treated as a literal workflow name, the wrapper is never dispatched for consumer workflows, so their failures are not triaged.\n- Requirement: \"**Trigger:** a failed (`failure` or `timed_out`) pull-request run of a GitHub Actions workflow, through `workflow_run: completed` (job `triage-workflow-run`) ... This repo's wrapper listens to the `CI` workflow; the consumer wrapper listens to every workflow (`\"*\"`) and skips the pipeline's own `AI \u2026` workflows, so each finished workflow also leaves a skipped wrapper run in the Actions tab.\" (PR description, \"Which workflows (Q55)\")\n  Expected change site: tests/test_ci_failure_workflow_run_triggers.py:111-119 (test_consumer_wrapper_listens_to_every_workflow_but_its_own) and the consumer wrapper at workflow-templates/ai-check-failure-triage.yml:14-18.\n  Evidence of absence: The shipped test asserts the configured string `workflows: [\"*\"]` and exercises the job-level `if:` condition with synthetic events, but never asserts that GitHub's `workflow_run` dispatcher actually delivers the wrapper for a non-AI, non-CI workflow name. The README claim \"each finished workflow ... leaves a skipped wrapper run in the Actions tab\" is not pinned by any contract test against the rendered workflow file or GitHub's documented behavior.\n  severity=MAJOR | confidence=4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/ai-check-failure-triage.yml: 17-19 | severity=MAJOR | confidence=4\n  PROBLEM: The `workflow_run.workflows` filter is set to `[\"*\"]`; it does not act as a wildcard for workflow names.\n  WHY: Consumer workflow runs such as \u201cTests\u201d do not match this filter, so GitHub does not dispatch the wrapper for them. The `triage-workflow-run` condition is never evaluated, and consumer Actions failures are not triaged.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9adca7b82c7470154270c25561cb45e9a97596b05a9119cf848ef273fc9d3b48",
+  "injection_suspected": true,
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37276461120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37276461120",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005075559_42bca3efe0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37276461120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:55:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The #6532 fix (the CI lint gate in both release workflows, the `STABLE_RELEASE_ENABLED` switch defaulting to off, the disabled-path summary, and tests for both workflows) already appears to be merged. What should this re-issue deliver?\nChoices:\nA) Add `tests/test_release_ci_gate.py`, which runs `scripts/release_ci_gate.sh` directly against a stub `gh`. Cover pass, missing, pending-then-timeout, failed/cancelled/skipped, wrong SHA, unreadable output, and newest-check-run-decides. Wire it into an existing `ci.yml` test step, as the CI test wiring guard requires. Leave the workflows, the script and the inline `ci.yml` block unchanged, and keep releases disabled. (RECOMMENDED)\nB) Make no code change. Report that the issue is already satisfied by the merged #6532/#6797/#6873 work, so the issue can be closed without a PR.\nC) Move the inline stub-`gh` test of `release_ci_gate.sh` out of `ci.yml` and into `tests/test_release_ci_gate.py`, replacing the inline block with a call to the new file.",
+  "fingerprint": "3036e547ae4c96837729f194855a6361ee16d7080dfcdc8c2cb4d680d3fcb881",
+  "lineage": {
+    "issue_number": 7205,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38201315724",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38201315724",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012035446_6e58270517",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7205,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38201315724"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7205 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T03:54:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

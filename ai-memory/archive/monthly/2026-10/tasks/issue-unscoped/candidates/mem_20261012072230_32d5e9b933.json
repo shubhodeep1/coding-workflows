@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5887-5893 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When the label-step output is unavailable, the marker step may assume an issue was labeled and add a recovery marker anyway.\n  WHY: The recovery sweep trusts these markers to remove `ai:review-blocked`; Gemini rates this MAJOR, while sonnet separately rates a related fallback concern NIT.\n- .github/workflows/review_autofix.yml: marker step, `else` branch (`labelled_set_unavailable`) | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: When `REVIEW_BLOCKED_LABELLED_RESOLVED` is not `true`, the marker step falls back to the old item-list derivation, which could mark an issue that already carried `ai:review-blocked` from a non-outage failure.\n  WHY: The source rates this NIT and argues the fallback is not a defect because the marker step repeats the label step's conditions and the fallback is logged.\n- .github/workflows/ci.yml:215-218 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, minimax_minimax-m3]\n  PROBLEM: CI `static-checks` fails because `tests/test_clarify_sandbox_base_image_preseed.py` is unwired, causing the aggregate `lint` check to fail.\n  WHY: The reviewers rate this BLOCKER and MAJOR respectively; minimax describes it as base-side drift outside this PR's scope.\n- tests/test_clarify_sandbox_base_image_preseed.py: CI test wiring guard output, \"These test files run in no workflow\" | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The CI test wiring guard lists this test file as unwired.\n  WHY: The source rates this NIT and says the file is not part of this PR, so no change in this PR can or should address it.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml: marker step, `else` branch (`labelled_set_unavailable`) | severity=NIT | confidence=2\n  PROBLEM: When `REVIEW_BLOCKED_LABELLED_RESOLVED` is not `true`, the step falls back to the old derivation of the item list.\n  WHY: The source says this is not a defect: the marker step repeats the label step's conditions, and the fallback is logged as `outcome=fallback reason=labelled_set_unavailable`.\n- tests/test_clarify_sandbox_base_image_preseed.py: CI test wiring guard output, \"These test files run in no workflow\" | severity=NIT | confidence=4\n  PROBLEM: The guard lists this file as unwired.\n  WHY: The source says it does not exist in this PR's checkout, is not referenced repository-wide, and is not in the PR's changed-file list; it attributes the failure to base drift.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:5887-5893 | severity=MAJOR | confidence=4\n  PROBLEM: When the label-step output is unavailable (e.g. empty outcome), the marker step assumes it was labeled.\n  WHY: The recovery sweep trusts these markers to remove `ai:review-blocked`; if the label wasn't successfully applied but the marker was added, the recovery sweep could remove a block label that should have persisted.\n- .github/workflows/ci.yml and tests/test_ci_wires_every_test_file.py | severity=BLOCKER | confidence=5\n  PROBLEM: CI `static-checks` fails because `tests/test_clarify_sandbox_base_image_preseed.py` is unwired in CI.\n  WHY: The `lint` aggregate job fails, preventing PR merges.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"Pass the resolved, successfully labelled issue-number set from the label step to the marker step, and write an outage marker for each item in that set.\"\n  Expected change site: .github/workflows/review_autofix.yml (mark_review_blocked_exhaustion step + Mark outage-caused review-blocked labels step)\n  Evidence of absence: Both deliverables from issue #7099 are addressed. The label step exports `labelled_issue_numbers` and `labelled_issue_numbers_resolved=true`, and the marker step reads those outputs to mark exactly that set. The fallback only fires when `REVIEW_BLOCKED_LABELLED_RESOLVED != \"true\"` and logs `PROVIDER_OUTAGE op=mark_label outcome=fallback reason=labelled_set_unavailable`. Consumer `ai-review.yml` exposes `outputs.paused` from `provider-outage-resume`, and `security-hold-sweep` uses `needs: provider-outage-resume` plus `needs.provider-outage-resume.outputs.paused != 'true'`. Both deliverables are present. No gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- .github/workflows/ci.yml:215-218 (CI test wiring guard)\n  PROBLEM: `static-checks` failed on PR head `736179db5133c7f22d216f8e6026519d64f1ef09` because `tests/test_ci_wires_every_test_file.py::test_every_test_file_runs_in_a_workflow` reports `tests/test_clarify_sandbox_base_image_preseed.py` as unwired.\n  WHY: That test file is not modified or introduced by this PR. The source attributes the failure to base-side drift and says wiring it here would be scope expansion beyond issue #7099.\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml: 215-218, \u201cCI test wiring guard\u201d\n  PROBLEM: The supplied CI run reports that `tests/test_clarify_sandbox_base_image_preseed.py` is unwired.\n  WHY: The guard fails in `static-checks`, causing the aggregate `lint` check to fail. The run log identifies the failing test and file.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2926f1800a4b29883ee6fc87322f99565d9cd331a15526b4c0ae684887d44622",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7101,
+    "run_id": "38214323168",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38214323168",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012072230_32d5e9b933",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7101,
+    "run_id": "38214323168"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T07:22:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

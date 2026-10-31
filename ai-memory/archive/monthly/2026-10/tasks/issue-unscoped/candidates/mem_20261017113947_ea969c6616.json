@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_refresh_runner.py:604 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `try/except CommandFailure: return True` in `_validation_assets_tracked` is too narrow, so other exceptions (e.g. `FileNotFoundError`, `OSError`) from `executor.run` would propagate to `process_repository` and fail the consumer with `outcome=\"error\"`.\n  WHY: Reviewer rated it MAJOR. z-ai_glm-5_3-flash disputes this: it says `CommandExecutor.run` (scripts/validation_refresh_runner.py:198-213) converts `TimeoutExpired` and `FileNotFoundError` into `CommandFailure`, so the finding is a false positive.\n- scripts/validation_refresh_runner.py:529 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Self-test runs per consumer are synchronous, so consumers that hit the full 900s timeout block the remaining work.\n  WHY: Several 900s timeouts can reach the 60-minute CI job cap and cause later consumers to be skipped. Reviewer rated it MAJOR. z-ai_glm-5_3-flash notes the editor ignored this with a documented reason.\n- scripts/validation_refresh_runner.py:535 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `CommandFailure` handler passes `timeout_secs=self_test_timeout_secs` to `_format_command_failure`.\n  WHY: The reviewer concluded `_format_command_failure` (line 1438) only adds `timeout_secs` when `returncode == 124`, so the behavior is correct. Rated NIT.\n- scripts/validation_refresh_runner.py:599-617 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `git ls-files -- validation` call in `_validation_assets_tracked` inherits the executor's default 300s timeout, so a hung git would stall each dirty consumer for 5 minutes.\n  WHY: This is a hardening suggestion (HARDENING_RISK_SCORE 1): pass `timeout=30` to the call. The existing `except CommandFailure` path already handles the raise.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"New `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS` (default 900, invalid values fall back to 900, values above 3600 are clamped to 3600)\"\n  expected_change_site: PR description body text on GitHub\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The code, README.md:3999, agents.d/7556-validation-refresh-diagnostics.md:3, changelog.d/7556-validation-refresh-diagnostics.md:9 and .github/workflows/validation-refresh.yml:179 all use the 1800 clamp (`SELF_TEST_TIMEOUT_MAX_SECS` at scripts/validation_refresh_runner.py:80), but the PR description still says 3600. z-ai_glm-5_3-flash saw the same stale wording and judged it superseded and not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_refresh_runner.py:604 | severity=MAJOR | confidence=4\n  PROBLEM: The `try/except CommandFailure: return True` in `_validation_assets_tracked` is too narrow.\n  WHY: Exceptions other than `CommandFailure` (such as `FileNotFoundError` or `OSError`) would propagate to `process_repository` and fail the consumer with `outcome=\"error\"`.\n- scripts/validation_refresh_runner.py:535 | severity=NIT | confidence=3\n  PROBLEM: `CommandFailure` handling passes `timeout_secs` to `_format_command_failure`.\n  WHY: The reviewer concluded this is correct because `_format_command_failure` (line 1438) only adds `timeout_secs` when `returncode == 124`.\n- scripts/validation_refresh_runner.py:529 | severity=MAJOR | confidence=3\n  PROBLEM: Self-test runs per consumer are synchronous, and a consumer that hits the self-test timeout blocks the remaining work.\n  WHY: Several 900s timeouts can reach the 60-minute CI job cap, causing later consumers to be skipped.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"New `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS` (default 900, invalid values fall back to 900, values above 3600 are clamped to 3600)\"\n  Expected change site: PR description body text on GitHub\n  Evidence of absence: The code, README.md:3999, agents.d/7556-validation-refresh-diagnostics.md:3, changelog.d/7556-validation-refresh-diagnostics.md:9 and .github/workflows/validation-refresh.yml:179 all use the 1800 clamp (`SELF_TEST_TIMEOUT_MAX_SECS` at scripts/validation_refresh_runner.py:80), but the PR description still says 3600.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- scripts/validation_refresh_runner.py:599-617 | HARDENING_RISK_SCORE=1\n  PROBLEM: The `git ls-files -- validation` call relies on the default 300s executor timeout.\n  WHY: A hung git would stall each dirty consumer for 5 minutes. Suggested fix: pass `timeout=30` (1 line).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/validation_refresh_runner.py:~604 | HARDENING_RISK_SCORE=1\n  PROBLEM: The `git ls-files` lookup in `_validation_assets_tracked` inherits the executor's 300s default timeout.\n  WHY: A hung git would stall each dirty consumer for 5 minutes before the existing `except CommandFailure` path returns True. Suggested fix: pass `timeout=30`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3558c7391be6195287fa35330db1717ddd1adedccc51988459b94e3c98ead7c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7556,
+    "run_id": "39028267057",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39028267057",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017113947_ea969c6616",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7556,
+    "run_id": "39028267057"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T11:39:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

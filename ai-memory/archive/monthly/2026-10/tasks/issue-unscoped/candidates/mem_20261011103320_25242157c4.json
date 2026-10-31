@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:785\u2013797 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The suffix-operations failure handler treats any nonzero result as proof that the PR close failed, so it can report that an already-closed PR is still open and request a manual close.\n  WHY: `unblock_run_ops` returns nonzero when any suffix operation fails, including linked-issue operations that run after a successful PR close; all reporting uses the highest severity because reviewers agreed on NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_conflict_resolve.sh:_resolver_reissue_for_host_only_scope, the else branch of `if _resolver_run_unblock_ops \"${reissue_dir}/ops_suffix.json\"; then`, specifically the inner `else` (reissue_comment_posted != true) | severity=NIT | confidence=[5]\n  PROBLEM: A failed suffix run is read as \u201cthe PR close failed,\u201d although a later source-issue write can fail after the PR has already closed.\n  WHY: The handler then warns that the PR is still open and asks for a manual close, misattributing the source-issue failure and suggesting a duplicate-replacement risk that does not exist.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_resolve.sh:785-795 | severity=NIT | confidence=[4]\n  PROBLEM: Any nonzero return from `_resolver_run_unblock_ops \"${reissue_dir}/ops_suffix.json\"` is treated as proof that the PR close failed, although a later linked-issue operation may have failed.\n  WHY: The handler can log `outcome=close_failed` and warn an operator to manually close an already-closed PR.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_conflict_resolve.sh:lines 791\u2013795 | severity=NIT | confidence=[5]\n  PROBLEM: The warning assumes a failed suffix-operations call means the PR is still open when its re-issue marker was not posted.\n  WHY: A later linked-issue operation can fail after the PR close succeeds, causing an incorrect manual-close request.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_conflict_resolve.sh:the `else` branch at lines 787-795 (after `if _resolver_run_unblock_ops \"${reissue_dir}/ops_suffix.json\"; then`) | severity=NIT | confidence=[4]\n  PROBLEM: The failure branch assumes the PR close failed, but `unblock_run_ops` returns nonzero when any suffix operation fails, including a later linked-issue close.\n  WHY: The warning can ask an operator to close an already-closed PR, and the `outcome=close_failed` log is inaccurate.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_conflict_resolve.sh:lines 785\u2013797 (`_resolver_reissue_for_host_only_scope`, the `else` branch after `_resolver_run_unblock_ops \"${reissue_dir}/ops_suffix.json\"`) | severity=NIT | confidence=[4]\n  PROBLEM: A nonzero suffix-operations result is treated as evidence that the PR close failed, although any operation in the suffix can cause that result.\n  WHY: If the PR closes but a later source-issue operation fails, the warning and `outcome=close_failed` log misattribute the failure to the PR close.\n\n- scripts/review_conflict_resolve.sh:lines 790\u2013796 (else branch of the suffix-ops failure handling) | severity=NIT | confidence=[4]\n  PROBLEM: The manual-close warning and Telegram page can trigger on any suffix-operation failure when `reissue_comment_posted != true`, without checking whether the PR is still open.\n  WHY: A source-issue operation can fail after the PR closes, prompting an operator to close an already-closed PR and misdirecting investigation.\n\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a7b257a6b89c225b972321dd1b8705d25a4cb27bdd2c03477a968c3bf2511b50",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6752,
+    "run_id": "38127800887",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38127800887",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011103320_25242157c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6752,
+    "run_id": "38127800887"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T10:33:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

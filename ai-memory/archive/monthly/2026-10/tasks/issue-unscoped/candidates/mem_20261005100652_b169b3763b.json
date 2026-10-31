@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/ai-check-failure-triage.yml:63 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `!startsWith(github.event.workflow_run.name, 'AI ')` condition excludes every consumer workflow whose name starts with `AI `, not only workflows owned by this pipeline.\n  WHY: A consumer-owned workflow such as `AI Integration Tests` can match the wildcard trigger, but its failed PR run is skipped and no triage issue is filed.\n- workflow-templates/ai-check-failure-triage.yml:18, 63 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The wildcard trigger includes `AI Check Failure Triage` itself; the job-level name check skips the job but does not prevent the workflow from being triggered.\n  WHY: Completion of a skipped triage workflow matches `[\"*\"]` again and starts another skipped triage workflow run, creating a chain of empty Actions runs.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/ai-check-failure-triage.yml: (code reference: The `triage-workflow-run.if` condition uses `!startsWith(github.event.workflow_run.name, 'AI ')` together with `on.workflow_run.workflows: [\"*\"]`) | severity=high | confidence=[4]\n  PROBLEM: The `AI ` prefix is intended to identify pipeline-owned wrappers (e.g., `AI Review`, `AI Implement`), but the condition matches the prefix against any workflow name. A consumer-owned workflow whose name happens to start with `AI ` (e.g., `AI Integration Tests`, `AI Compliance Check`) would be matched by the wildcard trigger but then skipped by the job condition, so its failure is never triaged. The PR description claims the filter skips \"the pipeline's own `AI \u2026` workflows\" but the implementation only filters by a textual prefix.\n  WHY: The trigger fires for every completed workflow (per the `workflows: [\"*\"]` pattern), and any consumer workflow whose display name starts with `AI ` exits the `triage-workflow-run` job with no triage issue. The intended \"triage consumer failures\" coverage has a gap that a consumer cannot detect from the wrapper contract alone.\n- workflow-templates/ai-check-failure-triage.yml: (code reference: `on.workflow_run.workflows: [\"*\"]` together with the `triage-workflow-run` job) | severity=low | confidence=[4]\n  PROBLEM: The wildcard `workflows: [\"*\"]` matches completed runs of `AI Check Failure Triage` itself. Each wrapper run started by `workflow_run` completes and re-triggers the wildcard, creating a chain of skipped wrapper runs (one per upstream run, multiplied by chain length) rather than exactly one skipped wrapper run per upstream workflow.\n  WHY: After any failed `CI` run, the auto-triage wrapper fires, completes, and its `completed` event matches the same wildcard again, scheduling another wrapper run whose job condition rejects it. Each upstream failure generates a chain of empty Actions runs that consume runner minutes and clutter the Actions tab. The PR description mentions \"each finished workflow in a consumer therefore leaves a skipped wrapper run in the Actions tab\" but does not call out that the wrapper's own completions also leave skipped runs.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/ai-check-failure-triage.yml:63 | severity=high | confidence=[4]\n  PROBLEM: This excludes every consumer workflow whose name starts with `AI `, not only workflows owned by this pipeline.\n  WHY: A consumer-owned workflow such as `AI Integration Tests` can match the wildcard trigger, but its failed PR run is then skipped and no triage issue is filed.\n- workflow-templates/ai-check-failure-triage.yml:18, 63 | severity=low | confidence=[4]\n  PROBLEM: The wildcard includes `AI Check Failure Triage` itself. The name check skips the job, but it does not prevent the workflow from being triggered.\n  WHY: Completion of a skipped triage workflow is another completed workflow run matching `[\"*\"]`, so it starts another skipped triage workflow run instead of stopping after one.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cd16e2d30f4ffb882bff217eb91543448f5dff0bf6a8c620733b2b2e0a23816f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37290078467",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37290078467",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005100652_b169b3763b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37290078467"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T10:06:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

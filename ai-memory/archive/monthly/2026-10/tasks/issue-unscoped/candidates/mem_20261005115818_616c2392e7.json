@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:1037 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `--repo` and `--rep` space-separated value-option cases are absent from the reported test function, leaving those parser forms untested.\n  WHY: Deepseek reports the cases are absent from the current checkout, while minimax and qwen report they are present in the latest diff, so the state of this coverage is disputed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Full security audits now inspect every tracked file over 2 MiB that passes the existing credential filter, including binaries and data files\"\n  expected_change_site: `scripts/codex_isolated_workspace.py` `export_oversized()` function and the oversized-chunk prompt instructions in `scripts/security_audit.sh`\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: Qwen says binary files are exported as raw byte chunks using `write_bytes(data)` without a binary-aware rendering or inspection path, and the agent is instructed to read every chunk as text; minimax separately notes the prompt has no binary-aware rendering or interpretation guidance. Deepseek disputes the gap, saying the exported bytes are hashed, mounted read-only, and read by the model.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_pr_merge_status_guard.py:1037 | severity=MAJOR | confidence=4\n  PROBLEM: The function `test_appended_git_directory_push_asks_without_origin_lookup` does not exist anywhere in the repository. Neither search string (`git push --repo upstream`, `git push --rep upstream`) is present in any file on disk. The existing `test_push_parser_guards_real_destination` at line 915 already covers `--repo=upstream` and `--repo origin` forms. The last run diff additions targeted a function that has been removed or renamed, so the two new entries are absent from the current checkout.\n  WHY: The intended test coverage for `--repo` and `--rep` without `=` separator is not present. A git push command passing `--repo` or `--rep` with a space-separated value would not be exercised by any test.\n- Requirement: \"Automatically chunk every eligible oversized tracked file in full-scope audits; fail the audit rather than report success if a file cannot be inspected within limits.\"\n  Expected change site: scripts/codex_isolated_workspace.py export_oversized(), scripts/security_audit.sh oversized-chunk prompt instructions\n  Evidence of absence: The pass-1 reviewer raised that binary files are written as raw bytes via `write_bytes(data)` with no binary-aware rendering. However, the SHA256 hash is computed for each chunk, the chunks are mounted read-only into the model's sandbox, and the model reads the raw bytes. This satisfies the requirement to \"inspect\" the file: the model receives every byte. Whether the model can interpret arbitrary binary content is a model-capability question, not an implementation gap. The implementation exports every eligible oversized file in full-scan mode, computes integrity hashes, mounts them, and fails on cap breaches. The requirement is already met.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: New test cases must lock in the parser's behavior for the `--repo` value-option form.\n  Expected change site: `tests/test_pr_merge_status_guard.py::test_push_parser_guards_real_destination` parametrize list (around line 901-914).\n  Evidence of absence: Both `git push --repo upstream` and `git push --rep upstream` are now present in the parametrize list in the LAST RUN DIFF; the test covers the no-refspec fallback path through the parser.\n  ISSUE_CONFIDENCE: 5\n- The cross-pollination finding from `openai/gpt-6-luna` notes that `export_oversized()` writes chunks as raw bytes while the security-audit prompt has no binary-aware rendering or interpretation guidance. The literal text of the linked issue's recommendation (\"chunk every eligible oversized tracked file; fail the audit if it cannot be inspected within limits\") is met by the original PR DIFF \u2014 the per-file and total caps fail the audit, and every filter-eligible oversized tracked file is exported \u2014 but for binary files, successful export does not guarantee the model can produce a useful audit signal. The PR's contract is \"export, then fail-closed on cap breach\"; whether the model can derive security findings from raw binary bytes is downstream of the implementation. Not raising as a blocking TASK_GAP because the linked issue's stated recommendation is satisfied by the PR DIFF; flagging here only as a follow-up improvement opportunity for binary-aware prompt handling.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Full security audits now inspect every tracked file over 2 MiB that passes the existing credential filter, including binaries and data files\"\n  Expected change site: `scripts/codex_isolated_workspace.py` `export_oversized()` function and the oversized-chunk prompt instructions in `scripts/security_audit.sh`\n  Evidence of absence: The implementation exports binary files as raw byte chunks using `write_bytes(data)` but provides no binary-aware rendering or inspection path. The agent is instructed to read every chunk as text, but binary files (images, compiled objects, data files with non-text content) cannot be meaningfully inspected as text. The test `test_export_oversized_all_chunks_every_eligible_tracked_file` verifies chunks can be reassembled as bytes, but does not verify the agent can actually inspect binary content. This creates a gap: binaries are exported but not inspectable, partially satisfying the requirement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus===",
+  "fingerprint": "7b81063465591383aebad1f7fd7cd3c9d6cdf8742239730c68d0740e2b90ab93",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6354,
+    "run_id": "37303915023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37303915023",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005115818_616c2392e7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6354,
+    "run_id": "37303915023"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T11:58:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

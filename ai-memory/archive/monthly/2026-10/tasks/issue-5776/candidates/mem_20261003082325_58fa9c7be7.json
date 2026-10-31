@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Clarification required\n\nClarification is still required. The latest `/answer [auto-answered-by-poller]` did not answer Q1. The issue requests default-branch completion only for standalone issues, while the earlier implementation progress comment says to preserve an integration-branch exception.\n\nQ1: Should a standalone issue receive `ai:merged` when its PR merges into the issue\u2019s declared `Integration branch:` rather than the repository\u2019s default branch?\n\nChoices:\n- A (RECOMMENDED): No. Only default-branch merges and orchestrator-managed child integration merges qualify, as the issue requests.\n- B: Yes. Preserve the standalone integration-branch exception described in the progress comment.\n\nPlanning ref: `main` at `825365804101ddd04708cfdceda0ea27070716d0`. No repository files changed.\n\nPLAN_SELF_CHECK: BLOCKER: Q1 has no interpretable answer.\nSTATUS: NOT_CLEAR\n\nReply with `/answer` and `Q1: A` or `Q1: B`.\n\nReply with:\n/answer",
+  "fingerprint": "321dab03378d246d64d00873b927770fc0bb29809a7a947e1af1056f92dc398e",
+  "lineage": {
+    "issue_number": 5776,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37109266987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37109266987",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5776"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003082325_58fa9c7be7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5776,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37109266987"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Plan requested re-clarification for issue #5776",
+  "timestamps": {
+    "created_at": "2026-10-03T08:23:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog fragment `changelog.d/8129-label-ensure-run-cache.md` lead paragraph must be 3-5 sentences (CLAUDE.md \u00a720.D); openai_gpt-6-luna also says it must lead with user or operator impact.\n  expected_change_site: lead paragraph of changelog.d/8129-label-ensure-run-cache.md (line 4), starting \"`scripts/label_helpers.sh` keeps a process-local cache ...\"\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  EVIDENCE: The paragraph has six sentences, one over the cap. Merging sentences 4 and 5, or 5 and 6, brings it to five. openai_gpt-6-luna adds that it begins with implementation detail rather than user or operator impact. Severity is NIT in all reports.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP\n- Requirement: One changelog fragment `changelog.d/8129-label-ensure-run-cache.md`; CLAUDE.md \u00a720 (line 768) says the lead paragraph is 3\u20135 sentences.\n  Expected change site: lead paragraph of `changelog.d/8129-label-ensure-run-cache.md`, the one starting \"`scripts/label_helpers.sh` keeps a process-local cache ...\".\n  Evidence of absence: The paragraph has six sentences, one over the cap. Merging sentences 4 and 5, or 5 and 6, brings it within the cap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP\n- Requirement: The changelog lead paragraph must be 3-5 sentences (CLAUDE.md section 20.D).\n  Expected change site: lead paragraph of changelog.d/8129-label-ensure-run-cache.md\n  Evidence of absence: The paragraph contains six sentences.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\n- Requirement: The linked issue (and CLAUDE.md \u00a720.D) requires the changelog lead paragraph to be 3-5 sentences.\n  Expected change site: lead paragraph of changelog.d/8129-label-ensure-run-cache.md (beginning \"`scripts/label_helpers.sh` keeps a process-local cache keyed by repository and label...\").\n  Evidence of absence: The paragraph contains six sentences. Sentences 4 and 5, or 5 and 6, can be merged to bring the count to 5.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\n- Requirement: Issue #8129 requires `changelog.d/8129-label-ensure-run-cache.md`. Per CLAUDE.md \u00a720.D its lead paragraph must be 3\u20135 sentences and lead with user or operator impact.\n  Expected change site: The lead paragraph in `changelog.d/8129-label-ensure-run-cache.md`.\n  Evidence of absence: Line 4 has six sentences and begins with implementation detail rather than user or operator impact.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP\n- Requirement: One changelog fragment `changelog.d/8129-label-ensure-run-cache.md`; CLAUDE.md section 20.D says the lead paragraph is 3-5 sentences.\n  Expected change site: lead paragraph of `changelog.d/8129-label-ensure-run-cache.md`, starting \"`scripts/label_helpers.sh` keeps a process-local cache keyed by repository and label...\"\n  Evidence of absence: Six sentences, one over the cap. Sentences 4 and 5 could be merged, or sentences 5 and 6.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\n- Requirement: The linked issue's discipline section requires one changelog fragment named after the issue; CLAUDE.md section 20.D says the lead paragraph is \"3-5 sentences.\"\n  Expected change site: lead paragraph of changelog.d/8129-label-ensure-run-cache.md (line 4), beginning \"`scripts/label_helpers.sh` keeps a process-local cache...\"\n  Evidence of absence: Six sentences, one over the cap. Merging sentences 4 and 5 (or 5 and 6) brings it to five. Verified against the file on the current ref.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n(No other findings reported. Hardening risk score 0.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5e1331126da3c6e6f7678d55a8558480f01209b45fd77684cadc0b938aaebc67",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8132,
+    "run_id": "40189905122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40189905122",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025120046_b6c9380da0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8132,
+    "run_id": "40189905122"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T12:00:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

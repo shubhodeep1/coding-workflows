@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan: update `tests/e2e_smoke_canary_b.txt`\n\nPlanning ref: `orchestrator/project-6690` @ `66a98d1d2fff8080610896f58df733d15762923e`. The integration branch matches the issue metadata, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue changes one existing plain-text fixture with exact, line-level instructions. It adds no code, scripts, scheduler wiring or dependencies, so neither widening nor narrowing the scope applies.\n\n**Automation / \u00a720 surface**\n- No new script. Only an existing data file changes.\n- No scheduler or PR-push wiring, no supervisor, no database work, and no entry in `docs/scripts-pending-removal.md`.\n\n**1. Files likely to change**\n- `tests/e2e_smoke_canary_b.txt` is the only file. It already exists. Its current content is:\n  ```\n  status: ok\n  decompose-run: 25567947079\n  ```\n- Do not touch `tests/e2e_smoke_canary.txt` (a sibling issue owns it) or `tests/e2e_smoke_canary_spec.txt`.\n\n**2. Functions or modules to implement**\n- None. This is a content edit only:\n  1. Set line 1 to exactly `status: ok`. It already is, so it stays as it is.\n  2. Insert `decompose-run: 37669315093` directly after line 1.\n  3. Keep the rest of the file unchanged after those two lines. The old `decompose-run: 25567947079` line therefore becomes line 3.\n  4. The file must end with exactly one trailing newline.\n\n  Expected final content:\n  ```\n  status: ok\n  decompose-run: 37669315093\n  decompose-run: 25567947079\n  ```\n\n**3. Data structures affected:** none.\n\n**4. API or interface changes:** none.\n\n## Decisions\n### D1 \u2014 Insert line 2 instead of replacing it\n- Chosen: insert `decompose-run: 37669315093` as the new line 2 and keep the old line 2 as line 3.\n- Alternatives considered: overwrite the old `decompose-run: 25567947079` line.\n- Why: the issue says to replace only the first line, insert the new line after it, and keep any other existing content unchanged. Keeping the old line satisfies the wording and every acceptance check (line 1, line 2, one file changed). Overwriting it would delete content the issue says to keep.\n\n## Security considerations\n- No trust boundary, endpoint, external input, credential or money state is involved.\n- Abuse case: the editor changes files outside scope. This is limited by the single-file `files_touched` scope guard.\n\n**5. Risks and edge cases**\n- The old `decompose-run` line stays on line 3, so the file holds two run IDs. That is intended under D1. Anything that reads only line 2 sees the new ID.\n- Do not leave a missing trailing newline or a doubled one.\n- The sibling issue edits a different file, so there is no merge conflict between them.\n\n**6. Testing considerations**\n- `head -n 1 tests/e2e_smoke_canary_b.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` prints `decompose-run: 37669315093`.\n- `tail -c1` of the file is a newline, and `tail -c2` is not two newlines.\n- `git diff --name-only` lists only `tests/e2e_smoke_canary_b.txt`.\n\n**7. Pre-execution self-check**\nThe plan targets one file, uses exact strings, and meets every acceptance criterion.\n\nPLAN_SELF_CHECK: WARNING: Following the literal \"insert and keep other content\" wording leaves the old `decompose-run: 25567947079` as line 3. The acceptance criteria are still met.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "80a2e5e01b1b2d89cd29d62e70faa18fd4899a6dc735e3e88f38d95fc7f884a1",
+  "lineage": {
+    "issue_number": 6692,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37670656853",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37670656853",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6692"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261007190321_cf4cca5329",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6692,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37670656853"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6692",
+  "timestamps": {
+    "created_at": "2026-10-07T19:03:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

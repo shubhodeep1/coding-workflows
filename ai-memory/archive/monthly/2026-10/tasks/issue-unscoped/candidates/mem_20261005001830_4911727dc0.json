@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_codex_isolated_workspace.py:140-237 | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The test expects two unscoped oversized files, including `big.bin`, but the reviewers report that its fixture creates and stages only `unscoped.txt` as an unscoped oversized file.\n  WHY: The reviewers report that the assertions for `unscoped=2`, the two-item manifest list, and `unscoped_oversized_count == 2` fail because `big.bin` is not created or staged.\n- scripts/codex_isolated_workspace.py:357-371 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Chunk line metadata can mislead citations when a chunk starts mid-line and spans a line boundary.\n  WHY: The review reports that `start_line` and `end_line` are derived from a line counter incremented by newlines, so a chunk containing both a continuation of one line and the next line can be misinterpreted.\n- scripts/security_audit.sh:1253 | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Concatenating the two scope files can fail if either input file is missing.\n  WHY: The review says a nonzero `cat` result can abort or impair oversized-file export; deepseek_deepseek-v4-pro and z-ai_glm-5_2 report both files are initialized before this line, disputing the missing-file precondition.\n- scripts/security_audit.sh:1728-1736 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The unscoped oversized-file count and related prompt or coverage data could become inconsistent if their read sites diverge in a future edit.\n  WHY: The review states the current values are consistent and identifies only a future coupling risk, not a present bug.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_codex_isolated_workspace.py: lines 140-237, the function `test_export_oversized_chunks_only_scoped_safe_tracked_files` | severity=BLOCKER | confidence=5\n  PROBLEM: The test fixture creates one oversized unscoped file (`unscoped.txt`) but the assertions expect two, including `big.bin`, which the review says the fixture never writes, stages, or symlinks.\n  WHY: The review says only `unscoped.txt` survives the tracked-path and filters as oversized and out of scope, so `unscoped=2` and the manifest assertions fail.\n- scripts/codex_isolated_workspace.py: export_oversized chunk loop, around lines 357-371 (the `chunks.append({...})` block) | severity=MAJOR | confidence=3\n  PROBLEM: When a chunk starts mid-line, `start_line` and `end_line` are derived from a line counter incremented only by newlines, which can mislead citations in mixed-content chunks.\n  WHY: The review says a chunk can contain the tail of one line and the head of the next, while its metadata can be mistaken as describing only one line.\n- scripts/security_audit.sh: line 1253, the line `cat \"${PRIOR_FINDINGS_SCOPE_FILE}\" \"${FIX_CYCLE_DIFFS_SCOPE_FILE}\" >> \"${OVERSIZED_SCOPE_FILE}\"` | severity=MAJOR | confidence=3\n  PROBLEM: The `cat` invocation can exit nonzero if either scope file is missing.\n  WHY: The review says a full-scan run without prior findings or fix-cycle diffs could fail before oversized export or leave its scope input incomplete.\n- scripts/security_audit.sh: lines 1728-1736, the heredoc that calls `read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT <<< \"${OVERSIZED_COUNTS}\"` | severity=NIT | confidence=2\n  PROBLEM: The count used in the audit-prompt note could become inconsistent with exported coverage data if the manifest read sites diverge in a future edit.\n  WHY: The review says the values are currently consistent and describes this as fragile coupling, not a present bug.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_codex_isolated_workspace.py: test_export_oversized_chunks_only_scoped_safe_tracked_files (lines 140-165) | severity=BLOCKER | confidence=4\n  PROBLEM: The fixture creates only `unscoped.txt` as an unscoped oversized file, but assertions expect both `big.bin` and `unscoped.txt`.\n  WHY: The review says `big.bin` is never created or staged, so the expected list and count of two fail.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_codex_isolated_workspace.py: test_export_oversized_chunks_only_scoped_safe_tracked_files (lines 140-165 in the diff) | severity=BLOCKER | confidence=3\n  PROBLEM: The fixture creates and stages five files but does not create or stage `big.bin`, while assertions expect two unscoped oversized files.\n  WHY: The review says only `unscoped.txt` passes the filters as an unscoped oversized file, so the expected count and manifest entries fail.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cf6760775f7e94a9e11d6792b59087dded06c02f1fd0bc683e1db5b8fb4eb912",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6241,
+    "run_id": "37244716182",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37244716182",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005001830_4911727dc0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6241,
+    "run_id": "37244716182"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T00:18:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

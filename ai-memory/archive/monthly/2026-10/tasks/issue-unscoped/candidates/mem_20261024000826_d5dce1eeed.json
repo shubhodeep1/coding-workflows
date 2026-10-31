@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/8000-drift-audit-profile.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The `manifest=missing` definition says only \"the profile resolved but its manifest could not be read\", but `load_profile_manifests` (`if names:`, scripts/audit_consumer_drift.py:256-265) now also drops a readable-but-empty manifest, so `audit_repository` logs `manifest=missing` for it. The changelog (changelog.d/drift-audit-profile-aware.md:4) has the same gap, and the `load_profile_manifests` docstring (\"every readable profile manifest\") is also now inaccurate.\n  WHY: Nothing breaks at runtime, because the audit falls back to every template. The documented log-field contract is narrower than what the code emits, so an operator will look for an I/O failure that does not exist. All reviewers rated it NIT.\n- agents.d/7973-editor-attempt-result.md:2 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fragment says \"every read falls back to `0` under `set -e`\", but scripts/review_apply_fixes.sh:2304-2305 (`editor_attempt_started_at=\"$(date +%s 2>/dev/null || true)\"`) now falls back to empty, and only the derived `duration_secs` falls back to `0`.\n  WHY: The logged line is unchanged, so there is no runtime difference. The documented contract understates what the script now does. Rated NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/8000-drift-audit-profile.md:2 (also changelog.d/drift-audit-profile-aware.md) | severity=NIT | confidence=4\n  PROBLEM: `load_profile_manifests` (`if names:`) now drops a readable-but-empty manifest, so `audit_repository` logs `manifest=missing` for it. The fragment defines `missing` as \"could not be read\" and the changelog says \"unreadable\". Neither mentions the empty-manifest case.\n  WHY: Nothing breaks, because an empty manifest falls back to auditing every template. The documented log-field contract is narrower than what the code emits, so an operator would look for an I/O failure that does not exist.\n- HARDENING: scripts/review_apply_fixes.sh, the `editor_attempt_now` assignment (`|| echo 0`) versus the start-time read (`|| true`). Both give `duration_secs=0` today. Suggested fix: use `|| true` for both (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/8000-drift-audit-profile.md:2 | severity=NIT | confidence=4\n  PROBLEM: The description of `manifest=missing` in the agent fragment does not match the code. scripts/audit_consumer_drift.py:263 (`if names:`) also sets `manifest_state=\"missing\"` for a manifest that is read successfully but contains no wrappers.\n  WHY: The code stays safe because it audits every wrapper, but the documented diagnostic state is misleading for an operator debugging logs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/audit_consumer_drift.py:256-265 and scripts/audit_consumer_drift.py:602-607 (contract text in agents.d/8000-drift-audit-profile.md:2 and changelog.d/drift-audit-profile-aware.md:4) | severity=NIT | confidence=4\n  PROBLEM: The last run added a third trigger for `manifest=missing`: a manifest that reads successfully but lists no wrapper is excluded from `load_profile_manifests`. The fragment and the changelog still define `missing` as only unreadable, and the docstring (\"for every readable profile manifest\") is also wrong now.\n  WHY: Nothing fails, because that profile audits every wrapper. The failure is diagnostic: `manifest=missing` now has two causes and the contract names only one.\n- agents.d/7973-editor-attempt-result.md:2 versus scripts/review_apply_fixes.sh:2304-2305 | severity=NIT | confidence=4\n  PROBLEM: The fragment says \"every read falls back to `0`\", but the start-time read now falls back to empty (`|| true`). The sibling read at scripts/review_apply_fixes.sh:2460 still uses `|| echo 0`.\n  WHY: The logged line is unchanged (`duration_secs=0`), but the shipped contract understates what the script now does.\n- HARDENING: scripts/review_apply_fixes.sh line 2460 (`|| echo 0`) versus line 2305 (`|| true`). Suggested fix: use `|| true` for both (1 line). HARDENING_RISK_SCORE: 1\n- TASK COMPLETENESS: NONE. The reviewer records the recommendations Rel 2, Rel 3 and BUG-002 as present in the diff. The Rel 3 deviation (`summary_present`) is documented as deferred.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/8000-drift-audit-profile.md:2 | severity=NIT | confidence=4\n  PROBLEM: The `manifest=missing` description says only \"could not be read\", but scripts/audit_consumer_drift.py:263 (`if names:`) also yields `missing` for a readable manifest with no wrappers. changelog.d/drift-audit-profile-aware.md:4 has the same gap.\n  WHY: There is no runtime failure, because the audit falls back to every template. The contract no longer describes the emitted values, so an operator grepping `manifest=missing` will misdiagnose the state.\n- HARDENING: scripts/review_apply_fixes.sh line 2460 (`|| echo 0`) is inconsistent with line 2305 (`|| true`). Suggested fix: change line 2460 to `|| true` and adjust the case statement, or revert line 2305 to match (2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/audit_consumer_drift.py (`load_profile_manifests` `if names:` guard, `audit_repository` `manifest_state = \"missing\"`; docs in agents.d/8000-drift-audit-profile.md and changelog.d/drift-audit-profile-aware.md) | severity=NIT | confidence=4\n  PROBLEM: `load_profile_manifests` now drops a readable-but-empty manifest, so `audit_repository` emits `manifest=missing` for a third case. The agents fragment and the changelog (line 4) were not updated and still define `missing` as unreadable.\n  WHY: An operator may diagnose an unreadable manifest when the real state is an empty manifest that the updater refuses with ERR_WORKFLOW_PROFILE_EMPTY. The stable log-prefix contract no longer matches the code.\n- HARDENING: agents.d/8000-drift-audit-profile.md and changelog.d/drift-audit-profile-aware.md, the `manifest=<loaded|missing|disabled>` definition. Suggested fix: extend both with \"or lists no wrappers (the updater refuses it with ERR_WORKFLOW_PROFILE_EMPTY)\" (2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cfbbc772ec497b8c0e3f3c57fe82d28eafc1e52551317c76ad44851831283310",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7975,
+    "run_id": "40040707354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40040707354",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024000826_d5dce1eeed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7975,
+    "run_id": "40040707354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T00:08:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

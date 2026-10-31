@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The plan and log describe implementing rate-limit-aware Phase 4b PR-state polling in .github/workflows/test-and-mark-stable.yml (gh_api_with_retry returns exit code 75 on rate-limited reads, fetch_pr_state reports rate_limited, phase4b_rate_limit_wait_seconds derives wait from GET /rate_limit, poll loop rate_limited branch waits without counting toward PR_STATE_FAILURES) plus behavioural and contract tests in tests/test_test_and_mark_stable_review_blocked_budget.py and a changelog fragment at changelog.d/5858-phase4b-rate-limit-aware-pr-state.md.\n  expected_change_site: .github/workflows/test-and-mark-stable.yml (Phase 4b step body), tests/test_test-and-mark-stable_review_blocked_budget.py, changelog.d/5858-phase4b-rate-limit-aware-pr-state.md\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: The PR diff contains only two new documentation files: the plan (docs/plans/issue-5858-phase4b-rate-limit-aware-pr-state-plan.md) and the project log (docs/implement-plan/issue-5858-phase4b-rate-limit-aware-pr-state.md). No hunk modifies .github/workflows/test-and-mark-stable.yml, no hunk adds tests to tests/test_test_and_mark_stable_review_blocked_budget.py, and changelog.d/5858-phase4b-rate-limit-aware-pr-state.md does not exist. Every Phase 1 checklist item in the log is still unchecked. The implementation phase has not run.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The plan and log describe implementing rate-limit-aware Phase 4b PR-state polling in .github/workflows/test-and-mark-stable.yml (gh_api_with_retry returns exit code 75 on rate-limited reads, fetch_pr_state reports rate_limited, phase4b_rate_limit_wait_seconds derives wait from GET /rate_limit, poll loop rate_limited branch waits without counting toward PR_STATE_FAILURES) plus behavioural and contract tests in tests/test_test-and_mark-stable_review_blocked_budget.py and a changelog fragment at changelog.d/5858-phase4b-rate-limit-aware-pr-state.md.\n  Expected change site: .github/workflows/test-and-mark-stable.yml (Phase 4b step body), tests/test_test-and-mark-stable_review_blocked_budget.py, changelog.d/5858-phase4b-rate-limit-aware-pr-state.md\n  Evidence of absence: The PR diff contains only two new documentation files: the plan (docs/plans/issue-5858-phase4b-rate-limit-aware-pr-state-plan.md) and the project log (docs/implement-plan/issue-5858-phase4b-rate-limit-aware-pr-state.md). No hunk modifies .github/workflows/test-and-mark-stable.yml, no hunk adds tests to tests/test_test-and-mark-stable_review_blocked_budget.py, and changelog.d/5858-phase4b-rate-limit-aware-pr-state.md does not exist. Every Phase 1 checklist item in the log is still unchecked. The implementation phase has not run.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a21becc7fa6890af4666847bd16462c46ba750007dcfc23cb672457d1ea8a5ce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36833932098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36833932098",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001083000_a629accd23",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36833932098"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T08:30:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

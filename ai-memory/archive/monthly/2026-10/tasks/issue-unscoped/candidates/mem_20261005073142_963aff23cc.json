@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py: lines 35-50 (def allowed, the `if commands is None and host is not None` branch around line 45-46) | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The lazy `commands = template_command_inventory(host)` branch in `allowed()` can admit host-checkout command twins without consulting the verified workflow-support checkout.\n  WHY: A future caller using `allowed(name, host)` could admit attacker-controlled commands without the trusted-support anchor.\n- changelog.d/6204-review-sandbox-audit-plans-parity.md, changelog.d/6309-review-sandbox-frozen-command-admission.md: filename prefixes 6204 and 6309 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The two changelog fragments in this PR use different issue numbers despite the one-fragment-per-PR convention.\n  WHY: CLAUDE.md \u00a720.B prescribes one fragment per PR; the naming-convention issue has no runtime failure.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description's \"What changes\" section states the sandbox \"admits each `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md` twin already exists in the **host** checkout\", and the trust anchor is \"checked on the host, never in the editor's workspace\".\n  expected_change_site: scripts/review_untrusted_workspace.py, `allowed()`\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The branch `if commands is None and host is not None: commands = template_command_inventory(host)` derives the inventory from `host` alone; the trusted-support anchor only exists at the snapshot-time intersection site (lines 159-161).\n- requirement: \u201cAdd exactly one fragment\u201d for observable behavior changes, with \u201cOne fragment per PR\u201d (CLAUDE.md \u00a720).\n  expected_change_site: changelog.d/6204-review-sandbox-audit-plans-parity.md and changelog.d/6309-review-sandbox-frozen-command-admission.md\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The PR adds both `changelog.d/6204-review-sandbox-audit-plans-parity.md` and `changelog.d/6309-review-sandbox-frozen-command-admission.md`; the last-run rename changes only the first filename, so the changes remain split across two fragments.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/6204-review-sandbox-audit-plans-parity.md, changelog.d/6309-review-sandbox-frozen-command-admission.md: filename prefixes 6204 and 6309 | severity=low | confidence=2\n  PROBLEM: Two changelog fragments in the same PR (this PR is #6313) use different issue/PR numbers.\n  WHY: No runtime failure. Both fragments assemble correctly and document distinct observable behaviour changes. This is a naming-convention inconsistency only.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py: lines 35-50 (def allowed, the `if commands is None and host is not None` branch around line 45-46) | severity=high | confidence=3\n  PROBLEM: The lazy `commands = template_command_inventory(host)` inside `allowed()` admits a `.claude/commands/<name>.md` purely from the host's `workflow-templates/.claude/commands/` directory; it never consults the verified workflow-support checkout.\n  WHY: Any future refactor that calls `allowed(name, host)` could admit attacker-controlled commands without the trusted-support anchor.\n- TASK_GAP\n  Requirement: The PR description's \"What changes\" section states the sandbox \"admits each `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md` twin already exists in the **host** checkout\", and the trust anchor is \"checked on the host, never in the editor's workspace\".\n  Expected change site: scripts/review_untrusted_workspace.py around lines 43-47 (the lazy `template_command_inventory(host)` call inside `allowed`).\n  Evidence of absence: The branch `if commands is None and host is not None: commands = template_command_inventory(host)` is present in the diff but is never exercised by the three current call sites (snapshot, enumerate_workspace, template_command_inventory). The trusted-support anchor only exists at the one snapshot-time intersection site (lines 159-161); the lazy branch re-derives the inventory from `host` alone with no anchor.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- changelog.d/6204-review-sandbox-audit-plans-parity.md, changelog.d/6309-review-sandbox-frozen-command-admission.md: filename prefixes 6204 and 6309 | severity=low | confidence=2\n  PROBLEM: The two changelog fragments this PR adds carry different issue numbers.\n  WHY: CLAUDE.md \u00a720.B prescribes one fragment per PR with the issue or PR number the work belongs to; the `6309-` prefix on the second fragment is the remaining inconsistency.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAdd exactly one fragment\u201d for observable behavior changes, with \u201cOne fragment per PR\u201d (CLAUDE.md \u00a720).\n  Expected change site: The changelog fragments for this PR.\n  Evidence of absence: The PR adds both `changelog.d/6204-review-sandbox-audit-plans-parity.md` and `changelog.d/6309-review-sandbox-frozen-command-admission.md`. The last-run rename changes only the first filename; the changes remain split across two fragments, so the assembler will publish two entries for this PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: CLAUDE.md 20.B prescribes \"One fragment per PR\" and says \"the number is the issue or PR the work belongs to\". The PR description also refers to a single fragment (\"changelog.d/review-sandbox-audit-plans-parity.md is the fragment\").\n  Expected change site: changelog.d/6204-review-sandbox-audit-plans-parity.md and changelog.d/6309-review-sandbox-frozen-command-admission.md\n  Evidence of absence: The PR ships two changelog fragments under two different issue numbers (6204 and 6309). The first was carried over from a prior autofix rename and the second was added for the frozen-admission hardening. CLAUDE.md 20.B allows only one fragment per PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0e8426052b0c78a32491d15b53ba012db663c4ce419ce4bbbe5a315da4421c94",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6299,
+    "run_id": "37275580869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37275580869",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005073142_963aff23cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6299,
+    "run_id": "37275580869"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:31:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

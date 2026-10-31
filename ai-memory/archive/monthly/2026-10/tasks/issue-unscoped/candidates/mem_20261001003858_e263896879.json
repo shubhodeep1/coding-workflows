@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4401-4412 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The \u201cRun reviewer models\u201d step failed repeatedly and hit the failure cap, so a completed reviewer panel has not been demonstrated.\n  WHY: The step propagates a nonzero exit, but the available log tail does not identify the cause or connect it to a changed PR hunk.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Reconcile the test data and assertions in `test_pickup_named_sessions_are_swept` with the closed-issue-only rule.\n  expected_change_site: tests/test_claude_session_janitor.py, `test_pickup_named_sessions_are_swept`\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: test_pickup_named_sessions_are_swept (lines 352-385 in tests/test_claude_session_janitor.py per the diff); the review says the issue states, archived sessions, kept count, expected calls list, and inline comment do not agree with the rule.\n- requirement: Update operator-facing documentation to say that issue-start sessions are archived only when their issue is closed; a later stage does not count.\n  expected_change_site: docs/operations/master-session.md Q61, agents.md Check-in Loop paragraph, and README.md Claude issue implementer item 5\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: docs/operations/master-session.md:30 (Q61 row) still reads the OLD wording; the review also reports the OLD wording in the local agents.md Check-in Loop paragraph and README's Claude issue implementer item 5, despite the diff reporting those lines rewritten.\n- requirement: Investigate the repeated \u201cRun reviewer models\u201d failure before treating the reviewer panel as complete or the PR as mergeable.\n  expected_change_site: `.github/workflows/review_autofix.yml`, \u201cRun reviewer models\u201d; underlying failure source not identified in the review output\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: run 36753408769, failed step `Run reviewer models`, fingerprint `29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022`; the supplied log tail lacks an `::error::` line, reviewer stderr, or stage-specific failure evidence; the review reports the PR blocked by the fingerprint cap and the checker and catch-all sweep held on this head.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: Reconcile the test data and assertions in `test_pickup_named_sessions_are_swept` with the closed-issue-only rule.\n  Expected change site: File: scripts/claude_session_janitor.py\n  Line or code reference: test_pickup_named_sessions_are_swept (lines 352-385 in tests/test_claude_session_janitor.py per the diff)\n  Evidence of absence: The review says the stub sets `repos/o/r/issues/5068` to `state: closed` and `repos/o/r/issues/5070` to `state: open`, while the assertions archive session_b (bound to #5070) and keep a count of 2. It says the expected `calls` list also includes `repos/o/r/issues/5126` although the only stage session is session_s, and that the inline comment contradicts itself on a literal read.\n  ISSUE_CONFIDENCE: 3\n  SEVERITY: NIT\n- Requirement: Update operator-facing documentation to say that issue-start sessions are archived only when their issue is closed; a later stage does not count.\n  Expected change site: File: docs/operations/master-session.md\n  Line or code reference: line 30 (Q61 row)\n  Evidence of absence: The local `docs/operations/master-session.md:30` still reads the OLD wording (\"issue-start sessions superseded by a later stage or whose issue is closed\"). The review also reports the OLD wording in the local agents.md Check-in Loop paragraph and README's Claude issue implementer item 5, despite the diff reporting those lines rewritten.\n  ISSUE_CONFIDENCE: 4\n  SEVERITY: MAJOR\n- Requirement: Investigate the repeated \u201cRun reviewer models\u201d failure before treating the reviewer panel as complete or the PR as mergeable.\n  Expected change site: File: .claude/hooks/pr_check_in_reminder.py (reviewer / CI failure)\n  Line or code reference: run 36753408769, failed step `Run reviewer models`, fingerprint `29efdb471a203aae8333c0d197c0bd5846a15bd710597fa29d4d70ebda7ae022`\n  Evidence of absence: The supplied log tail lacks an `::error::` line, reviewer stderr, or stage-specific failure evidence. The review says the PR is blocked by the fingerprint cap, the checker reports `held`, the catch-all sweep suppresses this head, and no actionable reviewer output was produced on the head.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: MAJOR\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:4401-4412, \u201cRun reviewer models\u201d | severity=MAJOR | confidence=5\n  PROBLEM: The supplied PR context reports three same-fingerprint reviewer failures on the current head, followed by the failure cap stopping further retries. A completed reviewer panel has not been demonstrated.\n  WHY: A nonzero exit from review_run_reviewers.sh is propagated as a failed step. The available log tail does not identify the underlying cause or tie it to a changed PR hunk, so this is a confirmed check failure requiring investigation, not a diagnosed defect in the janitor changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2d01451d8dd0d0617ea86eacec9389cbb6ad2e89e5900d089631bf64ed094845",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5694,
+    "run_id": "36794115478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794115478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001003858_e263896879",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5694,
+    "run_id": "36794115478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T00:38:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

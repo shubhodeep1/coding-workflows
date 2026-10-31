@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should the unattended implementation deliver, given that it can't write `.claude/hooks/pr_merge_status_guard.py`?\nChoices:\nA) Record the operator step only. Add `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` as an unresolved placeholder, add an `agents.md` note naming the human step (both hook copies, tests against both, changelog fragment) and the finding as still open, and add a changelog fragment for that. Make no hook code changes. A person then makes the hook change in a trusted checkout. (RECOMMENDED)\nB) Change the template copy only, with the new check off unless `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` is set. Add tests, docs and a changelog fragment, and add a temporary `.github/ai/claude_template_divergence.json` entry with a reason so parity CI passes. A person copies the change to the live hook later and removes the entry.\nC) Change the template copy only and rely on the held `ai/sync-claude-live-copies-held` draft PR for the live copy. Do not add an allowlist entry. **Note:** CI requires the committed live security hook to match the template, so this PR would stay red and unmergeable until a person merges the held sync PR.\nD) Close this fix-up as `BLOCKED` and leave #6755 for a person. The pipeline makes no changes.",
+  "fingerprint": "37c1a37a61186dad9f198aea44e5b2b30004ff88bc3a13fa72647cbc987a94ca",
+  "lineage": {
+    "issue_number": 6763,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37770640583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37770640583",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008113724_b718cd30dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6763,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37770640583"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6763 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T11:37:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

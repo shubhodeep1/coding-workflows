@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\nQ4: A\n\nRATIONALE:\nQ1: The spec says to verify before planning and without requesting `/answer`. The \"Decide clarify route\" step in `.github/workflows/clarify.yml` (line 423) already holds issues before any questions are posted, as the security-dependency check at lines 492-496 does with `AI_PHASE_GATE_V1 ... outcome=skip`. Putting the new check there covers the spec without adding implement-time or poller checks, which would widen scope. Issues that are already past clarify, like #6945 (now closed), still take the existing path.\nQ2: This is the strictest evidence that does not treat a failed check as passed. It matches the existing base-branch check in `scripts/check_failure_triage.sh` (around lines 400-410), which reads `repos/<repo>/commits/<ref>/check-runs` by check name. The default-branch commit must include the linked PR's merge commit, and the shard suffix must match exactly. Any failure to read this evidence sends the issue down the normal fix path, so an unverified issue is never closed.\nQ3: An evidence comment with a marker keeps repeat runs idempotent, following the repo's `<!-- ai:...:v1 -->` marker convention. Closing as completed with `ai:closed` is accurate when the failure was verified as fixed on main. The merged PR is left alone, as the spec requires.\nQ4: The spec asks for the traceback only when resolution is not verified, and only at this gate. `extract_failing_tests` in `scripts/workflow_failure_heal.py` (line 2094, reached through `heal-scope failing-tests`) already parses the CI shard, pytest and unittest failure shapes, so the gate reuses it on the check run linked in the issue. Changing filing-time capture in `check_failure_triage.sh` (option B) would be an extra change the spec does not ask for.\n\nSETUP REQUIRED: none.",
+  "fingerprint": "272a6e05008c0b805fa73f9cde63887bc7a64c4a541271c2dd6280f27ac9ee56",
+  "lineage": {
+    "issue_number": 7095,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38066404679",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38066404679",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7095"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010161535_141565ee4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7095,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38066404679"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7095",
+  "timestamps": {
+    "created_at": "2026-10-10T16:15:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\nQ4: A\n\nRATIONALE:\nQ1: Option A works for any issue and leaves the `activation_fix_merge` skip (`scripts/activation_verify.sh:287-289`) and the fix-issue de-duplication (`:450-452`) unchanged. Because the partial PR's `ai/issue-<n>` head still binds the issue, the activation-fix recursion guard keeps skipping it. Option B files the follow-up before the merge, so a PR that never merges leaves a stray issue, and it only fits activation-fix issues. Two constraints for the planner:\n- Swapping `Closes` for `Refs` in `.github/workflows/implement.yml` (comment at line 5758) is not enough on its own. `.github/workflows/issue_pr_status.yml:402-408` links the issue from the `ai/issue-<n>` head branch, and `extract_repo_scoped_issue_refs_from_text` (`scripts/gh_helpers.sh:2734-2749`) counts a bare `/issues/N` URL. On merge the issue would still be labelled `ai:merged` and closed. The merge path must honour a partial-delivery marker in the PR body, and only when the PR comes from this repository, its head is `ai/issue-<n>` for that issue, and its author is the `GH_PAT` login (the #7160 binding rules). For such a PR it posts the remaining-items comment and restarts clarify instead of closing. The PR body must use `Refs #<n>`, not the issue URL.\n- The restart must be marked as automated (as the #7328 pr-dependency release is). A plain `/reclarify` from the pipeline account is classified as a human one, which adds `ai:clarification-human-answer` and stops clarify-respond from answering the follow-up questions unattended.\n\nQ2: The way the scope gets lost (a clarify answer limits scope, but the PR still closes the issue) has nothing to do with activation-fix issues, and Q1:A is generic. Two limits:\n- Orchestrator-managed children are out of scope: their wave state already tracks the work.\n- The #4639 case, an activation-fix issue split by phase, is the regression test for the partial path.\n\nQ3: An explicit `Deferred scope:` block in the approved plan can be checked and fails safe: when it is missing, empty or malformed, the issue closes as it does today. Two requirements:\n- The plan prompt must ask for one bullet per remaining item whenever an answer or AD-<n> decision limits scope, and implement reads the block from the approved plan it already loads.\n- The remaining-items comment must quote the bullets as untrusted text.\n\nInferring partial delivery from `Scope-mode: Reduction` (option B) or by parsing answer prose (option C) is a guess that could keep issues open by mistake.\n\nQ4: The never-clarified sweep is a different failure: missed `issues` events, not lost scope. It touches the poller's standalone stall-recovery sweep, which has its own trust and API-budget rules. Splitting it out keeps this change small. The planner should file it as a separate issue that refers to tele-funtoken-msg-scoring#4607.",
+  "fingerprint": "6443053db1142c81afdfd9f5f3893a5e4be73795198fbeeb0ea9da1d1660c49c",
+  "lineage": {
+    "issue_number": 7657,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39200654815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39200654815",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7657"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261019045222_328f819078",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7657,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39200654815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7657",
+  "timestamps": {
+    "created_at": "2026-10-19T04:52:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

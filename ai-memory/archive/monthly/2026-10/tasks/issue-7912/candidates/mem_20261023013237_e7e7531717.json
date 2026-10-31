@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The fix is needed in `scripts/review_conflict_resolve.sh`, which is outside this heal issue's frozen scope. How should it be delivered?\nChoices:\nA) Close this heal issue and file a new standalone issue (not `ai:workflow-heal`). Its `files_touched:` block lists `scripts/review_conflict_resolve.sh`, `tests/test_review_conflict_resolve_retry_state.py` and a `changelog.d/` fragment, and it targets the default branch. (RECOMMENDED)\nB) Keep this issue and let the unblock judge handle the scope block when implement refuses the out-of-scope path (re-issue or operator step).\nC) Make no code change: the operator adds `read:org` to the consumer's `GH_PAT` and this issue is closed as an environment fix.\nD) Change only in-scope files: the test plus a changelog note recording the defect. The `gh pr edit` call stays as it is.\nQ2: Two other places call `gh pr edit`: `.github/workflows/update_workflows.yml:1548` (body edit) and `.github/workflows/implement.yml:6113` (label add). Should they also move to REST `gh api` in the same change?\nChoices:\nA) No. Fix only the retry-state write in `review_conflict_resolve.sh` and file the other two separately if they are seen failing. (RECOMMENDED)\nB) Yes. Move both to `gh api -X PATCH` / the labels REST endpoint in the same PR. Both files then have to be added to the granted scope as well.\nC) Move only `update_workflows.yml:1548`, because it writes a body the same way. Leave the label add in `implement.yml` alone.",
+  "fingerprint": "05a826b374f6e99d1e1b8bf9613ec4f4fb336fac6417eac5140d0bddb77a1177",
+  "lineage": {
+    "issue_number": 7912,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39883914797",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39883914797",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261023013237_e7e7531717",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7912,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39883914797"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7912 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-23T01:32:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

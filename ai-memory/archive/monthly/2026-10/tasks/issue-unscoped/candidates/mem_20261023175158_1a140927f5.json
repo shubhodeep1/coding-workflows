@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal_queue.py:106-114 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: `test_position_cli` builds tickets from a fixed `NOW` (line 32) but the CLI call does not pass that time, so `heal_queue_position` (`scripts/workflow_failure_heal.py:5346-5357`) uses the real clock and returns `go` instead of `wait` once the 10,800-second lease has expired.\n  WHY: The test fails in CI after lease expiry. Both reviewers say the failure pre-dates the PR and is outside the issue's one-file scope. Severity is MAJOR in the source, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal_queue.py:106-114 | severity=MAJOR | confidence=5\n  PROBLEM: `test_position_cli` asserts a 'wait' status, but the CLI returns 'go' because the lease has expired. The test uses a static timestamp while the implementation uses real time.\n  WHY: The test runs after the 10,800-second lease has expired, which causes a CI failure. The reviewer notes this is a known issue that pre-dates the PR and is out of scope per the issue requirements.\n- TASK_GAP (severity=NIT, confidence=5)\n  Requirement: \"rewrite tests/e2e_smoke_canary_b.txt so that it contains exactly these two lines, followed by a trailing newline: `status: ok` and `decompose-run: 39969947939`\"\n  Expected change site: tests/e2e_smoke_canary_b.txt\n  Evidence of absence: NONE (The requirement is fully implemented.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_workflow_failure_heal_queue.py:106-114 (`test_position_cli`; `heal_queue_position` at `scripts/workflow_failure_heal.py:5346-5357`) | severity=MAJOR | confidence=5\n  PROBLEM: The CLI test builds ticket timestamps relative to the fixed `NOW` at line 32, but its subprocess invocation does not pass that time. `heal_queue_position` therefore uses `_utc_now()` when the CLI omits `now`.\n  WHY: After the ticket's 10,800-second lease expires on the real clock, the CLI returns `go` instead of `wait`, failing the assertion at line 114. The test and implementation are outside the PR diff and the issue's one-file scope.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "076808f358410d0e6ea48c1c4771b7e7c74d8fb511e4d1f0b991ec75391918bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7989,
+    "run_id": "39991593165",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39991593165",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023175158_1a140927f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7989,
+    "run_id": "39991593165"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T17:51:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

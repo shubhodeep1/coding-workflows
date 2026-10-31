@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4446-4458 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: In the Phase 7 open-PR wait loop, when `PHASE7_POLL_REMAINING` is 1 the clamp sets `PHASE7_POLL_SLEEP` to 0, so the loop can run back-to-back run-list calls until the integer-second DEADLINE passes.\n  WHY: This weakens the intended backoff and adds GitHub API calls in the last second of the timeout path, but the `no_run` outcome and exit code are unchanged. Severity disagreement: anthropic_claude-sonnet-5_5 and openai_gpt-6-luna said NIT, and google_gemini-3_1-flash-lite said MAJOR. The highest, MAJOR, is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:Phase 7 open-PR wait loop (`if [ \"${PHASE7_POLL_SLEEP}\" -ge \"${PHASE7_POLL_REMAINING}\" ]; then PHASE7_POLL_SLEEP=$(( PHASE7_POLL_REMAINING - 1 ))` followed by `sleep \"${PHASE7_POLL_SLEEP}\"`) | severity=NIT | confidence=4\n  PROBLEM: When `PHASE7_POLL_REMAINING` is exactly 1, the clamped sleep is 0, so the loop can run another `phase7_list_cancel_runs` call straight away until the clock reaches DEADLINE.\n  WHY: This only happens in the last second of the 10-minute budget on the no-run timeout path. It can add a few back-to-back run-list calls, which cuts against the backoff, but the `no_run` result, diagnostic group and exit code are unchanged. Clamping the sleep to at least 1 or breaking when `PHASE7_POLL_REMAINING` is at most 1 would fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:4446-4458 (within the `while` loop, approx.) | severity=MAJOR | confidence=4\n  PROBLEM: When `PHASE7_POLL_REMAINING` is 1, the clamp sets `PHASE7_POLL_SLEEP` to 0, causing a tight loop in the final second.\n  WHY: `sleep 0` exits immediately and the `while` condition `[ \"$(date +%s)\" -lt \"${DEADLINE}\" ]` stays true until DEADLINE. This triggers repeated back-to-back API calls in the final second, negating the polling cadence and increasing GitHub API usage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:4453-4458 | severity=NIT | confidence=4\n  PROBLEM: When one second remains, the clamp sets `PHASE7_POLL_SLEEP` to `PHASE7_POLL_REMAINING - 1`, which is zero.\n  WHY: The loop checks its deadline using integer-second timestamps. A fast run-list request therefore allows another request immediately, so several run-list calls can happen before the deadline advances, which undermines the backoff and increases API usage on the timeout path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d581a94b75c0b52a784507afdf5c9f39f40c86de9e1f28506c98987077748e6b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7734,
+    "run_id": "39405841491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39405841491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020102728_839deddcb1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7734,
+    "run_id": "39405841491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T10:27:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

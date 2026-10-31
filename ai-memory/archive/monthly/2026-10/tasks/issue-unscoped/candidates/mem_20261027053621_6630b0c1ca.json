@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\n  expected_change_site: tests/test_security_audit_workflow_contract.py, test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair (lines 3725-3737)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The test only checks structure (the function is defined once, the extraction line appears once, and both the audit's reply and the repair's reply call the shared function), and it does not compare the parser body with its pre-move source, so no test confirms the parser source is unchanged. All five reviewers rated it SEVERITY: NIT. Sonnet rated it ISSUE_CONFIDENCE 3 and called it a wording gap in the description, not a runtime defect. The other four rated it 5. Earlier autofix rounds deferred it as PR-description wording.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: The PR description says \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\nExpected change site: `tests/test_security_audit_workflow_contract.py`, `test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair`\nEvidence of absence: The test checks that the function is defined once, that the extraction line appears once, and that both the audit's reply and the repair's reply call it. It does not compare the parser body with its pre-move source. This is a wording gap in the description, not a runtime defect. A frozen-source comparison would break on any harmless edit, and earlier autofix rounds deferred it for that reason. The structural test covers the real invariant: one parser, shared by the audit and the repair.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\nExpected change site: `tests/test_security_audit_workflow_contract.py`\nEvidence of absence: The test added in the last run (`test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair`) verifies that the function exists, is defined once, and is used by both the audit and repair callers. It does not perform a byte-for-byte comparison of the parser's source code against its pre-move version, meaning the stated deliverable in the PR description (\"a test confirms the parser source is unchanged\") is not present.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\" (PR Description, Testing section)\nExpected change site: tests/test_security_audit_workflow_contract.py \u2014 the test added for the moved parser should compare the parser source body with a frozen pre-move copy (or its hash) so byte-for-byte equivalence is verifiable, not merely structural equivalence.\nEvidence of absence: The test added in the LAST RUN DIFF (`test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair`, tests/test_security_audit_workflow_contract.py:3725-3737) only verifies structural properties: `security_audit_check_claude_reply` is defined exactly once; the `accept(value, f\"extracted items=...\")` line appears exactly once; both `${CLAUDE_AUDIT_OUTPUT_FILE}` and `${repair_output_file}` call that function; the extraction line falls inside the function body. It does not compare the parser body against its pre-move source, so the PR Description's stated test coverage (\"a test confirms the parser source is unchanged\") is not delivered. The previous autofix editor in round 4 (issue_comment 6434379928) explicitly deferred this as a PR-description wording problem; from the deliverable side the test that would substantiate the claim is still absent.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cThe check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\u201d\nExpected change site: `tests/test_security_audit_workflow_contract.py`, `test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair`\nEvidence of absence: The test at lines 3725-3737 checks that the parser is defined once, that both replies use it, and that an extraction statement appears once. It does not compare the parser source with its pre-move version, so the stated test deliverable is absent.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: PR description states \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\nExpected change site: tests/test_security_audit_workflow_contract.py, test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair (lines 3725-3737)\nEvidence of absence: The test added by the last run verifies structure only \u2014 one function definition, one occurrence of the extraction statement, and both call sites routing through the shared function. It contains no comparison of the parser body (the `python3 ... <<'PY'` heredoc in security_audit_check_claude_reply, scripts/security_audit.sh:1609-1718) against the pre-move source from `security_audit_try_claude`, so no test on the branch confirms the parser source is byte-for-byte unchanged. Prior autofix rounds explicitly deferred this as PR-description wording (brittle frozen-source test), and the editor summaries record that deferral; it remains a wording-vs-delivery mismatch rather than a runtime defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dfa95c38913724320ed11aaa736c9d0b4291aef96a1949d59d3ded0eadc36c77",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8223,
+    "run_id": "40454634846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40454634846",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027053621_6630b0c1ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8223,
+    "run_id": "40454634846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T05:36:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

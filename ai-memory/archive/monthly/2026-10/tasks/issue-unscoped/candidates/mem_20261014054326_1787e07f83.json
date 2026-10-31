@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of steps moved from `tests-hooks-and-orchestrator` to `tests-heal-plan-and-validation`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `.github/workflows/ci.yml` lines 979-983 comment says step timings were not readable when planned and that the moved steps are the hooks job's heaviest subprocess-driven steps, so the diff gives no timing evidence that these are the slowest steps or that `tests-heal-plan-and-validation` had the most headroom.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\n  Expected change site: .github/workflows/ci.yml, selection of steps moved from tests-hooks-and-orchestrator to tests-heal-plan-and-validation.\n  Evidence of absence: The added comment at lines 981\u2013983 explicitly states Step timings were not readable when this was planned. The implementation relied on heaviest subprocess-driven steps as a proxy for slowest steps without providing the requested timing data or evidence that tests-heal-plan-and-validation has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\u201d\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-hooks-and-orchestrator` and their destination.\n  Evidence of absence: The diff says the run\u2019s step timings were unavailable and selects steps described as \u201cthe hooks job's heaviest subprocess-driven steps.\u201d It provides no timing evidence that these are the slowest steps or that `tests-heal-plan-and-validation` had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-hooks-and-orchestrator` to the destination job with most headroom\n  Evidence of absence: The added comment at lines 979-983 states \"Step timings were not readable when this was planned; these are the hooks job's heaviest subprocess-driven steps.\" The diff does not establish that these are the slowest steps based on actual step timings from run 38508333607, nor does it verify that `tests-heal-plan-and-validation` had the most headroom. The issue explicitly requires using step timings to identify the slowest steps, but the implementation substituted a heuristic (subprocess-driven steps) instead.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ba7729770d6add37c30970bfdb4710a36f839c9242cf8bf177b53e83f5a907fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7368,
+    "run_id": "38514547584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38514547584",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014054326_1787e07f83",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7368,
+    "run_id": "38514547584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T05:43:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

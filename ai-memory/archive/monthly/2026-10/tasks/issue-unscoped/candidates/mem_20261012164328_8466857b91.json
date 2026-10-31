@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- The unattended instructions block contains no actual task \u2014 only an out-of-scope disclaimer and an unresolved `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder. There is nothing to execute yet. Please provide the actual task or issue and the severity classification reference content that should resolve the placeholder.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "65f64cec4e8af2d2afebd67ba1eb9db06e93c553bfece8d23754d7620faa8f36",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7050,
+    "run_id": "38275164555",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38275164555",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012164328_8466857b91",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7050,
+    "run_id": "38275164555"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-12T16:43:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

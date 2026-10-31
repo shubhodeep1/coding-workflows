@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ai_engine.py:723 | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The PR diff hunk `@@ -768,27 +768,6 @@` deletes the contract test `test_every_workflow_staging_ai_engine_also_stages_its_stall_guard`, which is unrelated to issue #8406.\n  WHY: A workflow that stages `ai_engine.sh` without the stall guard would no longer fail CI; the reviewer could not confirm whether the deletion comes from this branch or a stale merge base (reported as MAJOR). z-ai_glm-5_3-flash found the test still present at tests/test_ai_engine.py:723 and called the deletion hunk stale.\n- scripts/workflow_failure_heal.py:7796 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: An invalid token beginning with `-`, passed in the separated form `--pool-reason -x`, is rejected by argparse instead of being mapped to `unavailable`.\n  WHY: The CLI exits with an argument-parsing error rather than producing a payload; the reporter avoids this by using the attached form (reported as NIT).\n- tests/test_review_semble_contract.py:13-30 | severity=high | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push gate attributes the failure of this test to the change, but the diff touches nothing the test reads and the editor's \"fixture missing\" explanation is disproven.\n  WHY: The gate stays failed and the PR stays blocked, so the failure must be reproduced and fixed or the classification corrected (reported as MAJOR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ai_engine.py:723 | severity=high | confidence=3\n  PROBLEM: The PR diff hunk `@@ -768,27 +768,6 @@` deletes the contract test `test_every_workflow_staging_ai_engine_also_stages_its_stall_guard`, which is unrelated to issue #8406.\n  WHY: A workflow that stages `ai_engine.sh` without the stall guard would no longer fail CI; the reviewer could not confirm whether the deletion comes from this branch or a stale merge base (reported as MAJOR).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py:7796 | severity=low | confidence=4\n  PROBLEM: An invalid token beginning with `-`, passed in the separated form `--pool-reason -x`, is rejected by argparse instead of being mapped to `unavailable`.\n  WHY: The CLI exits with an argument-parsing error rather than producing a payload; the reporter avoids this by using the attached form (reported as NIT).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_semble_contract.py:13-30 | severity=high | confidence=3\n  PROBLEM: The pre-push gate attributes the failure of this test to the change, but the diff touches nothing the test reads and the editor's \"fixture missing\" explanation is disproven.\n  WHY: The gate stays failed and the PR stays blocked, so the failure must be reproduced and fixed or the classification corrected (reported as MAJOR).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7e94557cbe6141cd05df30b8312dcba5dbd4d4ad347bb90fa5e91516703821d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8412,
+    "run_id": "40989385487",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40989385487",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030031543_a6bf6d3d75",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8412,
+    "run_id": "40989385487"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T03:15:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/semble-overflow-off-lazy-bootstrap-plan.md:281 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The plan says this is a plan-only PR with no observable behavior and no need for a changelog fragment, although this PR ships the merged-PR guard behavior change and includes its fragment.\n  WHY: The wording inaccurately describes this PR and may mislead contributors about its behavior change and changelog requirement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Plan text in `docs/plans/semble-overflow-off-lazy-bootstrap-plan.md` should accurately describe this PR's changelog fragment situation.\n  expected_change_site: `docs/plans/semble-overflow-off-lazy-bootstrap-plan.md` lines 280-282\n  confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: The LAST RUN DIFF changed the text to \"This plan-only PR does not ship observable behavior and needs no fragment.\"; `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` ship the merge-guard fix; `changelog.d/6321-merge-guard-empty-quote-fd.md` is included for that fix; regression tests are added in `tests/test_pr_merge_status_guard.py`.\n- requirement: The text at line 281 correctly describes the Semble plan's own PR, not this PR; the previous text inaccurately referenced an unrelated bundled fix.\n  expected_change_site: `docs/plans/semble-overflow-off-lazy-bootstrap-plan.md` line 281\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The plan document describes a different project; the LAST RUN DIFF cleanup restores the plan's standalone changelog guidance.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/plans/semble-overflow-off-lazy-bootstrap-plan.md:281 | severity=NIT | confidence=5\n  PROBLEM: The plan document describes a different project, and the text at line 281 correctly describes the Semble plan's own PR, not this PR.\n  WHY: The previous text inaccurately referenced an unrelated fix bundled alongside the Semble plan in another PR; the LAST RUN DIFF cleanup correctly restores the plan's standalone changelog guidance.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/plans/semble-overflow-off-lazy-bootstrap-plan.md:281 | severity=NIT | confidence=4\n  PROBLEM: The text now states \"This plan-only PR does not ship observable behavior and needs no fragment.\" but this PR demonstrably ships observable behavior: `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` are both modified by the PR to add the empty-quoted-numeric-refspec word-boundary check, and `changelog.d/6321-merge-guard-empty-quote-fd.md` is the release fragment for that shipped behavior.\n  WHY: No runtime failure, but contributors following this plan would incorrectly conclude that \u00a720 does not require a fragment for PRs that include a behavior change, weakening the contract's documentation value.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/plans/semble-overflow-off-lazy-bootstrap-plan.md:281 | severity=NIT | confidence=5\n  PROBLEM: The plan says, \u201cThis plan-only PR does not ship observable behavior and needs no fragment,\u201d but this PR ships the merged-PR guard behavior change and includes `changelog.d/6321-merge-guard-empty-quote-fd.md`.\n  WHY: No executable path fails. The contributor guidance is inaccurate for this PR and can mislead readers about its behavior change and changelog requirement.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: Plan text in `docs/plans/semble-overflow-off-lazy-bootstrap-plan.md` should accurately describe the PR's changelog fragment situation.\n  Expected change site: `docs/plans/semble-overflow-off-lazy-bootstrap-plan.md` lines 280-282\n  Evidence of absence: The LAST RUN DIFF changed the text to \"This plan-only PR does not ship observable behavior and needs no fragment.\" But this PR (the implementation of issue #6321) ships the empty-quoted-numeric-refspec merge-guard fix in `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py`, includes `changelog.d/6321-merge-guard-empty-quote-fd.md` for that fix, and adds regression tests in `tests/test_pr_merge_status_guard.py`. The previous text correctly noted the bundle: \"the merged-PR guard redirect fix bundled in this PR does change shipped behavior and has its own fragment.\" The new \"plan-only PR\" wording is misleading \u2014 this PR is the merge-guard fix implementation, not a standalone plan PR.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: The linked issue #6321 requires a fix for the empty-quoted-numeric-refspec bypass in the merged-PR guard, with regression tests for both hook copies. The plan doc `docs/plans/semble-overflow-off-lazy-bootstrap-plan.md` \u00a720 changelog section should accurately describe this PR's changelog fragment situation.\n  Expected change site: `docs/plans/semble-overflow-off-lazy-bootstrap-plan.md` lines 278-282\n  Evidence of absence: The last run changed the plan text to \"This plan-only PR does not ship observable behavior and needs no fragment.\" but this PR ships the merge-guard fix (`.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` are modified with the security fix) and includes `changelog.d/6321-merge-guard-empty-quote-fd.md`. The previous text correctly acknowledged the bundle: \"the merged-PR guard redirect fix bundled in this PR does change shipped behavior and has its own fragment.\" The new wording erases this accurate acknowledgment, mislabeling the PR as \"plan-only\" when it implements issue #6321's security fix. The core security fix and tests are correctly implemented; only the plan documentation is now inaccurate.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "41870a2cdd1ac13384b3af2888399977c21c5f173de91b7881e79dab6df40606",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6326,
+    "run_id": "37293784711",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37293784711",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005102355_7511a1e0b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6326,
+    "run_id": "37293784711"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T10:23:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

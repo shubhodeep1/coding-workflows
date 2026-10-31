@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:102-104 | severity=critical | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The clear-winner exclusion list omits explicit ask-first rules elsewhere in the file, leaving conflicting instructions about when a session must stop and ask.\n  WHY: The highest severity was BLOCKER; reviewers disagreed, rating it MAJOR and NIT as well, and one characterized it as an interpretive conflict with no observed behavior break. The omission affects the pre-task STOP rule and the missing-resource-identifier ask rules in \u00a722.C and \u00a724.F.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The subsection applies only when \"nothing else in the file makes it ask-first.\"\n  expected_change_site: CLAUDE.md lines 102-104\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: CLAUDE.md:24 (pre-task STOP rule), CLAUDE.md:1020 (\u00a722.C \"Ask when missing\" for DigitalOcean IDs), CLAUDE.md:1527 (\u00a724.F \"Ask when missing\" for Cloudflare identifiers); the PR diff adds no reconciliation for those existing requirements.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CLAUDE.md: lines 102-104 | severity=NIT | confidence=3\n  PROBLEM: The clear-winner exclusion list omits several ask-first rules, leaving an interpretive conflict about whether they remain in force.\n  WHY: The list could be read as exhaustive, although the general clause and other criteria reduce the likelihood of an incorrect assumption.\n\n- Requirement: The PR description says a decision is a clear winner only when \"nothing else in the file makes it ask-first\".\n  Expected change site: CLAUDE.md lines 102-104.\n  Evidence of absence: The delivered list covers \u00a76, \u00a710, \u00a712.D, \u00a718.A, \u00a718.D, \u00a722.B, \u00a723.C, \u00a724.D, \u00a729.B and data deletion. It has no mention of CLAUDE.md:24 (the pre-task stop), \u00a722.C (:1020), \u00a724.F (:1527) or the :1378 and :306 stops. The general clause still covers them, so this is the same NIT-level point as the finding above, restated for lens completeness.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CLAUDE.md: lines 102-104 | severity=BLOCKER | confidence=4\n  PROBLEM: The clear-winner exclusion list omits several mandatory ask-first rules defined in this file.\n  WHY: An AI agent might incorrectly make a clear-winner decision for actions that explicitly require user input, such as supplying missing DigitalOcean resource IDs (\u00a722.C), missing Cloudflare identifiers (\u00a724.F), or when pre-task context is missing (pre-task rule at line 18).\n\n- Requirement: The new subsection makes a decision a clear winner only when \"nothing else in the file makes it ask-first: \u00a76 renames and removals, \u00a710 DB / index / contract changes, \u00a712.D, \u00a718.A manual scripts, \u00a718.D gates, \u00a722.B, \u00a723.C, \u00a724.D and \u00a729.B operations, or any deletion of data.\" (delivered verbatim at CLAUDE.md:102-104). The PR description intends this to cover all ask-first rules.\n  Expected change site: CLAUDE.md lines 102-104\n  Evidence of absence: The delivered text omits the \"Ask when missing\" rules for DigitalOcean resource IDs (\u00a722.C, CLAUDE.md:1020) and Cloudflare identifiers (\u00a724.F, CLAUDE.md:1527), as well as the pre-task mandatory-context-loading rule (\"If any are missing or unclear: STOP and ask... Never assume undocumented behavior.\", CLAUDE.md:24). Consequently, the exclusion list is incomplete regarding the stated intent to cover all ask-first rules.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CLAUDE.md: \u00a72 \u201cClear-Winner Assumptions,\u201d lines 102-104 | severity=NIT | confidence=4\n  PROBLEM: The rule says a clear-winner decision must not be ask-first elsewhere in the file, but its exclusion list omits explicit ask-first requirements in \u00a722.C and \u00a724.F, as well as the pre-task STOP-and-ask rule at lines 24-25.\n  WHY: An interactive session applying the listed exclusions as exhaustive can treat a decision as eligible for assumption even when the pre-task rule requires asking about missing or unclear context, or \u00a7\u00a722.C/24.F require asking for an unavailable resource identifier.\n\n- Requirement: \u201cA decision is a clear winner only when\u201d it is \u201cnot ask-first anywhere else in this file.\u201d\n  Expected change site: CLAUDE.md \u00a72 \u201cClear-Winner Assumptions,\u201d lines 102-104.\n  Evidence of absence: The new exclusion list does not account for the pre-task STOP-and-ask rule at lines 24-25 or the missing-identifier ask requirements in \u00a722.C and \u00a724.F. The PR diff adds no reconciliation for those existing requirements.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md: lines 102-104 (fourth clear-winner bullet); conflicting sites: line 24, line 1020, line 1527 | severity=MAJOR | confidence=4\n  PROBLEM: The clear-winner bullet's operative checklist omits standing ask-first rules in \u00a722.C and \u00a724.F and the pre-task context-loading STOP rule.\n  WHY: A session may proceed without required confirmation when it treats the list as the file's ask-first set; \u00a724.F requires asking for an unrecorded Cloudflare identifier.\n\n- Requirement: PR description \u2014 the subsection applies only when \"nothing else in the file makes it ask-first,\" delivered at CLAUDE.md:102-104 as an enumeration of exactly those rules (\"\u00a76 renames and removals, \u00a710 DB / index / contract changes, \u00a712.D, \u00a718.A manual scripts, \u00a718.D gates, \u00a722.B, \u00a723.C, \u00a724.D and \u00a729.B operations, or any deletion of data\").\n  Expected change site: CLAUDE.md lines 102-104 (the fourth clear-winner bullet).\n  Evidence of absence: No hunk adds \u00a722.C's \"Ask when missing\" ask rule (CLAUDE.md:1020), \u00a724.F's \"Ask when missing\" rule (CLAUDE.md:1527), or the PRE-TASK context-loading STOP rule (CLAUDE.md:24) to the exclusion list, so the delivered text under-covers the file's own ask-first set that the intent phrase requires. Same defect as the CORRECTNESS finding above; reported here for lens completeness.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b75fce910e228c8f58675626c521d766515c322d11c5de42bcbe31b6298de6bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7136,
+    "run_id": "38108564357",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38108564357",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011040040_0023a21add",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7136,
+    "run_id": "38108564357"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T04:00:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

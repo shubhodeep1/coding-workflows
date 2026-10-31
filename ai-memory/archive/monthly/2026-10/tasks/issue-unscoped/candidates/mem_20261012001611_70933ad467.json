@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml: Diagnostic logic removed in last autofix run. | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The autofix removed diagnostic logic needed to identify failing tests in shard failures.\n  WHY: Gemini says shard failures remain inconclusive; other reviewers report that the workflows already contain the requested diagnostics.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: future failures identify failing tests or show a crash log tail\n  expected_change_site: .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Gemini says the last autofix reverted all diagnostic changes requested in issue #6919 and the PR contains no diagnostic improvements for identifying failing tests or crash log tails.\n- requirement: Retrieve the complete `orchestrate-poll (3)` job log and inspect shard 1; rerun its 33-test selection; if it does not reproduce, rerun CI rather than guessing at a code fix.\n  expected_change_site: Investigation and rerun results for Actions run `37915639128`, shard 1 of `tests/test_orchestrate_poll_process.py`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: Minimax says retrieving the full Actions log and rerunning CI was deferred; GPT says the supplied artifacts lack the complete job log or rerun results and the check-run context is for a different head SHA; Qwen says the PR did not retrieve the full log, identify the failing test, or rerun CI.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml: Diagnostic logic removed in last autofix run. | severity=BLOCKER | confidence=5\n  PROBLEM: The autofix removed the diagnostic logic that identifies failing tests in shard failures.\n  WHY: CI shard failures remain inconclusive, preventing the identification of failing tests and the root cause.\n- Requirement: future failures identify failing tests or show a crash log tail.\n  Expected change site: .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml\n  Evidence of absence: The last autofix reverted all diagnostic changes requested in issue #6919; the PR now contains no diagnostic improvements for identifying failing tests or crash log tails.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Retrieve the complete `orchestrate-poll (3)` job log and inspect shard 1\" and \"if it does not reproduce, rerun CI rather than guessing at a code fix\"\n  Expected change site: CI run 37915639128 on PR #6904 (out-of-band, not on this branch)\n  Evidence of absence: This is the issue's own stated recommendation for the case where the original failure does not reproduce. The autofix correctly deferred this with `TASK_GAP_DEFERRED`: retrieving the full Actions log and rerunning CI requires authenticated GitHub access, which the editor sandbox does not have. The issue text itself recommends a CI rerun over a code guess, so this is an explicit deferral, not a missing deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cRetrieve the complete `orchestrate-poll (3)` job log and inspect shard 1,\u201d then rerun its 33-test selection; if it does not reproduce, rerun CI rather than guessing at a code fix.\n  Expected change site: Investigation and rerun results for Actions run `37915639128`, shard 1 of `tests/test_orchestrate_poll_process.py`.\n  Evidence of absence: The supplied artifacts contain only the inconclusive log summary, not the complete job log or rerun results. The available check-run context is for a different head SHA, `514894d7c8abe841df40db375ea7772ba6dfcd80`, rather than the failing run\u2019s `407e2fdeab105d5501bf10b60193d25c41cbf363`. The last-run diff removes diagnostic code and tests but provides no evidence that the original failure was investigated or cleared.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Retrieve the complete `orchestrate-poll (3)` job log and inspect shard 1 for a named `FAIL` or a missing-status message. Rebuild and rerun its 33-test selection at the PR head... If it does not reproduce, rerun CI rather than guessing at a code fix.\"\n  Expected change site: Investigation of CI run 37915639128, with either a fix to `tests/test_orchestrate_poll_process.py` or an explicit CI rerun on PR #6904\n  Evidence of absence: The PR added diagnostic code that duplicated existing base-branch features (now correctly removed by autofix). The PR did not retrieve the full log, identify the failing test, or rerun CI. The PR is now empty (no net change against main). The editor explicitly deferred this as \"TASK_GAP_DEFERRED\" because it requires authenticated GitHub log access and manual CI rerun, which the sandbox cannot perform. The issue itself acknowledges this is the correct outcome: \"rerun CI rather than guessing at a code fix.\"\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "13f007db713a33ec1b99ece13a89fd720f9c7d9c3c967bcd47e78a177361792d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6931,
+    "run_id": "38182239714",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38182239714",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012001611_70933ad467",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6931,
+    "run_id": "38182239714"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T00:16:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

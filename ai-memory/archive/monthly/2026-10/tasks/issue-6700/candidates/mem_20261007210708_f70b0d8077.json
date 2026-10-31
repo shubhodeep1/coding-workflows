@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6700,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6700\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6702\",\"pr_number\":6702,\"branch\":\"ai/issue-6700\",\"run_id\":\"37684868353\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37684868353\",\"changed_files\":[\"agents.md\",\"changelog.d/6700-smoke-canary-sandbox-seed.md\",\"scripts/review_apply_fixes.sh\",\"scripts/review_untrusted_sandbox.sh\",\"scripts/review_untrusted_workspace.py\",\"tests/test_review_apply_fixes_smoke_deterministic.py\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "2dd17c6bf6bf4f1f3e2b7ed74925b4ab2d6f22ca1d15031dd2c6fba577a129bf",
+  "lineage": {
+    "issue_number": 6700,
+    "parent_ids": [],
+    "pr_number": 6702,
+    "run_id": "37684868353",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37684868353",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6702"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261007210708_f70b0d8077",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6700,
+    "level": "run",
+    "pr_number": 6702,
+    "run_id": "37684868353"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6700: https://github.com/shubhodeep1/coding-workflows/pull/6702",
+  "timestamps": {
+    "created_at": "2026-10-07T21:07:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

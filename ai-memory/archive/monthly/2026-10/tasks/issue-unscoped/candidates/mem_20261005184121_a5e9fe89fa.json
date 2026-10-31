@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:40-41 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The hardcoded exclusion for `tests/test_audit_plans_command.py` silently stops applying if that test file is renamed or moved.\n  WHY: A rename breaks the contract silently, leaving CI to fail on the next autofix run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cRun PR-head setup in a credential-free sandbox. Keep tokens in separate trusted steps, and invoke host Python with -I and a sanitized import path.\u201d\n  expected_change_site: `.github/workflows/review_autofix.yml`, the `codex-agent` environment and workspace initialization steps\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The diff only adds `PYTHONSAFEPATH: \"1\"` (line 2423) and `python3 -I -B -` flags in workspace_init.sh. It does NOT move workspace initialization into a credential-free sandbox, and the `OPENROUTER_API_KEY` env var remains exposed job-wide for the entire `codex-agent` job (line 2420). The workflow still exposes `OPENROUTER_API_KEY` job-wide at line 2420 and runs workspace initialization on the credential-bearing host at lines 2940, 2974, and 2984.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py: lines 40-41 | severity=NIT | confidence=2\n  PROBLEM: Hardcoded path exclusion `if name == \"tests/test_audit_plans_command.py\": return False` relies on a literal file path.\n  WHY: A rename breaks the contract silently \u2014 no early warning, only a failing CI test on the next autofix run.\n- Requirement: \"Run PR-head setup in a credential-free sandbox. Keep tokens in separate trusted steps, and invoke host Python with -I and a sanitized import path.\"\n  Expected change site: `.github/workflows/review_autofix.yml` \u2014 workspace initialization steps; the `OPENROUTER_API_KEY` environment variable scope\n  Evidence of absence: The diff only adds `PYTHONSAFEPATH: \"1\"` (line 2423) and `python3 -I -B -` flags in workspace_init.sh. It does NOT move workspace initialization into a credential-free sandbox, and the `OPENROUTER_API_KEY` env var remains exposed job-wide for the entire `codex-agent` job (line 2420). The PR implements the narrower \"harden host Python\" approved scope rather than the original recommendation.\n  ISSUE_CONFIDENCE: 3\n  SEVERITY: MAJOR\n- HARDENING_SUGGESTION: file: tests/test_review_host_python_safe_path.py; location: top-level imports; issue: The test asserts the inline `PYTHONSAFEPATH=1` is set, but a future change that drops the inline override (relying on job-level env) would still pass the end-to-end test because PYTHONSAFEPATH is inherited. Add a static check for the inline `PYTHONSAFEPATH=1` token on each python3 invocation line. Suggested minimal fix: Extend `test_workspace_helper_isolates_every_stdin_python_invocation` to also assert `re.search(r'\\bPYTHONSAFEPATH=1\\b', line)` on each of the two python lines.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cRun PR-head setup in a credential-free sandbox. Keep tokens in separate trusted steps, and invoke host Python with -I and a sanitized import path.\u201d\n  Expected change site: `.github/workflows/review_autofix.yml`, the `codex-agent` environment and workspace initialization steps.\n  Evidence of absence: The workflow still exposes `OPENROUTER_API_KEY` job-wide at line 2420 and runs workspace initialization on the credential-bearing host at lines 2940, 2974, and 2984. The PR adds `PYTHONSAFEPATH` and isolated flags to two Python invocations, but does not sandbox PR-head setup or separate the token-bearing steps.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c828b4d2170a5db5cc981536f467c1e066a667032d39b892c7345a0cbd551853",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6311,
+    "run_id": "37350613143",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37350613143",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005184121_a5e9fe89fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6311,
+    "run_id": "37350613143"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T18:41:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

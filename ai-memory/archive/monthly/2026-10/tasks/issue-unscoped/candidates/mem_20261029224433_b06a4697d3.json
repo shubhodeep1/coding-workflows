@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (reported as satisfied, not a gap; SEVERITY: NIT, ISSUE_CONFIDENCE: 5)\n  Requirement: \"Update its content so it is exactly these three lines: `status: ok`, `run_id: alt-40831286935`, `updated-by: ai-pipeline`; only modify `tests/e2e_smoke_canary.txt`.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none \u2014 file on the PR head contains exactly the three required lines with LF endings and one trailing newline, and pr_changed_files.txt lists only tests/e2e_smoke_canary.txt. The constraint is fully satisfied.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6688e6311b91973cba776ee1aabb06e008d9d3292cc18eff566475284752a4a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "40962650223",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40962650223",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029224433_b06a4697d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "40962650223"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T22:44:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

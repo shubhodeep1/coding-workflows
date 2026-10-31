@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1356-1403 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The new comment at lines 1356-1361 says the job measured \"about 535-604s\", while the existing comment at lines 1401-1403 says \"this job about 4\" minutes, so the two figures conflict.\n  WHY: A maintainer choosing which job has headroom will read two conflicting measurements; it does not affect CI runtime (both reviewers rated it NIT).\n- .github/workflows/ci.yml:1337-1399 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The PR does not measure the duration of the added step in the destination job `tests-release-and-log-analysis` (`timeout-minutes: 20` at line 1337). Headroom is judged from old figures (535-604s).\n  WHY: If the 34-file batch takes more than about 5 minutes the job passes its 75% budget-watch line, and above about 9 minutes it risks the timeout; the code does not show this, since the PR says step timings \"were not readable\" (rated NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (bring `static-checks` under its 15-minute timeout; 15m18s in run 38562929820)\n  expected_change_site: .github/workflows/ci.yml, step selection in `static-checks` (lines 22-495) and the destination job `tests-release-and-log-analysis`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The comment at ci.yml:1356-1361 says step timings were not readable, and the step was chosen by test count and subprocess count. No data shows it is among the slowest steps or that the destination has the most headroom. Only one step moved, though the issue says \"steps\". `static-checks` still runs \"Implement post-Codex recovery unit tests\" (line 452), \"Validation self-test unit tests\" (ci.yml:459-479, 20 test files) and \"Validation bootstrap and family direct-run tests\" (ci.yml:481-495, 13 test files). The changelog repeats the \"had the most room\" claim without comparing jobs. `static-checks` could still exceed its 11m15s warning line and time out again.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:1356-1399 | severity=NIT | confidence=2\n  PROBLEM: The PR does not measure the duration of the step it adds in the destination job `tests-release-and-log-analysis` (`timeout-minutes: 20` at line 1337). Headroom is judged from old figures (535-604s, runs 38250939132 and 38251668637).\n  WHY: The moved batch has 34 test files. Above about 5 minutes it passes the 75% budget-watch line, and above about 9 minutes it risks the timeout. This is not shown from the code, since the PR says step timings \"were not readable\".\n- .github/workflows/ci.yml:1356-1361 and 1401-1403 | severity=NIT | confidence=3\n  PROBLEM: The new comment says this job measured \"about 535-604s\", while the existing comment 40 lines below says \"this job about 4\" minutes.\n  WHY: It does not affect CI runtime. A maintainer choosing which job has headroom will read two conflicting numbers.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (aim: bring `static-checks` under its 15-minute timeout; 15m18s in run 38562929820)\n  Expected change site: `.github/workflows/ci.yml`, `static-checks` (line 22 onward) and the destination job.\n  Evidence of absence: The PR's own comment (lines 1356-1361) says step timings were not readable, so the step was picked by test count and subprocess count. Only one step moved (the issue says \"steps\"). `static-checks` still runs \"Implement post-Codex recovery unit tests\" (line 452), \"Validation self-test unit tests\" and \"Validation bootstrap and family direct-run tests\". No data shows the moved step is among the slowest or removes the roughly 18 seconds of overrun plus a safety margin. No data shows `tests-release-and-log-analysis` has the most headroom. If the moved step runs under about 3.5 minutes, `static-checks` would still sit above its 11m15s warning line.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the step selection in `static-checks` and the destination job selection.\n  Evidence of absence: The new comment at `.github/workflows/ci.yml:1356-1361` says the step timings were not readable and identifies the moved batch by test count and subprocess count instead. The diff provides no comparison showing this was among the slowest steps in run `38562929820` or that `tests-release-and-log-analysis` had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, selection of steps from `static-checks` job (lines 22-495) and their destination\n  Evidence of absence: The PR's own comment at ci.yml:1357-1358 says \"Step timings were not readable when this was planned; this is the heaviest test step static-checks inherited, by test count and subprocess count.\" The implementer used test count as a proxy for timing data. Only one step was moved, though the issue says \"steps\" (plural). `static-checks` still contains \"Validation self-test unit tests\" (ci.yml:459-479, 20 test files) and \"Validation bootstrap and family direct-run tests\" (ci.yml:481-495, 13 test files). The implementer did not verify this was sufficient to bring `static-checks` under the 15-minute timeout.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- .github/workflows/ci.yml:1356-1361 vs 1401-1403 | severity=NIT | confidence=4\n  PROBLEM: The new comment at lines 1356-1361 says \"This job measured about 535-604s\" (9-10 minutes), while the existing comment at lines 1401-1403 says \"this job about 4\" (minutes). Both refer to `tests-release-and-log-analysis`.\n  WHY: It does not fail at runtime, but a maintainer will read two conflicting measurements for the same job. The comments are not reconciled.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "db9bb3f003ad6aef36b6b25e2dede7f1e723003e4d601ca1426697901dd97a79",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7385,
+    "run_id": "38571051004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38571051004",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014134018_a872eefc13",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7385,
+    "run_id": "38571051004"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T13:40:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

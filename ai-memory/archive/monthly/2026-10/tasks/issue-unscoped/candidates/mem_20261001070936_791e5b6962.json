@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml:433-441 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The head-derived completion path trusts a matching `orchestrator/project-<number>` branch name without verifying that the number identifies an existing `ai:orchestrator-tracking` issue.\n  WHY: A merged PR with that head name can cause an unrelated or nonexistent issue to be recorded as merged in AI-memory lineage.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/issue_pr_status.yml:433-441 | severity=low | confidence=2\n  PROBLEM: The head-derived path adds the issue number extracted from PR_HEAD_REF without verifying the issue exists, has the ai:orchestrator-tracking label, or is a valid issue number.\n  WHY: A collaborator with write access could merge a branch named `orchestrator/project-<N>`, causing false merged lineage that downstream learnings extraction samples as a finished task; the practical risk is bounded.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 3 (failback minimax/minimax-m2.5).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/issue_pr_status.yml:433-440 | severity=low | confidence=4\n  PROBLEM: The completion check treats any merged PR with head `orchestrator/project-<number>` and the default branch as proof that the number identifies a tracking issue, without verifying that the issue exists or is an orchestrator-tracking issue.\n  WHY: A matching merged PR can add an unrelated or nonexistent issue to the lineage-finalization list, and `memory_finalize_task` can record it as merged without confirming it is a project completion.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/issue_pr_status.yml:433-441 | severity=low | confidence=not stated\n  PROBLEM: The head-derived path adds an issue number from PR_HEAD_REF without verifying the issue carries the ai:orchestrator-tracking label or even exists.\n  WHY: A collaborator can merge a branch named `orchestrator/project-<N>`, causing issue <N>'s AI-memory lineage to be finalized as merged regardless of whether it is a tracking issue.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bda25bfbbbf255b4ce6ab8604af073290d5723055149c85988261402697e5e2f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5632,
+    "run_id": "36823304512",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36823304512",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001070936_791e5b6962",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5632,
+    "run_id": "36823304512"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T07:09:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

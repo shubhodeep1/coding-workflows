@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- PR Description:\"Closes https://github.com/shubhodeep1/coding-workflows/issues/8235\" | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Use of auto-closing keyword \"Closes\" referencing issue #8235.\n  WHY: If issue #8235 carries the 'ai:orchestrator-tracking' label, merging would auto-close the tracking issue and terminate the orchestrator state machine; severity is reported as BLOCKER by the source. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) examined this and did not report it, because nothing shows the issue carries that label.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- PR Description:\"Closes https://github.com/shubhodeep1/coding-workflows/issues/8235\" | severity=BLOCKER | confidence=4\n  PROBLEM: Use of auto-closing keyword \"Closes\" referencing the issue.\n  WHY: If issue #8235 carries the 'ai:orchestrator-tracking' label, merging this PR will auto-close the tracking issue and prematurely terminate the orchestrator state machine for this project.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "905bbbe9eba51d22c12c4f1d700c76a47acb465ac81aab7fe5a70a138effffa2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "40632821075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40632821075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028044424_249ae8de82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "40632821075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-28T04:44:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:Lines 107-119 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The configured-CI supersession path relies on Actions run IDs, so it does not correctly handle non-Actions CI checks.\n  WHY: OpenAI reports that a non-Actions check can make the filter return no numeric blocking count and produce `query_failed`, while Minimax and Qwen report that a later successful run cannot supersede a cancelled run; the highest reported severity is MAJOR (OpenAI and Qwen), while Minimax classifies this as a hardening opportunity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/pr_checks_lib.sh: `PR_CHECKS_JQ_SUPERSEDE_DEFS`, CI-name branch of `_mark_superseded` (the `(if ($ci != \"\" ... ((.[0].name // \"\") == $ci)) then ...)` arm) | severity not stated | confidence not stated\n  PROBLEM: When `AUTO_MERGE_REQUIRED_CI_CHECK` names a non-Actions CI provider, every run in the group has a null `_run_id`, so the same-run / bound-CI supersession paths are both dead and the cancelled run keeps blocking the merge until the head changes.\n  WHY: The suggested fallback is limited to groups where no run has an Actions run ID; the reviewer classifies this as a hardening opportunity rather than a correctness defect.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh:Lines 107, 113-119 | severity=MAJOR | confidence=5\n  PROBLEM: The configured-CI supersession filter assumes every check-run named by `AUTO_MERGE_REQUIRED_CI_CHECK` has an Actions run URL.\n  WHY: With a configured non-Actions CI check, `capture` errors on its details URL. The jq filter then produces no numeric blocking count, so `_pr_checks_completed` returns `query_failed` and refuses the merge even when the check succeeded. This affects the documented name-only mode when `AUTO_MERGE_WAIT_WORKFLOWS=none`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/pr_checks_lib.sh:Lines 107-119 | severity=MAJOR | confidence=4\n  PROBLEM: The configured-CI supersession path only recognizes check runs with `/actions/runs/<id>` URLs.\n  WHY: When `AUTO_MERGE_REQUIRED_CI_CHECK` is set to a check name that comes from a non-Actions source, `_run_id` returns null and the run is not in `PR_CHECKS_CI_RUN_IDS`, so a newer successful run cannot supersede an older cancelled run.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d6088df6fb0f956d6e2f17944b66a08da89301dca111adfc5fbcd4904a827053",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38330312662",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38330312662",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013013650_0c7373a83c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38330312662"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T01:36:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

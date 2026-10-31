@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1735-1737 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The claim that no pipeline request sets `HTTP-Referer`, `X-Title`, or a `user` field is factually incorrect because two pipeline scripts set attribution headers.\n  WHY: An operator following this guidance may incorrectly treat those requests as untagged; severity disagreement: minimax_minimax-m3 rated this MAJOR, while the other reviewers rated it NIT, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- CLAUDE.md:1735-1737 | severity=low | confidence=5\n  PROBLEM: This claim is inaccurate. `scripts/analyze_soft_errors.py:329-330` sets `HTTP-Referer: https://github.com/shubhodeep1/coding-workflows` and `X-Title: coding-workflows soft-error analyzer`. `scripts/summarize_unselected_runs.py:391` sets `X-Title: workflow-log-summarize-unselected-runs`.\n  WHY: The sentence as written is precisely false and would mislead a reader who greps for every caller; the reviewer says these scripts account for a negligible fraction of total OpenRouter spend and that no substantial-volume pipeline request sends these headers.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- CLAUDE.md: lines 1735-1737 | severity=high | confidence=5\n  PROBLEM: The \u00a729.A claim \"No pipeline request sets `HTTP-Referer`, `X-Title`, or a `user` field (`scripts/write_opencode_config.sh`)\" is factually wrong on two counts: `scripts/write_opencode_config.sh` does not make HTTP requests, and two pipeline scripts set attribution headers.\n  WHY: Any operator following \u00a729.A's guidance will conclude that the pipeline sends zero OpenRouter inference traffic tagged with attribution headers, when in fact two production call sites do exactly that. The same incorrect statement is repeated verbatim at the end of the changelog fragment (`changelog.d/6438-openrouter-mgmt-key-reads.md`, \"What this means for operators\" paragraph).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CLAUDE.md: 1735-1737 | severity=low | confidence=5\n  PROBLEM: The statement that no pipeline request sets HTTP-Referer or X-Title is false. `scripts/analyze_soft_errors.py` sets both headers at lines 329-330, and `scripts/summarize_unselected_runs.py` sets X-Title at line 391.\n  WHY: An interactive spend analysis following this guidance may incorrectly treat those requests as untagged and misstate which pipeline requests carry attribution headers.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- CLAUDE.md: 1735-1737 | severity=low | confidence=5\n  PROBLEM: The claim \"No pipeline request sets HTTP-Referer, X-Title, or a user field\" is factually incorrect.\n  WHY: An interactive session following \u00a729.A guidance would incorrectly report that no pipeline requests set attribution headers: scripts/analyze_soft_errors.py:329-330 sets both HTTP-Referer and X-Title, and scripts/summarize_unselected_runs.py:391 sets X-Title.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ec857bddb65607d56f27b5e563fbafd83fe2e71fe796481ebee32a0dc0f1e924",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6438,
+    "run_id": "37398085829",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37398085829",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006015849_4d6d3a5aba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6438,
+    "run_id": "37398085829"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T01:58:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

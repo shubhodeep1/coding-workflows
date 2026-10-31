@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In _clone_for_memory_branch, when AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true (read with parse_bool, default true), first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\n  expected_change_site: scripts/ai_memory_lib.py::_clone_for_memory_branch (enabled path, lines 3252-3267)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: scripts/ai_memory_lib.py:3252-3267 clones with `--depth 1` (shallow, not full history), tests/test_memory_maintenance_contract_noop.py:533-545 (also cited as :544-553) expects `--depth 1`, deviation documented in changelog.d/8295-memory-single-branch-clone.md and agents.d/8295-memory-single-branch-clone.md; minimax adds that flag semantics are inverted relative to the issue (false runs pre-#8287 full clone, unset/true runs depth-1). Severity disagreement: MAJOR (gemini, minimax, openai) vs NIT (sonnet, glm, who consider it a deliberate maintainer decision preserving default behavior and avoiding the 20-minute cap regression); highest is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"In _clone_for_memory_branch, when AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true, first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\nExpected change site: scripts/ai_memory_lib.py `_clone_for_memory_branch`\nEvidence of absence: The enabled path (lines 3252-3267) clones with `--depth 1`, not full history. This is main's #8287 fast path, which this PR keeps and gates. A full-history clone in front of it would bring back the 260k-commit fetch on every write and break the rule that nothing changes while the flag is unset. changelog.d/8295-memory-single-branch-clone.md and agents.d/8295-memory-single-branch-clone.md record the choice. A maintainer should still confirm it. No code change recommended.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"In _clone_for_memory_branch, when AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true, first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\nExpected change site: scripts/ai_memory_lib.py::_clone_for_memory_branch\nEvidence of absence: The enabled-path clone at scripts/ai_memory_lib.py:3252-3265 passes `--depth 1`, so it fetches shallow history, not full history. The test helper at tests/test_memory_maintenance_contract_noop.py:533-545 also expects `--depth 1`. The deviation is documented in changelog.d/8295-memory-single-branch-clone.md and agents.d/8295-memory-single-branch-clone.md as deliberate to prevent job-cap regression.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"In _clone_for_memory_branch, when AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true (read with parse_bool, default true), first clone only the memory branch: single-branch, with the branch option, no-tags, full history. ... When the flag is false, run the current code exactly.\" Also: \"Ship the new behaviour on: gate only the new code path behind AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED as an off switch.\"\nExpected change site: scripts/ai_memory_lib.py::_clone_for_memory_branch \u2014 the default (flag on / unset) branch\nEvidence of absence: The enabled-path clone at scripts/ai_memory_lib.py:3252-3267 passes --depth 1, so it fetches shallow history, not the full history the issue specifies. The implementation gates today's #8287 depth-1 path instead, leaving the issue's full-history path unbuilt. The deviation is documented in changelog.d/8295-memory-single-branch-clone.md and agents.d/8295-memory-single-branch-clone.md, and the test helper at tests/test_memory_maintenance_contract_noop.py:544-553 also expects --depth 1. The flag's effective semantics are inverted relative to step 1: AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED=false runs the pre-#8287 full clone and unset/true runs depth-1; the issue instead has unset/false = current (depth-1) and true = full-history.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"When AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true, first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\nExpected change site: scripts/ai_memory_lib.py::_clone_for_memory_branch\nEvidence of absence: The enabled-path clone at lines 3255-3262 passes `--depth 1`, so it does not fetch full history. The test helper in tests/test_memory_maintenance_contract_noop.py also expects `--depth 1`. The changelog and agents fragment document this deviation, but the linked issue does not defer the full-history requirement.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"In _clone_for_memory_branch, when AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED is true (read with parse_bool, default true), first clone only the memory branch: single-branch, with the branch option, no-tags, full history.\"\nExpected change site: scripts/ai_memory_lib.py::_clone_for_memory_branch (enabled path, lines 3252-3267)\nEvidence of absence: The enabled fast path clones with `--depth 1` (scripts/ai_memory_lib.py:3259-3260), shallow, not full history; the test helper (tests/test_memory_maintenance_contract_noop.py:533-545, `_shallow_clone_args`) pins `--depth 1`. The deviation is deliberate and documented in changelog.d/8295-memory-single-branch-clone.md and agents.d/8295-memory-single-branch-clone.md: main already ships the #8287 depth-1 single-branch clone, main's tests pin it, and the issue's constraint (\"with the flag unset, everything that runs today keeps running unchanged\") forbids changing the default path to full history. Carried through several review rounds as a maintainer decision.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "79c1f61818a40de00b2a37d7d89fadac29522ea6f5f8409dcc79ab1b5dfd9fcf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8308,
+    "run_id": "40860606397",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40860606397",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029115849_ff5d1a681f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8308,
+    "run_id": "40860606397"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T11:58:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

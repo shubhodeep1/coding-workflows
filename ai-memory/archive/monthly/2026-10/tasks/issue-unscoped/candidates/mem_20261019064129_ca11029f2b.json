@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_workflow_contract.py:142-147 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The new poller-loop assertion in test_security_pass_dark_launch_env_and_assets_are_wired checks only `\"prompts/references/output-contract.txt\" in poller[loop_start:loop_end]`. It does not check `prompts/contracts/mode-security-audit.yml`, which the poller's required-asset loop also requires (scripts/orchestrate_poll_process.sh:8576-8577).\n  WHY: A later change could drop the contract YAML from the required-asset loop and no test would fail. The audit would then fail with a generic render error (`prompt renderer exited nonzero`) instead of the closed-fail \"Required security-pass asset \u2026 is unavailable.\" message. The reviewers disagree on severity: minimax_minimax-m3 said MAJOR, anthropic_claude-sonnet-5_5 said NIT and google_gemini-3_1-flash-lite gave none, so the highest is used.\n- scripts/security_audit.sh:66-67 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The new grep alternative `| not found: ` in `(No such file or directory|os error 2|ENOENT| not found: )` matches any stderr line containing \" not found: \", not only the renderer's `Reference file for placeholder '...' not found: <path>` form.\n  WHY: Unrelated stderr lines would be logged under `security-audit: captured_path_error=`, which weakens the signal operators use for triage. minimax_minimax-m3 said NIT and google_gemini-3_1-flash-lite gave no severity. anthropic_claude-sonnet-5_5 explicitly rejected this point: the function only reads captured renderer stderr and only writes a log line, so it has no runtime effect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_workflow_contract.py:test_security_pass_dark_launch_env_and_assets_are_wired, the new check `assert \"prompts/references/output-contract.txt\" in poller[loop_start:loop_end]` | severity=NIT | confidence=4\n  PROBLEM: The test checks only one of the two files the PR added to the poller's required-asset loop. `prompts/contracts/mode-security-audit.yml` (scripts/orchestrate_poll_process.sh line 8577) is not checked.\n  WHY: A later edit could remove the contract file from the loop without any test failing. The missing file would then be dropped silently or cause a generic error, instead of stopping with \"Required security-pass asset \u2026 is unavailable.\" Suggested fix: `assert \"prompts/contracts/mode-security-audit.yml\" in poller[loop_start:loop_end]` (1 line; HARDENING_RISK_SCORE: 1).\n- Notes: No defects found in the last autofix run, which edited only the changelog fragment. All acceptance criteria of issue #7652 are judged met. The reviewer dropped the pass-1 point that the `\" not found: \"` pattern is too broad, because the code only writes a log line and has no runtime effect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_workflow_contract.py:lines 144-147 | confidence=4\n  PROBLEM: The new poller-loop asset assertion only checks for `prompts/references/output-contract.txt`, omitting `prompts/contracts/mode-security-audit.yml`.\n  WHY: If a future change drops `mode-security-audit.yml` from the staging loop in `orchestrate_poll.yml`, this test still passes, and a missing contract YAML causes a generic render failure instead of the \"Required security-pass asset ... is unavailable.\" diagnostic. Suggested fix: add `assert \"contracts/mode-security-audit.yml\" in poller[loop_start:loop_end]` (1 line).\n- scripts/security_audit.sh:line 66 | confidence=3\n  PROBLEM: The grep pattern `| not found: ` is too generic.\n  WHY: Any stderr line containing \" not found: \" is logged with the `captured_path_error=` prefix, which weakens the operator signal. Suggested fix: tighten it to `Reference file for placeholder .* not found: ` (1 line; HARDENING_RISK_SCORE: 2).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_workflow_contract.py:lines 142-145 (the new poller-loop assertion block) | severity=MAJOR | confidence=4\n  PROBLEM: The assertion checks only `\"prompts/references/output-contract.txt\" in poller[loop_start:loop_end]`, although the poller loop at scripts/orchestrate_poll_process.sh:8572-8577 requires both that file and `prompts/contracts/mode-security-audit.yml`.\n  WHY: A regression that drops the contract YAML still passes the test, so the audit fails with a generic `prompt renderer exited nonzero` instead of the closed-fail \"Required security-pass asset \u2026 is unavailable\" message the issue asks for. The asset-tuple assertion (lines 128-138) only covers the workflow-side staging loop. Suggested fix: add the matching assert (1 line; HARDENING_RISK_SCORE: 1).\n- scripts/security_audit.sh:line 67 (the new `| not found: ` alternative in the grep regex) | severity=NIT | confidence=3\n  PROBLEM: The pattern `(No such file or directory|os error 2|ENOENT| not found: )` matches any stderr line containing ` not found: `, not only the renderer's `ERROR: Reference file for placeholder '<name>' not found: <path>` form.\n  WHY: Unrelated stderr lines (for example `module 'foo' not found: `) would be logged under `security-audit: captured_path_error=`, which weakens triage. The other three alternatives are tightly scoped errno forms. Suggested fix: tighten it to `Reference file for placeholder .* not found: ` (1 line; HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Notes: The reviewer received an unexpanded template (`{{REFERENCE_SEVERITY_CLASSIFICATION}}`) instead of a task and asked for the actual task. It performed no review.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "caaf25b703af2baf4d727a8beb012e3886521423bb74f4f9919c1e8d53c61510",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7663,
+    "run_id": "39208789008",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39208789008",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019064129_ca11029f2b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7663,
+    "run_id": "39208789008"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T06:41:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

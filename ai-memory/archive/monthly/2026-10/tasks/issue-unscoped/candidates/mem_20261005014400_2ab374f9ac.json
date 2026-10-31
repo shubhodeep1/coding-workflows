@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py:lines 29-30 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: `test_template_parity` fails because `.claude/commands/audit-plans.md` differs from `workflow-templates/.claude/commands/audit-plans.md`.\n  WHY: The byte-for-byte equality assertion fails in `tests-hooks-and-orchestrator`, blocking the aggregate lint check; severity differed between BLOCKER and MAJOR, so the higher severity is used.\n- .claude/commands/audit-plans.md:lines 103, 126, 127 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash]\n  PROBLEM: The root command file retains outdated `/implement-plan-claude` text and omits the legacy qualifier, diverging from the template.\n  WHY: This divergence causes `test_template_parity` to fail its byte-for-byte equality assertion and blocks the aggregate lint gate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CI must pass; `test_audit_plans_command::test_template_parity` asserts byte-for-byte equality between `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md`, but the root copy does not match the updated template.\n  expected_change_site: `.claude/commands/audit-plans.md` (lines 1, 29, 32, 103, 126, 127)\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: Neither `.claude/commands/audit-plans.md` nor `workflow-templates/.claude/commands/audit-plans.md` appears in `pr_changed_files.txt` or any diff hunk in `last_run_diff.patch` / `original_pr_diff.patch`; the root file still says \"in-session\" / \"Claude implements it in-session\" and omits \"legacy\", while the template says \"Claude-engine orchestrator hand-off\" / \"default-engine hand-off\" and \"legacy `/implement-plan-claude` projects still in flight\"; `test_audit_plans_command::test_template_parity` fails.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_audit_plans_command.py:lines 29-30 | severity=critical | confidence=5\n  PROBLEM: `test_template_parity` fails because `.claude/commands/audit-plans.md` has diverged from `workflow-templates/.claude/commands/audit-plans.md`.\n  WHY: The byte-for-byte equality assertion fails, causing the `tests-hooks-and-orchestrator` CI check-run and aggregate lint check to fail.\n- .claude/commands/audit-plans.md:lines 103, 126, 127 | severity=critical | confidence=5\n  PROBLEM: The root command file retains outdated `/implement-plan-claude` text and omits the legacy qualifier, diverging from the template.\n  WHY: This text difference causes `tests/test_audit_plans_command.py:30` to fail its byte-for-byte equality assertion, resulting in a failure in the `tests-hooks-and-orchestrator` CI job and the aggregate lint gate.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_audit_plans_command.py:29-30 | severity=high | confidence=5\n  PROBLEM: The current CI run fails because `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md` differ.\n  WHY: The test asserts byte-for-byte equality and fails in `tests-hooks-and-orchestrator`, causing the aggregate `lint` check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: CI must pass \u2014 `tests-hooks-and-orchestrator` runs `test_audit_plans_command::test_template_parity`, which asserts byte-for-byte equality between `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md`. The PR description for Phase 5c states `/implement-plan-claude` is now \"a thin hand-off that dispatches the AI orchestrator\" and that \"the session-driven chain ... was retired on 2026-10-03\". The template copy was updated accordingly (lines 1, 29, 32, 103, 126, 127 describe `/implement-plan-claude` as a \"Claude-engine orchestrator hand-off\" and mark in-flight projects as \"legacy\"). The root copy was not.\n  Expected change site: `.claude/commands/audit-plans.md` (lines 1, 29, 32, 103, 126, 127) to match `workflow-templates/.claude/commands/audit-plans.md`.\n  Evidence of absence: Neither `.claude/commands/audit-plans.md` nor `workflow-templates/.claude/commands/audit-plans.md` appears in `pr_changed_files.txt` or any diff hunk in `last_run_diff.patch` / `original_pr_diff.patch`. Verified by grep: the two files diverge at lines 1, 29, 32, 103, 126, 127 \u2014 root still says \"in-session\" / \"Claude implements it in-session\" and omits \"legacy\"; template says \"Claude-engine orchestrator hand-off\" / \"default-engine hand-off\" and \"legacy `/implement-plan-claude` projects still in flight\". `test_audit_plans_command::test_template_parity` fails (CI log_tail: `1 failed, 8 passed in 0.09s`), which fails `tests-hooks-and-orchestrator`, which fails the aggregate `lint` required check. Note: the PR description claims this test \"also fails on `main`\", and prior autofix runs were BLOCKED because `.claude/commands/` is excluded from review-editor transfer \u2014 so this is not fixable by the autofix editor on this branch without an operator checkout.\n  SEVERITY: critical\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7251f2449725998c6557d2556112277d06bb4b98f258c20b159949fa75fe6e79",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37250546865",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37250546865",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005014400_2ab374f9ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37250546865"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T01:44:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

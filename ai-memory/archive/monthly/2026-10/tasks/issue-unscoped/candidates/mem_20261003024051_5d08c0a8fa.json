@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/usage_limit_resumes.py:716-741 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_skip_reason` detects permission prompts from only the summary returned by `_summary(session)`, so a permission marker present only in `external_metadata.post_turn_summary` can be missed.\n  WHY: When the external summary's `status_detail` contains a permission prompt and `needs_action` does not independently trigger `needs_input`, an old session can be classified as `too_old` and manually resumed; Qwen rated the impact as label-only when `needs_input` still skips the session, and GLM rated it NIT while describing the old-session bypass.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:716-741 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_skip_reason` detects permission prompts from only the summary returned by `_summary(session)`, so a permission marker present only in `external_metadata.post_turn_summary` can be missed.\n  WHY: When the external summary's `status_detail` contains a permission prompt and `needs_action` does not independently trigger `needs_input`, an old session can be classified as `too_old` and manually resumed; Qwen rated the impact as label-only when `needs_input` still skips the session, and GLM rated it NIT while describing the old-session bypass.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/usage_limit_resumes.py:722-725 | severity=high | confidence=4\n  PROBLEM: The `permission_prompt` check uses only `_summary(session)`, which returns the top-level summary when it is a dict, and can miss a permission marker present only in `external_metadata.post_turn_summary`.\n  WHY: A recent non-archived IDLE session can fall through to `not_reset` or `None` and resume past a pending approval gate; an old session can be classified as `too_old` instead of `permission_prompt` and routed through the manual-resume fallback.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:716-741; .claude/scripts/usage_limit_resumes.py:716-741 | severity=high | confidence=4\n  PROBLEM: The `permission_prompt` check reads only the top-level summary, unlike `has_unanswered_request(session)`, which reads both summary copies.\n  WHY: A permission prompt recorded only in the external copy can bypass the safeguard and reach the manual-resume fallback or be resumed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/scripts/usage_limit_resumes.py:517-522; .claude/scripts/usage_limit_resumes.py:722-732 | severity=high | confidence=4\n  PROBLEM: The permission-prompt check uses only `_summary`, which prefers the top-level summary and ignores the external summary when the top-level summary exists.\n  WHY: If the external summary alone records \u201cWaiting on permission\u201d while the top-level summary contains usage-limit text, neither `permission_prompt` nor `needs_input` is set, so `_skip_reason` returns `too_old` and the manual fallback can resume the session.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py (and byte-identical .claude/scripts/usage_limit_resumes.py): _skip_reason at lines 719-724; _summary at lines 517-522 | severity=low | confidence=3\n  PROBLEM: The `permission_prompt` boolean uses `_summary(session)`, which can ignore an external summary marker when the top-level summary is a dict.\n  WHY: For an old session where `has_unanswered_request` detects the external summary, the selector returns `needs_input` instead of `permission_prompt`; the session is still skipped, so the difference is only the skip-reason label.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py (byte-identical root copy .claude/scripts/usage_limit_resumes.py): `_summary` at lines 517-522, combined with the hoisted `permission_prompt` check and the new old-session branch in `_skip_reason` at lines 722-732 | severity=low | confidence=3\n  PROBLEM: The `permission_prompt` decision reads only the summary returned by `_summary`, while the sibling `needs_input` decision reads both copies.\n  WHY: If the external summary's `status_detail` contains a permission marker and neither copy's `needs_action` records a request, an old session is labeled `too_old`, allowing the manual fallback to resume it; this is a narrow residual, and the recent-session variant is pre-existing #5660 code this PR only hoisted.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0c317b49335ef04eafb51380ef35f27c11119b7699f459957c80e2d866f745f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6112,
+    "run_id": "37089631738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37089631738",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003024051_5d08c0a8fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6112,
+    "run_id": "37089631738"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T02:40:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py (and twin .claude/scripts/usage_limit_resumes.py): _decode_json_text function, line `positions = [index for index, char in enumerate(text) if char in \"{[\"][:MAX_JSON_START_CANDIDATES]` | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The reviewer claims the candidate-position list is not capped at `MAX_JSON_START_CANDIDATES`, so malformed inputs with many brackets may cause unnecessary `raw_decode` attempts.\n  WHY: The finding is rated NIT; other reviewers explicitly reject the claimed slicing behavior as a false positive.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py (and twin .claude/scripts/usage_limit_resumes.py): _decode_json_text function, line `positions = [index for index, char in enumerate(text) if char in \"{[\"][:MAX_JSON_START_CANDIDATES]`\n  PROBLEM: Python subscript precedence binds `[:MAX_JSON_START_CANDIDATES]` to the string literal `\"{[\"`, not to the list comprehension result. Since `\"{[\"` is 2 characters, `\"{[\"[:50]` is still `\"{[\"`, so the membership test `char in \"{[\"` is unchanged and the positions list contains every index where `{` or `[` appears in the entire input. The `MAX_JSON_START_CANDIDATES = 50` constant is defined but never limits the search.\n  WHY: On success the loop exits early because `raw_decode` succeeds on the first valid JSON start, so the uncapped list is harmless. On malformed input (no valid JSON anywhere in the text) the loop iterates over every bracket in the input instead of stopping at 50 candidates. For a large envelope or a pathological input with thousands of bracket characters before any JSON, this wastes CPU on positions that will all fail `raw_decode`. The constant becomes dead code and the documented cap is not enforced.\n  severity=NIT\n  confidence=5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "547ba92dde8c8e281b282c6fb51dbcba204765fa31e6255266cb0ad24de17908",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5718,
+    "run_id": "36838342653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36838342653",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001094240_eb60e90365",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5718,
+    "run_id": "36838342653"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T09:42:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

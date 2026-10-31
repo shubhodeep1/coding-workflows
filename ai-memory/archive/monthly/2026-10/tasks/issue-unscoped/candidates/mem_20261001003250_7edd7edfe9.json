@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4401-4412 | severity=critical | confidence=[4]\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The `Run reviewer models` step failed three times on the same PR head, triggering the identical-failure cap and blocking review and auto-merge progress.\n  WHY: The available logs do not show the underlying reviewer error, and the reviewers disagree on severity (BLOCKER vs MAJOR); neither attributes the failure to this PR\u2019s diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:515 | severity=NIT | confidence=1\n  PROBLEM: The permission-mode copy strips setuid/setgid/sticky bits but preserves world-readable permission bits; the reviewer found no regression because this matches the existing config writer pattern and the runtime directory is user-owned.\n  WHY: ACCEPTED \u2014 no defect.\n- scripts/review_conflict_resolve.sh:510 | severity=NIT | confidence=1\n  PROBLEM: `config[\"snapshot\"] = False` serializes to JSON `false`, which the OpenCode config parser accepts.\n  WHY: No defect.\n- scripts/review_conflict_resolve.sh:560-569 | severity=NIT | confidence=1\n  PROBLEM: `_resolver_model_index_prepare` returns 1 on failure paths, and the caller logs an error and exits 1.\n  WHY: Every failure is appropriately caught and surfaced; no defect.\n- scripts/review_conflict_resolve.sh:545, 553, 495 | severity=NIT | confidence=1\n  PROBLEM: The new identifiers are unique, existing log strings and exit messages are unchanged, and the new blocks are gated on `IS_WORKFLOW_SOURCE_REPO=true`.\n  WHY: No backward-compatibility break.\n- Requirement: The linked issue asks for \"a regression case in tests/test_review_conflict_resolve_retry_prelude_render.py in which the model stages ONLY the permitted conflicted file: it must fail on the failing SHA and pass with the fix\"\n  Expected change site: tests/test_review_conflict_resolve_retry_prelude_render.py\n  Evidence of absence: The six regression tests are present (test_model_staging_permitted_conflict_passes_scope_checks through test_private_model_index_wiring). The \"control\" run inside test_model_staging_permitted_conflict_passes_scope_checks runs with source_repo=False (the shared-index path) and asserts the #5627 failure (scope_rc=2). The pre-fix script cross-check (run the test against d1e530e) is listed in the plan as an acceptance test and was verified during development \u2014 the fact that the test is registered in main() in this PR is the delivery artifact, not the pre-fix SHA run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- Requirement: The linked issue says \"Not fixing the stale comment in scripts/workflow_failure_heal_intake.sh that sends source-repo review/autofix heal issues to the PR head branch (see Notes).\" This is listed as a non-goal and out of scope in the plan. The PR description's \"Out of scope\" section also records it. Not a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:lines 4401-4412, where the workflow runs `review_run_reviewers.sh` and exits with its return code. | severity=BLOCKER | confidence=4\n  PROBLEM: The supplied check-run context records three identical failures in \u201cRun reviewer models\u201d on the current PR head, but contains no underlying reviewer error.\n  WHY: The nonzero reviewer result fails `review / codex-agent`; the reported same-head failure cap then blocks another attempt, preventing review and auto-merge from progressing. The failure is not attributable to a specific defect in this PR diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/review_autofix.yml (review / codex-agent check-run): Failed check-run `review / codex-agent` on head cb3c13bcd98d, step `Run reviewer models`, runs 36759375269 / 36766440679 / 36773666189 | severity=MAJOR | confidence=3\n  PROBLEM: The review/autofix workflow failed deterministically three times on this PR head in the `Run reviewer models` step, tripping the identical-failure fingerprint cap and labeling the PR `ai:review-blocked`.\n  WHY: The available log tail does not show the underlying error; this PR does not touch `scripts/review_run_reviewers.sh` or `.github/workflows/review_autofix.yml`, so the failure is not likely caused by this PR\u2019s diff.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "49ec49588a61586788b13afe246d14bb9e2f20b03da2c0628559f6f24ef5b044",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5637,
+    "run_id": "36794129765",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794129765",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001003250_7edd7edfe9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5637,
+    "run_id": "36794129765"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T00:32:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8396,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8396\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8402\",\"pr_number\":8402,\"branch\":\"ai/issue-8396\",\"run_id\":\"40961720429\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40961720429\",\"changed_files\":[\".github/workflows/ci.yml\",\"agents.md\",\"changelog.d/8396-orchestrate-poll-single-file-modules-to-group-3.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "09c0576ecef888624ea72ea82e6959f0866044ff2102710d9fe3eb242092dc0e",
+  "lineage": {
+    "issue_number": 8396,
+    "parent_ids": [],
+    "pr_number": 8402,
+    "run_id": "40961720429",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40961720429",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8402"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261029223736_50c5eb002e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8396,
+    "level": "run",
+    "pr_number": 8402,
+    "run_id": "40961720429"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8396: https://github.com/shubhodeep1/coding-workflows/pull/8402",
+  "timestamps": {
+    "created_at": "2026-10-29T22:37:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

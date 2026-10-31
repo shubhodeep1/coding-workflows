@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this issue handle its remaining deferred work (the pool reason in the heal payload, and the `agents.d/` log-prefix fragment)? Both are outside the verified scope marker, and the pipeline can't widen that marker itself.\nChoices:\n- A: Finish this issue with no further code. Delivery is complete through #8398, which already shows the pool reason in the consumer run log, the Telegram alert and the step summary. The payload and log-prefix items are dropped from this issue's scope, and an operator files them separately if still wanted. (RECOMMENDED)\n- B: An operator re-files or re-scopes this issue so the marker covers `scripts/workflow_failure_heal.py` and `agents.d/*.md`. The pipeline then adds an optional `--pool-reason` to `build-engine-fallback-payload`, a `Claude pool step reason:` evidence line, filtering in `validate-payload`, and an `AI_ENGINE_POOL_REASON` prefix fragment. The fingerprint and `no_credential` stay unchanged. **Note:** this stalls at the scope gate until the operator acts.\n- C: Do only the payload change from B, without the new log prefix. This needs the same operator re-scope, limited to `scripts/workflow_failure_heal.py`.\nQ2: How should the actual `no_credential` cause in binance-blessings runs 40951784257 / 40951799298 be handled? No logs are available.\nChoices:\n- A: Defer it. Wait for a new occurrence from a consumer pinned to a release that includes #8398, so the report's run log shows `pool_reason=<token>`. Then file a fresh heal issue against that specific cause. (RECOMMENDED)\n- B: An operator pastes the `CLAUDE_POOL available=false reason=<r>` line and the result of the \"Install Claude Code CLI\" step from job `clarify` of run 40951784257. The pipeline then plans a fix for that specific cause. **Note:** if the cause needs files outside the current scope marker (for example `tools/claude-pool-broker/**` or `scripts/claude_pool_token.sh`), this also needs the operator re-scope described in Q1:B. Paired with Q1:A, this issue stays open for this item only.\n- C: Treat it as a transient broker or probe outage and make no code change. **Note:** the issue's fix constraints say this failure is deterministic and don't accept a retry as a fix, so pick this only if the operator has confirmed the outage was transient.",
+  "fingerprint": "135cbb4f9abc1bba0f69b6be66390ca41cfe8881ae3c28f0291aa5c2bfc9b5c0",
+  "lineage": {
+    "issue_number": 8392,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40967437316",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40967437316",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029224531_36b5a53a2f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8392,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40967437316"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #8392 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T22:45:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

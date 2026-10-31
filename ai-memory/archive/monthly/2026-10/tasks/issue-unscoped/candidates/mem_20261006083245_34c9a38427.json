@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer | severity=critical | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The test expects a retry and one successful reviewer call when Mistral has status \"failed\" and an empty error, but the retry will not occur.\n  WHY: The retry condition at scripts/review_run_reviewers.sh:5199-5202 requires a recognized skipped status or a context-overflow match; z-ai_glm-5_2 disputes this finding, citing scripts/review_run_reviewers.sh:5142, which writes \"skipped_open\" before continuing.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_review_pipeline_contract.py:test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer | severity=BLOCKER | confidence=5\n  PROBLEM: Test expects expected_success=1 and expected_count=1, but the retry will not occur.\n  WHY: When mistral_status=\"failed\" and error=\"\", the status file contains \"failed\" but the log file is empty. The retry condition at scripts/review_run_reviewers.sh:5199-5202 requires sf_status to be \"skipped_unmapped\", \"skipped_open\", or (\"failed\" AND context-overflow-grep-matches). With an empty error string, the grep fails, so the retry is not triggered. GPT is never called (expected_count should be 0), Mistral failed, so pass_successful=0. The test asserts RESULT=1 but the actual result will be RESULT=0.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a6aa2df038a6222831b7e1c3dcf586ed0648e7daf6f7137a49cc816040d7bc62",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6438,
+    "run_id": "37429125335",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37429125335",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006083245_34c9a38427",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6438,
+    "run_id": "37429125335"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T08:32:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

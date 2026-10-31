@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, the orchestrate-poll group-1 steps, specifically \"Orchestrate poll single-file module tests\" (ci.yml:2503-2509)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Only the unblock-test step moved from group 1 to group 0 (guard at ci.yml:2491), the single-file module tests step stays in group 1 at ci.yml:2503-2509, the PR comments at ci.yml:2477-2491 admit the placement is an estimate, the run's step timings were unreadable, and group 1 may still finish near the 15-minute budget-watch threshold. Severity disagreement: MAJOR (minimax_minimax-m3, openai_gpt-6-luna) vs NIT (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash); highest used is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, the `orchestrate-poll (1)` step guards.\n  Evidence of absence: Deliberate partial delivery. Only the unblock-test step moved from group 1 to group 0. The \"Orchestrate poll single-file module tests\" step stays in group 1 and is likely heavier. The PR comment at `ci.yml` lines 2478-2488 says `test_run_substate_ledger.py` alone took 139s locally. The step timings for run 40150026157 were unreadable. Constraints (no new required job names, no raised timeouts) are met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names\" so that orchestrate-poll (1) is no longer at 16m09s of its 20-minute timeout.\n  Expected change site: .github/workflows/ci.yml, the orchestrate-poll job step guards for group 1, specifically the steps hosting the heaviest measured test slices.\n  Evidence of absence: The PR moves only the \"Unblock judge, scan and orphan fix-up close tests\" step from group 1 to group 0 by editing one if: guard at ci.yml:2491. The \"Orchestrate poll single-file module tests\" step at ci.yml:2503-2509 (cited at ci.yml:2484 as containing test_run_substate_ledger.py at 139s locally) stays in group 1. The comment block at ci.yml:2481-2491 acknowledges the move is an estimate. The step timings were unreadable. tests/test_ci_poll_test_sharding.py pins the move, but the change may not solve the stated budget issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, the `orchestrate-poll` step guards and group placement.\n  Evidence of absence: The diff moves only the unblock-test step to group 0. The single-file module tests remain in group 1 at lines 2503-2509. The comments at lines 2477-2487 acknowledge the timings were unreadable, the placement is an estimate, and group 1 may still finish near the budget-watch threshold. The diff does not establish that group 0 has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (Linked issue #8091.)\n  Expected change site: `.github/workflows/ci.yml`, the `orchestrate-poll` group-1 steps, specifically \"Orchestrate poll single-file module tests\" (ci.yml:2503-2509).\n  Evidence of absence: The PR moved only the unblock step, whose recorded sandbox weight is 28.2s (ci.yml:2459), while the PR's comment states the single-file module step costs more (`test_run_substate_ledger.py` alone took 139s locally, ci.yml:2484-2485) and concedes \"group 1 may still finish near the 15-minute budget-watch threshold\" (ci.yml:2486). Predicted group-1 duration (~15m30s-15m40s) remains at or above the 15-minute warn threshold. Reported as NIT because the deferral is disclosed and the next budget-watch run will provide measured timings.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n\nHARDENING_SUGGESTIONS:\n- file: .github/workflows/ci.yml\n- location: ci.yml:2477-2489 (moved-step comment block)\n- issue: The estimate's derivation (\"this step costs about one minute more than the fast-fail subset\", ci.yml:2483) compresses two comparisons into one sentence.\n- suggested minimal fix: Replace that sentence with the explicit identity: if group 1's slice \u2248 group 0's fast-fail subset, then unblock \u2248 16m09s \u2212 15m09s \u2248 1 minute.\n- estimated lines changed: 1-2\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "452021bad07638ee0bb7489f263ab61141a3b9e20ff0f466c9d69e38ea33dd01",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8093,
+    "run_id": "40154683280",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40154683280",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025025601_b7338e2f6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8093,
+    "run_id": "40154683280"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T02:56:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

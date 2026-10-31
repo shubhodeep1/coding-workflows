@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The fix belongs in the poller's promotion gate (`comprehensive_promotion_gate_before_final_merge`, `scripts/orchestrate_poll_process.sh:14035`) and in `scripts/promote_main_cycle.sh`. This heal issue's frozen scope only allows `.github/workflows/promote-main-to-stable.yml`, `tests/**` and `changelog.d/*.md`. A plan listing `scripts/` paths here would be held with `heal_scope_plan_out_of_scope` (`scripts/files_touched_scope_guard.py:943`, `plan.yml:2691`). B only changes the error message in a workflow that already refuses correctly, so the poller would keep sending promotions that are sure to fail. C would leave the defect in place even though it can happen again. Re-issuing as a pipeline-authored issue with an exact `files_touched` grant is the supported way to get a root-cause fix that touches automation paths.\nQ2: Recording `deferred` with `reason: \"stable_not_ancestor\"` follows the poller's existing abandon pattern (`deferred` / `pin_released`). Marking the promotion `done` would claim a release this cycle never made: no version tag, no attested release manifest, no consumer dispatch. A later cycle will pick up whatever is on `main`.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/orchestrate_poll_process.sh (`comprehensive_promotion_gate_before_final_merge`, line 14035; pending-case dispatch near 14163-14178; `comprehensive_release_cycle_freeze`; `comprehensive_promotion_hold_or_fail`)\n    - scripts/promote_main_cycle.sh (`require_code_changes` / `base_not_ancestor` near 372-381; `pin_freeze` 538-625; freeze and gate dispatch near 766-781)\n    - .github/workflows/promote-main-to-stable.yml:241-261 (the `--is-ancestor` refusal stays unchanged)\n    - the heal scope marker in this issue's body (frozen paths)\n  steps:\n    - Plan the change as a new issue authored by the pipeline account (GH_PAT login) with no heal markers. Its body carries `files_touched:` listing exactly `scripts/orchestrate_poll_process.sh`, `scripts/promote_main_cycle.sh`, `tests/test_orchestrate_poll_process.py`, the existing promote-main-cycle test module under `tests/`, and `changelog.d/<new-issue>-promotion-stable-ancestry-precheck.md`. The body also carries the \"Suggested fix\" text of this issue.\n    - Hand-off: when the plan for this issue lists those `scripts/` paths, the heal plan gate holds it (`heal_scope_plan_out_of_scope`). The unblock judge's `reissue` verdict then creates the pipeline-authored replacement and closes this issue as superseded. Do not edit this issue's body or scope marker.\n    - In the replacement, poller change (pending case, after the pinned/untested checks and before the dispatch):\n      - Read the stable *branch* SHA unambiguously (`repos/<repo>/git/ref/heads/stable`, or `branches/stable`; `stable` is also a tag), then call `compare/<stable_branch_sha>...<promote_sha>`.\n      - Dispatch only when the status is `ahead` or `identical`.\n      - On `behind` or `diverged`, apply the Q2 outcome.\n      - On a read failure, call `comprehensive_promotion_hold_or_fail` with the new reason `stable_branch_lookup_unavailable`.\n      - Log under the existing `COMPREHENSIVE_PROMOTION_DEFERRED` prefix with `reason=stable_not_ancestor`.\n    - In the replacement, `promote_main_cycle.sh` change: before `pin_freeze` and the gate dispatch, require that `refs/heads/stable` is an ancestor of the candidate. If it is not, skip with the existing `PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base=<stable branch sha>`.\n    - Regression tests:\n      - Fake `gh` so the compare returns `diverged`, then `behind`. Assert no `promote-main-to-stable.yml` dispatch, state `deferred`/`stable_not_ancestor`, and the freeze tag deleted for a pinned cycle.\n      - Add a cycle test where the stable branch is not an ancestor of `main_tip` and the cycle skips with `base_not_ancestor`.\n    - Leave `promote-main-to-stable.yml`'s refusal untouched.\n  replaces_acceptance_criterion: none (only the delivery vehicle changes; the fix is the one this issue suggests)\n  equivalence_argument: The replacement carries the same fix, and its scope is exactly the files the fix touches. That satisfies the automation-path grant rules instead of working around this issue's frozen heal scope.\n  reversibility: If a person prefers the narrower in-scope change, they can close the replacement and post `/reclarify` here to choose B. No code lands until the replacement's PR merges.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/orchestrate_poll_process.sh (existing `deferred` + `pin_released` handling, `comprehensive_release_cycle_freeze`, `post_state_comment`, `tg_notify`)\n  steps:\n    - On `behind` or `diverged`, set `.comprehensive_promotion = {status: \"deferred\", reason: \"stable_not_ancestor\", promote_sha, stable_sha}`.\n    - Call `post_state_comment` and post one \"Promotion abandoned\" tracking comment naming both SHAs.\n    - Send a DEBUG `tg_notify`, because the pipeline handles this case itself.\n    - Call `comprehensive_release_cycle_freeze` for a pinned cycle and return 0 so the final merge goes ahead.\n    - Test both compare statuses.\n  replaces_acceptance_criterion: none\n  equivalence_argument: Deferring never records a release that did not happen, and it never blocks the project's final merge.\n  reversibility: The state field is plain data. A later change could map `behind` to `done` without migrating state.\n\nNote: the GITHUB FACTS line \"Branch `refs/heads/stable` ... does not exist\" contradicts the failed run's checkout of `refs/remotes/origin/stable` at `07ca402`. It is probably a lookup artefact, because `stable` is both a tag and a branch name. That is why the fix should read the branch ref explicitly before comparing by SHA.",
+  "fingerprint": "e143bfe4526b49b0b88f9b0cb191f13d3382871f632462f36a3db0144c93f79e",
+  "lineage": {
+    "issue_number": 7885,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39775806229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39775806229",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7885"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261022121830_f1c3cb6816",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7885,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39775806229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7885",
+  "timestamps": {
+    "created_at": "2026-10-22T12:18:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

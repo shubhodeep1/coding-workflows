@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `tests/test_audit_plans_command.py`:29-30 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The root and template copies of `audit-plans.md` differ, causing the byte-for-byte parity test to fail in CI.\n  WHY: CI fails and blocks merge; severity was reported as BLOCKER by google_gemini-3_8-flash and z-ai_glm-5_2, and MAJOR by openai_gpt-6-luna.\n- `scripts/security_audit.sh`:1302; security_audit_emit_codex_stderr_tail() at 95-98 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The 65,537-byte stderr truncation can leave a partial first line that the sanitizer does not discard.\n  WHY: For stderr larger than the cap, that fragment may be published without matching complete prompt-line or secret-value filters.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description \"Pending operator answers (Q41\u2013Q43)... The answers may add commits to this PR\" \u2014 Q41: whether LOG_SUMMARY stays an OpenRouter HTTP call; Q42: whether MATERIALITY stays as it is; Q43: which role the implement issue-summary codex call uses.\n  expected_change_site: scripts/ai_engine.sh / scripts/claude_engine.py / .github/ai/claude_engine.json for whichever role Q43 picks; README/agents model table for Q41/Q42.\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: No diff hunk in LAST RUN DIFF or the broader PR DIFF resolves Q41\u2013Q43; the PR description explicitly defers them pending operator answers and says these are not reportable gaps.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- `tests/test_audit_plans_command.py`: lines 29-30 | severity=BLOCKER | confidence=5\n  PROBLEM: The root command copy does not match the template copy, so `test_template_parity` fails.\n  WHY: CI raises an AssertionError in `tests-hooks-and-orchestrator`, causing the required aggregate lint check-run to fail and preventing PR completion.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `scripts/security_audit.sh`: 1302; security_audit_emit_codex_stderr_tail() at 95-98 | severity=MAJOR | confidence=4\n  PROBLEM: The new `tail -c 65537` truncation can leave a partial first line, but the sanitizer discards a cut first line only when the input exceeds 65,537 bytes.\n  WHY: For Claude stderr larger than the cap, the partial line is processed and may be published in the sanitized diagnostic tail; a fragment that no longer matches a complete prompt line or secret value can bypass those filters.\n- `tests/test_audit_plans_command.py`: 30; `.claude/commands/audit-plans.md:103,126`; `workflow-templates/.claude/commands/audit-plans.md:103,126` | severity=MAJOR | confidence=5\n  PROBLEM: The root and template command copies differ, causing the parity test to fail.\n  WHY: CI compares the files byte-for-byte, and the current run confirms `tests-hooks-and-orchestrator` fails on this test.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- `.claude/commands/audit-plans.md:103 and workflow-templates/.claude/commands/audit-plans.md:103` | severity=BLOCKER | confidence=5\n  PROBLEM: The root and template command copies differ, so `test_template_parity` fails.\n  WHY: The mismatch fails the required lint job and blocks merge; the editor sandbox cannot fix it because `scripts/review_untrusted_workspace.py:34-44` excludes `.claude/commands/` from the editor transfer allowlist.\n- Requirement: PR description \"Pending operator answers (Q41\u2013Q43)... The answers may add commits to this PR\" \u2014 Q41: whether LOG_SUMMARY stays an OpenRouter HTTP call; Q42: whether MATERIALITY stays as it is; Q43: which role the implement issue-summary codex call uses.\n  Expected change site: scripts/ai_engine.sh / scripts/claude_engine.py / .github/ai/claude_engine.json for whichever role Q43 picks; README/agents model table for Q41/Q42.\n  Evidence of absence: No diff hunk in LAST RUN DIFF or the broader PR DIFF resolves Q41\u2013Q43; the PR description explicitly defers them pending operator answers. Per the task-gap rules, deferred requirements are not gaps when the issue itself defers them \u2014 the PR description does defer them. Citing the deferral: these are not reportable gaps; flagging only for completeness so the editor does not act on them.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9e8e37c41d1d9da7d1aef5f3db0d9992e28e1901f10e5c503b13f26910979feb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37248809978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37248809978",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005015106_c2d7d7469b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37248809978"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T01:51:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nI'm answering with Q1: A and Q2: B. Q1 and Q2 are compatible: B is the only Q2 option that conflicts with nothing.\n\nOne thing I found changes the picture: on `main`, `workflow-templates/.claude/hooks/pr_merge_status_guard.py` line 2279 already has the new live lookup (`pull_requests = query_pull_requests(slug, branch, cwd)`). The matching changelog fragment, `changelog.d/6641-merge-guard-push-fresh-pr-state.md`, is also on `main`. So the template change came from #6641 on `main`, not only from #6647. I couldn't see whether `main`'s own live hook matches, because this checkout has no `.claude/` directory.\n\nDECISIONS:\nQ1: A\nQ2: B\n\nRATIONALE:\nQ1: The red `CI` check (run 37866800853) is on PR #6647's branch `ai/issue-6635` at `da50a4874bdc`, so the fix has to land there for that PR to pass. Option B's reasoning (\"main does not have #6647's template change yet\") is wrong, because `main` already has the new lookup. But `main` targets nothing that is currently failing, so A is still the right branch. Option C would leave the drift to a review loop that is not allowed to write this file.\nQ2: The pipeline deliberately keeps AI editors away from this hook, which runs on the host as a safety check:\n- The review sandbox explicitly excludes `.claude/hooks/pr_merge_status_guard.py` (`scripts/review_untrusted_workspace.py:121`).\n- CI deliberately never prepares the live copies of security hooks. Their committed live copies must already match the templates, \"even when the editor cannot write the live file\".\n\nOption A would get around both guards using a grant raised from an issue built out of CI-log text, which is untrusted. Option C would drop the security fix that #6641 already merged to `main`. So a person makes the byte-for-byte sync commit, and the pipeline only checks and closes.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none; both decisions are letters)\nNotes for the planner and implementer when following Q1:A + Q2:B:\n- Add `Integration branch: ai/issue-6635` so any follow-up work stacks onto PR #6647.\n- Do not write to `.claude/**` or `workflow-templates/.claude/**`. Do not change `tests/test_pr_merge_status_guard.py`, `tests/test_claude_template_live_parity.py`, `.github/workflows/ci.yml` lines 394-401, or `scripts/sync_claude_live_copies.py`.\n- The human operator should first check whether `main`'s `.claude/hooks/pr_merge_status_guard.py` matches `main`'s template:\n  - If it does not match, sync it on `main` first, so `main`'s own CI stays green, and then merge `main` into `ai/issue-6635`.\n  - If it does match, copy the template over the live hook on `ai/issue-6635`, keeping the executable mode.\n- Then the pipeline reruns `tests/test_pr_merge_status_guard.py` and `tests/test_claude_template_live_parity.py`, confirms `CI / lint` is green on PR #6647's new head, and closes this issue. It must not use an auto-close keyword against any `ai:orchestrator-tracking` issue.\n\nESCALATION (required for any ESCALATE decision):\n(none)\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n(none)",
+  "fingerprint": "01654e7e13d0d48fe4f4a914b5843c3d70908790a6c0ae7f9195a828d718e38f",
+  "lineage": {
+    "issue_number": 6828,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37868288221",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37868288221",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6828"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009011614_b8d997de83",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6828,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37868288221"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6828",
+  "timestamps": {
+    "created_at": "2026-10-09T01:16:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

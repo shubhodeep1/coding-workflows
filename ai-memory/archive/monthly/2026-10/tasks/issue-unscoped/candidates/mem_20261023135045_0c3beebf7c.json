@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1481-1492 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The return-to-`ai:awaiting-approval` log line prints cached `IMPL_RUN_STATUS`/`IMPL_RUN_CONCLUSION_LATEST`/`IMPL_RUN_ID_LATEST`, which refresh only every 30 seconds, so it can report a stale `in_progress`/`unknown` state instead of the real outcome.\n  WHY: The line exists to name the skipped or failed Implement run, so it misleads triage, though the pass/fail result is unchanged. All three reviewers rated it NIT.\n- .github/workflows/test-and-mark-stable.yml:1481-1487 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `IMPL_PROGRESS_NEXT_READ=$((NOW + 30))` is set before the `scoped_implement_progress_counts` call instead of after it.\n  WHY: A counter call longer than 30 seconds makes the throttle re-fire immediately, so it only enforces 30 seconds from the call start. This is a spacing nuance (NIT).\n- tests/test_test_and_mark_stable_plan_polling_guard.py:598-603 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `&page=2&` assertion in `test_implement_terminal_check_treats_unreadable_and_malformed_pages_as_unknown` cannot tell whether the terminal walk or the progress counter requested page 2.\n  WHY: A future counter regression could satisfy the assertion and silently lose coverage of the terminal walk's bad-page handling (NIT).\n- .github/workflows/test-and-mark-stable.yml:1484-1486 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: This item came from the HARDENING_SUGGESTIONS section, not the findings list. A failed or malformed counter read silently shows `impl_runs: 0`, which looks like \"no run exists\".\n  WHY: The suggested fix is to add a `::warning::` echo in the fallback branch (1 line, risk score 1).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep the completion budget unchanged, but measure it from the run's first non-`queued` status (`scripts/dispatch_and_watch_workflow_run.sh`) and log the queued duration.\"\n  expected_change_site: scripts/dispatch_and_watch_workflow_run.sh around lines 299-327\n  confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: No hunk touches that file. The reviewer notes this was deferred by decision AD-2 (option A, environmental cause) and falls outside the heal scope, so it is not a gap (NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:1481-1492 | severity=NIT | confidence=4\n  PROBLEM: `IMPL_RUN_STATUS`, `IMPL_RUN_ID_LATEST` and `IMPL_RUN_CONCLUSION_LATEST` refresh at most every 30 seconds while the label check runs every 10 seconds, so the `returned to ai:awaiting-approval` echo can print a cached `status=in_progress conclusion=unknown` or `id=unknown`.\n  WHY: The log line is meant to name the skipped or failed run and names the wrong state. The pass/fail result is unchanged because the `implement_failed` path at line 1528 runs its own scoped walk.\n- TASK_GAP:\n  Requirement: \"Keep the completion budget unchanged, but measure it from the run's first non-`queued` status (`scripts/dispatch_and_watch_workflow_run.sh`) and log the queued duration.\"\n  Expected change site: `scripts/dispatch_and_watch_workflow_run.sh` around lines 299-327\n  Evidence of absence: No hunk touches that file. Deferred by decision AD-2 (option A) and outside the heal scope, so not a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- HARDENING (.github/workflows/test-and-mark-stable.yml:1484-1486, `if ! scoped_implement_progress_counts; then` fallback): a failed or malformed counter read silently shows `impl_runs: 0`. Suggested fix: add a `::warning::` echo in the fallback (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:1481-1487 | severity=NIT | confidence=4\n  PROBLEM: `IMPL_PROGRESS_NEXT_READ` is set before the counter call instead of after it.\n  WHY: A slow counter call (over 30 seconds) makes the throttle re-fire immediately, so it only enforces 30 seconds from the call start.\n- .github/workflows/test-and-mark-stable.yml:1482-1492 | severity=NIT | confidence=5\n  PROBLEM: The return-to-`ai:awaiting-approval` log line prints `IMPL_RUN_STATUS` and `IMPL_RUN_CONCLUSION_LATEST` from a counter cached for up to 30 seconds, so it can show stale `in_progress`/`unknown`.\n  WHY: It is the operator-facing breadcrumb for an Implement run that ended without a PR, so a wrong status makes triage harder.\n- tests/test_test_and_mark_stable_plan_polling_guard.py:598-603 | severity=NIT | confidence=3\n  PROBLEM: The `&page=2&` assertion cannot distinguish a page-2 request from the terminal walk from one from the progress counter.\n  WHY: A future counter regression could satisfy the assertion and silently lose coverage of the terminal walk's bad-page handling.\n- HARDENING (.github/workflows/test-and-mark-stable.yml:1481-1487): move `IMPL_PROGRESS_NEXT_READ=$((NOW + 30))` to after the counter call (about 2 lines). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:1482-1492 | severity=NIT | confidence=5\n  PROBLEM: The return-to-approval log can report a stale Implement run status and conclusion.\n  WHY: The label transition is checked every 10 seconds but the run counters refresh only every 30 seconds, so the log can print the cached `in_progress`/`unknown` instead of the completed run's outcome.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a8de7a1004e69c254bb33652d616e779a2476076cc1db34eac949d517b783219",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7969,
+    "run_id": "39959390730",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39959390730",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023135045_0c3beebf7c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7969,
+    "run_id": "39959390730"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T13:50:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

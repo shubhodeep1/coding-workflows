@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan: rewrite line 2 of `tests/e2e_smoke_canary.txt` (canary-a redo, refs #7397)\n\nPlanning ref: `HEAD` is `2b7eab2b525d161414d01fb47c97efdc06ae1f15` on branch `orchestrator/project-7397`. The integration branch metadata matches and `Integration branch mismatch: false`.\n\n**What changes:** only the file the issue names. Line 1 stays `status: ok`. Line 2 changes from `run_id: 26151428977` to `decompose-run: 38660755875`. Line 3, `updated-by: ai-pipeline`, and any later lines stay as they are.\n\n**Automation:** this modifies existing data only. It adds no script, workflow, scheduler wiring, supervisor or database operation, so there is no entry for `docs/scripts-pending-removal.md`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue gives the exact file, the exact line content and a `files_touched` allowlist of that one file. It forbids editing any other file. Doing more would break the scope lock, and doing less would leave the project deliverable missing.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a one-line data edit: replace line 2 with `decompose-run: 38660755875`.\n\n## Data structures affected\n`tests/e2e_smoke_canary.txt`, a plain-text canary file. Keep its current line endings and its trailing newline.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 rather than add a new line\n- Chosen: replace line 2 (`run_id: 26151428977`) with `decompose-run: 38660755875`.\n- Alternatives considered: insert the new line as line 2 and push `run_id` down to line 3; append the new line at the end of the file.\n- Why: the acceptance check reads line 2 exactly. Replacing the line is the smallest edit that passes it. \"Leave any other lines\" refers to lines other than 1 and 2.\n\n### D2 \u2014 No changelog fragment\n- Chosen: no `changelog.d` entry.\n- Alternatives considered: add a fragment.\n- Why: the issue says \"Do not edit any other file\", and `files_touched` lists only the canary file.\n\n## Security considerations\nNo trust boundary, endpoint, external input, secret or money state is involved. The one abuse case is an edit outside the allowlist, and the `files_touched` scope guard rejects that.\n\n## Risks and edge cases\n- The old canary-a PR (#7398) was closed without merging. Implement must work from the current state of `orchestrator/project-7397`, not from that PR.\n- The file must not lose its trailing newline and must not pick up CRLF line endings.\n\n## Testing considerations\n- `sed -n 1p tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 38660755875`.\n- `sed -n 3p tests/e2e_smoke_canary.txt` still prints `updated-by: ai-pipeline`.\n- `git diff --stat` shows exactly one file with one line changed.\n\n## Pre-execution self-check\n- The planning ref matches the integration branch.\n- The scope matches the `files_touched` allowlist.\n- The acceptance checks are deterministic.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "d6c9b52b61f64528882bf6f54415568394bec58a60ce28506ee4343c700c34d9",
+  "lineage": {
+    "issue_number": 7400,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38662603259",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38662603259",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7400"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261015010036_cb92f8ef0e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7400,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38662603259"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7400",
+  "timestamps": {
+    "created_at": "2026-10-15T01:00:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

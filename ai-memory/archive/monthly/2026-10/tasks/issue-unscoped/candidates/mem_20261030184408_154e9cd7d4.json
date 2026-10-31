@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `branch_divergence` to the same file. It makes one `GET repos/<repo>/compare/<target>...<default>` call. Skip it when the target branch is the default branch.\" \u2014 the only skip condition the issue states is target == default; `<repo>` is generic.\n  expected_change_site: scripts/workflow_failure_heal_intake.sh, `_heal_fetch_evidence_pack_api` (lines 2879-2884)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  EVIDENCE: The comparison guard at lines 2879-2884 requires SOURCE_REPO to equal SELF_REPO, and the endpoint at line 2884 is built with `SELF_REPO`. A workflow_run report from a consumer repository (where SOURCE_REPO != SELF_REPO) therefore gets no Branch divergence subsection even when its target differs from its default branch. The linked issue and plan do not restrict this evidence to the self-repository; the self-repo-only restriction is a documented implementation choice (agents.d fragment), not a spec condition. Reviewer severities disagree: google_gemini-3_1-flash-lite=MAJOR, z-ai_glm-5_3-flash=NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Add branch_divergence using one GET repos/<repo>/compare/<target>...<default> call, skipping it when the target is the default branch.\n  Expected change site: scripts/workflow_failure_heal_intake.sh, _heal_fetch_evidence_pack_api\n  Evidence of absence: The comparison guard at lines 2879-2884 requires SOURCE_REPO to equal SELF_REPO. A workflow_run report from a consumer repository (where SOURCE_REPO != SELF_REPO) currently receives no divergence subsection even when it has valid distinct target/default branches. The linked issue and plan do not restrict this evidence to the self-repository.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Add `branch_divergence` to the same file. It makes one `GET repos/<repo>/compare/<target>...<default>` call. Skip it when the target branch is the default branch.\" \u2014 the only skip condition the issue states is target == default; `<repo>` is generic.\n  Expected change site: scripts/workflow_failure_heal_intake.sh, `_heal_fetch_evidence_pack_api` (lines 2879-2884).\n  Evidence of absence: The compare guard at workflow_failure_heal_intake.sh:2879 requires `SOURCE_REPO` to equal `SELF_REPO` and the endpoint at line 2884 is built with `SELF_REPO`, so a workflow_run report from a consumer repository gets no Branch divergence subsection even when its target differs from its default branch. No additional skip condition for consumer repos appears in the linked issue; the self-repo-only restriction is a documented implementation choice (agents.d fragment), not a spec condition.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e5616bbd22925105e592b16cc34551b72c477133b87bb54529d9a0160e313336",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8478,
+    "run_id": "41104866229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41104866229",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030184408_154e9cd7d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8478,
+    "run_id": "41104866229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T18:44:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

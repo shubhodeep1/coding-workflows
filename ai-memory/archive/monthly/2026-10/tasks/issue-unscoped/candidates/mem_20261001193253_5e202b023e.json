@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/protected_path_gate.sh:111, lines 127-146 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: An empty authorized head causes the wrapper to reject the protected call with `reason=authorized_head_missing`.\n  WHY: The reviewer found this to be correct fail-closed behavior, not a runtime failure.\n- scripts/protected_path_authorization.py:287-294 (evaluate_pr) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The wrapper binds the merge to the PR head from the API response rather than the caller's `expected_head`.\n  WHY: The reviewer found this behavior correct because a bound call has matching heads and the gate binds to the head actually checked.\n- scripts/protected_path_authorization.py:287-294 (the new head SHA check ordering) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: An unbound call with an invalid head SHA returns `block` with `reason: \"PR head SHA is unavailable\"`.\n  WHY: The reviewer found this to be correct fail-closed behavior, not a runtime failure.\n- scripts/protected_path_gate.sh:88-106 (cache logic) | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A bound call followed by an unbound call for the same PR uses a different cache key and re-reads GitHub API.\n  WHY: The reviewer found this to be a minor performance cost, not a correctness issue.\n- scripts/protected_path_authorization.py:631-647 (evaluate_release) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When `head_contains` is absent, merges cannot be authorized through the containment check.\n  WHY: The reviewer found this to be intentional fail-closed behavior; a comment naming the merge commit SHA itself still authorizes.\n- tests/test_orchestrate_poll_process.py:1895, 2284, 2304, 11138, 11210, 11220, 11271, 11326, 14014 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The changed test fixtures generate per-PR placeholder SHAs, which could make the GraphQL fake return inconsistent SHAs for the same PR.\n  WHY: The reviewer checked the GraphQL and REST fixtures and found their generated 40-hex SHAs consistent and well-formed.\n- scripts/protected_path_gate.sh:51-55 (PROTECTED_PATH_GATE_DIR) | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: An environment-provided `PROTECTED_PATH_GATE_CHECKER` could redirect the wrapper to a different Python script.\n  WHY: The reviewer characterized this as a defense-in-depth concern requiring control of the calling shell environment, not a runtime failure in the reviewed usage.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/protected_path_gate.sh:111, lines 127-146 | severity=NIT | confidence=2\n  PROBLEM: The wrapper treats an empty authorized head as missing and rejects the protected call with `reason=authorized_head_missing`.\n  WHY: At runtime this is the correct fail-closed behavior, not a runtime failure.\n- scripts/protected_path_authorization.py:287-294 (evaluate_pr) | severity=NIT | confidence=3\n  PROBLEM: The wrapper adds `--match-head-commit ${_ppg_authorized_head}` using the head from the PR API response, not the call's `expected_head`.\n  WHY: For a bound call the heads match, and binding the merge to the head actually checked is correct behavior.\n- scripts/protected_path_authorization.py:287-294 (the new head SHA check ordering) | severity=NIT | confidence=3\n  PROBLEM: With `expected_head` absent and an invalid head SHA, the result blocks with `protected: not unprotected` and `reason: \"PR head SHA is unavailable\"`.\n  WHY: This is correct fail-closed behavior, and the test covers it.\n- scripts/protected_path_gate.sh:88-106 (cache logic) | severity=NIT | confidence=2\n  PROBLEM: A bound call followed by an unbound call for the same PR uses a different cache key and re-reads GitHub API.\n  WHY: This is a minor performance cost, not a correctness issue.\n- scripts/protected_path_authorization.py:631-647 (evaluate_release) | severity=NIT | confidence=3\n  PROBLEM: When `head_contains` is absent, the containment condition prevents merges from being authorized.\n  WHY: This is correct fail-closed behavior; a comment naming the merge commit SHA itself still authorizes.\n- tests/test_orchestrate_poll_process.py:1895, 2284, 2304, 11138, 11210, 11220, 11271, 11326, 14014 | severity=NIT | confidence=2\n  PROBLEM: The generated per-PR placeholder SHAs could cause the GraphQL fake to return inconsistent SHAs for the same PR.\n  WHY: The GraphQL and REST fake values were checked and are consistent and well-formed 40-hex SHAs.\n- scripts/protected_path_gate.sh:51-55 (PROTECTED_PATH_GATE_DIR) | severity=NIT | confidence=2\n  PROBLEM: An environment-provided `PROTECTED_PATH_GATE_CHECKER` could redirect the wrapper to a different Python script.\n  WHY: In production the script sets the variable from its source line; the reviewer described this only as a defense-in-depth concern if an attacker controls the calling shell environment.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "059fed079eb07b012e775295d3bd7faecd29a6be92fa0f601000c085e9d0bf47",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4973,
+    "run_id": "36908585620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36908585620",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001193253_5e202b023e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4973,
+    "run_id": "36908585620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T19:32:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

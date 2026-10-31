@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the reporter get the Claude pool step reason it passes as `--pool-reason`? (The issue assumes the reporter already reads it, but it does not.)\nChoices:\nA) Use the same order as `ai_engine_no_account_reason` in `scripts/ai_engine.sh` (lines 246-261). Take `CLAUDE_POOL_REASON` from the environment first. If that is empty, read `CLAUDE_POOL_REASON_FILE` (default `${RUNNER_TEMP}/claude-pool-reason`, written by `scripts/claude_pool_token.sh`), refusing symlinks and reading at most 64 bytes. Add a new local variable in the reporter for it. (RECOMMENDED)\nB) Read only the reason file (`CLAUDE_POOL_REASON_FILE` / `${RUNNER_TEMP}/claude-pool-reason`) and ignore the `CLAUDE_POOL_REASON` env var.\nC) Read only the `CLAUDE_POOL_REASON` env var. This needs a matching `env:` entry on each workflow's reporter step, which widens scope beyond the four paths the issue lists.\nQ2: If no pool reason source exists for the job (no env value and no file, e.g. the pool step never ran), what should the reporter pass?\nChoices:\nA) Leave out `--pool-reason`, so the payload stays byte-identical to today's. Pass the argument only when a source exists; a value that fails `^[a-z0-9_]{1,60}$` still becomes `unavailable` inside `workflow_failure_heal.py`. (RECOMMENDED)\nB) Always pass `--pool-reason`, with an empty value when there is no source. Every engine_fallback payload would then carry `Claude pool step reason: unavailable`.",
+  "fingerprint": "8313ee2d979ae14fa69c9bd0d2cc2563f1084f935e8c19fdbd6c0a8b78f7f872",
+  "lineage": {
+    "issue_number": 8406,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40974017933",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40974017933",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029234312_cdb50c4258",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8406,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40974017933"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8406 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T23:43:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

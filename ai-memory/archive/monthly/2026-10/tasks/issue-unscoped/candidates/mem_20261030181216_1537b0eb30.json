@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/heal_reproduce.sh:188-196 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The bare-name fallback in `map_entry` (`short = name.split(\"::\")[-1]`, `n in (node, short)` / `n.startswith((node + \"[\", short + \"[\"))`) drops the class qualifier. A listed `tests/path.py::ClassB::test_same` therefore matches the bare name `test_same` of a failing `ClassA::test_same` in the same file and is reported as `reproduced`/`regression` even though it passed.\n  WHY: The gate's unittest/script parsers (`workflow-templates/.claude/hooks/prepush_affected_tests.py:146-147,716-717,719-723`) record only bare method names, so heal intake gets false reproduction evidence, which breaks the rule \"A test that passes at the failing SHA is never reproduced\". Reviewers disagreed on severity: google_gemini-3_1-flash-lite said MAJOR, while minimax_minimax-m3 and z-ai_glm-5_3-flash said NIT; the highest is used. anthropic_claude-sonnet-5_5 disputed reachability, because the callers build pairs from extract_failing_tests (scripts/workflow_failure_heal.py:3649, 3685-3688), which drops the class component.\n- scripts/heal_reproduce.sh:192-193 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The bare-name fallback in `map_entry` treats any matching bare name as proof that the listed test failed, even when the gate took that name from another test's captured output. `_UNITTEST_RE` accepts `FAIL: <name> (` lines anywhere in the output tail (`workflow-templates/.claude/hooks/prepush_affected_tests.py`, lines 147 and 703-723).\n  WHY: If a failing sibling prints a line such as `FAIL: test_x (ClassB)` while the listed `test_x` passes, the gate puts `test_x` in `names` and the passing test is classified `reproduced`/`regression` (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/heal_reproduce.sh | map_entry, failures branch, the line `if not any(n in (node, short) or n.startswith((node + \"[\", short + \"[\")) for n in names):`\n  PROBLEM: In a pytest unit, a bare name in `names` can only come from a captured-output line shaped like `FAIL: test_x (` or `FAIL  test_x` printed by a sibling test, and that would mark a listed test that passed as `reproduced` (advisory only).\n  WHY: suggested minimal fix: allow the bare-name comparison only when no entry in `names` contains \"::\", e.g. `bare_ok = not any(\"::\" in n for n in names)`; estimated lines changed: 3; HARDENING_RISK_SCORE: 1\n- NOTE: Disputes the class-qualified collision. Callers build the list from the `pairs` of extract_failing_tests (scripts/workflow_failure_heal.py:3649, 3685-3688), whose pytest pattern drops the class component, and the gate passes only short names to script-style runners (line 600). Not reported as a defect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/heal_reproduce.sh:map_entry function, lines 193-196 | severity=MAJOR | confidence=4\n  PROBLEM: The bare-name fallback in `map_entry` marks a class-qualified test ID (`tests/path.py::ClassB::test_same`) as failed when a same-named method in a different class (`tests/path.py::ClassA::test_same`) failed, even though the listed test passed.\n  WHY: The gate's unittest parser reports only method names, so `status=reproduced` is returned and heal intake receives false reproduction evidence.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/heal_reproduce.sh:map_entry, failures branch (~lines 188-196) | severity=NIT | confidence=4\n  PROBLEM: The bare-name fallback (`short = name.split(\"::\")[-1]`, `n in (node, short)` / `n.startswith((node + \"[\", short + \"[\"))`) ignores the class qualifier, so `tests/path.py::ClassB::test_same` matches a failing `ClassA::test_same` reported as bare `test_same` (`workflow-templates/.claude/hooks/prepush_affected_tests.py:147,719-723`). `test_bare_name_in_failed_script_unit_is_reproduced` covers only a listing with no class.\n  WHY: It reports `reproduced`/`regression` for a test that passed at the failing SHA, which breaks the rule \"A test that passes at the failing SHA is never reproduced\".\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/heal_reproduce.sh:`map_entry`, lines 192-193 | severity=NIT | confidence=4\n  PROBLEM: The bare-name fallback treats any matching bare name as evidence that the requested test failed, even when the gate took the name from another test's captured output. `_UNITTEST_RE` accepts `FAIL: <name> (` lines anywhere in the output tail (`workflow-templates/.claude/hooks/prepush_affected_tests.py`, lines 147 and 703-723).\n  WHY: A failing sibling that prints `FAIL: test_x (ClassB)` puts `test_x` in `names`, so a listed `test_x` that passed is classified `reproduced`/`regression`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/heal_reproduce.sh:map_entry, failures branch, line 193 | severity=NIT | confidence=4\n  PROBLEM: `short = name.split(\"::\")[-1]` with `n in (node, short) or n.startswith((node + \"[\", short + \"[\"))` lets a class-qualified listed ID (`tests/test_a.py::ClassB::test_x`) match the bare name of a failing `ClassA.test_x`. The gate parsers (`workflow-templates/.claude/hooks/prepush_affected_tests.py:146-147,716-717`) record only bare method names.\n  WHY: Heal intake receives `status=reproduced`/`reason=regression` for a test that did not fail at the failing SHA, which is the false-positive direction the issue forbids. This was new in the last run's diff.\n- HARDENING_SUGGESTION: scripts/heal_reproduce.sh | map_entry, failures branch, lines 191-196\n  PROBLEM: The bare-name match applies to class-qualified unittest IDs too, where a bare name cannot tell apart same-named methods in different classes.\n  WHY: suggested minimal fix: guard the `short` alternatives on the listed name having no class component (e.g. `bare_ok = \"::\" not in name`); estimated lines changed: 3; HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4c8f44290389ea6829e9d88a5fda43444979cefe3025935622835c69a236de64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8477,
+    "run_id": "41100214458",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41100214458",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030181216_1537b0eb30",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8477,
+    "run_id": "41100214458"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T18:12:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

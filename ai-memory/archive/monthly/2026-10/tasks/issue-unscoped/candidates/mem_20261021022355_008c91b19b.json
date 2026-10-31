@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/promote_candidate_follow.sh:240 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The PATCH git/refs call passes `-F \"force=false\"`, which the reviewers say sends `force` as the string \"false\" instead of the JSON boolean `false`.\n  WHY: The GitHub API may reject the string with HTTP 400/422, which the script maps to `outcome=error reason=patch_rejected`, so every non-frozen fast-forward would fail; qwen_qwen3_7-plus rated this MAJOR (mapped to high) and gemini gave no severity; anthropic_claude-sonnet-5_5 disputes it, saying `gh api -F/--field` is the typed field that sends a JSON boolean and `scripts/gh_api_retry.py` (lines 236-243) passes `-F` through unchanged.\n- scripts/promote_candidate_follow.sh:191-195 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The missing-branch path calls the branch unprotected and sends a CRITICAL alert without reading its protection status, so `FOLLOW_PROTECTED` is still `unknown` after the POST.\n  WHY: If a ruleset already targets `promote-candidate`, a scheduled creation during the 00:00 UTC hour still emits `outcome=unprotected` and pages the operator; the source rated it NIT (mapped to low); anthropic_claude-sonnet-5_5 raised the same concern as a hardening suggestion, not a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cBefore opening the PR, create `refs/heads/promote-candidate` at the current `main` tip\u201d; the issue also requires the branch to exist at the main tip before merge.\n  expected_change_site: Branch bootstrap before merge, alongside `.github/workflows/promote-candidate-follow.yml`.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The only creation path is `scripts/promote_candidate_follow.sh` lines 186-198, run by a workflow triggered by pushes to `main`, the schedule or manual dispatch, and the job requires `github.ref == 'refs/heads/main'` (`.github/workflows/promote-candidate-follow.yml` lines 13-18, 31); no pre-merge bootstrap is present, so the 13 wrappers may point at `@promote-candidate` before that ref exists (source severity MAJOR); anthropic_claude-sonnet-5_5 disagrees, citing the issue's deferral \"If the run cannot create it, the follower's first run does.\" and the BRANCH_EXISTS=false fallback tested by `test_created_when_branch_missing` and `test_created_branch_alerts_on_first_scheduled_run_after_midnight`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- scripts/promote_candidate_follow.sh | the alert text in the created-branch path (\"it is not protected (protected=${FOLLOW_PROTECTED})\") (hardening suggestion, not a finding)\n  PROBLEM: On this path FOLLOW_PROTECTED is always \"unknown\", so \"is not protected\" claims more than the script knows and the alert is a false positive if a ruleset already covers the name.\n  WHY: Suggested fix is to reword it to \"protection was not read for the new branch; confirm the promote-candidate ruleset exists\" (1 line).\n- tests/test_promote_candidate_follow.py | test_failed_reads_fail_closed / the create path (hardening suggestion, not a finding)\n  PROBLEM: No test covers `reason=create_failed`, where the POST git/refs returns non-2xx.\n  WHY: Suggested fix is to route `POST repos/{REPO}/git/refs` to [422, {...}] with the branch missing and assert returncode 1, `outcome=error reason=create_failed` and a single POST write (6 lines); HARDENING_RISK_SCORE: 1.\n- Notes (no findings): the reviewer rejects the pass-1 claim at scripts/promote_candidate_follow.sh:191 because the 00:00 UTC alert is inside the BRANCH_EXISTS=false block and a protected existing branch does not alert; rejects the `-F \"force=false\"` claim because `-F` is typed and sends a JSON boolean; confirms the `frozen_at=([0-9]{1,12})([[:space:]]|$)` regex is correct and fails safe; does not count P2.1 as a gap because the issue defers it to the follower's first run; reports P2.2-P2.8 present; could not confirm the remote `promote-candidate` branch exists; did not run tests.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/promote_candidate_follow.sh:240 | confidence=3\n  PROBLEM: Incorrect use of `-F` flag for `force` parameter in PATCH request.\n  WHY: The reviewer says `-F` with \"force=false\" sends a multipart/form-data string \"false\" instead of the boolean the GitHub API needs, and that `sha` and `force` should be sent together in one JSON body.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/promote_candidate_follow.sh:191-195 | severity=NIT | confidence=4\n  PROBLEM: The missing-branch path labels the branch unprotected and sends a CRITICAL alert without checking its protection status, and `FOLLOW_PROTECTED` remains `unknown` after the POST.\n  WHY: If a ruleset already targets `promote-candidate`, a scheduled creation during the 00:00 UTC hour still emits `outcome=unprotected` and pages the operator.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \u201cBefore opening the PR, create `refs/heads/promote-candidate` at the current `main` tip\u201d; the issue also requires the branch to exist at the main tip before merge.\n  Expected change site: Branch bootstrap before merge, alongside `.github/workflows/promote-candidate-follow.yml`.\n  Evidence of absence: The only creation path is `scripts/promote_candidate_follow.sh` lines 186-198, triggered by main pushes, the schedule or manual dispatch with `github.ref == 'refs/heads/main'` required (`.github/workflows/promote-candidate-follow.yml` lines 13-18, 31). No pre-merge bootstrap exists, so the 13 wrappers' `@promote-candidate` references may not resolve until the follower runs after merge.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/promote_candidate_follow.sh:240 (`-F \"force=false\"`) | severity=MAJOR | confidence=3\n  PROBLEM: The PATCH call uses `-F` (described by the reviewer as raw-field) for `force=false`, which sends the string `\"false\"` instead of the boolean `false` the GitHub API schema declares.\n  WHY: A string may be rejected with HTTP 400/422, which maps to `outcome=error reason=patch_rejected`, so every non-frozen fast-forward would fail; the stub-gh tests only check that the token is present; the reviewer's proposed fix is to switch to `-f` (described as the typed field).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3a719b46e72ce9e02fe33b506a1b7a9a8de3e52b76917245c905964e8b9b984f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7748,
+    "run_id": "39529590640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39529590640",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021022355_008c91b19b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7748,
+    "run_id": "39529590640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T02:23:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

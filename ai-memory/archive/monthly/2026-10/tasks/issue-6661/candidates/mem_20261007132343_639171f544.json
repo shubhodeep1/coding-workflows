@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation Plan: smoke canary A (issue for tracking #6660)\n\n**Planning ref:** `orchestrator/project-6660` @ `b1608e5b9f2f31cbe017210035b7b22d3d49ea6b`. It matches the integration branch metadata, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for one change to one existing file. No helpers, patterns or new code are needed. The edit stays inside the file the issue names and leaves the sibling's `tests/e2e_smoke_canary_b.txt` alone.\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (already exists). Its current content is:\n  ```\n  status: ok\n  run_id: 26151428977\n  updated-by: ai-pipeline\n  ```\n\n### 2. Functions/modules to implement\nNone. This is a data-file edit only:\n- Leave line 1 (`status: ok`) as it is.\n- Replace line 2 (`run_id: 26151428977`) with `decompose-run: 37624152181`.\n- Keep line 3 (`updated-by: ai-pipeline`). It is unrelated to the two required lines, and the issue says to keep unrelated content after line 2 and make the minimal edit.\n- Keep the single trailing newline.\n\n### 3. Data structures affected\nNone.\n\n### 4. API/interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Keep the trailing `updated-by` line\n- Chosen: Keep line 3 and replace only line 2.\n- Alternatives considered: Shrink the file to exactly two lines.\n- Why: The issue says to keep unrelated content after line 2 and prefer the minimal edit. All three acceptance checks only look at lines 1 and 2.\n\n## Security considerations\nNo trust boundary, endpoint, external input or secret is involved. The only abuse case is scope creep into other files. The implementer must stage only `tests/e2e_smoke_canary.txt`, which the files_touched guard also enforces.\n\n### 5. Risks and edge cases\n- **Conflict with the issue's \"exactly two lines\" wording:** the file already has a third line, and the issue also says to keep unrelated content after line 2. Keeping line 3 satisfies every acceptance check.\n- **Trailing newline:** the file must end with exactly one newline, with no blank line added.\n\n### 6. Testing considerations\n- `head -n1 tests/e2e_smoke_canary.txt` should print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` should print `decompose-run: 37624152181`.\n- `git diff --name-only` should list only `tests/e2e_smoke_canary.txt`.\n\n### 7. Pre-execution self-check\nThe plan meets all acceptance criteria and touches a single file.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "78eded2c1aba938acab6296a3ac94bf28bd6b618d12137e7f72453cd1ffe9d32",
+  "lineage": {
+    "issue_number": 6661,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37627036631",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37627036631",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6661"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261007132343_639171f544",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6661,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37627036631"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6661",
+  "timestamps": {
+    "created_at": "2026-10-07T13:23:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

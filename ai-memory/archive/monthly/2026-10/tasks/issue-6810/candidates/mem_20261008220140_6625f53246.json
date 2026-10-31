@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The implement guard needs a separate `files_touched:` line in this issue's body, followed by one indented `- <path>` line per file. How should that allowlist be supplied before `/approved`?\nChoices:\nA) A maintainer edits this issue's body now to add the block below as separate lines and confirms `ALLOW_WORKFLOW_EDITS=true`. The guard reads the live body and trusts the issue's author (the pipeline account), not whoever edited it, so the edit is enough and no new issue is needed. (RECOMMENDED)\n```\nfiles_touched:\n  - scripts/implement_heal_preflight.sh\n  - tests/test_implement_heal_preflight.py\n```\nB) Close this issue and have an OWNER, MEMBER or COLLABORATOR open a new issue whose body contains that block from the start, as the unblock judge's specification asks.\nC) Approve as written. The guard will refuse the commit with `IMPLEMENT_AUTOMATION_PATH_GUARD reason=no_allowlist` and the issue will go back to `ai:scope-blocked`.\n**Note:** C reproduces the #6799 failure and is listed only for completeness.",
+  "fingerprint": "22562004007e9ad2cd860b6d9dc4761262dba1824f2f0559e73d2d6cb929b1d2",
+  "lineage": {
+    "issue_number": 6810,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37850248259",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37850248259",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008220140_6625f53246",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6810,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37850248259"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6810 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T22:01:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:414-434 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: Offset-based pagination can miss a newly created review run between page reads, while the accumulated listing length causes the status-filtered scan to be skipped.\n  WHY: A missed active review can remain unseen when the marker is reread, allowing auto-merge; z-ai_glm-5_2 disputes that this is a demonstrable runtime defect and considers the race an accepted risk.\n- tests/test_claude_fixer_pending_checks.py:test_an_older_active_review_past_the_marker_page_keeps_the_pr_pending | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: No test covers a run created between pagination requests that makes the accumulated length non-divisible by 100 while the listing still has more items.\n  WHY: Without a test simulating this pagination-shift scenario, CI will not catch the reported status-scan skip.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Before enabling auto-merge, check PR-scoped review runs, including default-branch dispatches; defer while a newer run is active and authorize only against the latest completed review.\" (issue #5148 recommendation)\n  expected_change_site: scripts/claude_fixer_pending_checks.py, _read_active_runs_past_listing() \u2014 the check that decides whether the status scan runs\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The `len(listing) % REVIEW_RUNS_PER_PAGE` check is unreliable due to pagination shift; when a new run is created between page reads, the accumulated length is not a multiple of 100, the scan is skipped, and the new active run is missed.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_fixer_pending_checks.py:379-395, 478-495 | severity=high | confidence=2\n  PROBLEM: Offset-based pagination through Actions run listings can miss a newly created review run inserted at position 0 between page reads; the accumulated runs length may then not be divisible by `REVIEW_RUNS_PER_PAGE`, causing `_read_active_runs_past_listing` to skip its status-filtered fallback scan.\n  WHY: The new run can be absent from both the active list and `bound_reviews`, allowing `evaluate` to proceed through the comment re-read to auto-merge. A complete miss is described as practically unreachable because review initialization takes seconds while the interval to the comment re-read is likely under 100 ms; an active run matters when the accumulated page count is not a multiple of 100, and the comment re-read already names this window as accepted risk.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ---\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_fixer_pending_checks.py:414-434 | severity=high | confidence=4\n  PROBLEM: `_read_active_runs_past_listing()` uses `len(listing) % REVIEW_RUNS_PER_PAGE` to decide whether the listing has more items beyond the page that reached the marker, but pagination shifts can make the accumulated runs reflect different listing snapshots.\n  WHY: A newly created active run can be absent from the accumulated list, and the status scan that would catch it is skipped, allowing auto-merge while the newer review is running.\n- scripts/claude_fixer_pending_checks.py:414-434 | severity=high | confidence=4\n  PROBLEM: Offset-based pagination races with run creation, so a new run between page reads shifts subsequent pages and makes the accumulated listing length check unreliable.\n  WHY: A short final page caused by the shift can make the function skip the status scan, even though that scan would catch the new active run in the current listing.\n- tests/test_claude_fixer_pending_checks.py:test_an_older_active_review_past_the_marker_page_keeps_the_pr_pending | severity=high | confidence=3\n  PROBLEM: No test covers a new run created between page reads that causes the accumulated length to be non-divisible by 100 while the listing still has more items.\n  WHY: Existing tests cover a full first page reaching the marker or a short last page that genuinely ends the listing, but do not simulate this pagination shift; the scenario is plausible given periodic sweep and forced review dispatches.\n- Requirement: \"Before enabling auto-merge, check PR-scoped review runs, including default-branch dispatches; defer while a newer run is active and authorize only against the latest completed review.\" (issue #5148 recommendation)\n  Expected change site: scripts/claude_fixer_pending_checks.py, _read_active_runs_past_listing() \u2014 the check that decides whether the status scan runs\n  Evidence of absence: The `len(listing) % REVIEW_RUNS_PER_PAGE` check is unreliable due to pagination shift. When a new run is created between page reads, the accumulated length is not a multiple of 100, the scan is skipped, and the new active run is missed. The audit's core requirement \u2014 never enable auto-merge while a newer review is still running \u2014 is not fully met in this edge case.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_fixer_pending_checks.py:386-393, 414-415, 614-624 | severity=high | confidence=4\n  PROBLEM: Offset-based pagination can omit a newer review created between page requests; the accumulated listing can then cause the status-filtered check to be skipped.\n  WHY: If the new review is still running and has not posted a hand-off or marker when `evaluate()` rereads comments, the original marker remains live and the sweep can enable auto-merge while the newer review is active.\n=== END FINDINGS FROM openai_gpt-6-luna ---\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "669f9dccb60ea3838d48a61951c8629f2337819b0d56c3a6fb719a79e210462f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5178,
+    "run_id": "36794181192",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794181192",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001003433_47ed53559e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5178,
+    "run_id": "36794181192"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T00:34:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/check_in_status.py:lines 141-143 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The checker still reads one repo-wide page of 100 runs, so unrelated dispatches could hide an active review run and cause a hand-off to be reported as ready.\n  WHY: It can count no active PR-named run while a review is still in flight; the comment claiming parity with the poller is misleading.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/scripts/check_in_status.py:lines 141-143 | severity=NIT | confidence=5\n  PROBLEM: The comment states \"the same listing and newest-100 window the poller's _pr_named_review_dispatch_runs reads (issue #4701)\", but issue #4927 replaced the poller's global page with paginated per-wrapper REST calls within a time window. The checker still reads one repo-wide page of 100 runs, which has the same crowding exposure #4927 fixed in the poller \u2014 a burst of unrelated dispatches could push a still-active review run off the page.\n  WHY: The checker would count no active PR-named run and report a hand-off ready when a review is still in flight. The claim lease and stale-head check absorb the consequence, but the comment misleads anyone auditing the listing parity.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0c8f511d37831c5c10a40a025f75c8f50f8a487829eb94bee0af4b8d3773460b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36806355092",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36806355092",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001024412_1c6cc4523f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36806355092"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T02:44:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

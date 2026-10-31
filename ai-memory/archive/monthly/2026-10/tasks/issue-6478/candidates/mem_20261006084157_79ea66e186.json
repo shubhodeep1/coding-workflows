@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the poller's review-blocked judge `fix` path (`rb_fix_scope_check`) treat staged edits under `.github/`, `scripts/`, `prompts/`, `.claude/` and `workflow-templates/`?\nChoices:\nA) Always reject them, whatever `ALLOW_WORKFLOW_EDITS` is set to. A rejected fix uses up one review-blocked retry and sends the existing Telegram warning. Protected repairs then go through the judge's other actions (`merge_with_followup` / `close_and_reissue`), so the normal implement \u2192 review pipeline makes them. (RECOMMENDED)\nB) Always reject by default, and add a new opt-in repo variable (e.g. `REVIEW_BLOCKED_FIX_ALLOW_PROTECTED_EDITS`, default `false`) that brings back today's behaviour. **Note:** turning the variable on reopens this finding.\nC) Build the hunk-level provenance check the issue recommends: staged protected hunks may be pushed only when a trusted fix specification, generated outside the judge, authorizes them. This is much larger and needs a new trusted-spec mechanism designed first.\nQ2: Should the fix also cover the standalone review-blocked judge's fix path in `scripts/review_rb_judge.sh`, which has no protected-path check today?\nChoices:\nA) No. Change only the orchestrator poller path the finding cites (`scripts/orchestrate_poll_process.sh`), and file any standalone hardening as a separate issue. (RECOMMENDED)\nB) Yes. Apply the same protected-path rule to the standalone judge's fix commit in the same PR.\nQ3: Besides the poller-side rejection, should the review-blocked judge prompt (`prompts/mode-judge-review-blocked.txt`) be told that protected files can't be edited, so it stops choosing `fix` for those findings?\nChoices:\nA) Yes. Add a short prompt rule and pass a flag into the poller's judge prompt so the judge picks `merge_with_followup` / `close_and_reissue` straight away instead of using up retries on fixes that will be rejected. (RECOMMENDED)\nB) No. Enforce it only on the poller side and leave the prompt as it is.",
+  "fingerprint": "32722a5728f0cbbea153b04253362a49c33d64e5b0c4403e13056a18574c9736",
+  "lineage": {
+    "issue_number": 6478,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37437226299",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37437226299",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006084157_79ea66e186",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6478,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37437226299"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6478 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T08:41:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3432-3447 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new Phase 7 timeout logic writes `status=timeout` and `cancel_run_id` but does not guarantee `NEW_RUN_ID` exists in `GITHUB_OUTPUT` for downstream steps.\n  WHY: The reviewer itself concluded that `exit 1` makes the job fail, so this is safe for correctness. It was rated NIT, which maps to low.\n- .github/workflows/ci.yml:2586 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Adding `tests/test_test_and_mark_stable_phase7_timeout_status.py` to the CI test list edits a workflow path outside the heal scope, which allows only `.github/workflows/test-and-mark-stable.yml`, `tests/**` and `changelog.d/*.md`.\n  WHY: The reviewer rated it MAJOR, which maps to high, and says the wiring could stay in scope by adding the test to an already-wired test module. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) looked at the same edit and did not report it, because the repo's wiring guard requires it and the strict-allowlist is not enforced on the review path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Give the cancel-on-close job... a per-trigger concurrency group... in '.github/workflows/cancel_on_pr_close.yml' job 'cancel-active-runs'...\"\n  expected_change_site: .github/workflows/cancel_on_pr_close.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR DIFF and LAST RUN DIFF show no changes to `.github/workflows/cancel_on_pr_close.yml`. Other reviewers treat this as explicitly deferred under AD-1 \"Deferred scope\".\n- requirement: \"Update the concurrency-group pin in 'tests/test_review_merge_train.py' near line 1860 in the same change as the workflow edit\"\n  expected_change_site: tests/test_review_merge_train.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk exists for `tests/test_review_merge_train.py` in the PR DIFF or LAST RUN DIFF. Other reviewers treat this as explicitly deferred.\n- requirement: \"Add an agents fragment that corrects 'Cleanup jobs share repository-scoped concurrency' under 'Conflict-safe PR-close cleanup'\"\n  expected_change_site: agents.d/ (new fragment)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No `agents.d/` fragment for this change is included in the PR DIFF or LAST RUN DIFF. Other reviewers treat this as explicitly deferred.\n- requirement: \"plus a changelog fragment for the concurrency change\"\n  expected_change_site: changelog.d/ (new fragment)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Only the fragment for the timeout fix (`8327-phase7-cancel-timeout-status.md`) is present, and there is none for the concurrency change. Other reviewers treat this as explicitly deferred.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:3432-3447 | severity=low | confidence=4\n  PROBLEM: The new Phase 7 timeout logic writes `status=timeout` and `cancel_run_id` but does not guarantee `NEW_RUN_ID` exists in `GITHUB_OUTPUT` for downstream steps.\n  WHY: The reviewer concluded that `exit 1` makes the job fail, so this is safe for correctness. It was rated NIT.\n- TASK_GAP\n  Requirement: \"Give the cancel-on-close job... a per-trigger concurrency group... in '.github/workflows/cancel_on_pr_close.yml' job 'cancel-active-runs'...\"\n  Expected change site: .github/workflows/cancel_on_pr_close.yml\n  Evidence of absence: The PR DIFF and LAST RUN DIFF show no changes to `.github/workflows/cancel_on_pr_close.yml`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Update the concurrency-group pin in 'tests/test_review_merge_train.py' near line 1860 in the same change as the workflow edit\"\n  Expected change site: tests/test_review_merge_train.py\n  Evidence of absence: No diff hunk exists for `tests/test_review_merge_train.py` in the PR DIFF or LAST RUN DIFF.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Add an agents fragment that corrects 'Cleanup jobs share repository-scoped concurrency' under 'Conflict-safe PR-close cleanup'\"\n  Expected change site: agents.d/ (new fragment)\n  Evidence of absence: No `agents.d/` fragment for this change is included in the PR DIFF or LAST RUN DIFF.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"plus a changelog fragment for the concurrency change\"\n  Expected change site: changelog.d/ (new fragment)\n  Evidence of absence: Only the fragment for the timeout fix (`8327-phase7-cancel-timeout-status.md`) is present. No changelog fragment for the concurrency change is included.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2586 | severity=high | confidence=4\n  PROBLEM: This workflow edit is outside the heal scope declared by the issue marker, which allows `.github/workflows/test-and-mark-stable.yml`, `tests/**`, and `changelog.d/*.md`.\n  WHY: The edit changes the CI workflow to execute the new test while modifying a workflow path not authorized by the heal scope. The test itself is in scope, and its CI wiring could be kept in scope by adding it to an already-wired test module. Source severity was MAJOR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b013c31943455b57921e939c82a882aa85e991786b00d9f922bbb2a3b34ebb12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8361,
+    "run_id": "40962659259",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40962659259",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029230703_f2d8583c46",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8361,
+    "run_id": "40962659259"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T23:07:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

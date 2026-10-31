@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nScope-mode: Hold Scope\nReuse-audit: extends `scripts/review_run_reviewers.sh`\u2019s PR-state watchdog and close sentinel.\nScope-mode justification: This is a local change to an existing review step, not a new service. A run-scoped cache with locking, freshness checks, and legacy fallback completes the requested behavior without a dependency or external interface. Consistent with `unattended_system_instructions.md` \u00a76, correctness and safety take priority over a shorter cache-only shortcut.\n\n## Automation and execution\n- **Change type:** Extend an existing script; add no standalone script.\n- **Entry point:** `.github/workflows/review_autofix.yml`, **Run reviewer models** step. Its existing invocation of `scripts/review_run_reviewers.sh` needs no new wiring or workflow edit.\n- **Supervisor:** None. The existing per-attempt watchdogs remain responsible for polling.\n- **Database gate and removal registry:** Not applicable.\n\n## Planning ref\n`34634236ca583195de46a795fc642a09a68d8fb2` on `orchestrator/project-6031`; this matches the issue\u2019s Integration branch.\n\n## Files likely to change\n- `scripts/review_run_reviewers.sh` \u2014 share PR-state observations across its parallel watchdogs.\n- `tests/test_review_autofix_review_pipeline_contract.py` \u2014 extend the existing shell-helper harness with concurrency and failure cases.\n\n## Functions or modules to implement\n- Add a small, script-local PR-state lookup helper. Keep the existing `gh_retry gh api` request, preflight check, watchdog cadence, and `/tmp/pr_closed_sentinel_${PR_NUMBER}` behavior.\n- Store a run-scoped observation under the existing `RUNTIME_DIR`, protected by a lock. Under the lock, recheck freshness before querying; publish a successful observation atomically. A worker reading a fresh observation makes no API call.\n- On missing, malformed, stale, or unreadable cache data\u2014or a lock failure\u2014use the existing lookup behavior rather than inferring either state. Do not persist an API failure as an `open` observation. Preserve the watchdog\u2019s close reason, reviewer termination, and `PR_CLOSED` export.\n\n## Data structures affected\nOne ephemeral observation containing the repository/PR identity, validated state, and observation time, plus its lock file. Neither is a persisted review-ledger or GitHub state change.\n\n## API/interface changes\nNo new API call or exported interface. Reuse the existing `GET /repos/{owner}/{repo}/pulls/{pull_number}` and its `.state` response. GitHub documents this endpoint\u2019s path parameters and read permissions; validate the returned state as the current script does before sharing it. ([docs.github.com](https://docs.github.com/en/rest/pulls/pulls?utm_source=openai))\n\n## Decisions\n### D1 \u2014 Share observations inside the reviewer run\n- **Chosen:** Lock and atomically update a bounded-freshness file in `RUNTIME_DIR`.\n- **Alternatives considered:** Independent per-slot polling; a standalone watcher; a durable repository cache.\n- **Why:** The existing run already owns the parallel workers and an isolated runtime directory. This deduplicates ordinary polls without adding a process or allowing another run\u2019s observation to govern this PR.\n\n## Security considerations\n- The observation crosses a local worker-to-worker trust boundary. Accept only the expected repository/PR identity, valid state, and a non-future timestamp within the freshness bound; treat invalid data as unavailable.\n- This adds no endpoint or authorization surface. Continue using the review step\u2019s existing GitHub token and read request; do not log it or cache credentials.\n- A forged `closed` value could abort review, while a forged or indefinitely fresh `open` value could miss closure. Run isolation, strict validation, atomic publication, and expiry limit those cases. An API or filesystem failure must not become authoritative state.\n\n## Risks and edge cases\n- Concurrent workers must not each refresh the same expired observation in the normal path; recheck it **after** acquiring the lock.\n- Bound lock waiting so a slow or rate-limited request cannot indefinitely suspend watchdog checks. Exceptional lock/cache/API failures may use legacy per-worker polling.\n- Preserve the immediate close-sentinel check on every watchdog iteration; a fresh cached `open` must expire so closure is eventually queried.\n- The issue says to stay within `files_touched` but does not supply an explicit allowlist. The implementer must verify the runtime allowlist before editing; do not expand beyond the script and its focused existing test module.\n\n## Testing considerations\nExtend the representative harness in `tests/test_review_autofix_review_pipeline_contract.py` with stubbed GitHub responses and parallel shell workers. Assert one refresh for concurrent normal polls, refresh after expiry, legacy fallback for corrupt/stale data and API or lock failure, and prompt propagation of a confirmed closure through the existing sentinel. Check shell syntax, the focused tests, then applicable CI checks on the repository\u2019s pinned toolchain.\n\n## Pre-execution self-check\nThe requested path exists, the checkout matches the integration branch, and the plan requires neither a new scheduler nor an unknown external input. Pre-existing edits to `scripts/ai_memory.py` and `scripts/ai_memory_lib.py` are outside scope and must remain untouched.\n\nPLAN_SELF_CHECK: WARNING: The issue context does not enumerate its `files_touched` allowlist; verify it before implementation.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9717780bb130def4b6f2391e84bb247179923717480c3a9e59d372e85e336420",
+  "lineage": {
+    "issue_number": 6075,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36978514216",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36978514216",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6075"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261002073249_0283d039bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6075,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36978514216"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6075",
+  "timestamps": {
+    "created_at": "2026-10-02T07:32:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

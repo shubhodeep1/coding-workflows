@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ai_labels.py:597-627 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The five new test_repair_labels_* functions are defined after the `if __name__ == \"__main__\": raise SystemExit(main())` block, so main() never sees them in globals() and they never run in CI.\n  WHY: CI runs `python3 tests/test_ai_labels.py` (ci.yml:1536), not pytest, so a regression of the cmd_repair_labels fix would pass CI undetected. Severity disagreement: MAJOR (sonnet), BLOCKER (gemini, qwen); highest used.\n- scripts/ai_labels.py:434-451 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: cmd_repair_labels keeps only present[-1] and ai:needs-human, so stop labels (ai:blocked, ai:review-blocked, ai:implementation-failed) that sort before the last label are removed.\n  WHY: Those stop labels land in the remove set, which the reviewer says violates the requirement to preserve them. Sonnet judged this a non-defect (documented existing design) and dropped it.\n- tests/test_ai_labels.py:test_repair_labels_needs_human_still_wins_over_earlier_phases | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test expects ai:awaiting-approval and ai:implementing to be removed when ai:needs-human is present, but the reviewer says the implementation removes only ai:awaiting-approval when ai:implementing is last.\n  WHY: The reviewer says the test contradicts the implementation and the PR description. Sonnet checked this claim and judged it not to hold.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Keep stop labels (such as ai:blocked, ai:review-blocked, ai:implementation-failed) during label repair when present, in addition to keeping ai:needs-human when a phase group label is present.\n  expected_change_site: scripts/ai_labels.py, cmd_repair_labels function\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/ai_labels.py cmd_repair_labels initializes the kept set only with present[-1] and the ai:needs-human overlay, so other stop labels are added to the remove set.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ai_labels.py:597-627 | severity=MAJOR | confidence=5\n  PROBLEM: The five new tests (test_repair_labels_keeps_needs_human_parked_on_blocked, test_repair_labels_keeps_needs_human_parked_on_review_blocked_and_implementation_failed, test_repair_labels_keeps_needs_human_and_latest_stop_label_only, test_repair_labels_needs_human_still_wins_over_earlier_phases, test_repair_labels_terminal_phase_drops_needs_human) are defined after the `__main__` block that ends at line 598. main() (lines 590-594) scans sorted(globals()) before they exist.\n  WHY: ci.yml line 1536 runs `python3 tests/test_ai_labels.py`, not pytest, so none of the five tests run in CI. Suggested fix: move them above `def main()`, next to the tests at lines 251-260.\n- TASK COMPLETENESS / INTENT GAPS: NONE. The `cmd_repair_labels` change, tests, `changelog.d` fragment and `agents.d` fragment are all in the diff. The tests do not run in CI.\n- Dropped after checking: the claim that stop labels sorting earlier are dropped is documented existing design. The claim that test_repair_labels_needs_human_still_wins_over_earlier_phases contradicts the implementation does not hold.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ai_labels.py:597-627 | severity=BLOCKER | confidence=5\n  PROBLEM: The five new test functions are defined after the `if __name__ == \"__main__\": raise SystemExit(main())` block.\n  WHY: main() discovers tests via globals() when it runs, so tests defined after it are never executed by CI or manual runs.\n- scripts/ai_labels.py:434-451 | severity=BLOCKER | confidence=5\n  PROBLEM: cmd_repair_labels preserves only the lexicographically last label (present[-1]) and ai:needs-human, removing stop labels (ai:blocked, ai:review-blocked, ai:implementation-failed) that sort before it.\n  WHY: Any stop label before the alphabetically last label in present[] is added to the remove set, which violates the requirement to preserve these stop labels.\n- tests/test_ai_labels.py:test_repair_labels_needs_human_still_wins_over_earlier_phases | severity=MAJOR | confidence=4\n  PROBLEM: The test expectation contradicts the implementation logic and the PR description.\n  WHY: The test expects ai:awaiting-approval and ai:implementing to be removed when ai:needs-human is present, but the implementation only removes ai:awaiting-approval when ai:implementing is lexicographically last.\n- TASK_GAP:\n  Requirement: Keep stop labels (such as ai:blocked, ai:review-blocked, ai:implementation-failed) during label repair when they are present, in addition to keeping ai:needs-human when a phase group label is present.\n  Expected change site: scripts/ai_labels.py, cmd_repair_labels function\n  Evidence of absence: The implementation initializes the kept set only with present[-1] and the ai:needs-human overlay, causing all other stop labels to be added to the remove set.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_ai_labels.py:601-627 | severity=BLOCKER | confidence=5\n  PROBLEM: The five new test_repair_labels_* functions are defined after `if __name__ == \"__main__\": raise SystemExit(main())`. main() runs at line 598, scans globals() for test_* callables, then SystemExit ends the process before the `def` statements at lines 601-627 are reached.\n  WHY: CI runs `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_labels.py` (ci.yml:1536), not pytest, so none of the five tests run and a later regression would pass CI undetected. The PR's claim that \"3 fail on the old code, and all 30 tests pass\" must have come from pytest or another invocation.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2e24511210a36a99da7dbb817d5887c2942698b61ecfb98ff9efc61472a7b905",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7651,
+    "run_id": "39198132843",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39198132843",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019043520_f021827544",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7651,
+    "run_id": "39198132843"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T04:35:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

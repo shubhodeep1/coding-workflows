@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_post_editor_summary.sh:184 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: PR_NUMBER is used without verifying that it is set.\n  WHY: If PR_NUMBER is empty or unset, the API call will resolve to issues//comments, causing the request to fail (typically with a 404), which is incorrect behavior for a PR review step.\n- scripts/review_autofix_step_post_editor_summary.sh:184 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script ignores the exit status of the gh api call.\n  WHY: When gh api fails (e.g., due to an API outage, authentication issue, or the PR_NUMBER correctness issue reported above), the script warns but exits with status 0. The workflow proceeds as if the editor summary was successfully posted, masking the failure from the operator when they don't see the summary on the PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep the third export: it is required for freshness verification before auto-merge. Update the test to reflect all three sites.\"\n  expected_change_site: tests/test_workflow_failure_heal.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test test_review_autofix_passes_support_sha_to_every_marker_site currently fails on the PR because it asserts 3 == 2, indicating it expects two support-SHA exports while three are present in the workflow. The PR diff does not contain any modifications to tests/test_workflow_failure_heal.py to update this assertion.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_post_editor_summary.sh:184 | severity=high | confidence=[4]\n  PROBLEM: PR_NUMBER is used without verifying that it is set.\n  WHY: If PR_NUMBER is empty or unset, the API call will resolve to issues//comments, causing the request to fail (typically with a 404), which is incorrect behavior for a PR review step.\n- scripts/review_autofix_step_post_editor_summary.sh:184 | severity=high | confidence=[4]\n  PROBLEM: The script ignores the exit status of the gh api call.\n  WHY: When gh api fails (e.g., due to an API outage, authentication issue, or the PR_NUMBER correctness issue reported above), the script warns but exits with status 0. The workflow proceeds as if the editor summary was successfully posted, masking the failure from the operator when they don't see the summary on the PR.\n\nRequirement: \"Keep the third export: it is required for freshness verification before auto-merge. Update the test to reflect all three sites.\"\nExpected change site: tests/test_workflow_failure_heal.py\nEvidence of absence: The test test_review_autofix_passes_support_sha_to_every_marker_site currently fails on the PR because it asserts 3 == 2, indicating it expects two support-SHA exports while three are present in the workflow. The PR diff does not contain any modifications to tests/test_workflow_failure_heal.py to update this assertion.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b5b23fe2ba033df3db5145a9cf8f881d8eb5b95c61409ea8b15d5336e973fbe9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6971,
+    "run_id": "38201316144",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38201316144",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012052351_43cf7136d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6971,
+    "run_id": "38201316144"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-12T05:23:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

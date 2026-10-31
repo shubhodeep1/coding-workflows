@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:13141-13156 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The dispatch cap check uses a stored dispatch count without checking whether it belongs to the current validation cycle.\n  WHY: A prior cycle\u2019s exhausted count can block the first dispatch of a new cycle before the subsequent update resets the count.\n- scripts/orchestrate_poll_process.sh:13038, 13151 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The dispatch cap check blocks the third dispatch when the configured limit is 3.\n  WHY: The check trips when the count is already 3, so only two dispatches succeed.\n- scripts/orchestrate_poll_process.sh:13178 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The jq increment expression does not fall back to 1 when the stored dispatch count is a non-numeric string.\n  WHY: `tonumber? // 1` leaves a non-numeric input unchanged, causing the jq update to fail and leave the state file unchanged.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:13143-13156 | severity=MAJOR | confidence=4\n  PROBLEM: The validation dispatch cap check uses a global validation_cycle_dispatch_count without resetting it when the validation cycle changes.\n  WHY: When a new validation cycle begins, the dispatch counter from the previous cycle remains in the state file. If the previous cycle reached or exceeded the MAX_VALIDATION_DISPATCHES_PER_CYCLE limit, the first attempt to dispatch for the new cycle reads this stale count and prematurely trips the cap.\n- scripts/orchestrate_poll_process.sh:13038 (default limit) and 13151 (cap check) | severity=MAJOR | confidence=4\n  PROBLEM: The dispatch cap check trips after 2 dispatches instead of the documented 3.\n  WHY: With MAX_VALIDATION_DISPATCHES_PER_CYCLE=3, the logic trips the cap when count >= 3. The first dispatch runs (count=1), the second runs (count=2), and the third attempt reads count=3 and trips the cap (blocking the 3rd dispatch). This allows only 2 successful dispatches instead of the 3 intended by the description \"After 3 such runs...\".\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: lines 13141-13151 (cap-check block); jq update at line 13178 | severity=MAJOR | confidence=5\n  PROBLEM: The cap check reads the stored dispatch count without checking whether it belongs to the current validation cycle.\n  WHY: If the previous cycle exhausted the cap, the cap check trips on the first dispatch attempt of a new cycle before the jq update can reset the count.\n- scripts/orchestrate_poll_process.sh: line 13178, jq increment `((.validation_cycle_dispatch_count // 1) | (tonumber? // 1)) + 1` | severity=NIT | confidence=3\n  PROBLEM: `tonumber?` returns its input unchanged on failure rather than emitting null, so the trailing `// 1` does not engage when the stored value is a non-numeric string (e.g. `\"abc\"`).\n  WHY: With count `\"abc\"` the jq expression errors, the temp file is never produced, and `mv \"${STATE_FILE}.tmp\" \"${STATE_FILE}\"` fails. The state file keeps the old `validation_cycle_dispatch_count` and `validation_last_dispatch_ts`, so the next tick re-reads the same value and re-attempts the dispatch (the cap still defaults to 1 because of the shell regex). The dispatch loop continues hourly with no visible failure.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: 13143-13156 (cap check block) | severity=MAJOR | confidence=4\n  PROBLEM: The cap check reads `validation_cycle_dispatch_count` from the state file without checking whether the stored count belongs to the current validation cycle.\n  WHY: When a new validation cycle starts, the state file still holds `validation_cycle_dispatch_count` from the previous cycle. The cap check reads that old value and may block the first dispatch of the new cycle even though the jq update after a successful dispatch would reset the count to 1.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "1ad9feeaa7441cc0f4322f74a5a9da61a14dee412bb87abbe85de6aded10bd60",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7142,
+    "run_id": "38116833665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38116833665",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011065524_ce173dd4bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7142,
+    "run_id": "38116833665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T06:55:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

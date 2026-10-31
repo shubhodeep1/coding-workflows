@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1318-1343 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The partial-coverage block appends SHA and coverage markers on every run that skips over-cap text, duplicating markers already present in the tracker body.\n  WHY: The redundant content accumulates on repeated partial-coverage runs and can eventually approach GitHub's 65 536-character edit limit, though the Python tracker parser currently reads the first match correctly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1318-1343 | severity=low | confidence=3\n  PROBLEM: The partial-coverage block unconditionally appends the SHA marker, the \"Last audited commit\" label, and the partial-coverage marker to the existing tracker body every run where over-cap text is skipped. When the tracker body already carries those markers from a prior partial-coverage run, each subsequent run duplicates them.\n  WHY: The tracker body grows by roughly 200 bytes per partial-coverage run. The Python tracker parser uses `re.search` (first match), so duplicates are parsed correctly today, but the body accumulates redundant content on every weekly run where the over-cap file is not removed. Over months of repeated partial scans the body drifts toward the GitHub 65 536-character edit limit without any self-healing path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d5f4847f47a011e1abbcca151b2c461541bb877fdd96014f90568fd35f45c709",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6480,
+    "run_id": "37421935833",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37421935833",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006063943_bdae5357e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6480,
+    "run_id": "37421935833"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T06:39:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

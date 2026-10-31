@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validation_refresh_workflow_contract.py:91-153 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3, anthropic_claude-sonnet-5_5]\n  PROBLEM: The test's parsing regexes (`_job_block` end marker, anchored step_timeout, `dispatch_[a-z_]+` step id) would under-parse if a future step id contained digits or a key were inserted between `id:` and `timeout-minutes:`.\n  WHY: Hardening only, since the test passes today and fails loudly rather than silently. minimax rated it NIT; sonnet rated it a hardening suggestion with risk score 1.\n- .github/workflows/test-and-mark-stable.yml:5315-5316 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The job-level comment sums the in-step watcher DEADLINEs (3720 + 600 + 2400 = 6720 s = 112 m), while the step `timeout-minutes` sum to 128 m, so a reader could misread it as the step-timeout sum.\n  WHY: The comment is descriptive only and has no runtime impact. minimax rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_validation_refresh_workflow_contract.py:(dispatch step id regex in `test_release_gate_validation_refresh_watch_covers_child_budget`) | severity=low | confidence=1\n  PROBLEM: A future dispatch step id containing digits would be skipped by the `id: dispatch_[a-z_]+` pattern, and the `>= 3` assertion would then fail on a miscount.\n  WHY: It fails loudly rather than silently, so the impact is small. Suggested fix: use `[a-z0-9_]+` (about 1 line). HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_validation_refresh_workflow_contract.py:91-96, 137, 149-153 | severity=low (NIT) | confidence=1\n  PROBLEM: The `_job_block` end-marker regex (`^  [A-Za-z0-9_-]+:\\n`), the anchored step_timeout regex and the `dispatch_[a-z_]+` regex would silently under-parse if a future job or step id used characters outside today's ASCII set, or if a key sat between `id:` and `timeout-minutes:`.\n  WHY: This only matters if a future workflow change adds such a step. None exist today and the test passes.\n- .github/workflows/test-and-mark-stable.yml:5315-5316 | severity=low (NIT) | confidence=1\n  PROBLEM: The \"DEADLINEs\" sum in the job-level comment (3720 + 600 + 2400 = 6720 s = 112 m) refers to the watcher budgets, while the step `timeout-minutes` sum to 65 + 18 + 45 = 128 m.\n  WHY: The comment is prose only and has no runtime impact. Its numbers are consistent for what they describe but are not labeled as watcher deadlines.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "94221f7cc645bb9d3a873d549edc4c0e39159e632775dcb9e9c77eb221ca8c8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7845,
+    "run_id": "39706382778",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39706382778",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022015827_b1651b971d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7845,
+    "run_id": "39706382778"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-22T01:58:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

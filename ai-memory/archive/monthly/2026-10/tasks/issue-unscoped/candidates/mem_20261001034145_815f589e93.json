@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:658 | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The \u201cReview checkout on dispatched runs\u201d section asserts that four reader sites use `GITHUB_WORKSPACE`, but the cited test verifies only the reviewer panel.\n  WHY: If another reader resolves files from a different location, the prose misstates runtime behavior and that reader\u2019s checkout behavior remains unverified.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:658 | HARDENING_RISK_SCORE=2\n  PROBLEM: The new prose asserts that four distinct reader sites (reviewer panel, summariser, slop scan, reviewer file-context helpers) all read from `GITHUB_WORKSPACE`, but the only place the PR pins is `scripts/review_run_reviewers.sh` (test `test_reviewers_read_files_from_github_workspace` at tests/test_review_autofix_dispatch_pr_head_checkout.py:130).\n  WHY: If any of the other three readers actually resolve from a different location (e.g. `WORKSPACE_PATH` via \"Checkout PR head branch\"), this sentence misrepresents the runtime behaviour and the fix is silent for that reader on dispatched runs.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "acf3062dd06902c1d4aadc9f85a9e312d53f9265e7c0e39649563a2e9eeec4af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5857,
+    "run_id": "36810249480",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36810249480",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001034145_815f589e93",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5857,
+    "run_id": "36810249480"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T03:41:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

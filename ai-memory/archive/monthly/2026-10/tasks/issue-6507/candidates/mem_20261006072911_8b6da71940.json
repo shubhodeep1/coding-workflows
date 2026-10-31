@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6507,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6507\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6516\",\"pr_number\":6516,\"branch\":\"ai/issue-6507\",\"run_id\":\"37427499556\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37427499556\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"README.md\",\"agents.md\",\"changelog.d/6507-merge-train-bypass-authorization.md\",\"scripts/review_merge_train.sh\",\"tests/test_review_merge_train.py\"]}",
+  "fingerprint": "9dfd642e2920243fb725d1a2819fd53f603c43ba2e60d088c5fb64487a33adb1",
+  "lineage": {
+    "issue_number": 6507,
+    "parent_ids": [],
+    "pr_number": 6516,
+    "run_id": "37427499556",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37427499556",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6516"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006072911_8b6da71940",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6507,
+    "level": "run",
+    "pr_number": 6516,
+    "run_id": "37427499556"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6507: https://github.com/shubhodeep1/coding-workflows/pull/6516",
+  "timestamps": {
+    "created_at": "2026-10-06T07:29:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

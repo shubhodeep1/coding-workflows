@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/7604-synced-security-finding-intake.md:1-28 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The fragment re-adds the entire 28-line \"Synced-file security findings in the heal intake\" paragraph already present in agents.md (lines 1578-1600), when only the A01..A10 spelling sentence and the retired-file bullet are new.\n  WHY: After the fold, agents.md carries the paragraph twice and the old copy (\"anything else is rejected\", no retired-file bullet) contradicts the new one in every unattended prompt, against CLAUDE.md \u00a730 and unattended \u00a725. The reviewers labelled this MAJOR, which is mapped to high here.\n- scripts/workflow_failure_heal.py:122-123 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The second alternative of `_SYNCED_SECURITY_OWASP_RE` does not reject a parenthesised non-2021 year, so `A01 (2017)` is published as `A01:2021-Broken Access Control`.\n  WHY: The negative lookahead only skips `[\\s:-]` characters before a digit, so the \"other OWASP years are rejected\" invariant is broken for this shape. Qwen rated it NIT. Sonnet listed it only as a hardening suggestion, with no severity.\n- scripts/workflow_failure_heal_intake.sh:749,780 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: `ss_retired` and `ss_group_file` are not declared in the function's `local` lists (lines 706-712), so they leak into the global shell scope.\n  WHY: Every other variable in the function is local. This was raised only as a hardening suggestion, with no stated severity or confidence, so the values here are inferred.\n- scripts/workflow_failure_heal_intake.sh:780-786 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: A path that is both a live managed file and listed in `retired_files.txt` would have its findings skipped as retired, without checking `synced_security_source_paths`.\n  WHY: No such path exists today, so this is defense-in-depth only. This was raised only as a hardening suggestion, with no stated severity or confidence, so the values here are inferred.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/7604-synced-security-finding-intake.md:1-28 | severity=MAJOR | confidence=4\n  PROBLEM: The fragment re-adds the whole \"Synced-file security findings in the heal intake\" paragraph, which is already in agents.md lines 1578-1600. Only the A01..A10 spelling sentence and the `retired_files.txt` bullet are new.\n  WHY: After the fold, agents.md holds the paragraph twice. The old copy says \"anything else is rejected\" and has no retired-file bullet, so it contradicts the new copy in every unattended prompt. Fix: cut the fragment to the new text, or correct agents.md lines 1587-1589 directly.\n- Hardening: scripts/workflow_failure_heal_intake.sh:749,780 (`ss_retired`, `ss_group_file`) are missing from the `local` lists at lines 706-712.\n- Hardening: scripts/workflow_failure_heal.py `_SYNCED_SECURITY_OWASP_RE` (around line 123) accepts `A01 (2017)` as the 2021 name. Suggested fix: reject any `20\\d\\d` token other than `2021`.\n- Hardening: scripts/workflow_failure_heal_intake.sh:781-786 skips a path that is both live and listed in `retired_files.txt`. No such path exists today.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/7604-synced-security-finding-intake.md:1-28 | severity=MAJOR | confidence=5\n  PROBLEM: The fragment re-adds the entire 28-line paragraph already in agents.md \"Workflow architecture\". Only the retired-file bullet and the A01..A10 year-acceptance sentence are new.\n  WHY: After the fold, the two copies contradict each other (\"anything else is rejected\" against \"accepted with or without `:2021`\"). That costs prompt tokens, dilutes the prefix-cache shape and gives the model contradictory rules. CLAUDE.md \u00a730 requires fragments to hold only new text.\n- Hardening: scripts/workflow_failure_heal_intake.sh `_synced_security_finding_intake`, around lines 749 and 781: `ss_retired` and `ss_group_file` are not `local` (the `local` block is at lines 709-712).\n- Hardening: scripts/workflow_failure_heal_intake.sh:780-786: the retired-file skip does not check `synced_security_source_paths` for a path that is also live. No such path exists today.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7604-synced-security-finding-intake.md:1-28 | severity=MAJOR | confidence=4\n  PROBLEM: The fragment re-adds the full 28-line paragraph already in agents.md. Only the `A01..A10` acceptance sentence and the retired-file bullet are new.\n  WHY: After the fold, the old and new copies contradict each other in every unattended prompt and waste prompt budget. CLAUDE.md \u00a730 and unattended \u00a725 require fragments to hold only new text.\n- scripts/workflow_failure_heal.py:122 | severity=NIT | confidence=4\n  PROBLEM: The second alternative of `_SYNCED_SECURITY_OWASP_RE`, `(?![0-9A-Za-z])(?![\\s:-]*[0-9])`, only catches years preceded by `[\\s:-]`. `A01 (2017)` therefore passes and is published as `A01:2021-Broken Access Control`.\n  WHY: A parenthesised year silently maps a 2017 code onto the 2021 canonical name, breaking the \"other OWASP years are rejected\" invariant. The tests cover `A01:2017` and `A01 2017` but not this shape. It is a narrow edge case.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "02ccb8ae57a8fa66a49d67f7ebb99727b8c1f8780ab6fb40f005743cb0c75d93",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7817,
+    "run_id": "39612185481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39612185481",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021142154_1973b63179",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7817,
+    "run_id": "39612185481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T14:21:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

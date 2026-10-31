@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_issue_7251_dependency_wait.py:157 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The test counts physical lines in `calls.txt` to assert there was one API call, but the fake `gh` logs the multiline GraphQL query, so one invocation produces multiple lines.\n  WHY: CI fails with `assert 11 == 1`, causing the `tests-hooks-and-orchestrator` job and aggregate `lint` check to fail.\n- scripts/gh_helpers.sh:2835-2849 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The gate returns `merged` after a preflight-failed marker and `closed_unmerged` after a closed-dependency marker, and both workflows skip only `open`, `unverified`, `merged_pending`, and `closed_pending`.\n  WHY: After a failed preflight, `/answer` can start planning despite the requirement to resume only if both preflights pass; after PR #6667 closes without merging, `/answer` can move #7251 from `ai:blocked` to `ai:planning`, bypassing the intended handoff to the unblock judge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_issue_7251_dependency_wait.py:157 | severity=critical | confidence=5\n  PROBLEM: The fake `gh` logs a multiline GraphQL document, so counting physical lines does not count calls.\n  WHY: The CI job fails with `assert 11 == 1`, making the aggregate `lint` check fail.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_issue_7251_dependency_wait.py:157 | severity=critical | confidence=5\n  PROBLEM: The test asserts that the fake `gh` call log contains exactly one line, but the logged multiline GraphQL query produces multiple lines.\n  WHY: CI fails with `AssertionError: assert 11 == 1`, causing the aggregate lint check job to fail.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_issue_7251_dependency_wait.py:157 | severity=critical | confidence=5\n  PROBLEM: The test counts physical lines with `splitlines()`, but the fake `gh` logs `$*` with embedded GraphQL query newlines, so one invocation writes 11 lines.\n  WHY: CI fails with `AssertionError: assert 11 == 1`, cascading into the `lint` aggregate failing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_issue_7251_dependency_wait.py:157 | severity=critical | confidence=5\n  PROBLEM: The test counts physical lines in `calls.txt` to assert there was one API call, but the fake `gh` logs `$*`, which includes the multiline GraphQL query.\n  WHY: The test fails in CI with `assert 11 == 1`, causing the `tests-hooks-and-orchestrator` job and aggregate `lint` check to fail.\n- scripts/gh_helpers.sh:2835-2849 | severity=high | confidence=5\n  PROBLEM: The gate returns `merged` after a preflight-failed marker and `closed_unmerged` after a closed-dependency marker, and both workflows skip only `open`, `unverified`, `merged_pending`, and `closed_pending`.\n  WHY: After a failed preflight, `/answer` can start planning despite the requirement to resume only if both preflights pass; after PR #6667 closes without merging, `/answer` can move #7251 from `ai:blocked` to `ai:planning`, bypassing the intended handoff to the unblock judge.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_issue_7251_dependency_wait.py:157 | severity=critical | confidence=5\n  PROBLEM: The assertion counts physical lines in the fake `gh` call log, but the full `$*` includes the multiline GraphQL query, so one API call produces 11 lines.\n  WHY: CI fails with `AssertionError: assert 11 == 1`, causing the aggregate `lint` check to fail.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "29b7d958c262eb1d2cf4ba28cccaf0e182b424c6db742fe4de9673f3085708e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7259,
+    "run_id": "38477587915",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38477587915",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013225744_a53f0bccda",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7259,
+    "run_id": "38477587915"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T22:57:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

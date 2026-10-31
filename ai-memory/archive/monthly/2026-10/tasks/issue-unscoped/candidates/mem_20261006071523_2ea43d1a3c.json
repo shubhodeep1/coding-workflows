@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/internal-check-failure-triage.yml:35 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reusable workflow `check_failure_triage.yml` is referenced using an unpinned branch reference `@main` instead of an immutable commit SHA.\n  WHY: This violates the repository's strict immutability requirements and architecture facts, allowing the behavior of the triage pipeline to change independently of this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fix CI on pushes to main (Q51); the heal intake workflow should handle failed CI runs on pushes to the default branch.\"\n  expected_change_site: .github/workflows/workflow-failure-heal-intake.yml\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer states that \"CI\" was added to the workflow-trigger list and conditional logic was added to handle failed CI runs on pushes to the default branch, and notes that the requirement is fulfilled in the diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/internal-check-failure-triage.yml:35 | severity=critical | confidence=5\n  PROBLEM: The reusable workflow `check_failure_triage.yml` is referenced using an unpinned branch reference `@main` instead of an immutable commit SHA.\n  WHY: This violates the repository's strict immutability requirements and architecture facts, allowing the behavior of the triage pipeline to change independently of this PR.\n- Requirement: \"Fix CI on pushes to main (Q51); the heal intake workflow should handle failed CI runs on pushes to the default branch.\"\n  Expected change site: .github/workflows/workflow-failure-heal-intake.yml\n  Evidence of absence: The implementation added \"CI\" to the workflow-trigger list of `workflow-failure-heal-intake.yml` and added the conditional logic to handle failed CI runs on pushes to the default branch (`github.event.workflow_run.name == 'CI'` and `github.event.workflow_run.event == 'push'`).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n  (Note: This requirement is fulfilled in the diff.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ac30196a53e6b145cf1f402dd7aa18b07644b264fa02d281f38558ad79a0aa64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37425952275",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37425952275",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006071523_2ea43d1a3c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37425952275"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T07:15:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

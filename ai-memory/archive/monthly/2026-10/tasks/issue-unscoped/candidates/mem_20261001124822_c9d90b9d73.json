@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:2293 | severity=low\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The explanation for owner-only merges omits scripts as guard paths.\n  WHY: The reviewer describes this as a minor documentation imprecision with no runtime consequence.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: When a change moves paths from one class to another (here scripts from auto-merged to owner-merged guard paths), grep every prose description of both classes repo-wide, including comments in other workflows and operations tables, not only the docs the plan lists.\n  expected_change_site: CLAUDE.md line 2293\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: `CLAUDE.md:2289` correctly lists `.claude/hooks/**`, `.claude/scripts/**`, `.claude/settings.json`, and `.claude/settings.local.json` as the guard paths that get `ai:claude-sync-approval` and owner-only merge. `CLAUDE.md:2293`, the explanatory clause in the same sentence, still says \"because hooks and settings are the guards that limit what sessions can do\" \u2014 omitting scripts. `GUARD_PATH_PREFIXES = (\"hooks/\", \"scripts/\")` at `scripts/claude_twin_sync.py:95` makes scripts a guard path too. No diff hunk in this PR touches `CLAUDE.md`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- CLAUDE.md:2293\n  PROBLEM: The rationale clause omits scripts from the guard-path explanation.\n  WHY: The reviewer describes this as a minor documentation imprecision with no runtime consequence; adding \"scripts\" would align it with the guard-path list above.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The conformance lesson added by this PR at `docs/implement-plan/issue-5609-guard-synced-claude-scripts.md` (## Lessons) commits to: \"When a change moves paths from one class to another (here scripts from auto-merged to owner-merged guard paths), grep every prose description of both classes repo-wide, including comments in other workflows and operations tables, not only the docs the plan lists.\"\n  Expected change site: `CLAUDE.md` around line 2293, the explanatory clause under \u00a728.C that justifies the owner-only merge of `claude-twin-sync-*` PRs.\n  Evidence of absence: `CLAUDE.md:2289` correctly lists `.claude/hooks/**`, `.claude/scripts/**`, `.claude/settings.json`, and `.claude/settings.local.json` as the guard paths that get `ai:claude-sync-approval` and owner-only merge. But `CLAUDE.md:2293`, the explanatory clause in the same sentence, still says \"because hooks and settings are the guards that limit what sessions can do\" \u2014 omitting scripts. After #5609, `GUARD_PATH_PREFIXES = (\"hooks/\", \"scripts/\")` at `scripts/claude_twin_sync.py:95` makes scripts a guard path too. The subsequent clause (\"and `settings.json` lets every session run the scripts with its GitHub access and no prompt (issue #5609)\") acknowledges scripts run with GitHub access but does not call them a guard. This is the same staleness class the PR fixes at `.github/workflows/review_autofix.yml:549`, `README.md:1082`, and the `master-session.md` rows. No diff hunk in this PR touches `CLAUDE.md`.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: The PR's own conformance lesson (docs/implement-plan/issue-5609-guard-synced-claude-scripts.md, ## Lessons, first entry) commits to: \"When a change moves paths from one class to another (here scripts from auto-merged to owner-merged guard paths), grep every prose description of both classes repo-wide, including comments in other workflows and operations tables, not only the docs the plan lists.\"\n  Expected change site: CLAUDE.md line 2293\n  Evidence of absence: CLAUDE.md:2289-2290 correctly lists `.claude/hooks/**`, `.claude/scripts/**`, `.claude/settings.json`, and `.claude/settings.local.json` as guard paths merged only by the owner. But line 2293, in the same sentence, says \"because hooks and settings are the guards that limit what sessions can do\" \u2014 omitting scripts from the explanation. After #5609, scripts are guard paths too (`GUARD_PATH_PREFIXES = (\"hooks/\", \"scripts/\")` at `scripts/claude_twin_sync.py:95`). Line 2294 does add \"and `settings.json` lets every session run the scripts\" which explains why scripts are guards, but the shorthand at line 2293 is inconsistent with the explicit list two lines above. This is the same staleness class as the review_autofix.yml:549 comment (finding #1 in the PR description) that the PR did fix. No diff hunk in this PR touches CLAUDE.md.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "4167c6a92c264912ba509a85bce82d4ca03dbc754b2209c1058cddb883e51d9e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5699,
+    "run_id": "36862372396",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36862372396",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001124822_c9d90b9d73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5699,
+    "run_id": "36862372396"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T12:48:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue improve?\nChoices:\nA. A specific workflow or script that the reporter names in an `/answer` reply (RECOMMENDED)\nB. The review/autofix pipeline (`review_autofix.yml` and its `scripts/review_*` helpers)\nC. The orchestrator poller (`scripts/orchestrate_poll_process.sh`)\nD. Documentation only (README / agents.d fragments)\nQ2: What problem should the change fix, and how will we know it is fixed?\nChoices:\nA. The reporter describes the current bad behaviour, the expected behaviour and how to verify it (for example a failing run, an issue or PR link, or a test) (RECOMMENDED)\nB. Performance or cost: name the metric to lower, such as run time or API calls\nC. Reliability: name the failure mode, run ID or log line to remove\nD. No concrete problem: close this issue as not actionable\n**Note:** D is not compatible with any other answer.",
+  "fingerprint": "f88a497ed87027f054dcef9c951a036e89c845df6c2a52b8e01d9934ae245678",
+  "lineage": {
+    "issue_number": 8141,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40194820348",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40194820348",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261025125720_0a9309f383",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8141,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40194820348"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #8141 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-25T12:57:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

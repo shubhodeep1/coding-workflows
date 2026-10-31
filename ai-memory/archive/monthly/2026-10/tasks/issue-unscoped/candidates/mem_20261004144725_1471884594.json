@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:30-44, 1010-1015 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The root guard is out of sync with its template, causing five tests in `tests/test_pr_merge_status_guard.py` to fail.\n  WHY: CI's `tests-hooks-and-orchestrator` job fails and blocks merge eligibility; reviewers identify this as pre-existing on main and unrelated to the PR diff.\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The root `.claude/commands/audit-plans.md` differs from its template copy, causing `test_template_parity` to fail.\n  WHY: CI exits nonzero and blocks the required check; the mismatch is pre-existing on main and not touched by the LAST RUN DIFF.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cPorted #6177: three tests broken on main by #6124, #6126 and the review_autofix step split. Test and docs only.\u201d\n  expected_change_site: `tests/test_audit_plans_command.py`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff does not modify `tests/test_audit_plans_command.py`; it still reads `.claude/commands/audit-plans.md` directly and compares it to the template, while the current checkout has the template command but no root command. CI runs this test at `.github/workflows/ci.yml:562-565`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_pr_merge_status_guard.py (various tests) | severity=BLOCKER | confidence=[5]\n  PROBLEM: Five tests in `test_pr_merge_status_guard.py` fail in CI, causing `tests-hooks-and-orchestrator` and the aggregate lint job to fail.\n  WHY: This is pre-existing on main, caused by the root `.claude/hooks/pr_merge_status_guard.py` being out of sync with its template copy; neither the test file nor the root guard is touched by the LAST RUN DIFF.\n- tests/test_audit_plans_command.py:29-30 | severity=BLOCKER | confidence=[4]\n  PROBLEM: The root `.claude/commands/audit-plans.md` differs byte-for-byte from the template copy, causing `test_template_parity` to fail.\n  WHY: CI exits nonzero, blocking the required check; this is pre-existing on main and not touched by the LAST RUN DIFF.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_pr_merge_status_guard.py:30-44, 1010-1015 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The root `.claude/hooks/pr_merge_status_guard.py` is out of sync with its template and lacks redirect filtering, `+=` environment assignment stripping, and `|| exit` worktree preservation, causing five tests to fail.\n  WHY: `tests-hooks-and-orchestrator` exits with status 1 and the aggregate lint job fails, blocking pull request merge eligibility.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_pr_merge_status_guard.py | severity=BLOCKER | confidence=[4]\n  PROBLEM: The CI run for head `1a7d386` reports five failures and 172 passes in this suite; the tests load the root guard when it exists and require it to match the template, but the PR changes test path selection without updating the guard implementation.\n  WHY: The required `tests-hooks-and-orchestrator` job exits nonzero, causing the aggregate `lint` check to fail; the supplied check log confirms both failures.\n- Requirement: \u201cPorted #6177: three tests broken on main by #6124, #6126 and the review_autofix step split. Test and docs only.\u201d\n  Expected change site: `tests/test_audit_plans_command.py`, alongside the root-to-template test-path fallbacks added to the other session-asset tests.\n  Evidence of absence: The PR diff does not modify `tests/test_audit_plans_command.py`. It still reads `.claude/commands/audit-plans.md` directly and compares it to the template, while the current checkout has the template command but no root command. CI runs this test at `.github/workflows/ci.yml:562-565`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_pr_merge_status_guard.py | severity=BLOCKER | confidence=[5]\n  PROBLEM: The root guard exists but is out of sync with its template, lacking redirect handling, `+=` assignment parsing, and `|| exit` worktree preservation; consequently, the parity test and four command-parsing tests fail.\n  WHY: The failed tests cause `tests-hooks-and-orchestrator` to exit nonzero, failing the lint aggregate job and blocking merge.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal_intake.sh | _support_ref_branch function, the `case` statement\n  Issue: The `case` handles `stable|refs/tags/stable` but not `main|refs/heads/main`. If the reporter ever sends a raw branch ref instead of a resolved SHA (which the current contract says it won't), `_support_ref_branch` returns empty and the fix silently targets `stable` instead of `main`. The compare-based SHA path already handles this correctly, so this only matters for the defensive `case` shortcut.\n  Suggested minimal fix: Add `main|refs/heads/main) printf 'main\\n'; return 0 ;;` to the `case` block.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "48eb095b3d12267f7ad1f60b4ffc9f57d710079d22e9093bcf46fb6035bb5d55",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37205965374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37205965374",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004144725_1471884594",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37205965374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T14:47:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

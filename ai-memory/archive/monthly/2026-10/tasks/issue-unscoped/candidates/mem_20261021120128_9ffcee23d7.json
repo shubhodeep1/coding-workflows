@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Lint the PR body with Refs #7796, not a close keyword.\"\n  expected_change_site: PR description / body for #7800 (created by implement.yml)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR description says \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7800\" and does not include `Refs #7796`, The body is auto-generated at PR-creation time so a fix-up edit is not in scope for this PR (severity NIT in both)\n- requirement: \"Gate only the new code path behind `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED` as an off switch\"; setting it to `false` must turn the path off.\n  expected_change_site: `.github/workflows/review_autofix.yml`, the \"Prepare merge-conflict resolver prompt and pre-snapshot\" step's environment\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `scripts/review_conflict_prepare.sh` reads this variable at line 398, but that workflow step's environment at lines 3932-3946 does not pass it, so production runs see it as unset and keep the new path enabled (severity MAJOR; minimax_minimax-m3 considered this not a gap because the issue says the script defaults it and the workflow does not forward it)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Lint the PR body with Refs #7796, not a close keyword.\"\nExpected change site: PR body for the fix-up PR (created by implement.yml).\nEvidence of absence: The inlined PR description is \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7800\" \u2014 it contains a close keyword for the sub-issue and does not include the requested `Refs #7796`. The previous autofix editor acknowledged this gap and noted that it cannot edit the PR body. The body is auto-generated at PR-creation time, so a fix-up edit here is not in scope for this PR.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Gate only the new code path behind `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED` as an off switch\"; setting it to `false` must turn the path off.\nExpected change site: `.github/workflows/review_autofix.yml`, the \"Prepare merge-conflict resolver prompt and pre-snapshot\" step's environment.\nEvidence of absence: `scripts/review_conflict_prepare.sh` reads this variable at line 398, but that workflow step's environment at lines 3932-3946 does not pass it. GitHub repository variables are not automatically exported to the step, so production runs see it as unset and keep the new path enabled; the off switch is not available through a repository variable.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: \"Lint the PR body with Refs #7796, not a close keyword.\"\nExpected change site: PR description for #7800.\nEvidence of absence: The supplied PR description says \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7800\" and does not include `Refs #7796`.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a01204ebdcc811b2d0d19ff57ddf3effe2fa838ab7e0db025a3fb301ef53f5bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7801,
+    "run_id": "39593820061",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39593820061",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021120128_9ffcee23d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7801,
+    "run_id": "39593820061"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T12:01:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

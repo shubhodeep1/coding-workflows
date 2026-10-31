@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.claude/hooks/gh_api_write_guard.py`:1507-1513; `workflow-templates/.claude/hooks/gh_api_write_guard.py`:1509-1516 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The source guard and shipped template differ at decision sites in `evaluate()`, causing `tests/test_gh_api_write_guard.py::test_template_parity` to fail.\n  WHY: CI requires the files to be byte-identical, and the differing guard behavior also means literal-ID read loops may receive inconsistent handling between the source and consumer template.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"scripts/auto_decisions.py and orchestrate_parse_and_post_answer.sh are added to the clarify and implement staging lists.\"\n  expected_change_site: `.github/workflows/implement.yml` staging list\n  confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  EVIDENCE: `.github/workflows/clarify.yml` staging list includes both scripts (confirmed in PR diff, line 221), while `.github/workflows/implement.yml` includes `auto_decisions.py` (line 1009) but does NOT include `orchestrate_parse_and_post_answer.sh`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- `.claude/hooks/gh_api_write_guard.py`: lines 1507, 1513 vs `workflow-templates/.claude/hooks/gh_api_write_guard.py` lines 1510, 1516 | severity=BLOCKER | confidence=5\n  PROBLEM: The source guard and the shipped consumer template differ at two decision sites in evaluate().\n  WHY: `tests/test_gh_api_write_guard.py::test_template_parity` requires the two files to be byte-identical, and the mismatch causes CI to fail and blocks the PR from merging.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- `.claude/hooks/gh_api_write_guard.py`: lines 1506-1512 | severity=BLOCKER | confidence=5\n  PROBLEM: The source `if hazard:` check lacks the `_LOOP_HEADER_RE.match(command)` condition present in `workflow-templates/.claude/hooks/gh_api_write_guard.py:1510`.\n  WHY: `test_template_parity` fails, and literal-ID read loops matching `_LOOP_HEADER_RE` trigger `DECISION_ASK` instead of being evaluated by `_is_approvable_read_loop()`.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- `.claude/hooks/gh_api_write_guard.py`: line 1507 | severity=BLOCKER | confidence=5\n  PROBLEM: The source file's `if hazard:` check lacks the `_LOOP_HEADER_RE.match(command)` bypass that the shipped template `workflow-templates/.claude/hooks/gh_api_write_guard.py` carries at the equivalent branch.\n  WHY: `tests/test_gh_api_write_guard.py::test_template_parity` asserts byte-identical parity and is currently failing CI; consumer repositories receive behavior inconsistent with the documented literal-ID loop contract.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- `workflow-templates/.claude/hooks/gh_api_write_guard.py`: `evaluate()` near the `if hazard:` check (corresponds to `.claude/hooks/gh_api_write_guard.py:1506-1513`) | severity=BLOCKER | confidence=5\n  PROBLEM: The consumer-shipped template was not updated to match the source guard.\n  WHY: `tests/test_gh_api_write_guard.py::test_template_parity` asserts byte-equality and fails in CI, blocking the PR from merging.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- `.claude/hooks/gh_api_write_guard.py`: lines 1507, 1513-1517 | severity=BLOCKER | confidence=5\n  PROBLEM: The source guard is out of sync with the shipped template at `workflow-templates/.claude/hooks/gh_api_write_guard.py`.\n  WHY: `tests/test_gh_api_write_guard.py::test_template_parity` asserts byte identity, and CI confirms the test fails on the PR head, blocking the PR from merging.\n- Requirement: \"scripts/auto_decisions.py and orchestrate_parse_and_post_answer.sh are added to the clarify and implement staging lists.\"\n  Expected change site: .github/workflows/clarify.yml staging list, .github/workflows/implement.yml staging list\n  Evidence of absence: The clarify staging list includes both scripts (confirmed in PR diff, line 221). The implement staging list includes `auto_decisions.py` (line 1009) but does NOT include `orchestrate_parse_and_post_answer.sh`. The PR description says both are added to \"the clarify and implement staging lists.\" `orchestrate_parse_and_post_answer.sh` is only needed by clarify (it posts answers), not implement (which only calls `auto_decisions.py pr-section`), so this may be intentional \u2014 but the PR description's wording says \"the clarify and implement staging lists\" for both scripts.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- `scripts/auto_decisions.py`: _clean function (line ~94)\n  PROBLEM: The HTML-escaping replaces `<` with `&lt;` and `>` with `&gt;` but does not escape `&` itself, so a literal `&lt;` in the input would become `&amp;lt;` (double-encoding) or an `&` in text could be interpreted as an HTML entity by a markdown renderer.\n  WHY: Add `text = text.replace(\"&\", \"&amp;\")` before the `<` and `>` replacements.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0e72e2f48e346fc23cbe473b9e6c581fffc13415c909fd2f5acf2e86e34e5509",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6182,
+    "run_id": "37193188657",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37193188657",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004104728_91524fc23a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6182,
+    "run_id": "37193188657"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T10:47:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

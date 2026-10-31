@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6755,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6755\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6863\",\"pr_number\":6863,\"branch\":\"ai/issue-6755\",\"run_id\":\"37892011526\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37892011526\",\"changed_files\":[\"agents.md\",\"changelog.d/6755-merged-pr-guard-shell-wrappers.md\"]}",
+  "fingerprint": "2616f9c0fcbd7f98926a4d2d6686b9d9acd16b5a3a92216077b7a1f5de13ceb0",
+  "lineage": {
+    "issue_number": 6755,
+    "parent_ids": [],
+    "pr_number": 6863,
+    "run_id": "37892011526",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37892011526",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6863"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261009062530_012880a87d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6755,
+    "level": "run",
+    "pr_number": 6863,
+    "run_id": "37892011526"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6755: https://github.com/shubhodeep1/coding-workflows/pull/6863",
+  "timestamps": {
+    "created_at": "2026-10-09T06:25:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

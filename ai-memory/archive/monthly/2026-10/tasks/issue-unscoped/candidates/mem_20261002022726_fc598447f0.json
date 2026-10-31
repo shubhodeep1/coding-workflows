@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:659-673 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The guard can treat an alias declaration as an active `cd` redefinition and fall back to the session checkout even when Bash would use the builtin `cd`, including when unrelated alias arguments contain `cd=`.\n  WHY: Both cases can cause a harmless command to mark the directory unknown and incorrectly block a safe worktree push; the false fallback is pinned by `tests/test_pr_merge_status_guard.py:2325`.\n- changelog.d/5144-merge-guard-effective-repo.md:14-15 | severity=low | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The GitHub API calls table omits that a cached blocking result is re-verified with a live API call.\n  WHY: Operators may undercount API usage for cached-block paths; `_judge_guard_target()` re-queries GitHub at `.claude/hooks/pr_merge_status_guard.py:1746-1758`, and the twin\u2019s `_judge_guard_target` issues a live `query_pull_requests` call at lines 1854-1867.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states \"The root `.claude/hooks/` copy lands through a `[claude-twin-sync]` commit, so `test_template_copies_are_identical` stays red until then.\"\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The root copy lacks `_COMMAND_RESERVED_WORD_PREFIXES`, `_COMPOUND_OPENING_WORDS`, `_COMPOUND_CLOSING_WORDS`, `_cd_redefinition_reason`, `_tilde_word_flags`, per-word tilde-flag alignment, compound-depth tracking, reserved-word handling in `git_subcommands` and `guard_targets`. The last commit (b911ae7) updated only the template twin. This is the documented pending-twin-sync interim state under the protected-path twin-first rule; confirming the sync is outside this review round. The PR is BLOCKED until the sync commit lands.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:660-673 | severity=NIT | confidence=2\n  PROBLEM: The `alias` detection at line 671 checks `any(arg.startswith(\"cd=\") for arg in args)`, which matches any alias argument starting with `cd=`, including compound shell input like `alias cdtmp='echo tmp'` in the same token segment. The `shlex` tokenizer treats the entire `alias` segment's arguments as a flat list, so `alias foo=bar cd=true` would match.\n  WHY: A harmless alias declaration that coincidentally contains `cd=` somewhere in its arguments flips the directory to unknown, making later git calls in the same command fall back to the session checkout with a warning. No security impact \u2014 the fallback is strictly safer.\n- Requirement: The PR description states \"The root `.claude/hooks/` copy lands through a `[claude-twin-sync]` commit, so `test_template_copies_are_identical` stays red until then.\"\n  Expected change site: `.claude/hooks/pr_merge_status_guard.py`\n  Evidence of absence: The root copy lacks `_COMMAND_RESERVED_WORD_PREFIXES`, `_COMPOUND_OPENING_WORDS`, `_COMPOUND_CLOSING_WORDS`, `_cd_redefinition_reason`, `_tilde_word_flags`, per-word tilde-flag alignment, compound-depth tracking, reserved-word handling in `git_subcommands` and `guard_targets`. The last commit (b911ae7) updated only the template twin. This is the documented pending-twin-sync interim state under the protected-path twin-first rule; confirming the sync is outside this review round. The PR is BLOCKED until the sync commit lands.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:659-672 | severity=NIT | confidence=5\n  PROBLEM: The guard treats any `alias cd=...` definition as an active `cd` redefinition.\n  WHY: In a standard non-interactive Bash command, aliases are not expanded unless `expand_aliases` is enabled. Also, an alias defined on the same parsed command line does not affect later commands on that line. For `alias ll='ls -l' cd='true'; cd wt && git push ...`, Bash therefore uses the builtin `cd` and pushes from `wt`, but the guard falls back to the session checkout. A stranded session checkout can incorrectly block a safe worktree push. The test at `tests/test_pr_merge_status_guard.py:2325` pins this false fallback.\n- changelog.d/5144-merge-guard-effective-repo.md:15 | severity=NIT | confidence=5\n  PROBLEM: The row says a cached `(slug, branch)` pair costs zero API calls without noting that cached results identifying a blocking PR are re-verified live.\n  WHY: `_judge_guard_target()` re-queries GitHub for a cache-derived block at `.claude/hooks/pr_merge_status_guard.py:1746-1758`. Operators using the changelog\u2019s budget figure will undercount requests for those pairs and may underestimate API usage.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/5144-merge-guard-effective-repo.md:14 | severity=NIT | confidence=5\n  PROBLEM: The row states \"0 when the 300-second cache holds it\" for API calls per (slug, branch) pair, but `_judge_guard_target` in the twin (lines 1854-1867) always issues a live `query_pull_requests` call to re-verify a cache-derived block before returning the block verdict.\n  WHY: Operators reading the changelog table to size rate-limit budgets will undercount API calls for commands that hit a cached block. CLAUDE.md section 21.D is more precise (the sentence after the \"none\" clause says \"a block is always re-verified against a live call first\"), but the changelog summary as written is inaccurate.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7a33317b7e93fbd7e8cd19aba791e18bb0fe18bc0492ab49e00641b27a604a0f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5173,
+    "run_id": "36954167051",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36954167051",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002022726_fc598447f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5173,
+    "run_id": "36954167051"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T02:27:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

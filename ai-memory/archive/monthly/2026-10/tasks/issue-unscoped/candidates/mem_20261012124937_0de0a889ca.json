@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_security_hold_sweep.py:203-220 | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: `_gh_identity` passes the full parent environment to the `gh` subprocess, potentially exposing sensitive variables if they are later added to the parent environment.\n  WHY: The current environment is described as restricted, but relying on `os.environ` could expose future sensitive variables.\n- scripts/workflow_wrapper_refs.py:41-99 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The hand-rolled YAML parser may fail to identify the `with:` block for checkout steps with different list-item formatting or indentation, leaving the support checkout unpinned.\n  WHY: If the parser misses the block, the checkout may continue to use the moving `stable` ref instead of the intended release SHA.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Reissue for target branch stable as a normal issue with the exact files_touched list below\"\n  expected_change_site: Pull request target branch\n  confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The PR description says \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7209\" without indicating that the PR targets `stable`; the reviewer says the PR is presumably targeting the default branch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_security_hold_sweep.py, `_gh_identity` (lines 203-219) | severity not stated | confidence not stated\n  PROBLEM: The PAT subprocess inherits the full parent environment. Today that holds only `GH_TOKEN=github.token`, because the PAT variable is popped first, so nothing leaks.\n  WHY: Suggested optional hardening is to build the environment from an explicit allowlist (`PATH`, `HOME`, `LANG`, `GH_TOKEN`).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_security_hold_sweep.py, `_gh_identity` method, lines 213-220 | severity=NIT | confidence=3\n  PROBLEM: The use of `env={**os.environ, \"GH_TOKEN\": token}` in the subprocess call passes the current parent environment, including potentially sensitive variables, into the `gh` subprocess.\n  WHY: While the current environment seems to be restricted as intended, relying on `os.environ` exposes the subprocess to the full environment of the parent process, which could lead to accidental leakage if future changes add sensitive environment variables to the parent process scope.\n- scripts/workflow_wrapper_refs.py, `_pin_support_checkout_refs` method, lines 41-99 | severity=NIT | confidence=2\n  PROBLEM: The hand-rolled YAML parser is brittle. It assumes a specific indentation structure for `uses:` and `with:` blocks. If a step's `uses:` line begins with `-` directly (without a preceding `name:`) or has non-standard spacing, it may fail to correctly identify the `with:` block.\n  WHY: The pin functionality will silently fail to match the `with:` block, and the support checkout will remain unpinned, potentially using a moving `stable` ref instead of the intended release SHA.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Reissue for target branch stable as a normal issue with the exact files_touched list below\"\n  Expected change site: The pull request should target the `stable` branch, not the default branch (`main`). The issue explicitly states the reissue should target `stable`, and auto-decision AD-1 in the PR description confirmed this choice: \"A: The unblock judge asked for `stable` explicitly, and that is how this repo routes workflow fixes: heal issues carry `Target branch: stable`, and `forward-merge-stable-to-main.yml` carries the change to `main`.\"\n  Evidence of absence: The PR description says \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7209\" with no indication that the PR targets `stable`. The auto-decision explicitly chose option A (target `stable`), but the PR is presumably targeting the default branch. This bypasses the normal release process where workflow fixes target `stable` and are forward-merged to `main` by `forward-merge-stable-to-main.yml`. The issue also states \"Release the upstream fix through the normal process; do not bypass a failed check,\" which implies following the stable -> main promotion path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2e3a551844ce34b95d6921784557fe54b30eeddb7cb372769ac8ad53e7a1795a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7213,
+    "run_id": "38247461041",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38247461041",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012124937_0de0a889ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7213,
+    "run_id": "38247461041"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T12:49:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

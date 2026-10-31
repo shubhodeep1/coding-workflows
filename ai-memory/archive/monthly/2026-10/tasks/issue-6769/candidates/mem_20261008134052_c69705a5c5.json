@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which plans should the new gate hold back from automatic `/approved` while `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is off (the default)?\nChoices:\nA: Every plan, whatever files it touches. Auto-approval stops repo-wide until someone sets the flag to `true`.\nB: Only plans whose planned files include automation paths (`.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`). Other plans keep today's `AUTO_IMPLEMENT_ON_CLEAR_PLAN` behaviour. When the flag is `true`, the fail-closed gate checks those paths against the issue's trusted exact `files_touched` grant: an ungranted plan (for example, a security finding) is held, with the missing protected paths reported in an `AI_PHASE_GATE_V1` line; a fully granted plan is approved automatically. (RECOMMENDED)\nC: The flag only turns the grant check on or off. While it is off, behaviour stays exactly as it is today, with no suppression.\n**Note:** A conflicts with the \"granted plan\" regression the issue asks for, because nothing is ever approved automatically under A while the flag is off.\nQ2: Which branch should this change target?\nChoices:\nA: `main` only. `stable` gets the guard and this gate through the normal promote / release path, with no separate backport PR. (RECOMMENDED)\nB: `main`, plus a separate backport PR that brings the existing guard (`files_touched_scope_guard.py` automation-path functions) and this gate to `stable`.\nC: `stable` only, with \"Target branch: stable\", matching the original #6766 target.\nQ3: Besides the `plan.yml` auto-approve step and the managed and standalone stall-recovery `auto_approve` actions in `scripts/orchestrate_poll_process.sh`, should the gate also cover the staged-support latch release that posts `/approved [auto-approved-by-plan]`?\nChoices:\nA: Yes, put that release path behind the same gate too.\nB: No. Limit the change to `plan.yml` and the two stall-recovery `auto_approve` paths. The latch release only re-approves a plan that was already approved and only runs in this source repo. (RECOMMENDED)",
+  "fingerprint": "4767ba724ce0417cf217bda9a88c806a143f85a2ca7a8fcefc81a6d17604613d",
+  "lineage": {
+    "issue_number": 6769,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37785530551",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37785530551",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008134052_c69705a5c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6769,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37785530551"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6769 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T13:40:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

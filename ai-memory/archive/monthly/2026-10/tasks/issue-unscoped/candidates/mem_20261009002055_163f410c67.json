@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:2151-2160, 2267-2272 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The live hook was not updated to match the template, so it still reads cached PR state in both affected paths.\n  WHY: The byte-identity test fails, causing CI failure, and the live hook continues to allow cached open-PR state to authorize a push to a merged branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep the live and template hook copies aligned\" (issue #6641 spec item 4) and \"Require fresh PR state for every Bash or MCP push\" (spec item 1).\n  expected_change_site: .claude/hooks/pr_merge_status_guard.py\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR DIFF only modifies workflow-templates/.claude/hooks/pr_merge_status_guard.py; .claude/hooks/pr_merge_status_guard.py at lines 2151-2160 and ~2267-2272 still contains the pre-fix cached-state paths; tests/test_pr_merge_status_guard.py:2346-2402 enforces byte-identical copies\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/pr_merge_status_guard.py:Entire file | severity=critical | confidence=5\n  PROBLEM: The live copy of the pr_merge_status_guard.py hook is not updated to match the modified template in workflow-templates/.claude/hooks/pr_merge_status_guard.py.\n  WHY: The integration test tests/test_pr_merge_status_guard.py explicitly verifies byte-identity between the template and the live copy (test_template_copies_are_identical). Because the live copy remains unpatched, the test fails, causing CI failure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: \"Keep the live and template hook copies aligned\" (issue #6641 spec item 4) and \"Require fresh PR state for every Bash or MCP push\" (spec item 1).\nExpected change site: .claude/hooks/pr_merge_status_guard.py\nEvidence of absence: PR DIFF only modifies workflow-templates/.claude/hooks/pr_merge_status_guard.py. The live .claude/hooks/pr_merge_status_guard.py at lines 2151-2160 still contains the buggy pre-fix code (`if key not in pr_snapshots:` followed by `cached = _read_cache(slug, branch)` at line 2152) and at lines ~2267-2272 still contains `cached = _read_cache(slug, branch)` followed by `pull_requests = cached if cached is not None else query_pull_requests(...)` (the old MCP-push path that lets a cached open PR authorize a write to a merged branch). CI run 37860827117 job 113595865755 reported \"1 failed, 610 passed\"; the failing assertion is test_template_copies_are_identical (tests/test_pr_merge_status_guard.py:2346-2402) which compares the two files byte-for-byte and is enforced by agents.md (\"Security hooks under .claude/hooks/** and .claude/settings.json are never prepared: their committed live copies must match the templates for CI to pass, even when the editor cannot write the live file\"). Because the parity test is required, this PR cannot merge; until both copies carry the fix, this repo's own Claude Code sessions remain vulnerable to the same cached-open-PR-attack the change is meant to close, and the changelog fragment's claim that \"Consumer repos get the change with the next @stable sync\" is unreachable (an @stable release cannot be tagged from a red branch).\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py:Lines 2152 and 2267 | severity=critical | confidence=5\n  PROBLEM: The live copy was not updated to match the template. The template at `workflow-templates/.claude/hooks/pr_merge_status_guard.py` has the fix (pushes never read the TTL cache), but the live copy at `.claude/hooks/pr_merge_status_guard.py` still contains `cached = _read_cache(slug, branch)` at both locations.\n  WHY: The test `test_template_copies_are_identical` at `tests/test_pr_merge_status_guard.py:2346` enforces byte-identical content between the template and live copies. CI already proves this: run 37860827117 job 113595865755 failed with `1 failed, 610 passed`. Until both copies match, every CI run on this PR and every consumer-repo CI run that imports the parity test will be red. The security fix itself is correct in the template, but it is not deployed to the live hook that actually runs in sessions.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "83bef152146a03c3c3f87bfe15713901454680a47ff7c3e485a8ffee3ebcaa1f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6643,
+    "run_id": "37860827535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37860827535",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009002055_163f410c67",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6643,
+    "run_id": "37860827535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T00:20:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

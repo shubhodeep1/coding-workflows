@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The failing helpers did not come from this checkout. Run 37510669078 ran on `main` @ ec4d60e4a9b3, and review stages its support scripts from that verified commit, not from the PR head. This checkout admits `.claude/hooks/pr_merge_status_guard.py` (`scripts/review_untrusted_workspace.py:44`), but it has no `sandbox_path_unsupported` failure line and no `check-paths` subcommand. So the rule that rejected the hook must be a deliberate exclusion in newer code (the heal diagnosis cites `scripts/review_untrusted_workspace.py:60-62` and `scripts/review_conflict_resolve.sh:2239-2247`). Options B and C would relax that exclusion, which breaks the issue's \"do not weaken the guard\" constraint. Option A fixes the conflict and keeps the host-run safety hook out of the sandbox.\n\nBefore building the paired path, the plan should read the target branch's `scripts/review_untrusted_workspace.py`, `scripts/review_conflict_prepare.sh` and `scripts/review_conflict_resolve.sh`. The paired path should only run when the live hook and its `workflow-templates/` twin are both unmerged. The live copy should be copied from the validated template result, and its bytes must match the template. Every other excluded path should still fail closed. A fix on `ai/issue-6529` only reaches PR #6538's reviews once it lands on `main`, because review runs `main`'s helpers.\n\nQ2: The heal could not tell which path was rejected because the run logged no path names. Logging only the repo-relative names of rejected paths is low-risk and leaks no file content. It must be additive: keep the existing `::error::` text and `AI_ENGINE_FALLBACK ... reason=sandbox_path_unsupported` line as they are, and keep the fail-closed exit. Before logging, escape or drop control characters in each name so a crafted file name cannot inject workflow commands.\n\nQ3: The manifest is the other candidate cause. It is a generated, sorted, unique-line list, so any unsupported conflict shape belongs in the existing deterministic manifest resolver (`scripts/review_conflict_prepare.sh`), with a regression test. Sandbox admission must not be relaxed for the manifest. Only do this if the plan confirms a real unhandled shape such as delete/modify; otherwise the manifest stays as it is.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none; every decision is a lettered option)\n\nESCALATION (required for any ESCALATE decision):\n(none)\n\nActions taken: I read the sandbox admission rule in this checkout (`scripts/review_untrusted_workspace.py:44`, which admits the hook) and searched the whole tree for the resolver's failure string and `check-paths`. Neither is present here, so the failing code is on newer `main` and target-branch code that I did not read.\n\nAssumptions: the target branch `ai/issue-6529` carries the same exclusion and preflight code as `main` @ ec4d60e4a9b3, which the failed run used. The plan phase will read those files directly.\n\nMissing context: `conflicted_paths.txt` from run 37510669078. The plan should treat the live hook as the main suspect and the manifest as the second, and its regression tests should cover both shapes.",
+  "fingerprint": "2917131df89a45bdc0bb0cb78a74331ab7726733e0c017f4a36ef25cf19fa5a2",
+  "lineage": {
+    "issue_number": 6584,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37512488052",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37512488052",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6584"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006184403_2f3015a64c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6584,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37512488052"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6584",
+  "timestamps": {
+    "created_at": "2026-10-06T18:44:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

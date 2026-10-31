@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The implementer will rebuild group 3 / shard 1 (4 groups \u00d7 4 shards) from the remaining-tests list and run that slice of `tests/test_orchestrate_poll_process.py`. If a test fails, it fixes the failing assertion or the poller defect. What should happen if the slice passes, meaning the failure looks like a one-off?\nChoices:\nA. Make no code change. Report it as a failure that did not reproduce, with the slice's test list and the passing result, so the issue can close. (RECOMMENDED)\nB. Harden whichever tests in that slice look timing- or environment-sensitive (for example, sandbox temp dirs or subprocess timeouts), even without a confirmed failure.\nC. Stop and hand the issue to a human (`ai:needs-human`) without changing code.\nQ2: The triage was inconclusive because the CI annotations only say `shard N failed (exit 1)`. The failing test's name is only in the collapsed per-shard log. Should this fix also change the shard loop in `.github/workflows/ci.yml` so that each failing shard prints its `FAIL`/error lines as `::error::` annotations? The pass/fail gate would stay the same.\nChoices:\nA. No. Limit the change to the test or poller defect found under Q1. (RECOMMENDED)\nB. Yes. Also print the failing test names from failed shards as annotations in the orchestrate-poll step, and update `tests/test_ci_poll_test_sharding.py` to match. **Note:** this edits an automation path (`.github/workflows/`), so the issue needs a `files_touched` entry for it, or the implement guard will reject the commit.",
+  "fingerprint": "11911f1796066091afd70986eb35f963a810bed947f349569d3df3ce130c3e72",
+  "lineage": {
+    "issue_number": 6892,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37912931953",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37912931953",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009094740_8098dda6a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6892,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37912931953"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6892 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T09:47:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

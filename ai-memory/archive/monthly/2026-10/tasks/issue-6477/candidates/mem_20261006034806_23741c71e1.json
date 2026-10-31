@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which conflicted paths should get the same provenance checks that protected paths already get (only lines from either side, side order kept, shared lines kept, no added duplicates)?\nChoices:\nA) Every conflicted path. The `is_protected_conflict_path` skip goes away, so the judge can only recombine lines from the two sides. Resolutions that write new lines are rejected without a push, and the existing retry, lifetime-cap and escalation path handles them. The prompt's Rule 4 and the \"Protected paths include\u2026\" wording are updated to match. (RECOMMENDED)\nB) Protected paths plus a fixed list of executable or source extensions (for example `*.py`, `*.js`, `*.ts`, `*.go`, `*.rb`, `*.rs`, `*.java`, `*.c`, `*.php`, and similar). Prose and data files such as `*.md`, `*.txt` and `*.rst` stay unchecked, so the judge can still write new lines there.\nC) Like A, but a resolution with new lines is not simply rejected. It is pushed to a separate branch and left for human review instead of going to the integration branch. **Note:** this adds a new branch/PR flow and a human-in-the-loop step, which goes against the automation bias in \u00a720.",
+  "fingerprint": "9950fc8ff0ec66f8653bda38e286088f70a65ec78393c5441b0985e5eadec7f2",
+  "lineage": {
+    "issue_number": 6477,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37410152863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37410152863",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006034806_23741c71e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6477,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37410152863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6477 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T03:48:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

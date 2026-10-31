@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)\",\"issues\":[{\"id\":\"p1-failed-run-timeline\",\"title\":\"Heal evidence pack (P1a): failed-run step timeline, linked-run head refs, and the `## Evidence pack` section\",\"priority\":1},{\"id\":\"p1-issue-linked-runs-divergence\",\"title\":\"Heal evidence pack (P1b): issue-linked runs and main-vs-stable scope-path divergence\",\"priority\":2},{\"id\":\"p1-evidence-pack-consumers\",\"title\":\"Heal evidence pack (P1c): feed the `## Evidence pack` to the plan/clarify bundle, clarify-respond, and heal prompts\",\"priority\":2},{\"id\":\"p2-gate-tests-file\",\"title\":\"Pre-push gate: additive `run --tests-file <file>` option in prepush_affected_tests.py and prepush_test_gate_run.sh\",\"priority\":1},{\"id\":\"p2-heal-reproduce-script\",\"title\":\"Heal reproduction runner (P2a): new scripts/heal_reproduce.sh emitting heal_repro.v1 JSON\",\"priority\":2},{\"id\":\"p2-intake-reproduction\",\"title\":\"Heal reproduction runner (P2b): intake runs failing tests at failing vs last-green SHA and adds `## Reproduction`\",\"priority\":3},{\"id\":\"p2-plan-reproducible-gate\",\"title\":\"Heal reproduction runner (P2c): `HEAL_COUNTERFACTUAL: REPRODUCIBLE` value in partial_delivery.py and plan.yml\",\"priority\":3},{\"id\":\"p2-implement-repro-check\",\"title\":\"Heal reproduction runner (P2d): --venv for the heal gate and a pre-PR reproduction check on `[repro-required]` approvals\",\"priority\":3},{\"id\":\"p3-failure-shape\",\"title\":\"Heal trends (P3a): pure `classify_failure_shape` returning stall/timeout/test_failure/crash/api_error/other\",\"priority\":4},{\"id\":\"p3-run-time-trend\",\"title\":\"Heal trends (P3b): run-time trend table with regression and first-slow-day detection for stall/timeout heals\",\"priority\":4},{\"id\":\"p3-suspect-commits\",\"title\":\"Heal trends (P3c): `## Suspect commits` from last-green...failing compare and first-slow-day commits\",\"priority\":4},{\"id\":\"p3-regression-plan-gate\",\"title\":\"Heal trends (P3d): `HEAL_REGRESSION:` plan line and budget-only plan hold in the plan gate\",\"priority\":4},{\"id\":\"p5-cause-grouping\",\"title\":\"Heal root-cause grouping (P5): `cause=` marker and occurrence on an open heal with the same cause\",\"priority\":5},{\"id\":\"p7-heal-verify\",\"title\":\"Heal post-merge verification (P7): hourly `heal-verify` job reopening heals whose fix did not hold\",\"priority\":6},{\"id\":\"p4-suspect-scope\",\"title\":\"Heal suspect-commit scope (P4): add capped pipeline files from suspect commits to the frozen heal scope\",\"priority\":7},{\"id\":\"p6-code-ref\",\"title\":\"Heal branch awareness (P6a): `code_ref` routing to the branch the failing code ran from\",\"priority\":8},{\"id\":\"p6-port-to-default\",\"title\":\"Heal branch awareness (P6b): scripts/heal_port_to_default.sh files a port heal on main after a stable heal merges\",\"priority\":8}],\"dependency_edges\":[{\"from\":\"p1-failed-run-timeline\",\"to\":\"p1-issue-linked-runs-divergence\"},{\"from\":\"p1-issue-linked-runs-divergence\",\"to\":\"p2-intake-reproduction\"},{\"from\":\"p2-gate-tests-file\",\"to\":\"p2-heal-reproduce-script\"},{\"from\":\"p2-heal-reproduce-script\",\"to\":\"p2-intake-reproduction\"},{\"from\":\"p2-heal-reproduce-script\",\"to\":\"p2-implement-repro-check\"},{\"from\":\"p1-evidence-pack-consumers\",\"to\":\"p2-plan-reproducible-gate\"},{\"from\":\"p2-intake-reproduction\",\"to\":\"p3-failure-shape\"},{\"from\":\"p3-failure-shape\",\"to\":\"p3-run-time-trend\"},{\"from\":\"p3-run-time-trend\",\"to\":\"p3-suspect-commits\"},{\"from\":\"p2-plan-reproducible-gate\",\"to\":\"p3-regression-plan-gate\"},{\"from\":\"p3-run-time-trend\",\"to\":\"p3-regression-plan-gate\"},{\"from\":\"p3-suspect-commits\",\"to\":\"p5-cause-grouping\"},{\"from\":\"p5-cause-grouping\",\"to\":\"p7-heal-verify\"},{\"from\":\"p7-heal-verify\",\"to\":\"p4-suspect-scope\"},{\"from\":\"p4-suspect-scope\",\"to\":\"p6-code-ref\"},{\"from\":\"p6-code-ref\",\"to\":\"p6-port-to-default\"},{\"from\":\"p1-failed-run-timeline\",\"to\":\"p2-gate-tests-file\"},{\"from\":\"p1-failed-run-timeline\",\"to\":\"p1-evidence-pack-consumers\"},{\"from\":\"p1-issue-linked-runs-divergence\",\"to\":\"p2-plan-reproducible-gate\"},{\"from\":\"p2-implement-repro-check\",\"to\":\"p2-intake-reproduction\"},{\"from\":\"p3-regression-plan-gate\",\"to\":\"p3-suspect-commits\"},{\"from\":\"p2-gate-tests-file\",\"to\":\"p1-issue-linked-runs-divergence\"},{\"from\":\"p1-evidence-pack-consumers\",\"to\":\"p1-issue-linked-runs-divergence\"},{\"from\":\"p2-implement-repro-check\",\"to\":\"p2-plan-reproducible-gate\"},{\"from\":\"p2-intake-reproduction\",\"to\":\"p2-plan-reproducible-gate\"},{\"from\":\"p2-plan-reproducible-gate\",\"to\":\"p3-failure-shape\"}]}",
+  "fingerprint": "3bdb7c29e5a1a7d3dc47835ab6950b75c9eeb5bd7508af0cd2894536cc99a695",
+  "lineage": {
+    "issue_number": 8434,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41003295067",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41003295067",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261030044727_18ce76249c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8434,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41003295067"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)' into 17 issues (tracking #8434)",
+  "timestamps": {
+    "created_at": "2026-10-30T04:47:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

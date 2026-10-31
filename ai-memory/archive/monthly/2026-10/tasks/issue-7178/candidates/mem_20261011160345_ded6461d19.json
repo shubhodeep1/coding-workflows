@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The issue asks for the poller to \"terminalize capped low/medium keep_fixing decisions\" so that it matches `changelog.d/6914-security-pass-cap-low-test.md`. Three sources disagree with that fragment:\n- **agents.md** describes the capped low/medium \u2192 advisory conversion as current policy. It says the cap converts only low/medium findings (#6517, #6729). It also says \"#6539's stricter 'convert to fail' terminalized projects whose remaining findings were all low or medium and contradicted #6729\".\n- **The poller**, `scripts/orchestrate_poll_process.sh:7360-7391`, implements the advisory conversion and explains the same rule in its comment.\n- **The tests**, `tests/test_orchestrate_poll_process.py:6649` (`test_security_pass_cap_converts_low_keep_fixing_to_advisory`), plus the medium-severity test at 6547-6582, both assert the advisory conversion.\nagents.md also notes that heal PRs #6907/#6916 flipped this rule and #6906 restored it. The fragment's claims about the renamed test, \"Since #6539 \u2026 converts \u2026 to `fail`\" and \"the poller is unchanged\" match none of the current code, tests or docs. Which way should the fix go?\nChoices:\n- A: Treat the changelog fragment as the gap. Rewrite `changelog.d/6914-security-pass-cap-low-test.md` so it describes the actual behaviour: the low-severity cap test expects an advisory follow-up, as the poller does. If nothing user-visible remains to report, delete the fragment. Leave the poller, tests, README.md and agents.md unchanged. (RECOMMENDED)\n- B: Reverse the policy as the issue suggests. The poller would terminalize capped low/medium `keep_fixing` as `ai:security-pass-failed` with no waivers or advisory issues. The low and medium tests would be renamed and updated to expect failure, and README.md and agents.md would be revised through an `agents.d/` fragment. This brings back the #6539 behaviour that #6729 rejected.\n- C: Close the issue as not actionable and change nothing. The stale fragment would be released as written.",
+  "fingerprint": "0978198d527e7d0e08850fcf530e857c60db19e28c2853ed84dc1d047ad2b394",
+  "lineage": {
+    "issue_number": 7178,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38153459919",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38153459919",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011160345_ded6461d19",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7178,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38153459919"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7178 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T16:03:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

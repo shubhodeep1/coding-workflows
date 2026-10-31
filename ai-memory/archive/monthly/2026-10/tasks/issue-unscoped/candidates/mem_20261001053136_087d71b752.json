@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/inline_edit_guard.py:89-229 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `env` wrapper parser does not handle GNU `-S` / `--split-string`, so an inline Python write executed through `env -S` receives no deny decision from the guard.\n  WHY: The parser treats `-S` as a no-value option and the split-string payload as the command name, so the write is not recognized; severity is disputed, with two reviewers rating it major and two rating it nit or an accepted limitation.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nReviewer deepseek/deepseek-v4-pro failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\nChecking reviewer parser conventions and current codebase state. Reading inline_edit_guard.py to inspect wrapper parsing and option handling. Reading the remainder of inline_edit_guard.py. Reading template inline_edit_guard.py to compare with root copy. Reading test_template_parity in tests/test_inline_edit_guard.py. Reading tests/test_inline_edit_guard.py around line 525. Reading tests/test_inline_edit_guard.py from line 510. Reading lines 535-570 of tests/test_inline_edit_guard.py. Reading comments in pr_all_comments_context.txt after entry 45.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/inline_edit_guard.py, line 112 (`_WRAPPER_VALUE_OPTIONS[\"env\"] = frozenset({\"-u\", \"--unset\", \"-C\", \"--chdir\"})`) interacting with `_command_start` at lines 209-229; documentation in CLAUDE.md \u00a723.I (the new match-rules bullet at lines 1407-1414) and agents.md (the new hooks bullet at lines 1190-1203) | severity=MAJOR | confidence=5\n  PROBLEM: The hook documentation claims the guard handles `env` with its options, but GNU `env -S` / `--split-string` is missing from the parser's supported options, so an inline Python write through `env -S` receives no deny.\n  WHY: `_command_start` treats `-S` as a no-value flag and the split-string payload as the command word, which does not match `_PYTHON_RE`; the guard gives no deny, and there is no `env -S` inline-write test.\n- .claude/hooks/inline_edit_guard.py, `_command_start` (line 209), where `_MAX_SUBSTITUTION_DEPTH` is exceeded inside `inline_edit_kind` recursion (lines 430-434) | HARDENING_SUGGESTION | HARDENING_RISK_SCORE=1\n  SUGGESTION: Emit a one-time `systemMessage` warning on the first substitution-depth cap hit, using a module-level `_substitution_cap_warned` flag to avoid repeated warnings.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/inline_edit_guard.py, `_WRAPPER_VALUE_OPTIONS[\"env\"]` at line 112 and `_command_start()` at lines 219-228 | severity=MAJOR | confidence=5\n  PROBLEM: The `env` wrapper parser does not handle GNU `-S` / `--split-string`.\n  WHY: `-S` is skipped without consuming its argument as a split command, so the payload is treated as the command name and the hook returns no decision even though `env` executes the inline Python write.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/inline_edit_guard.py, `_WRAPPER_VALUE_OPTIONS[\"env\"]` at line 89-90 | severity=NIT | confidence=4\n  PROBLEM: The `env` wrapper option set omits `-S` / `--split-string`, allowing the shown inline Python write to bypass the guard and receive no deny decision.\n  WHY: The options loop treats `-S` as a no-value flag, then treats the split-string payload as the command word; `os.path.basename` of that payload does not match `_PYTHON_RE`, so `segment_kind` returns `\"\"` and the guard gives no decision.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/inline_edit_guard.py (and byte-identical workflow-templates/.claude/hooks/inline_edit_guard.py), `_WRAPPER_VALUE_OPTIONS[\"env\"]` (frozenset({\"-u\", \"--unset\", \"-C\", \"--chdir\"})) at lines 89-90; `_command_start` lines 178-208; CLAUDE.md \u00a723.I docstring lines 18-24 | severity=NIT | confidence=4\n  PROBLEM: GNU `env -S` / `--split-string` is not recognized by the guard, so the shown split-string payload is treated as the command word and the guard gives no decision.\n  WHY: The documentation and hook docstring state the guard handles `env` with its options, but the plan's Risks section accepts false negatives and `env -S` is not listed as a target shape; this was assessed as an accepted limitation rather than a regression, not a security bypass.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2480219b800fc7d74745fa281d17b804d7364c6c378277e7938e392dbfb2714f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4877,
+    "run_id": "36818268319",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36818268319",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001053136_087d71b752",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4877,
+    "run_id": "36818268319"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T05:31:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

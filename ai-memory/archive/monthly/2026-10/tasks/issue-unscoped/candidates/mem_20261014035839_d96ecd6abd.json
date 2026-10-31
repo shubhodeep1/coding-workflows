@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:19852-19879 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The standalone stall loop's new `continue` for `ai:claude-capacity-wait` (lines 19852-19856) runs before the state update that records `last_seen_phase` and `status_since_ts` (lines 19861-19879). While the label is present, those fields and `stall_recovery_count` are never updated.\n  WHY: After the wait label is removed, the phase matches the stale `last_seen_phase`, so `status_since_ts` is not reset. Stall recovery can fire immediately, which contradicts the README, the agents.d fragment, and the documented \"restarts the stall window\" claim. The new standalone test only greps for the skip. Reviewers rated this MAJOR, mapped here to high. Confidence ranged from 4 to 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:19852-19856 (state update 19861-19879) | severity=MAJOR | confidence=4\n  PROBLEM: The new skip for `ai:claude-capacity-wait` runs before the Python block that records `last_seen_phase` and `status_since_ts`. `status_since_ts` is not reset and `stall_recovery_count` is not cleared when the label is removed.\n  WHY: A standalone issue that waited longer than its phase threshold looks stalled on the first tick after the wait ends. This contradicts the README, the agents.d fragment, and `test_removing_capacity_wait_label_resets_the_stall_window`, which covers only the managed path. The existing `ai:needs-human` and `ai:blocked` skips behave the same way. The switch is off by default. The suggested fix is to run the state update before the skip, or to limit the docs wording to the managed path.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:19852-19856 | severity=MAJOR | confidence=4\n  PROBLEM: The early continue for ai:claude-capacity-wait skips the code responsible for updating last_seen_phase and status_since_ts.\n  WHY: Issues in the capacity-wait phase cannot reset their stall window or recovery count when they leave the wait phase.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:19852-19856 (state update 19861-19879, persisted at 19908-19910) | severity=MAJOR | confidence=4\n  PROBLEM: The `continue` for `ai:claude-capacity-wait` runs before `last_seen_phase` and `status_since_ts` are updated. After the label is removed, stall detection runs against the stale `status_since_ts` and `stall_recovery_count`.\n  WHY: With `CLAUDE_POOL_CAPACITY_WAIT_ENABLED=true`, removing the label can trigger immediate stall recovery instead of resetting the window. The managed path resets both fields. `test_standalone_stall_loop_skips_capacity_wait_phase` only greps the source, and the README and agents fragment promise a reset that is false on the standalone path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:19852-19855 (state update 19858-19879) | severity=MAJOR | confidence=5\n  PROBLEM: The standalone poller does not record `ai:claude-capacity-wait` as `last_seen_phase`.\n  WHY: When the wait label is removed, the phase returns to its previous value, so no phase change is seen. The old `status_since_ts` and `stall_recovery_count` stay in place, and recovery can fire immediately instead of restarting the stall window as documented.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:19854-19856 (state update 19861-19879) | severity=MAJOR | confidence=5\n  PROBLEM: The `continue` for `ai:claude-capacity-wait` (line 19855) runs before the state update logic, so `last_seen_phase`, `status_since_ts`, and `stall_recovery_count` are never updated while the label is present.\n  WHY: After the wait, `elapsed_minutes` is computed from the old timestamp and stall recovery fires immediately. This breaks the README, the agents.d fragment, and plan \u00a74. The test `test_standalone_stall_loop_skips_capacity_wait_phase` only greps for the skip text.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6da6db740d4575b9a7e4767aebad4ca4d9f3f2ca0d3532cc09ce7c63893ba86d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7352,
+    "run_id": "38506959090",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38506959090",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014035839_d96ecd6abd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7352,
+    "run_id": "38506959090"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T03:58:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

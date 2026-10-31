@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The issue gives an exact instruction: \"Keep HEAL_INTAKE_SCOPE_GUARD_ENABLED off by default and fail closed: do not create a heal issue while it is off.\" Only option A does that. Option B is marked recommended, but it still creates an issue while the flag is off, which goes against that instruction. Option C keeps creating issues with an unverified marker, so it does not fail closed either. The guard goes just before the only heal-intake creation call, `gh_retry gh issue create` in `scripts/workflow_failure_heal_intake.sh` (line 1333). The marker check uses `HEAL_SCOPE_RE` / the scope-marker helpers in `scripts/workflow_failure_heal.py` (lines 1902\u20131937), so the existing implement-side `HEAL_SCOPE_REFUSED` preflight in `scripts/implement_heal_preflight.sh` stays as it is.\n\nBinding details for the planner, all taken from the issue text:\n- **Flag off (default):** create no heal issue whether or not a marker is present. Log one stable skip line, e.g. `WORKFLOW_HEAL skip reason=scope_guard_disabled`, which keeps the existing `WORKFLOW_HEAL` log prefix. Exit 0. Off is the intended default state, not a failure, so there is no CRITICAL alert.\n- **Flag on:** check the `ai:workflow-heal-scope:v1` marker in the composed body before calling `gh issue create`.\n  - Missing or invalid marker: log a stable `::error::` line under the `WORKFLOW_HEAL` prefix, e.g. `reason=scope_marker_unverified`. Send a CRITICAL Telegram alert through the existing tg helper, and exit nonzero.\n  - Valid marker: create the issue exactly as today.\n- **Default in the helper:** the helper itself reads the flag as `${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-false}` (\u00a78 requires the default in the helper).\n- **Tests:** cover three cases: flag off means no issue is created, flag on with a bad or missing marker means refusal, and flag on with a valid marker means the issue is created.\n- **Out of scope:** do not add a marker to #6779 and do not infer scope from comments.\n\nSETUP REQUIRED:\n- HEAL_INTAKE_SCOPE_GUARD_ENABLED (variable): an operator sets this repository variable to `true` once the operator step for #6798 is finished. It must reach the intake script's environment, which means adding it to `workflow-failure-heal-intake.yml`'s env with default `false`. Until it is set, the heal intake files no heal issues: each report logs the stable skip line and exits 0, so workflow failures are not turned into heal issues during that time.",
+  "fingerprint": "b949dbd3963fc78033c78c9e8bedfe90776e96e046ad7780defeae15353d7440",
+  "lineage": {
+    "issue_number": 6871,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37899233534",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37899233534",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6871"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009073508_04d7d2df28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6871,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37899233534"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6871",
+  "timestamps": {
+    "created_at": "2026-10-09T07:35:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

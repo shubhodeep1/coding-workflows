@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/claude-actions-worker-pool-plan.md:126-225 | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The plan introduces the `ai:claude-pool-waiting` label for consumer-repo PRs and sweep searches without registering it in `.github/ai/label_contract.v1.json`.\n  WHY: Consumer repos may not have the label, causing `gh pr edit --add-label` to return 422 and preventing the sweep from finding and resuming waiting projects.\n- docs/plans/claude-actions-worker-pool-plan.md:203 | severity=high | confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The dispatcher reads only one `per_page=100` page of worker runs to find the newest run for each open queue item.\n  WHY: Under the planned workload, an item's run can fall beyond page 1 and be treated as missing, causing a duplicate concurrent dispatch for that item.\n- docs/plans/claude-actions-worker-pool-plan.md:185-205 | severity=low | confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The plan does not specify how the report job produces a result when account selection returns `all_gated` or `no_accounts` and the work job has no transcript.\n  WHY: Without a synthesized result, the dispatcher may treat the artifact as missing and redispatch before `resetsAt`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/plans/claude-actions-worker-pool-plan.md:126, 221, 225 | severity=high | confidence=[4]\n  PROBLEM: File: docs/plans/claude-actions-worker-pool-plan.md\n  Line or code reference: line 126 (Constraints \u00a76) lists `label ai:claude-pool-waiting` as a new identifier; line 221 \"Adds the label `ai:claude-pool-waiting` to the final PR\"; line 225 sweep searches the label \"across this repo and every repo in `.github/ai/consumer_repos.json`\"\n  WHY: Consumer repos may not have the label registered, causing label addition to fail and the sweep to miss waiting projects.\n- docs/plans/claude-actions-worker-pool-plan.md:203 | severity=high | confidence=[3]\n  PROBLEM: File: docs/plans/claude-actions-worker-pool-plan.md\n  Line or code reference: line 203 \u2014 \"One read of the runner repo's worker runs (`GET /repos/<runner>/actions/workflows/<worker>/runs?per_page=100`), parsed by `run-name`. For each open item, its newest run decides: ... no run \u2192 dispatch attempt 1.\"\n  WHY: A run beyond page 1 can be treated as missing, causing a duplicate concurrent worker run for the same queue item.\n- docs/plans/claude-actions-worker-pool-plan.md:185-205 | severity=low | confidence=[3]\n  PROBLEM: File: docs/plans/claude-actions-worker-pool-plan.md\n  Line or code reference: line 185 select \"Outputs `account` or `outcome=all_gated` / `outcome=no_accounts`\"; line 191 \"work (needs select; timeout ...)\"; line 198 \"report (always): `claude_pool.py classify transcript.jsonl` writes `claude-pool-result.json`\"\n  WHY: If work does not run, no transcript exists for report to classify; without a synthesized result, the dispatcher may redispatch before `resetsAt`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e9f76c25bd2fe99f7e55a28fb241b4fd06a545ede12730243b48d6dfc281372d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36965429469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36965429469",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002045206_8e31a69690",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36965429469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T04:52:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

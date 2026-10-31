@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/review_autofix_step_scripts.py:53-56 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The registry is reported to reference deleted scripts, which could cause automation tools to encounter missing-file errors when locating bootstrap scripts.\n  WHY: Gemini reports the registry entries point to deleted paths; Sonnet and Qwen dispute this, reporting that the entries point to extant replacement scripts and that the deleted filenames differ.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Reduce the workflow to \u2264430,000 bytes without raising the guard or changing behavior.\n  expected_change_site: .github/workflows/review_autofix.yml (file size reduction)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The editor summary reports the resulting workflow size as 436,581 bytes, 6,581 bytes above the 430,000-byte target; only two bodies were moved. The 480,000-byte hard guard is met. Sonnet notes it could not independently measure the file; Minimax and Qwen report the next candidate body was deferred because moving it would change behavior under the step-script contract.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- Requirement: The AI Issue Summary comment says to \"Reduce the workflow to \u2264430,000 bytes without raising the guard or changing behavior\". The unattended instructions \u00a724 say to aim for 50,000+ bytes of headroom below 480,000.\n  Expected change site: .github/workflows/review_autofix.yml, by moving one or more further large inline run: bodies into scripts/review_autofix_step_<slug>.sh.\n  Evidence of absence: This PR moves only two bodies, the editor summary and the review-blocked comment. The editor's own comment reports 436,581 bytes, about 6.6 KB above 430,000. I could not measure the file here, because no byte-count tool is available, so I rely on that reported figure. The shortfall is only against the soft \"aim\" target, not a hard limit.\n  Severity: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/review_autofix_step_scripts.py:53-56 | severity=MAJOR | confidence=4\n  PROBLEM: The registry REVIEW_AUTOFIX_STEP_SCRIPTS contains entries for scripts (\"Apply fixes with editor model\", \"Preflight: Verify required files before reviewer invocation\", \"Validate editor no-op disposition\") that have been deleted in this PR.\n  WHY: Automation tools querying this registry to locate bootstrap scripts will encounter missing file errors when attempting to use these deleted script paths.\n- Requirement: Reduce the workflow to \u2264430,000 bytes without raising the guard or changing behavior.\n  Expected change site: .github/workflows/review_autofix.yml (file size reduction)\n  Evidence of absence: The editor summary in the PR comments acknowledges that the workflow file was reduced from 448,012 to 436,581 bytes, which remains 6,581 bytes above the 430,000-byte target specified in the linked issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Reduce the workflow to \u2264430,000 bytes without raising the guard or changing behavior.\" (PR comment by shubhodeep1, 2026-10-09; restated in the AI Issue Summary and \u00a724 of the workflow file size split rule.)\n  Expected change site: `.github/workflows/review_autofix.yml` (file size reduction).\n  Evidence of absence: The autofix editor's own summary (entry[4] in PR comments) reports the file at 436,581 bytes after this PR, which is 6,581 bytes above the 430,000 target. The hard guard (480,000) is satisfied with 43,419 bytes of headroom, and the editor documented the remaining gap as `TASK_GAP_DEFERRED`: the next-largest candidate body (\"Telegram review-blocked judge decision\", ~10 KB) cannot be moved without changing its behavior because it currently lacks `set -u` and `pipefail`, and the step-script contract requires every moved body to open with `set -euo pipefail`. The primary CI failure (the >480,000-byte guard) is fixed; the 430,000-byte headroom target is not.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: The PR\u2019s AI Issue Summary comment (entry[0]) says to \u201cReduce the workflow to \u2264430,000 bytes without raising the guard or changing behavior.\u201d\n  Expected change site: `.github/workflows/review_autofix.yml` file size.\n  Evidence of absence: The PR\u2019s editor summary reports the resulting workflow size as 436,581 bytes, above the stated 430,000-byte target. The diff moves two step bodies but does not reduce the workflow to the requested size.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Reduce the workflow to \u2264430,000 bytes without raising the guard or changing behavior.\" (AI Issue Summary comment by shubhodeep1, 2026-10-09)\n  Expected change site: `.github/workflows/review_autofix.yml` (file size)\n  Evidence of absence: The editor summary (entry[4] in PR comments) reports the file at 436,581 bytes, 6,581 bytes above the 430,000 target. The CI hard guard (480,000 bytes) is satisfied with 43,419 bytes of headroom. The editor deferred further reduction as TASK_GAP_DEFERRED, citing that the next-largest candidate (\"Telegram review-blocked judge decision\", ~10 KB) lacks `set -u` and `pipefail`, and the step-script contract requires moved bodies to open with `set -euo pipefail`, so extracting it would change runtime behavior. The deferral is justified on correctness grounds, but the operator-specified target remains unmet.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "84aa42814e3c140feb9f66d927821a901f404976d2dd0ab795dcd300899a28c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6971,
+    "run_id": "38199428040",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38199428040",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012034558_7788d550c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6971,
+    "run_id": "38199428040"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T03:45:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

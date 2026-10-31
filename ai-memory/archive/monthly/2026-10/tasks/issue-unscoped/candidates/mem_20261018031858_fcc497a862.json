@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:2157-2159, 2184-2205, 2311-2317 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The header comment of `autofix_changes_lost_head_retry_consumed` says only `git rev-parse` / `git log` separate the two probes. The snapshot is stored before the peer helper's PR-named lookup (`_autofix_pr_named_review_runs`, extra API calls), `emit_event` and the caller's git calls.\n  WHY: The documented race rationale (\"milliseconds old\") is inaccurate and could mislead future maintainers. Reviewers rated it NIT. openai_gpt-6-luna also notes a run completing in the window would be missed by the snapshot, so a budget check could approve an extra retry.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/gh_helpers.sh:~2311-2317 | severity=NIT | confidence=4\n  PROBLEM: The comment misstates what runs between the snapshot and its reuse. The snapshot is stored at line 2158, before the in-flight filter and the PR-named lookup (lines 2184-2205), then `emit_event` (line 2208), and only then `git rev-parse` / `git log` (review_autofix_step_changes_lost_redispatch.sh lines 48-49).\n  WHY: Nothing fails and reuse is still safe, but a reader relying on \"milliseconds\" or \"only git\" could add slow work between the probes.\n- TASK COMPLETENESS: NONE. All deliverables are present. The two existing tests are unconfirmed because they could not be run.\n- All other checklist sections: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:2311-2317 | severity=NIT | confidence=4\n  PROBLEM: The header comment for `autofix_changes_lost_head_retry_consumed` inaccurately describes the interval between the two API probes.\n  WHY: The comment says only `git rev-parse` / `git log` separate the probes, but additional API calls may occur in between, which could mislead maintainers.\n- All other sections, including TASK COMPLETENESS: NONE\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh:2311-2317 | severity=NIT | confidence=4\n  PROBLEM: The race-reasoning paragraph says only `git rev-parse` / `git log` separate the probes. The PR-named `_autofix_pr_named_review_runs` lookup (lines 2187-2204), the peer probe's `emit_event` and echo, and the caller's git calls (review_autofix_step_changes_lost_redispatch.sh lines 48-49) also separate them.\n  WHY: This is a documentation defect only. The reuse logic is correct, but the timing claim would mislead a future reader.\n- TASK_GAP (all verified as satisfied, reported as NIT, confidence=5):\n  - Requirement: one-shot snapshot reuse, exact key match, existing fail-closed returns and jq-shape validation unchanged. Expected change site: scripts/gh_helpers.sh around autofix_changes_lost_head_retry_consumed lines 2332-2335, 2343-2364, 2370-2373. Evidence of absence: all behaviors are present.\n  - Requirement: the peer helper always makes its live call and never reads the snapshot. Expected change site: scripts/gh_helpers.sh autofix_retrigger_has_inflight_peer lines 2120-2123. Evidence of absence: the snapshot is cleared at entry (lines 2122-2123), the live call is at line 2138, and the helper never reads the snapshot.\n  - Requirement: do not cache the PR-named lookup. Expected change site: scripts/gh_helpers.sh around the `_autofix_pr_named_review_runs` call at line 2189. Evidence of absence: no caching was added.\n  - Requirement: update both header comments (the \"not cached\" note, API-call counts, and race reasoning). Expected change site: scripts/gh_helpers.sh lines 2089-2103 and 2301-2319. Evidence of absence: both are updated, except for the inaccurate timing claim at lines 2311-2317. severity=NIT, confidence=3.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/gh_helpers.sh:2157-2159, 2184-2205, 2311-2314 | severity=NIT | confidence=4\n  PROBLEM: The race rationale says only `git rev-parse` and `git log` separate the probes, but the snapshot is stored before the peer helper's PR-named workflow lookup, which can make multiple API calls.\n  WHY: A review run can start and complete after the snapshot but before the budget probe. The reused snapshot will not count it, so the budget check could approve an extra retry that a fresh query would suppress. The stale interval is not necessarily milliseconds.\n- All other sections, including TASK COMPLETENESS: NONE. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/gh_helpers.sh:2311-2317 | severity=NIT | confidence=4\n  PROBLEM: The comment says only `git rev-parse` / `git log` separate the probes. On the no-peer path the peer helper makes additional API calls after storing the snapshot (PR-named lookup at lines 2184-2205), and the git calls run only after those.\n  WHY: The code is correct and reuse is safe, but the documented rationale is inaccurate and could mislead future readers.\n- All other sections, including TASK COMPLETENESS: NONE\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e6615c7625e1bf4fbb75b788add1b09ef70206cff0a8a49a436c161fa5bc58b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7599,
+    "run_id": "39091982096",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39091982096",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018031858_fcc497a862",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7599,
+    "run_id": "39091982096"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T03:18:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

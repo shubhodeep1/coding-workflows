@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1755,1777 | severity=critical | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `embedded` check treats the URL's own `://` scheme as embedded content, causing the `if not embedded` gate to drop bare issue URLs.\n  WHY: For a bare URL, the lead is `\"https://\"`, so the gate suppresses the issue; other reviewers found the separate `bisect_right` keyword guard correct, but this finding concerns the scheme check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cMoved all references from `.github/scripts/*` \u2192 `scripts/*` and `.github/prompts/*` \u2192 `prompts/*`.\u201d\n  expected_change_site: `.github/scripts/`, `.github/prompts/`, and their root-level replacements.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains no directory moves or corresponding path-relocation hunks.\n- requirement: \u201cUpdated all workflow files (`.github/workflows/*.yml`) to reference scripts at the new root-level location.\u201d\n  expected_change_site: `.github/workflows/review_autofix.yml`, `.github/workflows/implement.yml`, `.github/workflows/memory_maintenance.yml`, and other affected workflow files.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The only workflow hunk registers a test in `.github/workflows/ci.yml`; the named workflows have no script-path update hunks.\n- requirement: \u201cUpdated research notes, README files, and example records to reflect the new paths.\u201d\n  expected_change_site: `research/squad-workflow-improvements-20260322T042436Z.md`, `ai-memory/README.md`, and `ai-memory/examples/sample_memory_record.v1.json`.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: None of those files appears in the PR diff. The `README.md` hunk documents issue-status behavior, not script or prompt paths.\n- requirement: \u201cUpdated `sys.path` insertion in `memory_maintenance.yml` to point to `scripts/` instead of `.github/scripts/`.\u201d\n  expected_change_site: `.github/workflows/memory_maintenance.yml`.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The workflow is unchanged in the PR diff; no hunk updates its Python import path.\n- requirement: \u201cAdded `__pycache__/` to `.gitignore`.\u201d\n  expected_change_site: `.gitignore`.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `.gitignore` is not included in the PR diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh:1755,1777 | severity=BLOCKER | confidence=4\n  PROBLEM: The `if not embedded` gate at line 1777 prevents `found.add()` whenever the `embedded` check at line 1755 is True. The `embedded` expression triggers when the lead contains `\"://\"`, which fires for the URL's own scheme. For `text = \"https://github.com/acme/widgets/issues/78\"`, `host_prefix.search` finds `github.com/` at position 10, `lead_start` walks back to 0, `lead = \"https://\"`, `embedded = True`, `url_start` is reset to 0, and the `if not embedded` gate then drops the issue. The test `test_bare_urls_paths_and_closing_keywords_still_link` (line 286) asserts `_extract(f\"https://github.com/{REPOSITORY}/issues/78\") == [78]`, which under this trace would return `[]`. The same defect also breaks the `[1, 2]` assertion in `test_adjacent_issue_links_each_count_on_their_own` (line 139) and the `[1]` assertion for the `?x=fix #2` case in `test_closing_keyword_after_a_link_or_keyword_still_links` (line 144).\n  WHY: The helper prints no issue numbers for any URL whose lead contains the URL's own scheme, so `LINKED_ISSUE_NUMBERS` and `LINEAGE_FINALIZE_ISSUE_NUMBERS` are empty for the simplest PR bodies. `issue_pr_status.yml` then logs \"No linked issues found\" instead of finding the issue, and a `claude/implement-plan-*` PR with a bare `https://github.com/<repo>/issues/<N>` body (no closing keyword) would skip the linked-issue handling entirely.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cMoved all references from `.github/scripts/*` \u2192 `scripts/*` and `.github/prompts/*` \u2192 `prompts/*`.\n  Expected change site: `.github/scripts/`, `.github/prompts/`, and their root-level replacements.\n  Evidence of absence: The PR diff contains no directory moves or corresponding path-relocation hunks.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: \u201cUpdated all workflow files (`.github/workflows/*.yml`) to reference scripts at the new root-level location.\u201d\n  Expected change site: `.github/workflows/review_autofix.yml`, `.github/workflows/implement.yml`, `.github/workflows/memory_maintenance.yml`, and other affected workflow files.\n  Evidence of absence: The only workflow hunk registers a test in `.github/workflows/ci.yml`; the named workflows have no script-path update hunks.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: \u201cUpdated research notes, README files, and example records to reflect the new paths.\u201d\n  Expected change site: `research/squad-workflow-improvements-20260322T042436Z.md`, `ai-memory/README.md`, and `ai-memory/examples/sample_memory_record.v1.json`.\n  Evidence of absence: None of those files appears in the PR diff. The `README.md` hunk documents issue-status behavior, not script or prompt paths.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \u201cUpdated `sys.path` insertion in `memory_maintenance.yml` to point to `scripts/` instead of `.github/scripts/`.\u201d\n  Expected change site: `.github/workflows/memory_maintenance.yml`.\n  Evidence of absence: The workflow is unchanged in the PR diff; no hunk updates its Python import path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \u201cAdded `__pycache__/` to `.gitignore`.\n  Expected change site: `.gitignore`.\n  Evidence of absence: `.gitignore` is not included in the PR diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e555f22d5574f24ab3c75e21aee0e3f264784f0e8764338ae3a9369582780678",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5825,
+    "run_id": "36885590292",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36885590292",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001173552_8afabf99f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5825,
+    "run_id": "36885590292"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T17:35:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\nQ4: A\n\nRATIONALE:\nQ1: The change is for \"the identified markerless issue\", which is #7082's case. In `scripts/workflow_failure_heal.py` (around lines 2444\u20132462), that case is `verify_heal_scope` returning `missing`. The other statuses mean something else: `malformed` or `duplicated` point at a broken pipeline marker, and `untrusted_author` or `edited` point at tampering. Replacing those would let a forged or edited issue get past duplicate detection, so they keep today's duplicate handling.\nQ2: The issue asks for an \"authenticated failed-run report\". The only real authentication is the GitHub Actions OIDC `report_identity` token that has passed `verify-report-identity`. The provenance and claim-binding checks also accept reports with no token while `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false`. If recovery accepted those, a weaker report could bypass duplicate detection. A report with no token or a rejected token keeps today's duplicate handling.\nQ3: The issue says to \"require the existing intake scope check to verify the marker\". `_heal_intake_scope_guard_permits_create` (`scripts/workflow_failure_heal_intake.sh:1455`, called at line 1561) is that check, and it only verifies when `HEAL_INTAKE_SCOPE_GUARD_ENABLED=true`. Requiring both flags reuses the check unchanged and adds no second verify path. With either flag off, today's intake and release behaviour stays the same.\nQ4: Without a durable link, every later report for the same failure would match #7082 again and create another replacement. A pointer comment with a dedupe marker, then closing #7082 as \"not planned\", sends later reports to the replacement, whose marker is verified. This does not edit #7082's body, does not treat that body as authority, and does not run its editor, so it stays within what the issue forbids.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone: every decision is a lettered option. These constraints bind the plan:\n- **Gating.** The new branch in `scripts/workflow_failure_heal_intake.sh` runs only when all of these hold:\n  - `HEAL_SCOPE_RECOVERY_ENABLED=true` (helper default `false`, per \u00a78);\n  - `HEAL_INTAKE_SCOPE_GUARD_ENABLED=true`;\n  - the report's OIDC identity verified;\n  - duplicate detection matched an existing heal issue whose `verify_heal_scope` status is exactly `missing`;\n  - that issue has no trusted `<!-- ai:heal-scope-recovery:v1 replaced_by=<n> -->` comment from the intake's authenticated account.\n- **Replacement.** Generate a fresh frozen scope from the verified runs using the existing `heal-scope` render path. Do not use the original body. Send the composed body through the unchanged `_heal_intake_scope_guard_permits_create`. Create the issue only if the result is `verified`.\n- **Original issue.** After the replacement is confirmed created, post one comment that ends with the recovery marker, then close the original as \"not planned\". If the create fails, do not touch the original.\n- **Tests.**\n  - Recovery flag off: duplicate handling is unchanged.\n  - Guard off: duplicate handling is unchanged.\n  - No token or a rejected token: duplicate handling is unchanged.\n  - Original status is `malformed`, `duplicated`, `untrusted_author` or `edited`: no recovery.\n  - Missing or forged scope on the replacement: no issue is created.\n  - The recovery marker is already present, or a later report arrives: no second replacement, and the report dedupes onto the replacement.\n  - Comments that carry the recovery marker but come from an untrusted author are ignored.\n- **Documentation.** Write an `agents.d/` fragment (\u00a725), not a direct `agents.md` edit, and add a `changelog.d/` fragment.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- HEAL_SCOPE_RECOVERY_ENABLED (variable): a person sets it to `true` after finishing the operator step, together with `HEAL_INTAKE_SCOPE_GUARD_ENABLED=true`. Until then the recovery path is skipped and the intake keeps recording duplicates as it does today.",
+  "fingerprint": "1c7454e21cd8bd77d08e79f7351374dca5385b1c7b3398e32dbf3a69e81ed8b8",
+  "lineage": {
+    "issue_number": 7191,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38184562188",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38184562188",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7191"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261011233738_298d11899d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7191,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38184562188"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7191",
+  "timestamps": {
+    "created_at": "2026-10-11T23:37:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

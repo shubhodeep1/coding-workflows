@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue-mode failure escalations are handed to the escalation judge without a stop notification or a human `/reclarify` wait.\n  expected_change_site: `.claude/commands/implement-issue-claude.md:3` and `workflow-templates/.claude/commands/implement-issue-claude.md:3`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  EVIDENCE: Both copies still state that failures stop the project and direct the ask to the issue with an `ai:claude-blocked` label and `PushNotification` (`implement-issue-claude.md:3`); `implement-plan-claude.md:117` and CLAUDE.md \u00a728.C/\u00a728.G describe escalation handoff to the checker and suppression of the stop notification. The issue command summaries remain stale, though `implement-plan-claude.md:117` has the correct behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Issue-mode failure escalations are handed to the escalation judge without a stop notification or a human `/reclarify` wait.\" The PR description's Issue Mode section promises escalation stops go to the escalation judge (CLAUDE.md \u00a728.G), not to a human with a `PushNotification`. The two `implement-issue-claude.md` files still carry the old text that says the opposite.\n  Expected change site: `.claude/commands/implement-issue-claude.md` (line 3) and `workflow-templates/.claude/commands/implement-issue-claude.md` (line 3).\n  Evidence of absence: Both files still read \"Failures and ask-first operations still stop the project (\u00a728.C). The ask then goes on the issue: one comment, the `ai:claude-blocked` label, and a `PushNotification`\" at line 3. The PR did edit the parallel Issue Mode bullet in `implement-plan-claude.md` (line 117 of the twin) to add \"An **escalation stop** is the exception ([Escalations](#escalations), CLAUDE.md \u00a728.G): its comment starts `<!-- ai:claude-blocked:v1 kind=escalation stop=<stop id> -->`, it sends no `PushNotification`, and instead of waiting for a human it hands the project checker the escalation wait.\" The matching sentence is missing from `implement-issue-claude.md`, so an issue-mode run reading that file instead of `implement-plan-claude.md` will follow the stale instruction, send a `PushNotification`, and stop waiting for a human, stalling the project. The fix is twin-first (Q40) to match the new \u00a728.C/\u00a728.G contract.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: Issue-mode failure escalations are handed to the escalation judge without a stop notification or a human `/reclarify` wait.\n  Expected change site: `.claude/commands/implement-issue-claude.md` and `workflow-templates/.claude/commands/implement-issue-claude.md`, opening issue-mode guidance.\n  Evidence of absence: Neither issue command is changed in the PR. Both still say failures stop the project and direct the ask to the issue with an `ai:claude-blocked` label and `PushNotification` (`implement-issue-claude.md:3`). This conflicts with the new issue-mode escalation flow, which hands the checker an escalation wait and suppresses the stop notification (`implement-plan-claude.md:117`).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: \"The stop now posts `<!-- ai:claude-blocked:v1 kind=escalation stop=<stop id> -->` and hands the project checker an `escalation` wait. The checker starts `/escalation-judge` about two minutes later.\" (PR description, \"What changes\") \u2014 this applies to issue-mode projects, whose entry point is `/implement-issue-claude`.\n  Expected change site: `workflow-templates/.claude/commands/implement-issue-claude.md:3` and `.claude/commands/implement-issue-claude.md:3`\n  Evidence of absence: Line 3 of both copies still reads: \"Failures and ask-first operations still stop the project (\u00a728.C). The ask then goes on the issue: one comment, the `ai:claude-blocked` label, and a `PushNotification`.\" After this PR, failure escalations in issue mode send no PushNotification and do not wait for a human \u2014 they hand off to the escalation judge. The PR updated CLAUDE.md \u00a728.C and the Issue Mode section of `implement-plan-claude.md:117` to reflect this, but did not update the summary on line 3 of `implement-issue-claude.md`, which is the first text an issue-mode session reads. The stale summary contradicts the new behavior. Line 9 does direct the session to read `implement-plan-claude.md` in full (which has the correct text), so the practical runtime risk is low, but the summary is now incorrect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "37c391e1d5ee6469528f24fe8bb57b655f14bf5a0b98a4772142f06c98a14c8e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "37028447428",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37028447428",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002162732_f72fcb7265",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "37028447428"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T16:27:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

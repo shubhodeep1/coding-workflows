@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add one changelog fragment named after this issue that follows CLAUDE.md \u00a720.D order: headline, lead paragraph, numbers table, a \"What this means for <audience>\" closing paragraph, and an optional \"For contributors\" subsection.\n  expected_change_site: changelog.d/8129-label-ensure-run-cache.md, after the numbers table\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  EVIDENCE: changelog.d/8129-label-ensure-run-cache.md ends at the table row `| Failures cached | 0 |` with no \"What this means for <audience>\" closing paragraph despite a clear operator takeaway (fewer `gh label create` calls, less GitHub API quota), and the contributor note that subshells do not share the cache sits in the lead paragraph instead of a \"For contributors\" subsection; the prior autofix only trimmed the lead paragraph. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: The issue asks for a changelog fragment named after this issue. CLAUDE.md \u00a720 (lines 774-778 and the template at line 810) sets its order as headline, lead paragraph, numbers table, a \"What this means for <audience>\" closing paragraph, and an optional \"For contributors\" subsection.\n  Expected change site: changelog.d/8129-label-ensure-run-cache.md, after the numbers table.\n  Evidence of absence: The fragment ends at the table row `| Failures cached | 0 |`. It has no audience closing paragraph, although the change has a clear operator takeaway: fewer `gh label create` calls and less GitHub API quota used. The contributor caveat that subshells do not share the cache sits inside the lead paragraph and not under \"For contributors\". The previous autofix run only shortened the lead paragraph and did not add either element.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Add one changelog fragment named after this issue that follows CLAUDE.md section 20.D, which requires a \"What this means for audience\" closing paragraph and a \"For contributors\" subsection.\n  Expected change site: changelog.d/8129-label-ensure-run-cache.md\n  Evidence of absence: The fragment lacks the required closing paragraph and the \"For contributors\" subsection. The contributor note about subshells is currently placed inside the lead paragraph, which violates the template structure.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The linked issue says: \"Add one changelog fragment named after this issue: changelog.d/<this issue number>-label-ensure-run-cache.md.\" CLAUDE.md \u00a720.D requires: 1. Headline. 2. Lead paragraph (3-5 sentences). 3. The numbers that matter. 4. Audience closing \u2014 a short 'What this means for <audience>' paragraph. 5. For contributors \u2014 a final subsection.\n  Expected change site: changelog.d/8129-label-ensure-run-cache.md, after the numbers table and as a closing contributor subsection.\n  Evidence of absence: The fragment ends at the numbers table row \"| Failures cached | 0 |\" with no \"What this means for <audience>\" closing paragraph, despite a clear operator takeaway (fewer `gh label create` calls and less GitHub API quota). The subshell-not-shared-cache note sits inside the lead paragraph, where \u00a720.D item 5 places it under a \"For contributors\" subsection. The autofix only trimmed the lead paragraph sentence count; sections 4 and 5 remain missing. All six pass-1 reviewers flagged this gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The changelog fragment must follow CLAUDE.md \u00a720.D\u2019s structure, including an audience closing paragraph when the information exists.\n  Expected change site: changelog.d/8129-label-ensure-run-cache.md, after the numbers table.\n  Evidence of absence: The fragment ends with the numbers table and has no \u201cWhat this means for\u201d audience closing paragraph, despite stating the operator impact of reducing label-create calls and GitHub API usage.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Add one changelog fragment named after this issue\" that follows CLAUDE.md \u00a720.D (headline, lead paragraph, numbers table, \"What this means for <audience>\" closing paragraph, optional \"For contributors\" subsection).\n  Expected change site: `changelog.d/8129-label-ensure-run-cache.md`, after the numbers table\n  Evidence of absence: The fragment ends with the table (`| Failures cached | 0 |`) with no \"What this means for <audience>\" paragraph, although the operator takeaway is clear. The subshell note sits in the lead paragraph, where \u00a720.D item 5 places it under \"For contributors\". The earlier autofix only trimmed the lead paragraph to five sentences.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Add one changelog fragment named after this issue\" following CLAUDE.md \u00a720.D (headline, lead paragraph, numbers table, \"What this means for <audience>\" closing paragraph, optional \"For contributors\" subsection).\n  Expected change site: changelog.d/8129-label-ensure-run-cache.md, after the numbers table (lines 6-10).\n  Evidence of absence: The fragment ends at the table (`| Failures cached | 0 |`, line 10) with no \"What this means for operators\" closing paragraph, although the operator takeaway exists. All nine peer fragments in changelog.d/ include that closing paragraph. The contributor-only detail (subshells do not share the cache) sits in the lead paragraph (line 4) rather than a \"For contributors\" subsection. The last autofix only cut the lead paragraph from six to five sentences.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5166546e08f0024e5838f8ac7d93bb072a05dd8b3dba52f1addc6a4256650b6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8132,
+    "run_id": "40191350084",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40191350084",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025122548_7ea3fdea88",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8132,
+    "run_id": "40191350084"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T12:25:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA. The review/autofix pipeline (`review_autofix.yml` and the `scripts/review_*` helpers)\nB. The orchestrator and poller (`orchestrate*.yml`, `scripts/orchestrate_poll_process.sh`)\nC. The clarify, plan or implement phase workflows\nD. Documentation only (`README.md`, `docs/`, an `agents.d/` fragment)\nE. None of these. I will reply with the exact file, workflow or behaviour, and what is wrong with it today. (RECOMMENDED)\nQ2: What outcome would show the issue is done?\nChoices:\nA. A specific bug or failing run is fixed. I will give the run ID, error or issue number. (RECOMMENDED)\nB. Measurable speed or cost goes down. I will give the metric and the target.\nC. A specific new capability is added. I will describe it.\nD. No concrete outcome. Close this issue as not actionable.",
+  "fingerprint": "1f41656bb11ddd70958f24a582827980a0b18b5f7ddbc909331947ab6d3fd5ce",
+  "lineage": {
+    "issue_number": 7274,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38270970883",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38270970883",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012153638_10abceb521",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7274,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38270970883"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7274 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T15:36:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

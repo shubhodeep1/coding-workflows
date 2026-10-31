@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1872-1880 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `python3 -I` implies `-E`, so the explicit `PYTHONDONTWRITEBYTECODE=1` on the builder call and the digest-count call is ignored. `_load_wrapper_renderer()` then writes `.pyc` files into the upstream support checkout.\n  WHY: Severity disagreement: three reviewers rated it NIT and minimax_minimax-m3 rated it MAJOR, so the highest is used (MAJOR, mapped to high). minimax_minimax-m3 adds that a read-only checkout makes the `.pyc` write fail, which sets `manifest_failed` and fails open. The fix is `python3 -I -B` on both calls.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/security_audit.sh: `security_audit_resolve_upstream_managed_paths`, builder call and count call | severity=NIT | confidence=4\n  PROBLEM: `-I` implies `-E`, so `PYTHONDONTWRITEBYTECODE=1` on both calls has no effect.\n  WHY: `_load_wrapper_renderer()` in `scripts/build_sync_manifest.py` writes `scripts/__pycache__/workflow_wrapper_refs.*.pyc` into the upstream support checkout, leaving untracked files. Using `-I -B` on both calls fixes it.\n- The other checklist sections reported NONE. The reviewer judged the `-I` change on the digest-count step correct, and also judged the new test correct.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/security_audit.sh:1872-1875, 1880 | severity=NIT | confidence=4\n  PROBLEM: `python3 -I` ignores the `PYTHONDONTWRITEBYTECODE` environment variable.\n  WHY: Bytecode generation is not disabled, so `.pyc` files are written to the support checkout. The suggested fix is `python3 -I -B`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh:1872-1875, 1880 | severity=MAJOR | confidence=4\n  PROBLEM: The python3 invocations lack `-B`, and `PYTHONDONTWRITEBYTECODE=1` is ignored under `-I`. `exec_module` on `workflow_wrapper_refs.py` writes `.pyc` files into the upstream support checkout.\n  WHY: On a read-only support checkout the write raises `OSError`, which `_load_wrapper_renderer()` turns into a `ManifestError`. That sets `skip_reason=\"manifest_failed\"` and the resolver fails open. The suggested fix is `-I -B` on both calls, dropping the redundant env token, and tightening the test regex.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1872-1875, 1880 | severity=NIT | confidence=4\n  PROBLEM: `PYTHONDONTWRITEBYTECODE=1` is ineffective because `-I` implies `-E`.\n  WHY: `_load_wrapper_renderer()` in `scripts/build_sync_manifest.py:271` calls `exec_module()`, which writes untracked `.pyc` files into the support checkout's `scripts/__pycache__/`. The suggested fix is `-B` on both calls.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2ee40b534d5cc935232e7025a867291296f747d2490dd8a9ffd0c9d3674bb28e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7546,
+    "run_id": "39018028618",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39018028618",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017085705_9bbac04667",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7546,
+    "run_id": "39018028618"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T08:57:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

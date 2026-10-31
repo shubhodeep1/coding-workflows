@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/memory_helpers.sh:88-120 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The temporary stderr file is removed only on the normal path after the Python call, so a SIGTERM or SIGINT during the call leaves it in TMPDIR.\n  WHY: The requirement says to remove the temp file on every path, and the file holds raw stderr. All reviewers rated this NIT. The anthropic_claude-sonnet-5_5 reviewer examined it and chose not to report it as speculative.\n- scripts/memory_helpers.sh:66-83 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The auth-category regex `(^|[^0-9])403([^0-9]|$)` also matches a traceback line number such as `line 403`, so unrelated errors are classified as `auth`.\n  WHY: This produces misleading telemetry. The rating is NIT from google_gemini-3_1-flash-lite (confidence 4) and minimax_minimax-m3 (confidence 2), and a hardening suggestion from openai_gpt-6-luna. anthropic_claude-sonnet-5_5 examined it and rejected it, because ai_memory.py prints messages rather than tracebacks.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"On failure, add fields to the existing telemetry JSON object... exit_code (integer), duration_ms (integer), and stderr_category\"\n  expected_change_site: scripts/memory_helpers.sh, _memory_record_with_failure_telemetry\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says the function does not handle a Python failure before start_ms or end_ms is captured, and that the rc initialisation to 0 assumes Python always returns a code. It rated this NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/memory_helpers.sh:88-112 | severity=NIT | confidence=4\n  PROBLEM: The temporary stderr file created by `mktemp` is not guaranteed to be removed if the shell is terminated (SIGTERM or SIGINT) during the Python execution.\n  WHY: The cleanup `rm -f \"${err_file}\"` is never reached, leaving raw stderr in the temp directory.\n- scripts/memory_helpers.sh:66-83 | severity=NIT | confidence=4\n  PROBLEM: The grep patterns that classify `stderr_category` are too broad. `(^|[^0-9])403([^0-9]|$)` matches a traceback line such as `line 403`.\n  WHY: An unrelated Python error is classified as `auth`, which gives misleading telemetry.\n- TASK_GAP: Requirement: \"On failure, add fields to the existing telemetry JSON object... exit_code (integer), duration_ms (integer), and stderr_category\" | Expected change site: scripts/memory_helpers.sh, _memory_record_with_failure_telemetry | severity=NIT | confidence=3\n  Evidence of absence: The function does not handle a Python failure before start_ms or end_ms is captured, and the rc initialisation to 0 assumes Python always returns a code.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/memory_helpers.sh:_memory_stderr_category auth branch | severity=NIT | confidence=2\n  PROBLEM: The `403` regex classifies a traceback frame such as `line 403, in main` as `auth` instead of `other`.\n  WHY: An operator can chase a non-existent credential problem.\n- scripts/memory_helpers.sh:_memory_record_with_failure_telemetry captured-stderr branch | severity=NIT | confidence=4\n  PROBLEM: A SIGTERM or SIGINT during the Python call exits the script before `rm -f \"${err_file}\"`, leaving the temp file with raw stderr in TMPDIR.\n  WHY: The issue requires removing the temp file on every path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/memory_helpers.sh:114-120 | severity=NIT | confidence=4\n  PROBLEM: The temporary stderr file is removed only on the normal path after the Python call.\n  WHY: A SIGTERM or SIGINT during the Python call leaves the file in TMPDIR, contrary to the requirement to remove it on every path.\n- scripts/memory_helpers.sh:81 (hardening suggestion, risk score 1)\n  PROBLEM: The broad `403` regex also classifies a traceback line such as `line 403` as `auth`.\n  WHY: The suggested fix is to match `403` only in HTTP error or status context (about 1 line changed).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/memory_helpers.sh:114-120 | severity=NIT | confidence=3\n  PROBLEM: The temp file is removed only after the Python call returns normally, so a SIGTERM or SIGINT leaves it in TMPDIR.\n  WHY: The requirement says to remove it on every path, and a CI timeout or cancellation sends SIGTERM.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "166726d81ecdfec3536d284d9b463090f224c6d5b7abdc9e25163ae76214f1a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7619,
+    "run_id": "39107738452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39107738452",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018074548_c00511889f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7619,
+    "run_id": "39107738452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T07:45:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

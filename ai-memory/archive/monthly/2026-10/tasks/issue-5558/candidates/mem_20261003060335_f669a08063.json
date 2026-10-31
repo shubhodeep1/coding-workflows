@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan\n\nPlanning ref: `main` at `66707437b53aa54446d661c8f409795577d13ead`. No integration branch is specified. The `/answer` was auto-posted after clarification found no questions; I interpret option **A** as the issue\u2019s recommended choice, not as a separate human selection.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `.claude/hooks/gh_api_write_guard.py`  \nScope-mode justification: Fix both reported parser mismatches within the existing hook, without changing its permission wiring or adding a shell parser dependency. Fixing only the heredoc case would leave a demonstrated file-disclosure path. Under `unattended_system_instructions.md` \u00a76, Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed; the prompt cost of asking on unquoted expansions is warranted, while quoted dynamic reads retain their current outcome.\n\n### Automation and rollout\n\n- **Existing code only:** extend the hook and its byte-identical consumer template; add no standalone script.\n- **Entry points:** the existing `Bash` `PreToolUse` hook in `.claude/settings.json` remains the runtime entry point. `.github/workflows/ci.yml` runs its guard tests on PRs and pushes to `main` or `stable`; the existing stable consumer sync distributes `workflow-templates/.claude/`.\n- **Supervisor, DB gate, removal registry:** not applicable. No new scheduled operation, long-running process, or database work.\n\n### Files likely to change\n\n- `.claude/hooks/gh_api_write_guard.py` and `workflow-templates/.claude/hooks/gh_api_write_guard.py` \u2014 identical guard changes.\n- `tests/test_gh_api_write_guard.py` \u2014 regression and compatibility cases.\n- `CLAUDE.md` \u00a723.D/\u00a723.H and `agents.md` \u2014 revised permission contract and guidance for #4786/#4909 loop approvals.\n- `changelog.d/5558-gh-api-guard-expansion-heredoc.md` \u2014 security fix fragment; do not edit `CHANGELOG.md`.\n\n### Functions and data structures\n\n- Extend `_shell_rewrite_hazard` or an adjacent existing guard check to identify **unquoted** `$` and backtick expansions in direct `gh api` words before a read or routine call can receive no decision. Keep escaped and single-quoted literals, and double-quoted dynamic endpoints, out of this new rule. Preserve the existing stricter `-F`, ANSI-C quoting, comment, brace-expansion, and hidden-call checks.\n- Replace the regex-only operator recognition in `strip_heredoc_bodies` with quote-aware recognition. Strip bodies only for actual Bash heredoc operators, not quoted or escaped `<<`, `<<<`, or markers in comments or expansion syntax. Retain detection of real heredocs inside command substitutions.\n- Keep the existing `(prefix, delimiter_quoted, body)` heredoc records and `evaluate`\u2019s `(decision, reason)` interface. No new external API calls, settings rules, or environment variables.\n\n**Data flow:** Recognize actual heredocs \u2192 tokenize the remaining command \u2192 identify direct and hidden `gh api` calls \u2192 check Bash rewrite hazards \u2192 apply existing argument classification and whole-command decision. Where shell syntax cannot be classified safely, ask rather than treating a possible call as absent.\n\n### API/interface changes\n\nNo public API or endpoint changes. The hook\u2019s observable change is `ask` for a direct `gh api` call containing an unquoted expansion that could alter its words; `\"repos/a/b/pulls/$n\"` retains its current no-decision outcome in a loop.\n\n## Decisions\n\n### D1 \u2014 Choose quote-aware expansion checks\n- **Chosen:** Option A: ask on unquoted expansions in `gh api` words, while preserving double-quoted dynamic reads.\n- **Alternatives considered:** B, asking for quoted expansions too; C, fixing only heredoc stripping.\n- **Why:** A closes the demonstrated word-splitting bypass without imposing B\u2019s prompt cost on documented quoted reads. C leaves the bypass open.\n\n### D2 \u2014 Recognize heredocs from shell context\n- **Chosen:** Make `strip_heredoc_bodies` distinguish executable heredoc operators from quoted or escaped text and other `<<` syntax.\n- **Alternatives considered:** Narrowing the existing regex to a few known examples.\n- **Why:** A regex adjustment alone could still discard a real `gh api` line when `<<` is data.\n\n## Security considerations\n\nThe trust boundary is the untrusted Bash command passing from the `PreToolUse` hook to Bash and then `gh api`; the settings allow rule must not approve an effect the hook failed to see. An expanded word can inject `-Fbody=@/etc/passwd` or `-XDELETE`; a false heredoc can conceal a destructive call. Neither path should proceed without a prompt. Validate raw quoting and operator context rather than relying on `shlex`\u2019s expanded-looking tokens. Keep the existing local-repository checks for routine writes and fail-closed behavior for unreadable input. No new endpoint, credential handling, or money mutation is involved.\n\n### Risks and edge cases\n\n- A global \u201ccontains `$`\u201d rule would regress quoted loop reads; a check limited to parsed `-F` values would miss flags injected from an endpoint.\n- Heredoc handling must preserve real quoted-delimiter heredocs and calls hidden in executable heredoc bodies while ignoring quoted markers.\n- The comment references a Claude-authored plan on another branch; it is not present on this planning ref and is not required for implementation. No issue-described source path conflicts with the checkout.\n\n### Testing and verification\n\nAdd cases asserting `ask` for both reported unquoted-expansion shapes and the quoted-`<<EOF` concealment; assert the double-quoted read remains undecided. Cover escaped/single-quoted literals, real heredocs, here-strings, comments, and substitutions, alongside existing file-backed and malformed-`--jq` behavior. Verify both hook copies are byte-identical and run `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_gh_api_write_guard.py`, followed by the repository\u2019s applicable lint and CI checks.\n\n**Pre-execution self-check:** On this ref, the three reported bypass shapes and the quoted-read control all currently return no decision; the hook twins are identical. The plan covers the acceptance criteria, preserves the existing entry point, and requires no unavailable scalar input.\n\nSTATUS: CLEAR  \nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2ff950ea8ba93439eb7c89f0f31a21d34ad78064b3679c5f4e54ff0a39f04010",
+  "lineage": {
+    "issue_number": 5558,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37101436511",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37101436511",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5558"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003060335_f669a08063",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5558,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37101436511"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #5558",
+  "timestamps": {
+    "created_at": "2026-10-03T06:03:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

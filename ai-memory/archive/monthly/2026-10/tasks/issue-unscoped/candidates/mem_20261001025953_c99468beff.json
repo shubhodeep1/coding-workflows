@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1568, 1570; agents.md:1659-1663, 1852-1856 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The gate emits `AUTOFIX_GATE_REVIEW_CHECKOUT`, but `agents.md` omits it from both contractual stable-log-prefix inventories.\n  WHY: Registry-driven workflow-log-analysis and API-hygiene reporting will omit this checkout-decision event; reviewers agree on the issue, with no severity disagreement.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Register `AUTOFIX_GATE_REVIEW_CHECKOUT` in both contractual stable-log-prefix inventories.\n  expected_change_site: agents.md, \"Stable log prefixes (contractual)\" bullet list and `LOG_PREFIX.name=` inventory\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: agents.md:1650-1663 and `LOG_PREFIX.name=` inventory at agents.md:1843-1856 omit the prefix; emitted at .github/workflows/review_autofix.yml:1568 and :1570\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:1568, 1570 | severity=NIT | confidence=5\n  PROBLEM: The gate emits `AUTOFIX_GATE_REVIEW_CHECKOUT` on two code paths, but the prefix is not registered in either contractual stable-log-prefix list in `agents.md`.\n  WHY: The prefix is invisible to downstream log-analysis tooling that relies on the registered prefix set.\n- Requirement: \"gate exports `review_checkout_sha` from the existing `/pulls/<n>` fetch (same-repo heads only)\"\n  Expected change site: .github/workflows/review_autofix.yml gate step and agents.md\n  Evidence of absence: The gate export, the checkout expression, the test file, and the agents.md prose are all present. No gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"`codex-agent` \u2192 'Checkout repo' uses `pull_request.head.sha || review_checkout_sha || github.sha`\"\n  Expected change site: .github/workflows/review_autofix.yml line 2474\n  Evidence of absence: Present \u2014 `ref: ${{ github.event.pull_request.head.sha || needs.gate.outputs.review_checkout_sha || github.sha }}` at line 2475.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"regression test `tests/test_review_autofix_dispatch_pr_head_checkout.py`; updated `tests/test_review_autofix_merge_precheck.py`\"\n  Expected change site: tests/test_review_autofix_dispatch_pr_head_checkout.py [new], tests/test_review_autofix_merge_precheck.py\n  Evidence of absence: Both present \u2014 new file with 298 lines covering wiring, gate fragment under bash, and end-to-end scratch-repo test; merge_precheck assertion updated. Wired into ci.yml at line 836.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"`agents.md` paragraph; changelog fragment\"\n  Expected change site: agents.md, changelog.d/5824-dispatched-review-pr-head-checkout.md\n  Evidence of absence: Both present \u2014 agents.md gains `## Review checkout on dispatched runs` section; changelog fragment created with correct format.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"done: tests pass, workflow under 480,000 bytes\"\n  Expected change site: .github/workflows/review_autofix.yml\n  Evidence of absence: The PR description reports workflow at 457,831 bytes (< 480,000) and all 13 tests passing. Claim is plausible from the diff size (~65 lines net growth ~13 lines). No counter-evidence.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- agents.md: lines 1659-1663, 1852-1856 | severity=NIT | confidence=4\n  PROBLEM: The new stable log prefix `AUTOFIX_GATE_REVIEW_CHECKOUT` emitted in `.github/workflows/review_autofix.yml:1568,1570` is not registered in the contractual stable-log-prefix registry.\n  WHY: Workflow-log-analysis and API-hygiene reporting tools parse output using that registry, so the checkout-decision events will go untracked.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: Register the new stable log prefix `AUTOFIX_GATE_REVIEW_CHECKOUT` in both the contractual bullet list and the `LOG_PREFIX.name=` inventory.\n  Expected change site: agents.md:1650-1663 and agents.md:1843-1856\n  Evidence of absence: The inventories omit the prefix; it is emitted at .github/workflows/review_autofix.yml:1568 and :1570.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- review_autofix.yml:1568, 1570 emits `AUTOFIX_GATE_REVIEW_CHECKOUT`; agents.md:1650-1663 and 1843-1856 list stable prefixes but omit it. | severity=NIT | confidence=4\n  PROBLEM: The new stable log prefix is missing from both contractual prefix inventories.\n  WHY: Workflow-log-analysis and API-hygiene reporting depend on registered prefixes, so this checkout-decision event will not be included in registry-driven reporting.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: Register `AUTOFIX_GATE_REVIEW_CHECKOUT` in both the contractual bullet list and the `LOG_PREFIX.name=` entries in `agents.md`.\n  Expected change site: agents.md, \"Stable log prefixes (contractual)\" bullet list and `LOG_PREFIX.name=` registry\n  Evidence of absence: `.github/workflows/review_autofix.yml:1568` and `:1570` emit the prefix, but both inventories omit it; agents.md line 675 mentions it only in prose.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- agents.md: lines 1659-1663 (bullet list) and 1852-1856 (LOG_PREFIX.name= block) | severity=NIT | confidence=5\n  PROBLEM: The gate emits `AUTOFIX_GATE_REVIEW_CHECKOUT` at `.github/workflows/review_autofix.yml:1568` and `:1570`, but neither contractual stable-log-prefix list registers it.\n  WHY: Workflow-log-analysis and API-hygiene tooling key off the contractual prefix list, leaving this emitted prefix invisible and omitted from optimization reports.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b6dfeedd918a6d32605cc6f39ad05859adbd6c84d139af6e885c48565bb16288",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5857,
+    "run_id": "36804673126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36804673126",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001025953_c99468beff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5857,
+    "run_id": "36804673126"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T02:59:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

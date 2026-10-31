@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says poller judges return 75 when configured for Codex or when Claude is unavailable, and the caller then runs its unchanged Codex command.\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, `poller_judge_isolated` and the five poller judge call sites.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The five call sites now use `poller_claude_judge`. That helper routes Codex through `review_untrusted_sandbox.sh` (`scripts/orchestrate_poll_process.sh:129-149`), which configures and runs OpenCode. If Claude is unavailable, it retries that isolated OpenCode path (`scripts/orchestrate_poll_process.sh:232-235`). The replaced Codex commands are not retained as the fallback described in the PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The PR description says poller judges return 75 when configured for Codex or when Claude is unavailable, and the caller then runs its unchanged Codex command.\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `poller_judge_isolated` and the five poller judge call sites.\n  Evidence of absence: The five call sites now use `poller_claude_judge`. That helper routes Codex through `review_untrusted_sandbox.sh` (`scripts/orchestrate_poll_process.sh:129-149`), which configures and runs OpenCode. If Claude is unavailable, it retries that isolated OpenCode path (`scripts/orchestrate_poll_process.sh:232-235`). The replaced Codex commands are not retained as the fallback described in the PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d8e51149e636f03154bf167fd19191d74a0129e47244132c8fe2dec5d19c886f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37344891663",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37344891663",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005171901_97b3b07cf0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37344891663"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T17:19:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

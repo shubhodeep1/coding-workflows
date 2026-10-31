@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint:\n- No files edited; this is read-only analysis.\n- `scripts/review_untrusted_sandbox.sh`: the root cause is confirmed. `prepare` puts the whole dependency container under one 900-second `timeout`, and any nonzero exit becomes `::error::Review dependency isolation failed`, which is fatal.\n- The same helper's existing `prepare-ephemeral` action does the isolation work (Docker check, snapshot, image build, `workspace` file) and skips the dependency install. It prints the sandbox root instead of writing `REVIEW_SANDBOX_ROOT` to `GITHUB_ENV`.\n- `.github/workflows/review_autofix.yml:5028-5049` is in this issue's heal scope and can fall back to `prepare-ephemeral`, so the editor runs without dependencies.\n\nDECISIONS:\nQ1: REFRAME\n\nRATIONALE:\nQ1: None of the three options works as written. A can't land from this issue: `scripts/implement_heal_preflight.sh` turns an edit outside the scope marker into `HEAL_SCOPE_REFUSED reason=out_of_heal_scope` plus `ai:needs-human`, and only the intake can re-file the marker. B leaves the editor unable to run. C leaves a repeatable failure in place. But a fix for the actual failure fits inside the current scope: the workflow step can fall back to the helper's existing `prepare-ephemeral` action. That gives a fully isolated sandbox without the optional dependency install, so a stalled install only limits validation instead of stopping the editor. Docker, snapshot and image-build failures still fail closed, because `prepare-ephemeral` repeats those steps itself.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - .github/workflows/review_autofix.yml, step \"Install project dependencies (best-effort)\" (lines 5028-5049)\n    - scripts/review_untrusted_sandbox.sh (read-only reference, do not edit):\n      - `prepare-ephemeral <claude|codex>` (lines 11-14, 20-76) snapshots the workspace, builds the image, writes `${root}/workspace`, `${root}/image`, `${root}/baseline.json` and `${root}/engine` (claude only), and prints the root. It does not write `GITHUB_ENV`.\n      - It requires `$PWD` to equal the resolved workspace (line 51).\n      - `run` needs only `${root}/workspace` (line 227).\n    - tests/test_review_autofix_claude_fixer_mode.py: existing cases `prepare_failed` / `prepare_second_failed` / `prepare_partial_cleanup_failed` (around lines 655, 724-727, 910-911)\n    - tests/test_review_autofix_review_pipeline_contract.py\n    - changelog.d/<issue>-review-deps-timeout-fallback.md\n  steps:\n    - Add a small shell function inside the step's `run:` body, for example `prepare_without_deps()`. Name it uniquely; it must not collide with existing identifiers.\n    - The function runs `(cd \"${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}\" && bash \"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh\" prepare-ephemeral \"<engine>\")`, captures stdout as the root, and requires a non-empty root.\n    - On success it prints `::warning::Review dependency preparation failed; continuing with an isolated sandbox without project dependencies (editor validation may be limited).` and the log line `REVIEW_SANDBOX_DEPS_FALLBACK engine=<engine> outcome=ephemeral`, then appends `REVIEW_SANDBOX_ROOT=<root>` to `$GITHUB_ENV`.\n    - On failure it returns nonzero.\n    - Claude branch: `prepare claude` \u2192 if that fails, `prepare_without_deps claude` \u2192 if that also fails, run the existing role-to-codex fallback loop unchanged (same `AI_ENGINE_FALLBACK role=<role> reason=sandbox_prepare_failed` lines), then `prepare` (codex) \u2192 if that fails, `prepare_without_deps codex` \u2192 if that fails, exit 1.\n    - Codex branch: `prepare` \u2192 if that fails, `prepare_without_deps codex` \u2192 if that fails, exit 1.\n    - Keep the step's `name:`, `if:` and `env:`, `set -euo pipefail`, and the existing comment. Add a comment citing this heal (consumer run 37748099665): a 900-second dependency timeout made `prepare` fail on both engines and the editor never ran.\n    - Tests: assert that the step contains the `prepare-ephemeral` fallback for both engines, that it writes `REVIEW_SANDBOX_ROOT` only after a non-empty root, and that it still ends with a nonzero exit when `prepare-ephemeral` also fails. Isolation failure must still block the editor.\n    - Tests: update the existing `prepare_failed` expectations so a dependency-only failure (stubbed `prepare` fails, `prepare-ephemeral` succeeds) sets `REVIEW_SANDBOX_ROOT` and does not switch the engine. Both failing still produces `sandbox_prepare_failed` and a failed step.\n    - Add one changelog fragment.\n    - Check `wc -c .github/workflows/review_autofix.yml`. It must stay under 480,000 bytes; if not, move the step body into a `scripts/review_autofix_step_*.sh` script following the agents.md pattern.\n  replaces_acceptance_criterion: The suggested fix's \"bound the install inside the container in scripts/review_untrusted_sandbox.sh\" becomes \"when dependency preparation fails, the workflow falls back to a dependency-free isolated sandbox, so the editor still runs; real isolation failures stay fatal\".\n  equivalence_argument: The issue's goal is that a stalled best-effort install must not stop the editor, and real isolation failures must still block it. The fallback meets the first part. It meets the second because `prepare-ephemeral` repeats the Docker check, snapshot, workspace-path validation and image build, and fails on any of them. The proxy-bridge and venv failures it absorbs only affect dependencies, which the helper already treats as skippable warnings. The dependency container's own 900-second limit, credential-free proxy and `refresh` are unchanged, so dependency output is still never published.\n  reversibility: Removing the fallback calls in the one workflow step restores the previous behaviour. A helper-side in-container time limit (option A) can still be filed later by the heal intake as a scoped follow-up; it does not conflict with this change.",
+  "fingerprint": "37982d1127032a2d513a608d85f9bbce975588f13ea81c8df0c67e668b85e4bf",
+  "lineage": {
+    "issue_number": 6749,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37753483024",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37753483024",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6749"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008090826_fac7eb8264",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6749,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37753483024"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6749",
+  "timestamps": {
+    "created_at": "2026-10-08T09:08:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

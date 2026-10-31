@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8295,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8295\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8308\",\"pr_number\":8308,\"branch\":\"ai/issue-8295\",\"run_id\":\"40794024283\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40794024283\",\"changed_files\":[\".github/workflows/memory_maintenance.yml\",\"changelog.d/8295-memory-single-branch-clone.md\",\"scripts/ai_memory_lib.py\",\"tests/test_ai_memory_push_retry_backoff.py\",\"tests/test_memory_maintenance_contract_noop.py\"]}",
+  "fingerprint": "e31aa16f6399c8a5d4b744a0d735c0e8d741a99e4eeecdbe5e4defaa5696c658",
+  "lineage": {
+    "issue_number": 8295,
+    "parent_ids": [],
+    "pr_number": 8308,
+    "run_id": "40794024283",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40794024283",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8308"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261029011144_db085c3b58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8295,
+    "level": "run",
+    "pr_number": 8308,
+    "run_id": "40794024283"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8295: https://github.com/shubhodeep1/coding-workflows/pull/8308",
+  "timestamps": {
+    "created_at": "2026-10-29T01:11:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

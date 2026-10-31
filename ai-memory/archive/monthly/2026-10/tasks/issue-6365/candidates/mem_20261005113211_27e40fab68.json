@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6365,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6365\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6371\",\"pr_number\":6371,\"branch\":\"ai/issue-6365\",\"run_id\":\"37301801901\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37301801901\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6365-check-triage-runs-security-pass.md\",\"scripts/security_pass_skip.py\",\"tests/test_security_pass_skip.py\"]}",
+  "fingerprint": "d6348ed3be648eb4d5c60608422265461bde3aad3b4f21c45dd51f8bb5f86a82",
+  "lineage": {
+    "issue_number": 6365,
+    "parent_ids": [],
+    "pr_number": 6371,
+    "run_id": "37301801901",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37301801901",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6371"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005113211_27e40fab68",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6365,
+    "level": "run",
+    "pr_number": 6371,
+    "run_id": "37301801901"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6365: https://github.com/shubhodeep1/coding-workflows/pull/6371",
+  "timestamps": {
+    "created_at": "2026-10-05T11:32:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

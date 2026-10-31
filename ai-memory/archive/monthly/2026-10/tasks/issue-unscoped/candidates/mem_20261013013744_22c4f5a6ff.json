@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:577-580 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The comment in `_protected_handoff_ops` says a failed handoff is not retried, which is misleading for the `retryable=True` path.\n  WHY: The follow-up handoff keeps its wait open and the next judge run retries it; all reviewers rated this NIT.\n- scripts/unblock_judge.sh:890-896 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: If regrant-marker creation succeeds but the resume command fails, the next run treats regrant as already done and hands the issue to an operator to grant paths that are already granted.\n  WHY: This can leave the fix-up wait open and produce misleading handoff instructions; all reviewers rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_judge.sh | merged-fix-up arm, `if unblock_try_regrant; then ... fi` followed by the `followup_verdict` handoff branch, together with `regrant_ops` in scripts/unblock_actions.py (lines 808-829) and the `already_regranted` return in scripts/unblock_ledger.py (line 553) | severity=low | confidence=2\n  PROBLEM: If reset fails after the regrant marker is posted, the next run treats regrant as already done and falls through to an operator handoff instructing them to grant paths that are already granted.\n  WHY: The wait stays open and resume is not retried; the reviewer notes the handoff pages a person and is no worse than before the PR.\n- scripts/unblock_actions.py | comment at lines 577-580 (\"The verdict is already recorded, so a failed handoff is not retried\") | severity=low | confidence=3\n  PROBLEM: The comment is wrong for `retryable=True`, which is used by `followup_handoff_ops`.\n  WHY: The shell leaves the wait open on failure and the WARNING says \"the next judge run retries it\".\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_actions.py | lines 577-580 | severity=low | confidence=4\n  PROBLEM: The function docstring/comment in `_protected_handoff_ops` claims \"a failed write is not retried\", which is contradicted by the retryable handoff logic introduced in this PR.\n  WHY: This does not affect runtime, but it misleads future maintainers about the function's retry behavior.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh; scripts/unblock_actions.py; scripts/unblock_ledger.py | unblock_judge.sh:891-895, 910-927; unblock_actions.py:811-829; unblock_ledger.py:552-553 | severity=low | confidence=4\n  PROBLEM: A failed regrant actuation is not retried despite leaving the fix-up wait open; the one-shot marker makes the next run hand the issue to an operator instead of retrying the resume.\n  WHY: If the marker write succeeds but a later operation fails, such as posting `/approved`, the next run sees the regrant marker and hands the issue to an operator even though the guard already grants the paths.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_actions.py | `_protected_handoff_ops`, comment at lines 577-580 | severity=low | confidence=3\n  PROBLEM: The comment says \"a failed handoff is not retried\" although this function is also called with `retryable=True` from `followup_handoff_ops`.\n  WHY: The shell side keeps the wait open and the WARNING says \"the next judge run retries it\", which the comment could lead maintainers to overlook.\n- scripts/unblock_judge.sh | merged-fix-up arm, `unblock_try_regrant` / `UNBLOCK_REGRANT_RESULT != regranted` branch (lines 890-896) | severity=low | confidence=2\n  PROBLEM: If the regrant marker is posted but the resume command fails, the next run treats regrant as already done and falls through to `followup-handoff`, instructing an operator to grant paths that are already granted.\n  WHY: This occurs after a failed API write between the marker and resume command posts; the issue remains safely blocked, but the handoff instructions do not match the state.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nNo task was provided \u2014 only the unattended system instructions header and an unfilled `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder. Awaiting the actual task specification before proceeding.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9a4d697b945bd4461e264df4a603b8b00c53bd2411c88c02af29ce509b64271b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7290,
+    "run_id": "38330157606",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38330157606",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013013744_22c4f5a6ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7290,
+    "run_id": "38330157606"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T01:37:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

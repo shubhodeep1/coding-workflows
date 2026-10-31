@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7177,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7177\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7180\",\"pr_number\":7180,\"branch\":\"ai/issue-7177\",\"run_id\":\"38153545689\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38153545689\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"agents.d/7177-standalone-sweeps-without-projects.md\",\"changelog.d/7177-standalone-sweeps-without-projects.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_alert_levels_human_only.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_orchestrate_poll_workflow_contract.py\"]}",
+  "fingerprint": "fc05d51878d0b20421bedb57cce2c960ecd8a7774b5425cbd6ede86da8ca1061",
+  "lineage": {
+    "issue_number": 7177,
+    "parent_ids": [],
+    "pr_number": 7180,
+    "run_id": "38153545689",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38153545689",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7180"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261011164137_fd707331ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7177,
+    "level": "run",
+    "pr_number": 7180,
+    "run_id": "38153545689"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7177: https://github.com/shubhodeep1/coding-workflows/pull/7180",
+  "timestamps": {
+    "created_at": "2026-10-11T16:41:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

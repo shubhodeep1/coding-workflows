@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh:341-345 | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: An unrecognized `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE` value is logged with `outcome=ok`, making an operator misconfiguration difficult to distinguish from success.\n  WHY: The fallback to `auto` works, but the misconfiguration signal is buried in success-class output; reviewers classify this as NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/validation_harness_sandbox.sh: `sandbox_start_verified_dockerd`, the `auto|cgroupfs) ;; *) sandbox_log provision ok cgroup_mode_unrecognized_using_auto ;;` case (around lines 342-345) | severity=NIT | confidence=2\n  PROBLEM: A misspelled `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE` such as `cgoupfs` is logged with `outcome=ok`.\n  WHY: Behaviour is correct, because the value falls back to `auto`, and the new test pins the reason token. The only effect is that a misconfiguration is easy to miss in the log.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_harness_sandbox.sh: lines 342-345 | severity=NIT | confidence=3\n  PROBLEM: An unrecognized VALIDATION_HARNESS_SANDBOX_CGROUP_MODE value is logged with outcome=ok.\n  WHY: An operator who misspells the mode (e.g., cgroupfs spelled wrong) will see a successful log entry, making it impossible to debug the misconfiguration using logs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validation_harness_sandbox.sh: lines ~341-345 in `sandbox_start_verified_dockerd`:\n  case \"${VALIDATION_HARNESS_SANDBOX_CGROUP_MODE}\" in\n      auto|cgroupfs) ;;\n      *) sandbox_log provision ok cgroup_mode_unrecognized_using_auto ;;\n  esac\n  | severity=NIT | confidence=3\n  PROBLEM: An unrecognized `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE` value is logged with `outcome=ok`, mixing an operator-misconfiguration FYI line into the success-class log stream.\n  WHY: The fallback-to-`auto` behavior is correct; only the log outcome is misleading.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/validation_harness_sandbox.sh: 342-345 (`sandbox_start_verified_dockerd`, unrecognized-mode case arm) | severity=NIT | confidence=3\n  PROBLEM: An unrecognized `VALIDATION_HARNESS_SANDBOX_CGROUP_MODE` value is logged as `sandbox_log provision ok cgroup_mode_unrecognized_using_auto`, i.e. with `outcome=ok`.\n  WHY: no functional failure \u2014 the fallback to `auto` is correct and tested \u2014 but the misconfiguration signal is buried in success-class output.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "04b35ef2d8324156310adaa29829d7fba09b6968ae0ffbd8f0a1049764f93326",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7105,
+    "run_id": "38095865283",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38095865283",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011001811_5a5f3733ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7105,
+    "run_id": "38095865283"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T00:18:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

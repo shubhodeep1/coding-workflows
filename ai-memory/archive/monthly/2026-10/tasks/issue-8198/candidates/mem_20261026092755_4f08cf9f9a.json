@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8198,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8198\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8199\",\"pr_number\":8199,\"branch\":\"ai/issue-8198\",\"run_id\":\"40298054458\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40298054458\",\"changed_files\":[\".claude/hooks/gh_api_write_guard.py\",\"agents.d/8198-gh-api-guard-auto-mode-unquoted-expansion-deny.md\",\"changelog.d/8198-gh-api-guard-auto-mode-unquoted-expansion-deny.md\",\"tests/test_gh_api_write_guard.py\",\"workflow-templates/.claude/hooks/gh_api_write_guard.py\"]}",
+  "fingerprint": "a8f7ee6b53bfa446e9108387da4fccc282f40728f22a45075ea6081b9ba84acc",
+  "lineage": {
+    "issue_number": 8198,
+    "parent_ids": [],
+    "pr_number": 8199,
+    "run_id": "40298054458",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40298054458",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8199"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261026092755_4f08cf9f9a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8198,
+    "level": "run",
+    "pr_number": 8199,
+    "run_id": "40298054458"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8198: https://github.com/shubhodeep1/coding-workflows/pull/8199",
+  "timestamps": {
+    "created_at": "2026-10-26T09:27:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_check_failure_triage_workflow_security.py:1306 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `_run_collect_stage` sets `MOCK_GH_CALL_LOG`, but its fake `gh` writes to `MOCK_GH_CALLS`, making the former variable redundant.\n  WHY: The variable has no runtime effect; reviewers classify it as NIT.\n- tests/test_check_failure_triage_workflow_security.py:1455 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `COLLECTOR_PATH =REPO_ROOT` is missing a space before `=`.\n  WHY: It has no runtime effect; reviewers classify it as a cosmetic NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Cover an advancing PR head in regression tests without changing review/autofix behavior or relaxing CI failure checks.\"\n  expected_change_site: tests/test_check_failure_triage_workflow_security.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The tests `test_triage_collect_stage_uses_failing_sha_after_pr_head_advanced` and `test_triage_collect_stage_reports_unchanged_pr_head` do not set HEAD_SHA in the environment fixture for `_run_collect_stage`; the check in scripts/check_failure_triage.sh at line 517 is false, preventing the new triage SHA override logic from executing.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_check_failure_triage_workflow_security.py\n  Line or code reference: `\"MOCK_GH_CALL_LOG\": str(temp_path / \"gh_calls.txt\")` in `_run_collect_stage` (about line 1306)\n  Problem: The fake `gh` in this helper logs to `MOCK_GH_CALLS` (line 1255, set at line 1312). `MOCK_GH_CALL_LOG` is read only by `_run_collector`'s fake `gh`, so the new variable is redundant in this helper.\n  Why it fails at runtime: It does not fail. Removing the line changes nothing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- tests/test_check_failure_triage_workflow_security.py\n  Line or code reference: `COLLECTOR_PATH =REPO_ROOT / \"scripts\" / \"collect_pr_check_runs_context.py\"` (about line 1455)\n  Problem: The space before `=` is missing.\n  Why it fails at runtime: It does not fail. It is a style nit only.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Cover an advancing PR head in regression tests without changing review/autofix behavior or relaxing CI failure checks.\"\n  Expected change site: tests/test_check_failure_triage_workflow_security.py\n  Evidence of absence: The tests test_triage_collect_stage_uses_failing_sha_after_pr_head_advanced and test_triage_collect_stage_reports_unchanged_pr_head in tests/test_check_failure_triage_workflow_security.py do not set HEAD_SHA in the environment fixture for _run_collect_stage. As a result, the check in scripts/check_failure_triage.sh at line 517 is false, preventing the new triage SHA override logic from executing, and making the assertions based on expected output from the new logic effectively untested.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_check_failure_triage_workflow_security.py\n  Line or code reference: 1306 (added by this PR) and the fake-`gh` heredoc at 1253-1278\n  Problem: the fixture sets `MOCK_GH_CALL_LOG` to the same path as `MOCK_GH_CALLS`, but the fake-`gh` heredoc in this helper writes only to `${MOCK_GH_CALLS}`. The `MOCK_GH_CALL_LOG` entry is dead in this fixture (the new `_run_collector` helper at 1469 is the only consumer of `MOCK_GH_CALL_LOG`).\n  Why it fails at runtime: it does not. It is a leftover from copying the `_run_collector` env block into the `_run_collect_stage` block. The PR still works because both env vars resolve to `temp_path / \"gh_calls.txt\"` and the capture path reads the same file.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- tests/test_check_failure_triage_workflow_security.py\n  Line or code reference: 1455\n  Problem: `COLLECTOR_PATH =REPO_ROOT / \"scripts\" / \"collect_pr_check_runs_context.py\"` is missing a space before `=`.\n  Why it fails at runtime: it does not. Python parses it; CI does not lint `tests/*.py` with `ruff check --select E` (only `scripts/*.py` is linted). Cosmetic.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_check_failure_triage_workflow_security.py:1306\n  Problem: sets `MOCK_GH_CALL_LOG`, but the helper's fake gh only writes to `${MOCK_GH_CALLS}` (line 1255) and the capture reads the same file directly (lines 1341-1343). The variable is dead in this helper.\n  Severity: NIT\n  Confidence: 4\n- tests/test_check_failure_triage_workflow_security.py:1455\n  Problem: `COLLECTOR_PATH =REPO_ROOT / ...` parses identically to `= REPO_ROOT` (token spacing is not semantically meaningful in Python); tests are not linted for this. Cosmetic only.\n  Severity: NIT\n  Confidence: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3b0431bea9125f9ae8ad6677c0356269c507adfc24e3655911d648f53f392cea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6929,
+    "run_id": "38114207343",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38114207343",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011055639_c605ce1d4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6929,
+    "run_id": "38114207343"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T05:56:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

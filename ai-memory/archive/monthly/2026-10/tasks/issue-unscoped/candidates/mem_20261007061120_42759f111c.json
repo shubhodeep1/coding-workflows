@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1095 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED repository variable is not enabled, so the new non-retryable failure-cap logic remains disabled.\n  WHY: The workflow skips cap evaluation when the variable is false, preventing the new functionality from taking effect.\n- scripts/review_conflict_resolve.sh:595-607 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When a report mixes host_only and unsafe entries, the function falls through to sandbox_path_unsupported without naming the host_only paths in an ::error:: line.\n  WHY: Operators see only a generic isolation-unavailable message and must inspect resolver output to discover the paths; fail-closed behavior remains correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Set the REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED repository variable back to true, or delete it.\"\n  expected_change_site: Repository variable REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED on the coding-workflows repository\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR description explicitly states \"The session proxy refuses the Actions variables API, so this PR cannot change it.\"; no changes in the diff enable the functionality; `.github/workflows/review_autofix.yml` still passes the variable through at line 542 and skips cap evaluation when its value is `false` at line 1095.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:595-607 | severity=low | confidence=3\n  PROBLEM: When the report file has a mix of host_only and unsafe entries, the function silently falls through to sandbox_path_unsupported without echoing any ::error:: line that names the rejected paths.\n  WHY: An operator investigating a sandbox_path_unsupported failure sees only the generic \"isolation unavailable\" message and must manually inspect the resolver output to discover that the conflict set includes e.g. .claude/hooks/pr_merge_status_guard.py alongside an unsafe symlink. This is a diagnostic gap, not a correctness gap \u2014 the fail-closed behavior is correct.\n- Requirement: \"Set it back to true, or delete it, in repository variables.\"\n  Expected change site: The coding-workflows repository variable REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED.\n  Evidence of absence: The PR description explicitly states \"The session proxy refuses the Actions variables API, so this PR cannot change it.\" No code diff can modify a GitHub Actions repository variable. The kill-switch gate on the variable at review_autofix.yml:1095 is the correct place for the variable check \u2014 the PR cannot change the variable itself, only add the code that it gates. This is an operational note, not a deliverable the PR omitted.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5 \u2014 the requirement cannot be satisfied by a code change; the PR correctly documents the needed operator action.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:1095 | severity=high | confidence=5\n  PROBLEM: The PR description states that the REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED repository variable needs to be set to true or deleted for the new non-retryable failure-cap logic to be enabled, but the changes in this PR do not modify this variable.\n  WHY: The fix-up cap logic remains disabled by line 1095 in .github/workflows/review_autofix.yml, so the new functionality will not take effect.\n- Requirement: Set the REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED repository variable back to true, or delete it.\n  Expected change site: Repository variables configuration.\n  Evidence of absence: The PR description indicates this variable is currently false, but no changes in the diff enable this functionality, rendering the feature useless.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cSet it back to `true`, or delete it, in repository variables.\u201d\n  Expected change site: The coding-workflows repository variable `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED`.\n  Evidence of absence: The PR description reports that this variable is currently `false` and says an operator action is needed. The PR diff documents that action but does not change the repository variable. `.github/workflows/review_autofix.yml` still passes the variable through at line 542 and skips cap evaluation when its value is `false` at line 1095. Thus, with the reported setting, the new non-retryable stop remains disabled for this repository.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "1c036227674c1f2820a07a14724252ba2a4432cd5dc74b249bea3ea94f22314d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6614,
+    "run_id": "37577061322",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37577061322",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007061120_42759f111c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6614,
+    "run_id": "37577061322"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T06:11:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

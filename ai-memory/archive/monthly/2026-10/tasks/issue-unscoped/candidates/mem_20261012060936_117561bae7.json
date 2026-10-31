@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_check_failure_triage_workflow_security.py:1771-1778 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test named `test_flag_off_with_legacy_metadata_adds_no_line` passes `branch_flag=None`, which now exercises the default-on path rather than flag-off.\n  WHY: Empty metadata lets the assertions pass regardless of flag state, so the test no longer verifies the flag-off behavior its name advertises.\n- README.md:2370 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The parenthetical `(TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=true)` is mildly misleading now that `true` is the default rather than an opt-in.\n  WHY: A reader could miss that `=true` is no longer the opt-in switch; this is documentation drift, not a runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: tests/test_check_failure_triage_workflow_security.py\n  Line or code reference: 1771-1778 (`test_flag_off_with_legacy_metadata_adds_no_line`)\n  PROBLEM: The test name claims it covers the \"flag_off\" path, but the first and third subTests pass `branch_flag=None`. With this PR flipping the script's default from `false` to `true`, `None` in the subprocess env now exercises the default-on path, not flag-off. The test still passes (empty metadata means no line gets added regardless of flag state), so the assertions hold, but the test no longer covers what its name advertises: a flag-off case for the diagnose stage. Either replace `None` with `\"false\"` in those subTests or rename the test, so a future reader does not infer false coverage.\n  WHY: not a runtime failure today \u2014 the assertions still hold because empty metadata short-circuits the line emission. The defect is documentation/contract: a test named \"flag_off\" no longer exercises any flag-off case (the `flag=None` branch now means \"default-on\"), and the next default flip or behavior change could regress silently.\n  severity=low\n  confidence=3\n- File: README.md\n  Line or code reference: 2370 (description for `CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED`)\n  PROBLEM: The parenthetical \"(TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=true)\" used to mean \"when the operator opts in\". After this PR flips the default to `true`, that parenthetical reads as a tautology for the default case, which is mildly misleading. The line still parses (\"the flag is `true`, which is now the default, so the gate is skipped\"), but a reader skimming the row could miss that `=true` is no longer the opt-in switch.\n  WHY: not a runtime failure. Documentation drift only.\n  severity=low\n  confidence=2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No task was provided in this session; the input says it is awaiting an issue body, plan file, or explicit directive.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2fd7cd45963756792ca75df93e20b3a17605b28affeb26c06f387d9175139cc0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7212,
+    "run_id": "38209651876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38209651876",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012060936_117561bae7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7212,
+    "run_id": "38209651876"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-12T06:09:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

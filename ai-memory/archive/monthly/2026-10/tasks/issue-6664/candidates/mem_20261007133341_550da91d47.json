@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Unattended Claude pipeline completion: Claude in every role (phase 3) and blocker reduction (phase 4)\",\"issues\":[{\"id\":\"p3a-validate-roles\",\"title\":\"Claude engine: move VALIDATE, VALIDATE_SELF_HEAL and VALIDATION_REFRESH onto Claude (plan phase 3a)\",\"priority\":1},{\"id\":\"p3c-heal-triage-activation-unblock\",\"title\":\"Claude engine: move WORKFLOW_HEAL, CHECK_TRIAGE, ACTIVATION_VERIFY and UNBLOCK_JUDGE onto Claude (plan phase 3c)\",\"priority\":2},{\"id\":\"p3d-log-analysis-utility-roles\",\"title\":\"Claude engine: move log analysis, retro and the review utility roles onto Claude, utility roles on Sonnet 5.5 (plan phase 3d)\",\"priority\":3},{\"id\":\"p3e-fallback-policy\",\"title\":\"Claude engine: capacity-only codex fallback with alerts and heal reports, AI_ENGINE_FALLBACK_POLICY (plan phase 3e, decision D1)\",\"priority\":4},{\"id\":\"p4a-needs-human-digest\",\"title\":\"Needs-human digest: exhausted judge rounds park items in one ai:needs-human digest issue instead of closing them (plan phase 4a, decision D6)\",\"priority\":5},{\"id\":\"p4b-security-line-ownership\",\"title\":\"Security pass convergence: findings block only on project-written lines; others become advisory follow-ups (plan phase 4b, decision D4)\",\"priority\":6},{\"id\":\"p4d-operator-steps-drain\",\"title\":\"Operator-step issue drains itself: no release/sync operator steps, entries ticked when the stable tag passes the merge (plan phase 4d)\",\"priority\":7}],\"dependency_edges\":[{\"from\":\"p3a-validate-roles\",\"to\":\"p3c-heal-triage-activation-unblock\"},{\"from\":\"p3c-heal-triage-activation-unblock\",\"to\":\"p3d-log-analysis-utility-roles\"},{\"from\":\"p3d-log-analysis-utility-roles\",\"to\":\"p3e-fallback-policy\"},{\"from\":\"p3e-fallback-policy\",\"to\":\"p4a-needs-human-digest\"},{\"from\":\"p4a-needs-human-digest\",\"to\":\"p4b-security-line-ownership\"},{\"from\":\"p4b-security-line-ownership\",\"to\":\"p4d-operator-steps-drain\"}]}",
+  "fingerprint": "aa4ef9cc038df4de860f9ea09f70e5250f46b8f80e51438cf6c9edc3ec64757a",
+  "lineage": {
+    "issue_number": 6664,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37627656759",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37627656759",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261007133341_550da91d47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6664,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37627656759"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Decomposed project 'Unattended Claude pipeline completion: Claude in every role (phase 3) and blocker reduction (phase 4)' into 7 issues (tracking #6664)",
+  "timestamps": {
+    "created_at": "2026-10-07T13:33:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/label_helpers.sh:291 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The grep -qiE 'HTTP 404|Not Found' check on _del_err captures gh_retry retry notices if they occur, potentially leading to false positives or confusing logs if retry messages are interleaved.\n  WHY: A non-404 failure might be incorrectly treated as a 404, suppressing the warning or misleading the outcome reporting. (Source severity: NIT)\n- scripts/label_helpers.sh:279 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The DELETE call redirects stdout to /dev/null and captures all stderr with 2>&1, so any error payload from GitHub is discarded.\n  WHY: It becomes difficult to diagnose why a DELETE call failed if it was not a simple 404, as the API response details are lost. (Source severity: NIT)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update any assertions that expect a PUT from the phase swap so they expect the POST + DELETE shape, keeping each test's intent\"\n  expected_change_site: tests/test_review_rb_judge_label_propagation.py (test_resilient_phase_swap_allows_terminal_to_terminal, around line 3089)\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The file is unchanged in this PR, and the test still asserts one PUT. That PUT exercises scripts/review_rb_judge.sh::_resilient_phase_swap (lines 1014-1016), a separate function whose terminal-to-terminal path still uses a full-set PUT. Both reviewers rate it NIT. anthropic_claude-sonnet-5_5 judged the deferral justified and did not treat it as a defect.\n- requirement: Run both test files and confirm they pass.\n  expected_change_site: tests/test_label_helpers_phase_transition_contract.py and the other label-helper tests (CI execution)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: This is a verification step, not code. The behavioural cases skip when jq is missing in the sandbox. The check-run context shows failed_count: 0 and one check still in progress (incomplete_count: 1), so there is no green result yet. Severity disagreement: sonnet NIT (confidence 2), gemini MAJOR (confidence 5).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"`tests/test_review_rb_judge_label_propagation.py` has `_put_label_calls` / `_delete_label_calls` helpers... Update any assertions that expect a PUT from the phase swap so they expect the POST + DELETE shape, keeping each test's intent\"\nExpected change site: `tests/test_review_rb_judge_label_propagation.py`, around `test_resilient_phase_swap_allows_terminal_to_terminal` (line 3089)\nEvidence of absence: The file is unchanged in this PR. The remaining PUT assertion exercises `_resilient_phase_swap` in `scripts/review_rb_judge.sh` (lines 1014-1016), a different function that the issue says not to change. The deferral is justified, so the reviewer did not report it as a defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n\nTASK_GAP:\nRequirement: \"Run both test files and confirm they pass.\"\nExpected change site: `tests/test_label_helpers_phase_transition_contract.py` and the other label-helper tests, run on the PR head\nEvidence of absence: This is a verification step, not code. The behavioural cases skip when `jq` is missing. The check-run context shows `failed_count: 0` and one check still in progress, so there is no green result yet.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/label_helpers.sh:291 | severity=NIT | confidence=3\n  PROBLEM: The grep -qiE 'HTTP 404|Not Found' check on _del_err captures gh_retry retry notices if they occur, potentially leading to false positives or confusing logs if retry messages are interleaved.\n  WHY: A non-404 failure might be incorrectly treated as a 404, suppressing the warning or misleading the outcome reporting.\n- scripts/label_helpers.sh:279 | severity=NIT | confidence=3\n  PROBLEM: The DELETE call redirects stdout to /dev/null and captures all stderr with 2>&1. Any error payload from GitHub is discarded.\n  WHY: It becomes difficult to diagnose why a DELETE call failed if it was not a simple 404, as the API response details are lost.\n\nTASK_GAP:\nRequirement: Run both test files and confirm they pass.\nExpected change site: CI execution environment\nEvidence of absence: The last run context shows incomplete_count: 1, and the behavioral test cases skipped in the current sandbox. No green CI verdict has been confirmed for the changes.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Update any assertions that expect a PUT from the phase swap so they expect the POST + DELETE shape, keeping each test's intent.\"\nExpected change site: `tests/test_review_rb_judge_label_propagation.py::test_resilient_phase_swap_allows_terminal_to_terminal` and the phase-swap behavior it tests.\nEvidence of absence: The test still asserts one PUT. It exercises `scripts/review_rb_judge.sh::_resilient_phase_swap`, a separate implementation whose terminal-to-terminal path still uses a full-set PUT; neither that path nor its assertion changed in this PR.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "05b9649f38e0fb16cd90507ddfba86d182b91944ed69bac450a05bd881e700c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7933,
+    "run_id": "39913985376",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39913985376",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023075109_c7907cc191",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7933,
+    "run_id": "39913985376"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T07:51:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

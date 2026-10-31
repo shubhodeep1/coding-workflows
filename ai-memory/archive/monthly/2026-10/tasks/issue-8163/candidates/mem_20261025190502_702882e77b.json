@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a data-only edit: replace the whole contents of `tests/e2e_smoke_canary_b.txt` with exactly these two lines, ending in a newline:\n```\nstatus: ok\ndecompose-run: 40222261089\n```\nLine 1 stays as it is. Line 2 changes from `decompose-run: 25567947079` to `decompose-run: 40222261089`. No other file is touched.\n\n## Data structures affected\nOnly the text of the canary file. No schemas or state.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Rewrite the whole file instead of editing one line\n- Chosen: Write the full two-line content, so there is no stray or trailing line.\n- Alternatives considered: A substitution on line 2 only.\n- Why: The issue requires \"exactly two lines\". Rewriting the whole file guarantees that whatever the current file contains.\n\n## Security considerations\nNo trust boundaries, endpoints or secrets are involved. The edit is a static test fixture on the integration branch. Abuse cases: none.\n\n## Risks and edge cases\n- A trailing blank line or a CRLF line ending would break the \"exactly two lines\" check. Use LF endings and one final newline.\n- No conflict found: the issue's description of the current content matches the integration branch (`orchestrator/project-8159`, HEAD `684b192`).\n- I did not find a test that requires a changelog fragment for this file, and `files_touched` allows only this one path, so no fragment is added.\n\n## Testing considerations\n- Check the result with `wc -l` (should print 2) and with `sed -n '1p;2p'`. Diffing against the expected bytes also works.\n- `git diff --stat` should show only `tests/e2e_smoke_canary_b.txt`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for one exact two-line edit to one file, and its `files_touched` lists only that file. Nothing more is needed to make the change complete and correct, so the scope stays exactly as the issue states it.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "d6b75f2798305c7aace02a2f40607ab5cd82c3178c99a78de7ce6ac37a2fcc7c",
+  "lineage": {
+    "issue_number": 8163,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40223735153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40223735153",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8163"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261025190502_702882e77b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8163,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40223735153"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8163",
+  "timestamps": {
+    "created_at": "2026-10-25T19:05:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/ai-check-failure-triage.yml:63 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The workflow exclusion uses GitHub Actions `contains()`, which compares strings case-insensitively and therefore skips triage for custom workflows whose names differ only in casing from a shipped pipeline name.\n  WHY: A failed PR run from a custom workflow such as `ai clarify` can be excluded from triage, while the Python evaluator uses case-sensitive membership and does not detect the mismatch; tests/test_ci_failure_workflow_run_triggers.py:51-58\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_ci_failure_workflow_run_triggers.py lines 51-58 (_evaluate function using case-sensitive Python `in` operator), workflow-templates/ai-check-failure-triage.yml:63 (exclusion condition using `contains(fromJson(...), github.event.workflow_run.name)`) | severity=NIT | confidence=4\n  PROBLEM: GitHub Actions `contains()` is case-insensitive for both string and array comparisons, so the exclusion condition can skip triage for a consumer-owned workflow whose name matches a shipped pipeline name case-insensitively.\n  WHY: The test evaluator uses Python's case-sensitive `in` operator, so the regression test cannot detect the mismatch.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/ai-check-failure-triage.yml | 63 (the `!contains(fromJson('[...]'), github.event.workflow_run.name)` check in the `triage-workflow-run` job condition); also tests/test_ci_failure_workflow_run_triggers.py:51-58, 117-131 | severity=NIT | confidence=4\n  PROBLEM: GitHub Actions' `contains()` performs case-insensitive comparison for arrays of strings, so a custom workflow whose name case-insensitively matches a shipped pipeline name trips the exclusion check and skips triage.\n  WHY: The Python test evaluator uses case-sensitive membership, and the exact-match regression only checks shipped-name casing; the PR description says to \"skip only the shipped pipeline workflow names, not custom workflows merely named `AI `\".\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/ai-check-failure-triage.yml: Line 63, `contains(fromJson(...), github.event.workflow_run.name)` | severity=NIT | confidence=4\n  PROBLEM: GitHub Actions `contains()` compares strings case-insensitively, so a custom workflow named `ai clarify` matches the shipped workflow name `AI Clarify` and is excluded from triage.\n  WHY: The test evaluator at tests/test_ci_failure_workflow_run_triggers.py:51-52 uses case-sensitive Python membership, so a failed pull-request run from that custom workflow skips triage and gets no check-failure triage issue.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_ci_failure_workflow_run_triggers.py; _evaluate function (lines 37-58 in the PR diff), specifically the `!contains(fromJson(...))` translation at line ~49: `lambda m: f\"(not (lookup('{m.group(2)}') in {m.group(1)}))\"` | severity=NIT | confidence=4\n  PROBLEM: The test evaluator models GitHub's `contains()` with Python's case-sensitive `in` operator, although GitHub's `contains()` is case-insensitive.\n  WHY: A consumer workflow named \"ai clarify\" or \"AI clarify\" can be silently excluded from triage at runtime while the test reports it as eligible.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/ai-check-failure-triage.yml | triage-workflow-run job `if:` condition, `!contains(fromJson('[\"AI Clarify\",...]'), github.event.workflow_run.name)` | severity=NIT | confidence=4\n  PROBLEM: GitHub Actions `contains()` is case-insensitive, so a consumer workflow named `ai clarify` matches the shipped workflow name `AI Clarify` and is incorrectly excluded from triage.\n  WHY: The regression test does not catch this because its `_evaluate` helper (tests/test_ci_failure_workflow_run_triggers.py line ~51) uses case-sensitive Python string comparison, contradicting the stated intent to skip \"only the shipped pipeline workflow names, not custom workflows whose names start with `AI `\".\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1e2910961bf13576934c22bb2cf453d9fbaa2aa410858d8989c2c96b5c922626",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37306745120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37306745120",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005125309_50abc44c2f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37306745120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T12:53:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

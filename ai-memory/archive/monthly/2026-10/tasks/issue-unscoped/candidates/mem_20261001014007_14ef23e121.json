@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1389-1393, 1414-1416 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: Once `IMPL_SCOPED_CAPPED=1`, a later issue-scoped run that completes without a PR can be skipped by the terminal lookup, causing the phase to time out instead of reporting `implement_failed` with that run's details.\n  WHY: The capped walk is suppressed when the terminal branch runs, so the completed run's ID and conclusion are not reported; both reviewers classify this as a low-impact nit because the release gate still blocks at the phase timeout.\n- .github/workflows/test-and-mark-stable.yml:1374-1388 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Repeated failed reads of the cached run do not re-anchor `IMPL_SCOPED_UNREADABLE_AT`, so the message can report elapsed time since the first failure rather than clarify that failures are ongoing.\n  WHY: The throttle remains correctly bounded, but the elapsed-time wording may mislead operators; the reviewer describes this as a wording nit.\n- .github/workflows/test-and-mark-stable.yml:1375-1388 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The cached-run read is repeated on every terminal-check iteration during the 120-second unreadable throttle, issuing up to 12 unnecessary API calls at the production poll interval.\n  WHY: These repeated reads consume shared API rate-limit budget without changing behavior; the reviewer identifies cycle-local caching as the applicable guidance.\n- .github/workflows/test-and-mark-stable.yml:1243\u20131277, 1403\u20131406 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A single complete scoped runs-list walk with no matching issue-scoped run immediately reports `implement_failed`, even if the run is temporarily absent from the listing.\n  WHY: The workflow documents an Actions run-indexing race and retries empty scoped lookups in `capture_run_id`, but this terminal branch exits before another lookup can find a run that appears shortly afterward.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml: 1392-1393 (the IMPL_SCOPED_CAPPED guard) and lines 1414-1416 (where the cap is set) | severity=low | confidence=3\n  PROBLEM: Once IMPL_SCOPED_CAPPED is set to 1, all later scoped walks are suppressed for the rest of the phase. If a new issue-scoped Implement run is created after the capped walk, completes, and creates no PR, the terminal branch enters but the cap skips the walk, and the phase times out instead of reporting implement_failed with the correct run ID.\n  WHY: The terminal branch fires (IMPL_RUN_TOTAL > 0, IMPL_RUN_IN_PROGRESS = 0 on the unscoped page-1 poll) because the completed new run shows 0 active. IMPL_SCOPED_CAPPED=1 prevents walking the window. The phase waits until the inactivity timeout. The outcome is still blocked (timeout vs implement_failed), but the error message loses the issue-scoped run ID and conclusion.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml: lines 1389-1393 (the cached-status / CAPPED if/elif/else) and lines 1414-1416 (rc=2 branch in summarize_scoped_impl_runs) | severity=low | confidence=3\n  PROBLEM: After `IMPL_SCOPED_CAPPED=1` is set, the if/elif/else chain falls into the CAPPED branch whenever the page-1 poll later shows a fresh, issue-scoped Implement run that has just completed without producing a PR, so the newest run is not reported.\n  WHY: The fallback is the inactivity-timeout path: the phase exits via `status=timeout` instead of the intended `implement_failed` with the new run's ID and conclusion.\n- .github/workflows/test-and-mark-stable.yml: lines 1374-1388 (the by-ID read block), specifically the elif `[ -z \"$IMPL_SCOPED_UNREADABLE_AT\" ]` guard | severity=low | confidence=2\n  PROBLEM: When a cached-run read by ID fails, the code sets `IMPL_SCOPED_UNREADABLE_AT` only on the FIRST failure. Subsequent failed by-ID reads inside the same 120-second throttle window do not re-anchor the timer, and the user-visible line \"could not be read Xs ago\" reports the elapsed time since the first failure.\n  WHY: In practice this is harmless \u2014 the throttle correctly bounds the wasted API calls and the message is technically accurate \u2014 but it can mislead an operator into thinking a single transient failure happened long ago when the by-ID read has actually been failing every poll for the entire interval. This is purely a wording nit, not a runtime defect.\n- .github/workflows/test-and-mark-stable.yml: lines 1375-1388 (the by-ID read is unconditional when `IMPL_SCOPED_ACTIVE_RUN_ID` is set) | severity=low | confidence=3\n  PROBLEM: The cached-run read happens on every terminal-check iteration, including during the 120-second unreadable throttle. With `POLL_INTERVAL=10` (the production default), each throttle window issues up to 12 wasted API calls to a run that the code has already decided not to act on.\n  WHY: At `POLL_INTERVAL=10` and a persistent unreadable cached run, the throttle window issues 12 `actions/runs/${ID}` reads for one smoke job, all drawing from the shared rate-limit budget. The waste does not break behavior but is exactly the kind of repeated work \u00a715 calls out.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml: `summarize_scoped_impl_runs` at lines 1243\u20131277 and the `IMPL_SCOPED_TOTAL == \"0\"` failure branch at lines 1403\u20131406. | severity=high | confidence=4\n  PROBLEM: A single complete runs-list walk with no matching issue-scoped run immediately reports `implement_failed`.\n  WHY: The workflow already documents an Actions run-indexing race and retries empty scoped lookups in `capture_run_id` at lines 1142\u20131150. If the issue\u2019s run is temporarily absent from the runs listing when this new walk occurs, the helper returns success with a total of zero and the terminal branch exits before another scoped lookup. The release gate therefore fails even if that run appears shortly afterward.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bfc1e4e246e86d300687c5d53704a7122afc22e13b7dc7f55a46df42d1a01ae2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5712,
+    "run_id": "36798585298",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36798585298",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001014007_14ef23e121",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5712,
+    "run_id": "36798585298"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T01:40:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

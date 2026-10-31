@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_autofix_report.sh:163-172 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: When the staged helper lacks the sentinel, the reporter silently falls back to legacy behavior, disabling the author filter for the streak counter.\n  WHY: Untrusted comments can affect the streak without an observable warning when the helper is old or staging fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Protect poller-merge-unbound findings with a regression test.\n  expected_change_site: A test file covering poller merge logic in scripts/orchestrate_poll_process.sh.\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No regression tests for the poller merge-unbound fixes are added in this PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_autofix_report.sh:163-172 | severity=high | confidence=4\n  PROBLEM: The reporter silently falls back to legacy behavior when the staged helper lacks the sentinel, so the streak counter can lose protection against untrusted comments without an observable warning.\n  WHY: If the helper file is old or staging fails, the author filter is disabled silently, leaving the streak counter exposed to untrusted comments which can end the streak or inflate it.\n- TASK_GAP\n  Requirement: Protect poller-merge-unbound findings with a regression test.\n  Expected change site: A test file covering poller merge logic in scripts/orchestrate_poll_process.sh.\n  Evidence of absence: No regression tests for the poller merge-unbound fixes are added in this PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_autofix_report.sh:163-172\n  PROBLEM: When `AUTOFIX_FAILURE_MARKER_AUTHOR` is set but the staged helper predates the sentinel, the reporter silently degrades to legacy behavior without a warning.\n  WHY: A drift between the reporter and the helper produces no observable signal until a security incident happens.\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "83ec45dd2fa540fe40912dbcd0a8615a673d5068018b39390e10a8268c97edd7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7023,
+    "run_id": "38021234595",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38021234595",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010035349_f438703bc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7023,
+    "run_id": "38021234595"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T03:53:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

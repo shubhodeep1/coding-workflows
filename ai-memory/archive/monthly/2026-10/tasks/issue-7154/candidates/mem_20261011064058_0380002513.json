@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the fix for these two CI failures go, given that they come from PR #7153's own changes and are not on `main`?\nChoices:\nA) Point this issue at PR #7153's branch `ai/issue-7151`. Shrink the `README.md` section before the trim marker under the 200,000-byte limit (leave the limit alone) and update `tests/test_review_pool_reviewer.py` to the new role list and fallback policy on that branch.\nB) Make no code change here. PR #7153's own review/autofix loop already gets these failed check-runs in its context and owns PR-specific failures. Close this issue as PR-specific with a note linking PR #7153. (RECOMMENDED)\nC) Apply only the README trim on `main` as preventive headroom and skip the test changes, which belong with the PR's code. **Note:** this does not fix PR #7153's CI. Its README would still go over the limit unless the trim also gets merged into the PR branch.",
+  "fingerprint": "54ba8a8b453ebf17ceb7b91c5705649293708034d4b15ff418b01926e4e2ae97",
+  "lineage": {
+    "issue_number": 7154,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38118552653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38118552653",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011064058_0380002513",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7154,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38118552653"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7154 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T06:40:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

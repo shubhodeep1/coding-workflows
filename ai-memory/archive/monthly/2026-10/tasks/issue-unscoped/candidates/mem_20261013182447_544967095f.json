@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/7126-noop-force-merge-trusted-evidence.md:9 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The changelog incorrectly states that the shared gate does not read check-runs under the allow-all sentinel.\n  WHY: `_pr_checks_completed` fetches check-runs and computes the configured CI check state before returning for the allow-all sentinel, so the changelog can mislead operators about Gate D's behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace the inline query in Gate D with the shared gate (_pr_checks_completed or _pr_wait_for_required_checks with \"${N_PR}\" \"${N_HEAD_SHA}\" \"${N_BASE}\").\n  expected_change_site: scripts/orchestrate_poll_process.sh Gate D logic (primary arm)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Evidence of absence: The PR only added fail-closed logic to the 0:allow_all arm of Gate D; the original inline query for the primary arm of Gate D was not replaced as requested.\n- requirement: Accurately describe that the shared gate reads check-runs under the allow-all sentinel before bypassing required-check filtering.\n  expected_change_site: changelog.d/7126-noop-force-merge-trusted-evidence.md, line 9 (the bullet added/modified by the last run)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The fragment states \"Under the allow-all sentinel... the shared gate does not read check-runs\", but `_pr_checks_completed` always fetches check-runs (`scripts/pr_checks_lib.sh:283`) and computes the named CI check state (`scripts/pr_checks_lib.sh:285-328`) before reaching its allow-all return (`scripts/pr_checks_lib.sh:333-337`).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/7126-noop-force-merge-trusted-evidence.md | Gate D bullet, the added sentence \"Under the allow-all sentinel (`ORCH_FINAL_MERGE_REQUIRED_CHECKS=\"\"`) the shared gate does not read check-runs, so when no named CI check is configured\u2026\" | severity=low | confidence=5\n  PROBLEM: The statement is inaccurate because `scripts/pr_checks_lib.sh` fetches check-runs at line 283 and computes the named CI check's state at lines 300-327 before returning at lines 333-337 for the allow-all sentinel.\n  WHY: Nothing breaks; the Gate D fail-closed code is correct, but the operator-facing changelog misdescribes the mechanism.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/7126-noop-force-merge-trusted-evidence.md:9 | severity=low | confidence=5\n  PROBLEM: The changelog description of Gate D is inaccurate. It states the gate \"does not read check-runs\" under the allow-all sentinel, but _pr_checks_completed performs this read before the allow-all return.\n  WHY: Misleading documentation for operators; does not cause runtime failure.\n- Requirement: Replace the inline query in Gate D with the shared gate (_pr_checks_completed or _pr_wait_for_required_checks with \"${N_PR}\" \"${N_HEAD_SHA}\" \"${N_BASE}\").\n  Expected change site: scripts/orchestrate_poll_process.sh Gate D logic (primary arm)\n  Evidence of absence: The PR only added fail-closed logic to the 0:allow_all arm of Gate D; the original inline query for the primary arm of Gate D was not replaced as requested.\n  Severity: BLOCKER\n  Confidence: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: changelog.d/7126-noop-force-merge-trusted-evidence.md\n  Line or code reference: line 9 (the bullet added/modified by the last run)\n  Problem: The fragment states \"Under the allow-all sentinel... the shared gate does not read check-runs\", but `_pr_checks_completed` always fetches check-runs (`scripts/pr_checks_lib.sh:283`) and computes the named CI check state (`scripts/pr_checks_lib.sh:285-328`) before reaching its allow-all return (`scripts/pr_checks_lib.sh:333-337`). The runtime behavior is correct - the gate reads the check-runs and uses `PR_CHECKS_LAST_CI_NAME` to decide whether any CI check is configured - but the operator-facing description misstates what the gate reads, which is misleading for anyone reading the changelog to understand Gate D.\n  Why it fails at runtime: The code runs correctly. The failure is that operators trying to understand the allow-all behavior from the changelog are told the gate does not read check-runs, when it actually does. The accurate description is that the gate returns success under allow-all without applying the required-checks filter, while still reading check-runs to populate the CI check state.\n  Severity: NIT\n  Confidence: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/7126-noop-force-merge-trusted-evidence.md:9 | severity=low | confidence=5\n  PROBLEM: This says the shared gate skips reading check-runs under the allow-all sentinel. In fact, `scripts/pr_checks_lib.sh::_pr_checks_completed` fetches check-runs at line 283 and computes the configured CI check state before the allow-all return at lines 330-336.\n  WHY: The workflow is unaffected, but the changelog misstates what Gate D reads, which can mislead operators diagnosing its behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/7126-noop-force-merge-trusted-evidence.md:9 | severity=low | confidence=5\n  PROBLEM: The fragment states \"Under the allow-all sentinel (`ORCH_FINAL_MERGE_REQUIRED_CHECKS=\"\"`) the shared gate does not read check-runs\", but `scripts/pr_checks_lib.sh` lines 283-337 show that `_pr_checks_completed` fetches check-runs (line 283), computes the named CI check state (lines 300-328), and only then reaches the allow-all return (lines 333-337).\n  WHY: The code runs correctly, but the operator-facing documentation misstates what Gate D reads. An operator reading this fragment would believe no check-runs are fetched under allow-all, when in fact they are fetched and the CI check state is computed.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- The prompt arrived with no task content, only the header and an unfilled placeholder `{{REFERENCE_SEVERITY_CLASSIFICATION}}`. The template substitution failed, so there is no issue, instruction, or severity classification to act on. Cannot proceed; report the blocker and re-run with a properly rendered prompt, or provide the task and the required classification reference directly.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f0ea261837a4f55ec72af2f02e1f2b4f96a4a6d609e07f7134a5c428c536b949",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7322,
+    "run_id": "38442175956",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38442175956",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013182447_544967095f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7322,
+    "run_id": "38442175956"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T18:24:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

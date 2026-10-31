@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_render_validation_templates.py:522-552 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Tests hardcode the `Dockerfile.app.dockerignore` basename and never assert that it matches the basename of each family's compose `services.app.build.dockerfile`. The loop in test_every_family_renders_empty_dockerfile_specific_ignore also skips any family without `Dockerfile.app.j2`. The related test_app_image_ignores_consumer_root_dockerignore is at tests/test_render_validation_templates_node_hardhat_regressions.py:74-100.\n  WHY: If a family's Dockerfile is renamed, BuildKit would not find the matching dockerignore and would fall back to the consumer's root `.dockerignore`, which brings back the original bug. The reviewer calls this a latent gap, not a current regression. The source severity is NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A family whose Dockerfile is renamed must rename its dockerignore to match (PR description and agents.md fragment).\n  expected_change_site: tests/test_render_validation_templates.py (test_every_family_renders_empty_dockerfile_specific_ignore) and tests/test_render_validation_templates_node_hardhat_regressions.py (test_app_image_ignores_consumer_root_dockerignore)\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: test_every_family_renders_empty_dockerfile_specific_ignore only checks that `(output_root / \"Dockerfile.app.dockerignore\").is_file()` and skips families without `Dockerfile.app.j2`. test_app_image_ignores_consumer_root_dockerignore asserts `dockerfile_rel == \"validation/Dockerfile.app\"` but never compares the dockerignore name to the Dockerfile name.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- none | severity=NIT | confidence=1\n  PROBLEM: The reviewer found no defect in the last autofix run or in the rest of the PR. The review was static only.\n  WHY: Nothing fails. The `_shared/Dockerfile.app.dockerignore.j2` entry was added to both `optional_copy_files` lists, and the lists stay in step. The renderer needs no change for the new file. NONE for every category, including task completeness.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_render_validation_templates.py:522-552 | severity=NIT | confidence=3\n  PROBLEM: Tests hardcode the `Dockerfile.app.dockerignore` basename and never assert that it matches the Dockerfile basename across families. The loop skips families without `Dockerfile.app.j2`. The related test_app_image_ignores_consumer_root_dockerignore is at tests/test_render_validation_templates_node_hardhat_regressions.py:74-100.\n  WHY: If a family's Dockerfile is renamed, BuildKit would not match the dockerignore and the root `.dockerignore` would apply, which brings back the original bug. This is a latent gap, not a current regression.\n- TASK_GAP\n  Requirement: A family whose Dockerfile is renamed must rename its dockerignore to match (PR description and agents.md fragment).\n  Expected change site: tests/test_render_validation_templates.py around test_every_family_renders_empty_dockerfile_specific_ignore and the corresponding assertion in tests/test_render_validation_templates_node_hardhat_regressions.py\n  Evidence of absence: test_every_family_renders_empty_dockerfile_specific_ignore iterates `if (path / \"Dockerfile.app.j2\").is_file()` and only checks `(output_root / \"Dockerfile.app.dockerignore\").is_file()`, with no comparison against the docker-compose.test.yml `build.dockerfile` value. test_app_image_ignores_consumer_root_dockerignore asserts `dockerfile_rel == \"validation/Dockerfile.app\"` but never compares `Path(dockerfile_rel).with_name(... + \".dockerignore\")` to the rendered ignore file.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d95b674c879801d0ddc9caddfb40e258ca54827f2ac51b684cc773e675c21072",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8181,
+    "run_id": "40271536621",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40271536621",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026050852_45f7f037c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8181,
+    "run_id": "40271536621"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T05:08:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

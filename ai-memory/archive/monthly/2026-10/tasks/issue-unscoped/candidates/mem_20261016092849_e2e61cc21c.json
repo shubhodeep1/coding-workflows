@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:185 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The `AUTOFIX_CONTINUATION_ENABLED` row still says continuation dispatches always bypass the post-commit peer-dedup, but the bypass now applies only when `AUTOFIX_SKIP_SELF_TRIGGERED=true`.\n  WHY: Under the default setting, the continuation runs the peer check and skips with `continuation=true` when a peer is found, so the operator-facing README now contradicts the shipped behavior. Both reviewers rated it MAJOR. The anthropic reviewer noted `README.md` is outside the issue's `files_touched` list.\n- scripts/review_autofix_step_post_commit_retrigger.sh:122 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer reported this as a NIT. It says the `AUTOFIX_SKIP_SELF_TRIGGERED` condition correctly bypasses the peer check only when the variable is explicitly `true`, so no defect is described.\n  WHY: The reviewer states the logic appears correct and gives \"N/A\" as the runtime failure.\n- probably_unnecessary_but_read_if_stuck.md:426-441 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer reported this as a NIT. It says the docs were updated and that the changelog and `agents.md` fragments also carry information about the change, so no defect is described.\n  WHY: The reviewer says this is a documentation-consistency check, not a runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue's `files_touched` scope excludes root `README.md`, but the `AUTOFIX_CONTINUATION_ENABLED` row still describes the old unconditional peer-dedup bypass.\n  expected_change_site: README.md line 185 (the `AUTOFIX_CONTINUATION_ENABLED` variable row)\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: README.md line 185 still says continuation dispatches bypass the peer-dedup. No diff hunk updates it. The reviewer judged this an explicit scope decision in the issue and said it should be a separate issue.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:185 | severity=MAJOR | confidence=5\n  PROBLEM: The `AUTOFIX_CONTINUATION_ENABLED` row says continuation always bypasses the post-commit peer-dedup. The bypass is now conditional on `AUTOFIX_SKIP_SELF_TRIGGERED=true`. The PR updated `probably_unnecessary_but_read_if_stuck.md` \u00a720.4 but not this row.\n  WHY: Under the default setting, the continuation logs `AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight ... continuation=true` when it finds a peer. An operator following the README would expect `AUTOFIX_PEER_CHECK_BYPASSED` and a second dispatch. The reviewer noted that `README.md` is outside the issue's `files_touched` list.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_post_commit_retrigger.sh:122 | severity=NIT | confidence=5\n  PROBLEM: The condition `[ \"${AUTOFIX_SKIP_SELF_TRIGGERED:-false}\" = \"true\" ]` is correctly implemented to bypass the peer check only when the variable is explicitly `true`.\n  WHY: N/A (the logic appears correct).\n- probably_unnecessary_but_read_if_stuck.md:426-441 | severity=NIT | confidence=5\n  PROBLEM: The `AUTOFIX_CONTINUATION_DISPATCH_ISSUED` docs were updated to reflect the new behavior. The changelog fragment and `agents.md` fragment also contain information about these changes.\n  WHY: This is not a runtime failure. The reviewer said the updated documentation accurately describes the new conditional peer-check bypass.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: README.md line 185 | severity=MAJOR | confidence=5\n  Requirement: The issue scope limits implementation to specific files, and the `files_touched` pipeline plan grant excludes root `README.md`.\n  Expected change site: `README.md` line 185 (the `AUTOFIX_CONTINUATION_ENABLED` variable row in the \"Variables\" table)\n  Evidence of absence: The README row still says continuation dispatches bypass the peer-dedup. After this PR the bypass applies only when `AUTOFIX_SKIP_SELF_TRIGGERED=true`. No diff hunk updates the README. The runbook at `probably_unnecessary_but_read_if_stuck.md:429-432` is correctly updated. The reviewer called this real documentation drift but an explicit scope decision, to be filed as a separate issue.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- README.md:185 | severity=MAJOR | confidence=5\n  PROBLEM: The README says continuation dispatches always bypass the peer-dedup. After this PR the bypass applies only when `AUTOFIX_SKIP_SELF_TRIGGERED=true`, so the README text is factually wrong.\n  WHY: Operators reading the README variable table would believe continuation always bypasses peer-dedup, which is not true under the default settings. The reviewer said the implementer correctly stayed in scope, but the README needs a follow-up edit.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "fc12bbabb8a7eff9a5e747040f55306add9dc5e0a334482bdb8fe2f714e9316f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7496,
+    "run_id": "38878524227",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38878524227",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016092849_e2e61cc21c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7496,
+    "run_id": "38878524227"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T09:28:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

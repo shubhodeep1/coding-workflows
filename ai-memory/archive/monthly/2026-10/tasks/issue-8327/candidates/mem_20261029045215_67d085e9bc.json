@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The frozen heal-scope marker on this issue covers only `.github/workflows/test-and-mark-stable.yml`, `tests/**`, `changelog.d/*.md` and the issue's own `agents.d/8327-*.md`. `agents.d/8064-heal-scope-own-agents-fragment.md` says implement enforces that marker whatever the approval, so option B would be held as `heal_scope_plan_out_of_scope` and rejected at implement, which leaves the pipeline stuck. Option C would label the stall transient, but four earlier workflow analyses (BUG-007) record the same shared-group problem, so the evidence says it recurs. Option A fixes the certain reporting bug inside the allowed scope and defers the concurrency-group fix. It also gets past the counterfactual gate (`agents.d/8249-heal-plan-counterfactual-gate.md`): a `PARTIAL` result is approved only when each named job appears as a whole token in a `## Deferred scope` bullet, and the in-scope fix alone will not make `e2e-smoke-test` pass. It will make it fail correctly instead.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - Heal scope marker in the issue body: `paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md`\n    - `agents.d/8064-heal-scope-own-agents-fragment.md`: scope is extended only by `agents.d/<issue>-*.md`, and `heal_scope_plan_out_of_scope` cannot be lifted by `/approved`\n    - `agents.d/8249-heal-plan-counterfactual-gate.md`: the `HEAL_COUNTERFACTUAL: PARTIAL: <job>` line must sit inside `## Counterfactual check`, and each named job must appear as a token in a `## Deferred scope` bullet\n    - `.github/workflows/test-and-mark-stable.yml`: Phase 7 poll loop (around lines 3338-3399), the post-loop output write (lines 3435-3439), the already-closed timeout path (lines 3114-3127, the `status=timeout` pattern to reuse) and the summary step (lines 3623-3628)\n  steps:\n    - Edit only `.github/workflows/test-and-mark-stable.yml`, files under `tests/` and one new `changelog.d/*.md` fragment.\n    - Phase 7 timeout: after the poll loop, when `NEW_RUN_ID` is set and the last `STATUS` is not `completed`, do four things in this order:\n      - emit `::error::cancel-on-close run #${NEW_RUN_ID} did not complete within ${PHASE7_WAIT_BUDGET_MINUTES}m (status=${STATUS})`;\n      - write `status=timeout` to `$GITHUB_OUTPUT`;\n      - write `cancel_run_id=${NEW_RUN_ID}`;\n      - `exit 1`.\n    - Phase 7 timeout, constraints:\n      - Follow the shape of the existing path at lines 3114-3127.\n      - Do not change `PHASE7_WAIT_BUDGET_MINUTES`.\n      - Do not rename any existing output or step id.\n    - Summary step: when `CANCEL` is empty but a PR number exists, print `FAILED (no status)` and set `passed=false`. Keep `SKIPPED (no PR to close)` only for the case where there really is no PR.\n    - Tests: add a regression test in `tests/test_test_and_mark_stable_phase7_unconflict.py`, or in a sibling file, with two assertions:\n      - the post-loop timeout path writes `status=timeout` and exits non-zero;\n      - the summary never prints SKIPPED for an empty status when a PR exists.\n    - Add a `changelog.d` fragment that describes the reporting fix.\n    - Plan, `## Deferred scope` bullets: put these in bullets that each contain the token `e2e-smoke-test`:\n      - the per-trigger concurrency group in `.github/workflows/cancel_on_pr_close.yml` (`group: cancel-on-pr-close-${{ github.repository }}-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number }}`, keeping `cancel-in-progress: false`);\n      - the matching pin update in `tests/test_review_merge_train.py:1860`, which is deferred because changing the pin alone would break that test against the unchanged workflow;\n      - the agents fragment that corrects \"Cleanup jobs share repository-scoped concurrency\" under \"Conflict-safe PR-close cleanup\".\n    - Plan, `## Deferred scope` note: state that these items go through a separate issue that is not a heal issue.\n    - Plan, `## Counterfactual check`: end with the single unfenced line `HEAL_COUNTERFACTUAL: PARTIAL: e2e-smoke-test`.\n  replaces_acceptance_criterion: The suggested fix #1 (concurrency group) leaves this issue; this issue's acceptance becomes \"Phase 7 can no longer misreport a run that did not complete as SKIPPED/PASSED\".\n  equivalence_argument: The reporting bug is certain and fully in scope, and fixing it means the gate fails loudly instead of silently passing. That strengthens the check and does not weaken it. The root-cause concurrency fix is kept, not dropped: the `## Deferred scope` section records it, and partial-delivery tracking (#7657) keeps this issue open after the merge until it lands.\n  reversibility: If a human wants the concurrency fix in this issue, they can widen the heal scope marker or run `/reclarify`. The deferred bullets already give the exact patch, and none of the in-scope edits conflict with it.",
+  "fingerprint": "99c9d0c8dd4fabd8afba9a89af0f7484af567a62bf4a2c7c9084a3d6c0acf753",
+  "lineage": {
+    "issue_number": 8327,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40819525021",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40819525021",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8327"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029045215_67d085e9bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8327,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40819525021"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8327",
+  "timestamps": {
+    "created_at": "2026-10-29T04:52:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

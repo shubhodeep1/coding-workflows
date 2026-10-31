@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6236,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6236\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6245\",\"pr_number\":6245,\"branch\":\"ai/issue-6236\",\"run_id\":\"37242019477\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37242019477\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/claude-engine-smoke.yml\",\".github/workflows/orchestrate_poll.yml\",\"README.md\",\"agents.md\",\"changelog.d/6236-read-profile-claude-isolation.md\",\"scripts/ai_engine.sh\",\"scripts/clarify_sandbox/Dockerfile\",\"scripts/stage_workflow_support.sh\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/test_ai_engine.py\",\"tests/test_orchestrator_judges_claude_engine.py\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "47520dad476043914822478f5634023745e0fcdafa141ae4b96c214eea1a09ff",
+  "lineage": {
+    "issue_number": 6236,
+    "parent_ids": [],
+    "pr_number": 6245,
+    "run_id": "37242019477",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37242019477",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6245"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261004232619_c2d89f2d8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6236,
+    "level": "run",
+    "pr_number": 6245,
+    "run_id": "37242019477"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6236: https://github.com/shubhodeep1/coding-workflows/pull/6245",
+  "timestamps": {
+    "created_at": "2026-10-04T23:26:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

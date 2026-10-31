@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:18803-18805, 23258-23260 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: Both re-issue arms call `ensure_label_exists \"ai:check-triage\"`, which on a cache miss makes a redundant label-create POST even though the source issue already carries the label.\n  WHY: This contradicts the PR's \"0 extra API calls\" claim and spends shared API quota. All reviewers rated it NIT. The pattern matches existing label calls, so it is not a runtime failure.\n- scripts/orchestrate_poll_process.sh:23254-23260 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: In the standalone arm, `ensure_label_exists \"ai:check-triage\"` runs before the `[ -n \"${orig_title}\" ]` check, so it still runs when the source-issue read fails.\n  WHY: The reviewer said it is harmless because the create is still skipped, and it matches the existing `ai:clarification` call. Rated NIT.\n- scripts/orchestrate_poll_process.sh:18787-18805, 23251-23259 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The stall-recovery label-carriage behavior changed, but there is no `agents.d` fragment documenting it. Only a changelog fragment was added.\n  WHY: The agents.md \"Workflow architecture\" narrative drifts from shipped behavior. Rated NIT, and it does not fail at runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:23254-23260 | severity=NIT | confidence=1\n  PROBLEM: In the standalone arm, `ensure_label_exists \"ai:check-triage\"` runs before the `[ -n \"${orig_title}\" ]` check, so it still runs when the source-issue read fails.\n  WHY: It is harmless, because the create is still skipped. It matches the existing `ai:clarification` call.\n- scripts/orchestrate_poll_process.sh:18803-18805, 23258-23260 | severity=NIT | confidence=2\n  PROBLEM: `ensure_label_exists` makes one label-create call on a cache miss (`_ENSURED_LABELS_CACHE`, line 4125). The PR's \"0 extra API calls\" claim doesn't count it.\n  WHY: It runs once per triage re-issue per process, which is rare, and it matches the other labels in these arms.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:18804, 23260 | severity=NIT | confidence=5\n  PROBLEM: `ensure_label_exists(\"ai:check-triage\")` makes a redundant GitHub API write for a label already confirmed on the source issue.\n  WHY: It consumes shared API quota and contradicts the PR's claim of no new API calls.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:18804, 23259 | severity=NIT | confidence=5\n  PROBLEM: Both re-issue paths call `ensure_label_exists(\"ai:check-triage\")` even though the source issue read confirms the label is attached.\n  WHY: In a fresh process the label cache is empty, so each triage re-issue sends a label-create request that GitHub rejects as already existing. This is a redundant API write, contrary to the PR's zero-extra-call claim.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:18803-18805, 23258-23260 | severity=NIT | confidence=5\n  PROBLEM: Both re-issue paths call `ensure_label_exists \"ai:check-triage\"`, which on a cache miss runs `gh_retry gh label create` (lines 4153-4156) and returns \"already exists\".\n  WHY: This contradicts the PR's \"Extra GitHub API calls: 0\" claim. The pattern already exists for `ai:clarification` and `ai:orchestrator-managed`, so it is not a new regression.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:18804, 23259 (helper at 4153-4156 / 4166-4169) | severity=NIT | confidence=4\n  PROBLEM: On a fresh poller process `ensure_label_exists` runs a `gh label create` POST that always returns \"already exists\" when the source issue carries `ai:check-triage`. That is one redundant API write per triage re-issue.\n  WHY: This contradicts the changelog's \"Extra GitHub API calls | 0\" row and the PR's \"this adds no API calls (\u00a715)\". The same pattern already exists for `ai:workflow-heal`. The suggested fix is to skip the call when `orig_issue_is_triage = true`.\n- scripts/orchestrate_poll_process.sh:18787-18805, 23251-23259 | severity=NIT | confidence=3\n  PROBLEM: The change alters documented stall-recovery behavior (which issues get `ai:orchestrator-managed` on `close_and_reissue`), but root `agents.md` is unchanged and only a changelog fragment was added.\n  WHY: The agents.md \"Workflow architecture\" narrative drifts from shipped behavior. The suggested fix is an `agents.d/7516-stall-reissue-lineage-labels.md` fragment.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1c8c3e1c1924e984950fbce3d6b67d1444d49da86434c1393600ee2563ff34cb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8178,
+    "run_id": "40271027620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40271027620",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026050928_cbee90e347",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8178,
+    "run_id": "40271027620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T05:09:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

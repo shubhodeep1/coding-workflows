@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The heal implement path only transfers files inside the frozen scope marker (`.github/workflows/internal-review.yml`, `.github/workflows/review_autofix.yml`, `tests/**`, `changelog.d/*.md`), and the diagnosis cannot add a path. That means the fix can't land in `scripts/review_conflict_prepare.sh` from this issue. That file is where the root cause sits: line 393 keeps a fragment only when its index stages are exactly `\"1 2 \"`. Option B would split the folded-fragment rule between the prepare script and an inline workflow step. That step would also have to repeat the prepare script's work: the remaining-path recount, the fragment-only `[ai-merge-resolve]` commit, and the integration-sync deferral. It would also grow `review_autofix.yml`, which is already close to the size guard. The fix constraints rule this out. Option C keeps the whole change manual. Option A needs one person to file a scoped issue, after which the normal clarify \u2192 plan \u2192 implement \u2192 review pipeline finishes the fix with an exact automation-path grant.\n\nThe replacement issue should carry this issue's diagnosis unchanged, with these points:\n- **Keep the `1 3` shape, forward-merge heads only.** Accept `_ff_stages == \"1 3 \"` only when `HEAD_REF` matches `auto/forward-merge-stable-*`.\n- **Same file checks as the `1 2` case, against stage 3.** The work-tree file must be a regular file, not a symlink, and byte-identical to `:3:<path>`.\n- **Keep everything else.** The kill switch, the recount, the commit and the exclusions stay unchanged.\n- **Regression tests in `tests/test_conflict_folded_fragment_keep.py`.** Add three cases: a positive forward-merge case, a negative case where an `ai/issue-*` head gets stages `1 3`, and a case with the kill switch off.\n\nSeparately, PR #7795 stays blocked until a person merges `origin/main` into its branch, keeps `main`'s copies of `agents.d/7604-synced-security-finding-intake.md` and `changelog.d/wfopt-0922-validate-dispatch-notice.md`, and merges the PR with a merge commit (not squash or rebase). Re-running the resolver on that head will fail the same way.",
+  "fingerprint": "2129ed615c01a85fa2d4a69ab4b730e53b01d1d8675cb69c855879695bda05c8",
+  "lineage": {
+    "issue_number": 7796,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39567245908",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39567245908",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7796"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261021081929_af04187aea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7796,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39567245908"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7796",
+  "timestamps": {
+    "created_at": "2026-10-21T08:19:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

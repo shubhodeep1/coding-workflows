@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py: lines ~2909-2918\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The parametrization lacks a regression case for a heredoc read by a non-data, non-shell reader whose body mentions a guarded subcommand, which could cause the parser to report a false-positive invocation.\n  WHY: `_strip_data_heredoc_bodies` only recognizes a fixed list of data readers, so this case would survive stripping and could be surfaced as a `git push` invocation.\n- tests/test_pr_merge_status_guard.py: line ~2940\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The nested data heredoc commit test does not clarify that its assertion covers the `-F -` form only.\n  WHY: Without that clarification, readers could assume the one-commit assertion generalizes to other `-F` forms.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_pr_merge_status_guard.py: lines ~2909-2918\n  PROBLEM: The parametrization lacks a regression case for a heredoc read by a non-data, non-shell reader whose body mentions a guarded subcommand, which could cause the parser to report a false-positive invocation. HARDENING_RISK_SCORE: 2.\n  WHY: `_strip_data_heredoc_bodies` only recognizes a fixed list of data readers, so this case would survive stripping and could be surfaced as a `git push` invocation.\n- tests/test_pr_merge_status_guard.py: line ~2940\n  PROBLEM: The nested data heredoc commit test does not clarify that its assertion covers the `-F -` form only. HARDENING_RISK_SCORE: 1.\n  WHY: Without that clarification, readers could assume the one-commit assertion generalizes to other `-F` forms.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3401024d5e3c645bfd90d838be5a194f2c97a5a190c696ca3972afeb7f21dee9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6791,
+    "run_id": "37820163549",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37820163549",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008182702_778f6cde34",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6791,
+    "run_id": "37820163549"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-08T18:27:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

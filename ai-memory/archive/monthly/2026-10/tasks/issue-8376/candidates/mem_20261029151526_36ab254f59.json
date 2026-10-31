@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: The evidence does not prove a root cause. In `.github/workflows/test-and-mark-stable.yml`, Phase 3b counts as \"activity\" only a change in labels, run status or counts, the in-progress step name (taken from the latest matching run's jobs, lines 1588-1592) or the `ai/issue-<N>` branch head. Here the only matching run stayed `pending` for 30 minutes, yet `ai:implementing` was set at 13:28:44. Either GitHub never started that run (transient or concurrency-queued), or the run that set the label isn't counted by `scoped_implement_progress_counts` (lines 1492-1527). The logs can't tell these apart. Option C would treat activity in another run as progress, so it could hide a real hang, which the fix constraints forbid. Option A ships nothing that would settle the question next time. So the plan should take B and keep the 30-minute guard and `status=timeout` exactly as they are. On the stall exit path only, and fail-open (a failed lookup must not change the exit code or status), it should log:\n- the latest matching run's ID, status, `created_at` and `run_started_at`;\n- that run's jobs, with each job's status, `started_at` and in-progress step;\n- any other non-completed run in the test repo created after `IMPL_CREATED_AFTER` whose name matches \"Implement\" but whose title differs, which would expose a concurrency blocker;\n- an explicit warning when the label says `ai:implementing` but the run is `pending`/`queued`/`waiting`.\n\nLock this in with a contract test under `tests/` and a `changelog.d/*.md` entry. Check `wc -c` on the workflow file against the 480,000-byte limit (\u00a724). The plan should also say plainly that the cause is unverified and may be environmental.\nQ2: The test-repo implement run URLs and logs are not in the issue, the GitHub facts or the repository, so option B would mean asking for data nobody can supply. Proceed on the evidence already here. The diagnostics added for Q1 are what will capture that data on the next occurrence.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered options.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "c09d07232b2d81a008fad19e15d9bf4e246bd37e121b02471ca385efbba7fc54",
+  "lineage": {
+    "issue_number": 8376,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40898358521",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40898358521",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8376"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029151526_36ab254f59",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8376,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40898358521"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8376",
+  "timestamps": {
+    "created_at": "2026-10-29T15:15:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The missing CLAUDE.md template is most likely a false finding. `tests/test_claude_md_section_numbers.py:34-36` says `workflow-templates/CLAUDE.md` is a symlink to the root `CLAUDE.md`. The isolated snapshot leaves symlinks out (agents.md, \"Isolated Codex agents\" \u2192 Modes), so the file looks absent here even though it is likely tracked: this check also found nothing at `workflow-templates/CLAUDE.md`. Option B would break the `resolve()` identity check at line 36. Option C widens the isolation trust boundary, which this issue doesn't ask for. Option D drops a real gap without checking it. So under A, check the host git index first, and stop with `BLOCKED:` only if the symlink really is missing, because the editor sandbox cannot transfer symlinks.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - host checkout git index entry for `workflow-templates/CLAUDE.md` (`git ls-files -s workflow-templates/CLAUDE.md` on the host, not in the sandbox snapshot)\n    - `tests/test_claude_md_section_numbers.py:33-36`\n    - `tests/test_pr_merge_status_guard.py:2165-2171`\n    - `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py`\n  steps:\n    - Guard drift (always): make `.claude/hooks/pr_merge_status_guard.py` byte-identical to `workflow-templates/.claude/hooks/pr_merge_status_guard.py`, using the template as the source of truth, with the same executable bit. Commit both in the same change. Do not count on `scripts/sync_claude_live_copies.py`, which skips pairs where both copies changed.\n    - CLAUDE.md template: in the plan, look the path up in the host git index (mode `120000` with blob content `../CLAUDE.md`). If it is there, record the gap as \"already satisfied: tracked symlink, hidden by the sandbox snapshot\" in the PR body and do nothing else.\n    - If the index has no such entry, or it is a regular file, emit `BLOCKED: workflow-templates/CLAUDE.md symlink to ../CLAUDE.md must be created outside the editor sandbox (symlink transfer is rejected)` for that gap only. The guard-drift fix still ships.\n    - Do not create a regular-file copy at that path, and do not change `scripts/codex_isolated_workspace.py`.\n  replaces_acceptance_criterion: \"Track workflow-templates/CLAUDE.md as a symlink to ../CLAUDE.md\" becomes \"the symlink is shown to be tracked in the host index; if it is missing, the gap is reported as `BLOCKED:` for an operator\".\n  equivalence_argument: If the symlink is already tracked, the original requirement is already met, the release-gate tests at lines 36 and 2171 pass on the host checkout, and `update_workflows.yml` keeps syncing the consumer's root CLAUDE.md. If it is not tracked, the gap is reported rather than papered over with a regular-file copy that would fail the identity test.\n  reversibility: If a person later decides a regular-file copy or a sandbox exception is acceptable, B or C can be done as a separate change. The guard parity fix stands either way.\n\nAssumptions and notes:\n- I took the snapshot's missing file to mean \"symlink skipped\", based on the isolation contract in agents.md. The host index check in the plan confirms or rules this out.\n- I did not read lines 136-151 of the two guard copies. The direction of the fix (live copy matches the template) comes from the issue's own fix instruction.",
+  "fingerprint": "c31d2eec139154aa8c74531baad2b542d6302246b7a4f86d5676b77ae1214ca2",
+  "lineage": {
+    "issue_number": 6658,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37627278428",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37627278428",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6658"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007132526_97177327b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6658,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37627278428"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6658",
+  "timestamps": {
+    "created_at": "2026-10-07T13:25:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

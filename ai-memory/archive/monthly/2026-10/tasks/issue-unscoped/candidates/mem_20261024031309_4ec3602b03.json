@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_wait_review.sh:199-201,208,271 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The new completed-run bypass (`coverage_run_completed`, lines 199-201) means the `BAIT_REVIEW_COOLDOWN_SKIP != 1` clause at line 271 is always true for completed runs, so the guard is redundant.\n  WHY: `review_run_checked_out_bait` has a single caller that always passes `\"$RUN_ID\"`, so the line 208 cooldown skip never fires when `RUN_STATUS=completed`. Both reviewers rated it NIT and said it does not fail at runtime and needs no change. The guard is only defense in depth.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stable_e2e_step_wait_review.sh:199-201,208,271 | severity=NIT | confidence=3\n  PROBLEM: `review_run_checked_out_bait` has one caller, `require_bait_review_coverage` (line 263), which always passes `\"$RUN_ID\"`. With `RUN_STATUS=completed`, line 208 never records a cooldown skip, so the `!= \"1\"` check at line 271 is always true and now redundant.\n  WHY: It does not fail at runtime. The guard is defense in depth, and the test's static assertion still passes. No change is required.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stable_e2e_step_wait_review.sh:199-201,271 | severity=NIT | confidence=4\n  PROBLEM: The completed-run bypass makes the `${BAIT_REVIEW_COOLDOWN_SKIP:-0} != 1` clause at line 271 unreachable, so the condition degenerates to `[ \"$RUN_STATUS\" = \"completed\" ]`. The static assertion in `tests/test_test_and_mark_stable_live_log_cooldown.py:123-126` still matches.\n  WHY: It does not fail at runtime. The dead guard may be misread as a live protection. Keep it as defense in depth, or drop it together with its static assertion.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8e1991210c79e0f8b4d3ffca82a9cc4f8d2240d2a8758319b7efdb4c830750f0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8047,
+    "run_id": "40056057390",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40056057390",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024031309_4ec3602b03",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8047,
+    "run_id": "40056057390"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T03:13:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

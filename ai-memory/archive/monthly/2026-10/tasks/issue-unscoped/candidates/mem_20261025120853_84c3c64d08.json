@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:677-691 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `jq -e 'type == \"array\"'` check runs on the output of the `--jq` filter, which always wraps results in `[...]`, so a non-array raw API response such as `{}` becomes `[]` and passes the check.\n  WHY: A non-array response is treated as an empty listing, so dedup finds no duplicate and the script can file a duplicate triage issue; `test_non_array_listing_fails_closed` misses this because its fake `gh` does not apply the `--jq` filter. Severity is MAJOR in all three sources, mapped here to high. Confidence ranges from 3 to 5 across reviewers. qwen_qwen3_7-plus disputed the finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/check_failure_triage.sh:677-687 | severity=MAJOR | confidence=3\n  PROBLEM: The array check runs on the output of the `--jq` filter, which always wraps results in an array, so `{}` yields `[]` and passes the `type == \"array\"` check. If `gh` exits 0 with empty output, `jq -s 'add // []'` also gives `[]`.\n  WHY: A non-array response is read as \"no duplicate\" and the script goes on to `gh issue create`. The non-array test's fake `gh` prints `MOCK_OPEN_TRIAGE` directly and never applies the filter. The reviewer rated practical likelihood low. Suggested fix: check `type == \"array\"` inside the `--jq` expression and have the test apply the filter or add a `{}` case.\n- HARDENING_SUGGESTIONS: scripts/check_failure_triage.sh:677-685, move the array check inside the `--jq` expression (about 3 lines). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh:681,683-685 | severity=MAJOR | confidence=5\n  PROBLEM: The array check validates the filtered output, not the raw API response. The `--jq` filter wraps `.[]` in an array, so a valid JSON object such as `{}` produces `[]` and passes `jq -e 'type == \"array\"'`.\n  WHY: A non-array response is treated as an empty listing, so deduplication can file a duplicate triage issue. The non-array test does not catch it because its `gh` stub prints the response verbatim instead of applying the `--jq` filter (tests/test_check_failure_triage_workflow_security.py:1307-1309).\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/check_failure_triage.sh:677-691 | severity=MAJOR | confidence=3\n  PROBLEM: The array check on line 685 validates the transformed page output, not the raw API response. A `{}` response yields `[]`, and an object such as `{\"a\": {}}` yields entries like `{\"number\": null, \"body\": \"\"}`. Both pass the check as an \"empty\" listing, so the run proceeds to `gh issue create` at line 1768.\n  WHY: The issue's requirement (BUG-001) that the check confirm the listing was an array of issues is not enforced on the raw response. Non-iterable shapes (`null`, `5`, `{\"a\": 1}`) do fail closed, because `.pull_request` errors and `gh` exits non-zero, so the tests pass via that path. The practical exposure is narrow, since it needs an HTTP 200 with a JSON object.\n- HARDENING_SUGGESTIONS: scripts/check_failure_triage.sh:677-686, drop `--jq` from the `gh` call and validate that every page is an array in the merge `jq` before projecting (about 8 lines). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6c632af1fc56cf746566e3757fda761ceb69089e3ea485846f9e1be44e2624db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8133,
+    "run_id": "40190091903",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40190091903",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025120853_84c3c64d08",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8133,
+    "run_id": "40190091903"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T12:08:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:875-889 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When every failing unit's baseline re-run times out or errors, the unit moves to `unverified` and `status = \"unverified\"`. `\"unverified\"` is in `PASSING_STAMP_STATUSES` (line 94) and the stamp check at line 1261 accepts it, so the push proceeds even if the change really broke a slow test.\n  WHY: The other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) judged this the PR's intended, documented design and did not raise it as a defect. minimax reported it as MAJOR, which is mapped to high here.\n- tests/test_review_prepush_test_gate.py:385-408 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The two new tests lock in the `baseline_timeout`-only pass behaviour. `test_step_scripts_share_the_unverified_summary_mapping` is a brittle text-substring contract check.\n  WHY: Tightening the gate later would first require editing these tests. minimax rated this MAJOR, mapped to high here.\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:929 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `write_summary` Unverified loop calls `_sanitize_name` on `u.get(\"names\")` elements without an `isinstance(n, str)` check. A non-string element would raise `TypeError`.\n  WHY: The step scripts and `failing_names` already yield strings, so this is defensive only. minimax rated it NIT, mapped to low here. It is also listed as a hardening suggestion by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, with risk score 1.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR says an unfinished baseline re-run is now reported as `unverified` so implement skips the repair turn. It does not disclose that `PASSING_STAMP_STATUSES` treats `\"unverified\"` as a passing stamp, so the push itself is allowed.\n  expected_change_site: workflow-templates/.claude/hooks/prepush_affected_tests.py lines 94 / 882-889 / 1261, plus changelog.d/prepush-gate-baseline-timeout-unverified.md and agents.d/prepush-gate-baseline-timeout-unverified.md\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `PASSING_STAMP_STATUSES` at line 94 still contains `\"unverified\"`, agents.d/prepush-gate-baseline-timeout-unverified.md (1-8) does not mention that the stamp passes, changelog.d/prepush-gate-baseline-timeout-unverified.md (line 13) mentions only the repair turn\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nHardening suggestion (risk score 1): workflow-templates/.claude/hooks/prepush_affected_tests.py, `write_summary` Unverified loop. Filter `names` with `isinstance(n, str)` before slicing; not reachable today.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:875-889 | severity=MAJOR | confidence=5\n  PROBLEM: When every failing unit's baseline re-run times out or errors, `status = \"unverified\"`. `\"unverified\"` is in `PASSING_STAMP_STATUSES` (line 94) and the stamp check at line 1261 accepts it, so the push proceeds with no repair turn.\n  WHY: A change that genuinely breaks a slow test file can now push, because the baseline re-run is also slow and the unit moves to `unverified`.\n- tests/test_review_prepush_test_gate.py:385-408 | severity=MAJOR | confidence=3\n  PROBLEM: The new tests lock in the regression above. `test_step_scripts_share_the_unverified_summary_mapping` is a brittle text-substring check.\n  WHY: Hardening the gate to refuse a `baseline_timeout`-only stamp would first require amending these tests.\n- workflow-templates/.claude/hooks/prepush_affected_tests.py:880,929 | severity=NIT | confidence=2\n  PROBLEM: `failing_names` always returns strings and the step-script filter already applies `isinstance(n, str)`, but `write_summary` has no such filter on the gate path.\n  WHY: Defense only; the gate path never sees a non-string under documented invariants.\n- TASK_GAP: Requirement: the PR description says an unfinished baseline re-run is reported as `unverified` so implement skips the repair turn, but it does not disclose that `PASSING_STAMP_STATUSES` (workflow-templates/.claude/hooks/prepush_affected_tests.py:94) treats `\"unverified\"` as passing.\n  Expected change site: workflow-templates/.claude/hooks/prepush_affected_tests.py lines 94 / 882-889 / 1261, plus changelog.d/prepush-gate-baseline-timeout-unverified.md and agents.d/prepush-gate-baseline-timeout-unverified.md\n  Evidence of absence: `PASSING_STAMP_STATUSES` at line 94 still contains `\"unverified\"`, agents.d/prepush-gate-baseline-timeout-unverified.md (1-8) does not mention that the stamp passes, changelog.d/prepush-gate-baseline-timeout-unverified.md (line 13) mentions only the repair turn\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Hardening suggestion (risk score 1): workflow-templates/.claude/hooks/prepush_affected_tests.py:929. Filter with `isinstance(n, str)` inside the generator before slicing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nHardening suggestion (risk score 1): workflow-templates/.claude/hooks/prepush_affected_tests.py, `write_summary` unverified loop (line ~929). Add `if isinstance(n, str)` before the 10-element slice; purely defensive.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ab7906cf2678aed81c1d72a53d9839fa4d9e735ead8b13ad821428d603e1f913",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8382,
+    "run_id": "40946522441",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40946522441",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029205811_92aff6a6fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8382,
+    "run_id": "40946522441"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T20:58:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

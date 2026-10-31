@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) The review/autofix pipeline (`review_autofix.yml` and the `scripts/review_*` helpers)\nB) The orchestrator poller and judges (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nC) The clarify / plan / implement phase workflows\nD) Documentation only (README, `agents.md`, docs/)\nE) Another area. Name the file, workflow or feature in your `/answer`. (RECOMMENDED)\nQ2: What problem should be fixed, or what outcome is wanted?\nChoices:\nA) A specific bug or failure. Link the failing run, PR or issue and describe the expected behaviour. (RECOMMENDED)\nB) Lower cost or runtime (OpenRouter spend, CI minutes, GitHub API calls). Name the target and a measurable goal.\nC) A new feature or capability. Describe it and its acceptance criteria.\nD) Clearer docs or logs. Name the section or log prefix to change.\nQ3: How will we know the change is done?\nChoices:\nA) Use the concrete acceptance criteria you give in your `/answer` (for example, \"run X no longer fails with Y\" or \"metric Z drops below N\"). (RECOMMENDED)\nB) A new or updated contract test that pins the behaviour, named in your `/answer`.\nC) Close the issue as not actionable. **Note:** choosing this means Q1 and Q2 do not need answers.",
+  "fingerprint": "81a7b83b43bc4cd2a02c6d783e7232f545fc0ea05a1661f40312ead4644b6a14",
+  "lineage": {
+    "issue_number": 7001,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38010824304",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38010824304",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010005620_fb445fbf4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7001,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38010824304"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7001 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T00:56:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

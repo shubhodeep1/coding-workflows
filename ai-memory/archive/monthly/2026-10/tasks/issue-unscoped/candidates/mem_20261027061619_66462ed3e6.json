@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue item 4, \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`)\" that stops the gate at once if a trusted, open `kind=capacity` `ai:provider-outage` tracker exists.\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml`, `resolve-version` or the E2E job preamble\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: No hunk adds a preflight step. The issue marks it optional, and the in-loop checks already fail the gate within one poll, so the reviewer does not count it as a correctness gap. (severity=NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: Issue item 4, \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`)\" that stops the gate at once if a trusted, open `kind=capacity` `ai:provider-outage` tracker exists.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, `resolve-version` or the E2E job preamble.\n  Evidence of absence: No hunk adds a preflight step. The issue marks it optional, and the in-loop checks already fail the gate within one poll. The issue's fix list and affected-file list also cover the other items, so I am not counting this as a correctness gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d379c323d17acc40bca7f1d90031fd1b6ede8b85ce8ba7a63e3fc34ca1e376a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8221,
+    "run_id": "40458616377",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40458616377",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027061619_66462ed3e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8221,
+    "run_id": "40458616377"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-27T06:16:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

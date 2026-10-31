@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:22-28 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `ai:consumer-health` exclusion is applied to the opening issue trigger but missing from the `/reclarify` comment triggers.\n  WHY: A `/reclarify` comment on an `ai:consumer-health` issue still triggers the clarify workflow, bypassing the intended exclusion. Source severity was MAJOR. qwen_qwen3_7-plus disputes this as a false positive, saying `/reclarify` is an intentional override that matches the `ai:provider-outage` pattern.\n- .github/workflows/internal-clarify.yml:15-21 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `ai:consumer-health` exclusion is missing from the `/reclarify` comment trigger conditions.\n  WHY: `/reclarify` on a consumer health issue triggers this internal workflow. Source severity was MAJOR. qwen_qwen3_7-plus disputes this as a false positive.\n- workflow-templates/ai-clarify.yml:15-21 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The consumer wrapper template lacks the `ai:consumer-health` exclusion in the `/reclarify` comment trigger conditions.\n  WHY: Consumer repositories using this wrapper still trigger clarification runs for `/reclarify` comments on consumer health notices. Source severity was MAJOR. qwen_qwen3_7-plus disputes this as a false positive.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The clarify workflow now skips issues labelled `ai:consumer-health`, the same way it skips `ai:operator-step` and `ai:provider-outage` issues.\"\n  expected_change_site: `issue_comment` event conditions in .github/workflows/clarify.yml, .github/workflows/internal-clarify.yml, workflow-templates/ai-clarify.yml\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR updated the `opened` issue event condition but not the `issue_comment` (reclarify) event conditions in the three workflow files. qwen_qwen3_7-plus disputes this, citing the PR description's statement that \"/reclarify still starts clarification on one if the operator wants a change planned.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/clarify.yml:22-28 | severity=MAJOR | confidence=5\n  PROBLEM: The `ai:consumer-health` exclusion is applied to the opening issue trigger but missing from the `/reclarify` comment triggers.\n  WHY: A `/reclarify` comment on an `ai:consumer-health` issue still triggers the clarify workflow, bypassing the intended exclusion and causing unnecessary planning runs.\n- .github/workflows/internal-clarify.yml:15-21 | severity=MAJOR | confidence=5\n  PROBLEM: The `ai:consumer-health` exclusion is missing from the `/reclarify` comment trigger conditions.\n  WHY: As in the main workflow, `/reclarify` on a consumer health issue triggers this internal workflow.\n- workflow-templates/ai-clarify.yml:15-21 | severity=MAJOR | confidence=5\n  PROBLEM: The consumer wrapper template lacks the `ai:consumer-health` exclusion in the `/reclarify` comment trigger conditions.\n  WHY: Consumer repositories using this wrapper still trigger clarification runs for `/reclarify` comments on consumer health notices.\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"The clarify workflow now skips issues labelled `ai:consumer-health`, the same way it skips `ai:operator-step` and `ai:provider-outage` issues.\"\n  Expected change site: `issue_comment` event conditions in .github/workflows/clarify.yml, .github/workflows/internal-clarify.yml, workflow-templates/ai-clarify.yml\n  Evidence of absence: The PR updated the `opened` issue event condition but not the `issue_comment` (reclarify) event conditions to exclude the `ai:consumer-health` label in all three workflow files.\n- HARDENING_SUGGESTIONS: .github/workflows/clarify.yml jobs.clarify.if (lines 22-28) | HARDENING_RISK_SCORE: 1\n  PROBLEM: The if-condition is complex and hard to maintain, so future label exclusions are easy to miss.\n  WHY: Suggested fix: extract the label exclusion logic or break it into cleaner lines (about 10 lines changed).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "82cd5f6dba6772bb8e5e6f11471bb4c9941fc0d6924d0a4d6c73d2e6c6e98191",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7431,
+    "run_id": "38711206952",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38711206952",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261015093046_7c4b7a5915",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7431,
+    "run_id": "38711206952"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-15T09:30:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

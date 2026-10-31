@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":4813,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/4813\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6149\",\"pr_number\":6149,\"branch\":\"ai/issue-4813\",\"run_id\":\"37105846922\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37105846922\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/issue_pr_status.yml\",\"changelog.d/4813-close-sweep-target-branch-merges.md\",\"scripts/gh_helpers.sh\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_issue_pr_status_payload_fallback_contract.py\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "be8a1735c07800459b6f4abbf8dadbb3a9960d10912f78f1193b4d0c8e7e4122",
+  "lineage": {
+    "issue_number": 4813,
+    "parent_ids": [],
+    "pr_number": 6149,
+    "run_id": "37105846922",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37105846922",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6149"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261003074343_0f2061f1ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 4813,
+    "level": "run",
+    "pr_number": 6149,
+    "run_id": "37105846922"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #4813: https://github.com/shubhodeep1/coding-workflows/pull/6149",
+  "timestamps": {
+    "created_at": "2026-10-03T07:43:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

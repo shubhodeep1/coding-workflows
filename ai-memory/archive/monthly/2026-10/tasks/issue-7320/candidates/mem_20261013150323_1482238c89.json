@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the fix to `EXPECTED_STEP_DECLARATIONS[\"plan.yml\"]` (five \u2192 six, plus the updated count comment) land?\nChoices:\nA) On PR #7229's head branch `ai/issue-7216`, by adding a `Target branch: ai/issue-7216` line to this issue. The test change then ships with the step that needs it. (RECOMMENDED)\nB) Nowhere through this issue. Close it and let PR #7229's own review/autofix loop update the test, since the failure only exists on that PR.\nC) On the default branch. **Note:** the default branch's `plan.yml` has only five declarations, so this would make CI fail on `main` until PR #7229 merges. Pick this only if the two changes will merge together.",
+  "fingerprint": "ed335aa4d39545b248737b7e67bfd0e27e5b4db532eff4b536c4f338f5eefaa3",
+  "lineage": {
+    "issue_number": 7320,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38417841098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38417841098",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013150323_1482238c89",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7320,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38417841098"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7320 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T15:03:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

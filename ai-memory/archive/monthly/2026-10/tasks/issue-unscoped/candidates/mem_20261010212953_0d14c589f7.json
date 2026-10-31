@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Attempt to reproduce shard 1's failure; identify and reproduce the failing test, fix a specific defect only if demonstrated, and otherwise report that the cause remains unverified or investigate a transient test or runner failure.\n  expected_change_site: PR body or issue #6859 investigation record/comment\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The PR description is auto-generated as \"Automated implementation. Closes #6859\" and does not document a reproduction attempt or unverified cause; the linked issue's \"Affected files\" and \"Suggested fix\" call for identifying and reproducing the failing test; the PR adds future failure annotations but no shard-1 failure identification or reproduction; the editor summary says the full log was unavailable and the cause remains unverified, but records no reproduction attempt or transient-failure investigation; the deferral appears only in an autofix editor summary comment or working log, not the PR body or tracking issue.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Attempt to reproduce shard 1's failure. Fix a specific defect only if demonstrated; otherwise report that the cause remains unverified.\"\n  Expected change site: PR body or issue #6859, with an explicit reproduction result or unverified-cause acknowledgement\n  Evidence of absence: The PR description is just \"Automated implementation. Closes #6859\" \u2014 there is no reproduction attempt and no unverified-cause note on the issue or PR. The deferral lives only in the autofix editor's own summary comment (entry id 6102146201), which is the pipeline's working log, not the linked issue or the PR description a human reviewer would consult. The linked issue's \"Affected files\" block specifically calls for identifying and reproducing the failing test, and the PR instead makes the next failure self-identify without addressing the original cause.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cRetrieve the full \u2018Orchestrate poll process unit tests\u2019 output for shard 1\u201d and identify and reproduce the failing test; if reproducible, fix the demonstrated defect, otherwise investigate a transient test or runner failure.\n  Expected change site: Issue #6859 or the PR investigation record.\n  Evidence of absence: The PR diff adds future failure annotations but contains no shard-1 failure identification or reproduction. The PR editor summary says the full log was unavailable and the cause remains unverified; it records no reproduction attempt or transient-failure investigation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Attempt to reproduce shard 1's failure. Fix a specific defect only if demonstrated; otherwise report that the cause remains unverified.\"\n  Expected change site: PR body or issue #6859 comment \u2014 a statement that the root cause of run 37883807697 remains unverified, or a reproduction attempt result.\n  Evidence of absence: The PR description is the auto-generated \"Automated implementation. Closes #6859\" with no reproduction attempt or unverified-cause note. The linked issue's \"Suggested fix\" and \"Affected files\" blocks call for identifying and reproducing the failing test. The PR instead makes future failures self-identify. The auto-decision AD-1 explicitly chose this approach and the editor summary mentions the reproduction as deferred (\"TASK_GAP_DEFERRED\"), but no statement appears in the PR body or the tracking issue. The original failure's cause remains unverified and undocumented in the deliverables.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "82b7d590ef7a664797d248e34f01fb542b6446dc8bd892a1754b6103a73e714c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6861,
+    "run_id": "38086124042",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38086124042",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010212953_0d14c589f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6861,
+    "run_id": "38086124042"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T21:29:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

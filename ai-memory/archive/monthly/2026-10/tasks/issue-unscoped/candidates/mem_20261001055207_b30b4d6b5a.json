@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3557-3560 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The moved-head guard does not cover fork-based pull_request runs.\n  WHY: If a fork branch advances after checkout, this step exits before comparing the checked-out SHA with the live head, allowing reviewers to run with the old checkout while scripts/review_collect_pr_metadata.sh:209-234 and :464-470 collect current PR metadata and diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml: Lines 3557-3560 exit for a fork head before the moved-head comparison at lines 3632-3635.\n  PROBLEM: The new moved-head guard does not cover fork-based pull_request runs, despite the documentation describing it for pull_request runs generally.\n  WHY: If a fork branch advances after the checkout but before metadata and diff collection, this step exits before comparing the checked-out SHA with the live head. The reviewer step can then run with the old checkout while scripts/review_collect_pr_metadata.sh:209-234 and :464-470 collect the current PR metadata and diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9b8392ce4ab39253f6b68c595a9b5a68ea61501841167a53ceb6dcc1c43228bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5857,
+    "run_id": "36819757444",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36819757444",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001055207_b30b4d6b5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5857,
+    "run_id": "36819757444"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T05:52:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

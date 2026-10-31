@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_engine.sh:393 | HARDENING (HARDENING_RISK_SCORE: 0)\n  PROBLEM: AI_ENGINE_CLAUDE_NO_WEB_NOTE phrase \"When one the task depends on is not there\" is grammatically incomplete (missing \"that\" or \"a fact\").\n  WHY: The model will likely parse it correctly from context, but it is a small quality issue. Suggested fix: \"When one that the task depends on is not there\" or \"When a fact the task depends on is not there\" (1 line).\n- scripts/ai_engine.sh:407-427 | HARDENING (HARDENING_RISK_SCORE: 1)\n  PROBLEM: _ai_engine_instructions_file creates a new mktemp copy under RUNNER_TEMP on each call that is never deleted on the success path.\n  WHY: Multiple Claude runs in the same job accumulate copies. Cleanup would touch three callers' existing traps. The runner cleans RUNNER_TEMP per job, so this is not a leak. Suggested fix: a `trap 'rm -f \"${_AI_ENGINE_TMP_INSTRUCTIONS:-}\"' RETURN` in each caller (about 3 lines), which can ship in a follow-up.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f16894ffb122a46aae816973e9a39d04fe17ab7a7c679daade5d0d3e0a3b5115",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7371,
+    "run_id": "38542101917",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38542101917",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014100121_66daae6575",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7371,
+    "run_id": "38542101917"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-14T10:01:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

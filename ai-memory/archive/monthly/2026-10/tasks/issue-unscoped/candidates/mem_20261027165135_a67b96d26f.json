@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml` \u2014 a preflight step at the start of the E2E jobs (`e2e-smoke-test`, `e2e-alt-model-test`, `orchestrate-decompose-test`) or in `resolve-version`\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: No hunk in the PR diff adds a preflight step, and the only capacity-tracker lookup is in the orchestrate fallback (lines 4496-4506). The item is marked optional and the in-loop checks already fail the gate within one poll, so it is recorded as a NIT and not a defect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, a preflight step in the E2E jobs or in `resolve-version`.\n  Evidence of absence: No hunk in the PR diff adds a preflight step. The only capacity-tracker lookup is in the orchestrate fallback. The issue marks this item optional, and the in-loop checks already fail the gate within one poll. Recorded for completeness and not as a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml` \u2014 a preflight step at the start of the E2E jobs (`e2e-smoke-test`, `e2e-alt-model-test`, `orchestrate-decompose-test`) or in `resolve-version`.\n  Evidence of absence: No diff hunk in the PR adds such a preflight step. The only `ai:provider-outage` / `kind=capacity` tracker lookup is inside the orchestrate-dispatch fallback block (lines 4496-4506), which runs only after the 90-second `TRACKING_DEADLINE` search has failed. The item is explicitly \"Optional but recommended\", and the in-loop capacity checks (`lines 994-1006, 1223-1235, 1598-1610, 5057-5068`) already fail the gate within one poll. Not treated as a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a06e8322bed1d1453090b0c2d66d8e4792216e363a7fe663bbf2ac4ec2ceb3a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8221,
+    "run_id": "40541849200",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40541849200",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027165135_a67b96d26f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8221,
+    "run_id": "40541849200"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T16:51:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

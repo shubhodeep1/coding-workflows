@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Current `main` already has a credential-free checkout, a token-free diagnosis step in an isolated container, and a separate posting token. What should this re-issue deliver?\nChoices:\nA) Treat the finding as fixed. Check the current code against the exploit scenario and fill any gaps in `tests/test_check_failure_triage_workflow_security.py`: no persisted checkout credentials, no GitHub token in the diagnose step's environment, the model launched only through the isolated helper, and posting only with `CHECK_TRIAGE_ISSUES_TOKEN`. Change runtime code only where a gap is confirmed. (RECOMMENDED)\nB) Do A, and also follow the recommendation literally: move \"Diagnose check failure\" into its own job, with no `GH_PAT`/`CHECK_TRIAGE_ISSUES_TOKEN` secret, `permissions: {}`, and the collected context handed over as an artifact. Move posting into another job with only issue-write access. The consumer wrapper `workflow-templates/ai-check-failure-triage.yml` and the secret pass-through would need updating to match.\nC) Close as already fixed and change nothing. **Note:** an implement run with no repository change is treated as a no-op, so this choice should end the issue as `ai:closed` with no PR.",
+  "fingerprint": "f3d23c723a2b70fabc237df59882f83c83ee2602af95e43063f71f40c9072045",
+  "lineage": {
+    "issue_number": 6635,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37617969876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37617969876",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007120605_e8161d56c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6635,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37617969876"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6635 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T12:06:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

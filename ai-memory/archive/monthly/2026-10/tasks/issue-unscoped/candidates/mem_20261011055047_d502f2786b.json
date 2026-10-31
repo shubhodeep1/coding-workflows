@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_ledger.py:533-537 | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: If a persistent block's fingerprint changes between ticks, the 24-hour clock restarts and `still_blocked_24h` does not fire on that path.\n  WHY: The reviewer states this does not fail at runtime because the item and project caps still bound the item, and identifies it as the stated trade-off.\n- scripts/unblock_ledger.py:27-29 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The module docstring describes the 24-hour rule as counting from \u201cthe last round\u201d without the same-stop-and-fingerprint qualifier implemented in the logic.\n  WHY: It has no runtime effect but misleads maintainers about the updated terminal-clock semantics.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The module-level docstring's \u201cRules enforced here\u201d list should describe the corrected 24-hour semantics using the same-stop-and-fingerprint qualifier.\n  expected_change_site: `scripts/unblock_ledger.py` module docstring, the `Rules enforced here:` bullet that mentions `BLOCKED_AFTER_LAST_ROUND_HOURS`.\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `scripts/unblock_ledger.py` lines 27-29 still describe the rule as \u201cafter the last round with the item still blocked\u201d; the new `last_times` filter at lines 533-537 counts only rounds whose stop and fingerprint match the current block.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_ledger.py:533-537 | severity=NIT | confidence=2\n  PROBLEM: Only rounds on the same stop and fingerprint now start the 24-hour clock. If the fingerprint of a persistent block changes between ticks (for example, the fingerprint is derived from text that varies), the clock restarts and `still_blocked_24h` does not fire on that path.\n  WHY: It does not fail. `MAX_ROUNDS_PER_ITEM` and `MAX_ROUNDS_PER_PROJECT` still bound the item, and this is the stated trade-off of the change.\n- scripts/unblock_ledger.py:27-29 | severity=NIT | confidence=4\n  PROBLEM: The module's \"Rules enforced here\" docstring still says \"the last round\", which describes the old behavior.\n  WHY: It has no runtime effect, but a maintainer reading the docstring would get the wrong semantics.\n- README.md:3525-3528\n  HARDENING SUGGESTION: The edit leaves one very long line (\"...does not start the clock), the judge closes it as not planned with a\"), which breaks the wrapping of the surrounding paragraph. Suggested minimal fix: Re-wrap the sentence at about 75 characters.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_ledger.py:27-29 | severity=NIT | confidence=4\n  PROBLEM: The module docstring describes the 24-hour rule as counting from \"the last round\" without the same-stop-and-fingerprint qualifier implemented in the logic.\n  WHY: This is not a runtime failure, but it misleads maintainers regarding the updated semantics of the terminal clock.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR description enumerates which doc sites record the corrected 24-hour semantics (\"The terminal-condition text in `agents.md` and the README now says the 24 hours count from the last round on the same block ... a correction\") and the diff updates the function-level comment in `decide()`. The in-code spec at the top of `scripts/unblock_ledger.py` (the module docstring's \"Rules enforced here\" list) is part of \"everything else\" that describes the same 24-hour rule and was not updated to match.\n  Expected change site: `scripts/unblock_ledger.py` module docstring, the `Rules enforced here:` bullet that mentions `BLOCKED_AFTER_LAST_ROUND_HOURS`.\n  Evidence of absence: lines 27-29 still read \"past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last round with the item still blocked, the only outcome is the terminal close\". After this PR the implementation counts only rounds whose stop and fingerprint match the current block (the new `last_times` filter at lines 533-537), but the docstring's \"after the last round with the item still blocked\" wording omits the same-stop-and-fingerprint qualifier. README.md (lines 3525-3527) and agents.md (the \"Unblock judge (Phase 7)\" bullet, changed line) were corrected, and the function-level comment was corrected; the module-level docstring was missed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_ledger.py:27-29\n  HARDENING SUGGESTION: The module docstring still describes the 24-hour rule as counting from \"the last round\" without the same-stop-and-fingerprint qualifier that the code now enforces. Suggested minimal fix: Update the docstring to say \"BLOCKED_AFTER_LAST_ROUND_HOURS after the last round on the same stop and fingerprint with the item still blocked\" to match the updated semantics in `decide()`. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "cd7b78e860428f8d5529cde4597092d3d5e85f9c5ae717a1df0343e55c37d85b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7149,
+    "run_id": "38113703452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38113703452",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011055047_d502f2786b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7149,
+    "run_id": "38113703452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T05:50:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_build_sync_manifest.py:130-226 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `test_seed_only_audit_gate_target_is_allowed_but_consumer_owned` is defined twice (lines 130 and 226), so the line-130 copy is shadowed dead code.\n  WHY: pytest runs only the last binding, so edits to the first copy silently never run and ruff F811 flags it. Reviewers rated it MAJOR; it is mapped to high.\n- changelog.d/audit-allowlist-seed-only.md:1-16 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The fragment duplicates `changelog.d/8334-audit-gate-seed-only-allowlist.md`, which describes the same seed-only allowlist fix.\n  WHY: Changelog assembly will emit two overlapping Fixed entries for one change. Reviewers rated it NIT, and the line range spans the reviewers' claims of 1-15 and 1-16.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The audit-gate contract (workflow-templates/audit-gate/contract.json) must mark the allowlist as \"seed_only\": true.\n  expected_change_site: workflow-templates/audit-gate/contract.json\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not modify this contract file. Three other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) refuted the gap: the file already has `\"seed_only\": true` at line 14.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_build_sync_manifest.py:130,226 | severity=MAJOR | confidence=5\n  PROBLEM: The test `test_seed_only_audit_gate_target_is_allowed_but_consumer_owned` is defined at line 130 and again at line 226. The merge-resolve commit brought in the second copy, which rebinds the name, so the line-130 test never runs.\n  WHY: pytest collects only the last binding, so the first definition is dead code and ruff F811 flags it. The PR's `ruff check --select E,F` covered `scripts/*.py`, not `tests/`. Fix: delete one copy, preferably the line-130 one.\n- changelog.d/audit-allowlist-seed-only.md:1-15 | severity=NIT | confidence=4\n  PROBLEM: The fragment duplicates `changelog.d/8334-audit-gate-seed-only-allowlist.md`, which is also a `fixed` entry and also introduces `managed_files[].seed_only`.\n  WHY: The next release will emit two overlapping Fixed entries. This is a documentation defect only. Fix: drop the fragment or fold its distinct facts into the 8334 fragment.\n- TASK COMPLETENESS: No gaps. The pass-1 TASK_GAP about `workflow-templates/audit-gate/contract.json` is invalid, because the file already has `\"seed_only\": true` at line 14. All other deliverables are present, and the last autofix change is correct.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_build_sync_manifest.py:test_seed_only_audit_gate_target_is_allowed_but_consumer_owned | severity=MAJOR | confidence=5\n  PROBLEM: The test function is defined twice in the module.\n  WHY: Python shadows the first definition with the second, so only the last runs and the first is dead code.\n- changelog.d/audit-allowlist-seed-only.md:entire file | severity=NIT | confidence=4\n  PROBLEM: The fragment duplicates changelog.d/8334-audit-gate-seed-only-allowlist.md.\n  WHY: Changelog assembly folds both files, giving redundant entries for a single fix.\n- TASK_GAP:\n  Requirement: The audit-gate contract (workflow-templates/audit-gate/contract.json) must mark the allowlist as \"seed_only\": true.\n  Expected change site: workflow-templates/audit-gate/contract.json\n  Evidence of absence: The provided PR diff does not contain a modification to this contract file. Verify that the file at the PR HEAD contains the required \"seed_only\": true entry, as the new tests depend on it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_build_sync_manifest.py:130,226 | severity=MAJOR | confidence=5\n  PROBLEM: The module defines `test_seed_only_audit_gate_target_is_allowed_but_consumer_owned` twice. The line-130 copy has its own contract fixture (lines 133-147). The line-226 copy has another fixture (lines 228-239) with a slightly different body. Only the line-226 copy is collected and run.\n  WHY: The shadowed line-130 copy never executes. Both bodies test the same invariant, so the test passes today, but coverage is silently lost and a maintainer editing the first copy would be misled.\n- TASK COMPLETENESS: No gaps. All PR deliverables are present on the branch, including `\"seed_only\": true` at contract.json line 14. The last-run change adding `\"allowed-paths\"` to the loop in `test_non_boolean_seed_only_is_rejected` is correct. The changelog overlap with `changelog.d/8334-audit-gate-seed-only-allowlist.md` was noted but not raised, because it is out of scope.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_build_sync_manifest.py:130,226 | severity=MAJOR | confidence=5\n  PROBLEM: The module defines the same test function twice. Only the line-226 copy, introduced via the `[ai-merge-resolve]` merge commit, is collected and executed, and the line-130 copy is dead code.\n  WHY: pytest collects one binding per name, so the shadowed definition is unreachable and can mask future coverage loss. Fix: delete one copy.\n- changelog.d/audit-allowlist-seed-only.md:1-16 | severity=NIT | confidence=4\n  PROBLEM: Two changelog fragments describe the same seed-only allowlist fix (`<!-- changelog: fixed -->`, same change to `security/dependency-audit-allowlist.json`). They duplicate `changelog.d/8334-audit-gate-seed-only-allowlist.md` (lines 1-16).\n  WHY: `scripts/assemble_changelog.py` folds both at release, producing two overlapping Fixed entries.\n- TASK COMPLETENESS: No gaps. The gemini TASK_GAP does not hold, because `workflow-templates/audit-gate/contract.json:14` already contains `\"seed_only\": true`. The last-run change is correct.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d8c27aae5e05782381a6df390f0dbf11d78cc93f46258f6ead763d81f7d853ab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8355,
+    "run_id": "40947872748",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40947872748",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029205159_7303c3365f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8355,
+    "run_id": "40947872748"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T20:51:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

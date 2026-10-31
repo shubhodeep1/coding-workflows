@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: B\n\nRATIONALE:\nQ1: `_heal_scope_recovery_evaluate` in `scripts/workflow_failure_heal_intake.sh` stops unless `REPORT_AUTH=verified` (lines 993-996), and the provenance gate already re-checks a run's repository, failed conclusion, workflow path and link to the source item. Rebuilding the report from the pipeline-written metadata and putting it back through that gate keeps the check as strict as OIDC. A new auth value that only the scan sets and only recovery accepts keeps a forged report from reaching any other path. Option B fails for #7082, because its source PR (drhyg_ecommerce_automation#66) has failed 20 times and may have moved on. Option C would let anyone who can write a markerless issue trigger recovery.\nQ2: The host-only stop needs a person to merge by hand (#6745 and #6756 both say \"never becomes a heal issue\"), and a heal replacement cannot fix it. #7082's reason is `conflict_resolver_sandbox_path_unsupported`, so option A covers the gap without breaking that rule.\nQ3: Option B keeps today's non-retryable result on the PR side: the comment, `ai:needs-human` and the WARNING, with the existing pr/head/reason dedup. Recovery then only adds the work on the heal-issue side, which is a different target. This also follows the issue's instruction to keep the existing non-retryable outcome.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Every decision is a letter.\n\nImplementation notes the planner should treat as binding:\n- **Q1, the scan:**\n  - Add a `schedule:` trigger, or a scan step, to `.github/workflows/workflow-failure-heal-intake.yml`, which already uses the shared `workflow-failure-heal-intake` concurrency group.\n  - The scan runs only on the default branch and stays behind `HEAL_SCOPE_RECOVERY_ENABLED`. Unset, empty or `true` keeps it on; `false` turns it off.\n  - It handles a bounded number of issues per tick.\n  - It lists open `ai:workflow-heal` issues that the intake's own `/user` login wrote and whose heal-scope status is `missing`.\n  - For each one it rebuilds the report from that issue's metadata and runs the existing provenance gate on every run.\n  - It recomputes the fingerprint from the fetched job logs and requires it to match the issue's `fp`.\n  - It then calls the existing recovery path with a new `REPORT_AUTH=reconstructed`, which only `_heal_scope_recovery_evaluate` accepts.\n  - Missing or expired logs, a fingerprint mismatch, or any failed read skip the issue: nothing is filed, and a reason token is logged.\n  - The existing `heal-scope verify` creation guard stays unchanged.\n- **Q2, ordering:** run the recovery check before the non-retryable early exit (around lines 563-618), but only for the two sandbox reasons. A host-only report keeps its current routing.\n- **Q3, ordering:** recovery first, then the unchanged non-retryable PR handling.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone.\n\nAssumptions:\n- The scan is the only caller that may set `REPORT_AUTH=reconstructed`. The intake never takes that value from a payload.\n- Log messages use the existing `WORKFLOW_HEAL heal_scope_recovery` prefix, with a new reason token such as `reason=reconstructed`.\n\nMissing context:\n- I checked the recovery code but did not open the provenance gate code or the non-retryable branch body (lines 563-618). How much the provenance helpers can be reused comes from `agents.md`, not from reading them.\n- The GitHub facts show #7082 is still open. Nothing tells me whether its failed-run logs are still retained. If they have expired, the scan will skip #7082 by design, and a new authenticated report would then be the only way to recover it.",
+  "fingerprint": "867369a97d66cfd46050808a480d2e8c9e646cc18cb26bc35d5df7311d73f1d4",
+  "lineage": {
+    "issue_number": 7333,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38482450267",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38482450267",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7333"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261013231859_74beec9462",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7333,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38482450267"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7333",
+  "timestamps": {
+    "created_at": "2026-10-13T23:18:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

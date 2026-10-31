@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:130 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The shell builtin `command` is missing from `_SHELL_CONTROL_PREFIXES`, so wrapped `command git push ...` invocations are not recognized by the merged-PR guard.\n  WHY: `bash -c 'command git push origin HEAD:feature/x'` executes a real Git push, but the hook skips the invocation and issues no guard or confirmation.\n- .claude/hooks/pr_merge_status_guard.py:508\u2013524; 951\u2013952 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The wrapper scan does not recognize the shell builtin `command` before `git`.\n  WHY: `bash -c 'command git push origin HEAD:feature/x'` is parsed successfully, but `_command_after_control_prefix()` leaves `command` as the first token and the Git-command check skips the segment, issuing no merged-PR check or confirmation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py:130 | severity=high | confidence=5\n  PROBLEM: The shell builtin `command` is missing from `_SHELL_CONTROL_PREFIXES`. When a bash -c wrapper runs `command git push ...`, `_command_after_control_prefix` (line 819) does not strip `command`, and the Git check at line 951 sees `command` instead of `git`, hits `continue`, and skips the merged-PR check entirely. The scanned invocation is silently dropped \u2014 no guard, no confirmation prompt.\n  WHY: `bash -c 'command git push origin HEAD:feature/x'` executes a real Git push, but the hook detects no Git subcommand. This bypasses the merged-PR commit guard that this PR's docs claim is fixed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:508\u2013524; 951\u2013952 | severity=high | confidence=5\n  PROBLEM: The wrapper scan does not recognize the shell builtin `command` before `git`.\n  WHY: `bash -c 'command git push origin HEAD:feature/x'` is parsed successfully, but `_command_after_control_prefix()` leaves `command` as the first token and the Git-command check then skips the segment. No merged-PR check or confirmation is issued for the push.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "ebaa0a14dfbd67052b09179058bfe4e7fed9d91749d6f72f164f6fdaa56512d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6863,
+    "run_id": "37924736866",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37924736866",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009122220_d9ade5346f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6863,
+    "run_id": "37924736866"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T12:22:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

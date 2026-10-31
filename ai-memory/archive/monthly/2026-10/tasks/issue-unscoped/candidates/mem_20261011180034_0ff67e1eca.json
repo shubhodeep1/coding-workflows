@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh: lines 669-680 (LAST RUN DIFF in 489-518 region and 659-693 region) | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The hook-only conflict block invokes `_conflict_prepare_commit_deterministic_merge`, which calls `git commit` and exits successfully under the listed gates.\n  WHY: The reviewer describes the integration-sync deferral and fingerprint check, then concludes that the deferral is limited to zero allowlisted conflicts and classifies this as NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Run the existing sandbox-only regression test (tests/test_review_conflict_resolve_sandbox_only.py) in both CI workflow test lists.\n  expected_change_site: .github/workflows/ci.yml and .github/workflows/test-and-mark-stable.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The last AI autofix run removed tests/test_review_conflict_resolve_sandbox_only.py from the CI test lists.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Run the existing sandbox-only regression test (tests/test_review_conflict_resolve_sandbox_only.py) in both CI workflow test lists.\n  Expected change site: .github/workflows/ci.yml and .github/workflows/test-and-mark-stable.yml\n  Evidence of absence: The last AI autofix run removed tests/test_review_conflict_resolve_sandbox_only.py from the CI test lists.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_prepare.sh | lines 669-680 (LAST RUN DIFF in 489-518 region and 659-693 region) | severity=NIT | confidence=2\n  PROBLEM: The new hook-only conflict block calls `_conflict_prepare_commit_deterministic_merge` which calls `git commit` and `exit 0`. The block is gated by `_ghm_resolved:-false = true` AND `_resolver_allowlist_count -eq 0` AND `_mu_resolved != true` AND `_ff_defer_commit != true`.\n  WHY: The integration fingerprint check still runs because `_mu_defer_commit=true` makes the deferred-commit block at line 1247+ gate on the fingerprint result. But if a mixed conflict with `_resolver_allowlist_count > 0` and `_ghm_defer_commit=false` is dispatched, the hook is staged but the resolver continues \u2014 that's intentional. The defer logic only fires when count is zero.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d1c869a7b5b50399426b408cba2b84267ed1eac47e74fd996142a26b772befdb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6894,
+    "run_id": "38160598391",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38160598391",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011180034_0ff67e1eca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6894,
+    "run_id": "38160598391"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T18:00:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

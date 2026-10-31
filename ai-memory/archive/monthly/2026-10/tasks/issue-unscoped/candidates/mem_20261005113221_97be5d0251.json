@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:979-984 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The parametrized test is missing the tab-separated FD-redirect case, `\"git push origin HEAD:feature/open\\t2>/dev/null\"`.\n  WHY: Tabs are valid argument separators, and without this case a regression in handling tab-separated FD redirects could go undetected.\n- changelog.d/6321-merge-guard-empty-quote-fd.md and changelog.d/6333-quoted-numeric-refspec-fd-guard.md:Both files | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The two changelog fragments document the same observable behavior change, potentially producing duplicate release notes.\n  WHY: CLAUDE.md \u00a720 requires exactly one fragment per PR; however, if the 6333 fragment is absent as reported, only one fragment remains and there is no violation.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add `\"git push origin HEAD:feature/open\\t2>/dev/null\"` as a test case in `test_adjacent_fd_redirect_does_not_create_numeric_refspec` to verify tab-separated FD redirects do not create spurious numeric refspecs.\n  expected_change_site: tests/test_pr_merge_status_guard.py, inside the `@pytest.mark.parametrize(\"command\", [...])` decorator of `test_adjacent_fd_redirect_does_not_create_numeric_refspec` (lines 979-984)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The parametrize block at lines 979-984 contains exactly four entries, all using a space separator; the fifth tab-separated entry from the PR diff is absent.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_pr_merge_status_guard.py:Lines 979-984 (test_adjacent_fd_redirect_does_not_create_numeric_refspec parametrize block) | severity=high | confidence=4\n  PROBLEM: The actual file has only four parametrize entries and is missing the tab-separated case from the original PR diff.\n  WHY: Without this test case, a future parser change that mishandles tab-delimited FD redirects could silently escape detection.\n- changelog.d/6321-merge-guard-empty-quote-fd.md and changelog.d/6333-quoted-numeric-refspec-fd-guard.md:Both files | severity=low | confidence=3\n  PROBLEM: Two changelog fragments document the same observable behavior change.\n  WHY: The changelog assembler will insert both entries into CHANGELOG.md, producing duplicate release notes. If 6333 is genuinely absent (and glob confirms it is not on disk), or if it was dropped and 6321 remains, then there is exactly one fragment and no violation. The discrepancy between the commit stat and the filesystem is itself a concern: the last commit (6451dcde) reportedly added the 6333 fragment, but it is not present.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: The original PR diff added a 5th parametrize entry to `test_adjacent_fd_redirect_does_not_create_numeric_refspec` in `tests/test_pr_merge_status_guard.py` \u2014 `\"git push origin HEAD:feature/open\\t2>/dev/null\"` (with a literal tab between the refspec and the file-descriptor redirect) \u2014 exercising the guard's word-boundary check (`_SHELL_WORD_DELIMITERS` includes `\\t`) for a tab-separated FD that must not pop the refspec. The guard's new pop condition explicitly requires `command[raw_start - 1] in _SHELL_WORD_DELIMITERS`, and the test matrix is incomplete without the tab case because the existing four entries all use space separators.\nExpected change site: `tests/test_pr_merge_status_guard.py` line 984, inside the `@pytest.mark.parametrize(\"command\", [...])` decorator of `test_adjacent_fd_redirect_does_not_create_numeric_refspec`.\nEvidence of absence: The parametrize block at lines 979-984 contains exactly four entries, all using a space separator. A grep for `feature/open.*2>/dev/null` in the file returns only lines 980 (space-separated) and 982 (`12>/dev/null` space-separated), neither of which contains a tab character. The 5th tab-separated entry from the original PR diff is absent.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_pr_merge_status_guard.py:Lines 979-984, parametrize decorator for `test_adjacent_fd_redirect_does_not_create_numeric_refspec` | severity=high | confidence=5\n  PROBLEM: The tab-separated FD-redirect regression case is missing from the parametrized test.\n  WHY: Tabs are valid argument separators in Bash. Without this test case, the parser's behavior when a tab separates a numeric refspec from an adjacent FD redirect is untested. A regression could cause `HEAD:feature/open` to be incorrectly popped as a numeric FD when followed by `\\t2>/dev/null`, creating false blocked pushes.\nRequirement: The PR diff adds `\"git push origin HEAD:feature/open\\t2>/dev/null\"` as a test case in `test_adjacent_fd_redirect_does_not_create_numeric_refspec` to verify tab-separated FD redirects do not create spurious numeric refspecs.\nExpected change site: tests/test_pr_merge_status_guard.py, inside the `@pytest.mark.parametrize(\"command\", [...])` decorator of `test_adjacent_fd_redirect_does_not_create_numeric_refspec` (lines 979-984)\nEvidence of absence: The parametrize block contains exactly four entries (lines 980-983). The fifth tab-separated entry from the PR diff is not present in the file.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_pr_merge_status_guard.py:lines 979-984, the parametrize block of test_adjacent_fd_redirect_does_not_create_numeric_refspec | severity=high | confidence=4\n  PROBLEM: The tab-separated FD-redirect regression case is missing.\n  WHY: The parser explicitly treats tab as a word delimiter (`_SHELL_WORD_DELIMITERS = frozenset(\" \\t\\r\" + ...)` at .claude/hooks/pr_merge_status_guard.py:120 and `lexer.whitespace = \" \\t\\r\"` at line 259), so `HEAD:feature/open\\t2>/dev/null` is a real input shape the guard must handle. With the digit \"2\" separated from the refspec by a tab (not a space), the adjacency check at line 277 (`previous_end == token_end - len(token)`) decides whether \"2\" is popped as an FD or kept as an argument; this exact boundary is untested. A future change to the adjacency heuristic could silently regress tab handling and no test would catch it, since every existing entry uses a space or no separator.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1f2230f0fe10ace96f9eedd7431f6dfdf44f0968c63d7a4508e2d7927d7e66c7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6271,
+    "run_id": "37297874076",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37297874076",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005113221_97be5d0251",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6271,
+    "run_id": "37297874076"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T11:32:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

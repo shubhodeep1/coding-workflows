@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/claude-issue-pickup.md:lines 32-40 and line 84 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash]\n  PROBLEM: Pickup step 1 does not treat a `list_triggers` call that fails twice or a page without boolean `has_more` as an incomplete listing before branches act on the absence of unseen pickup triggers.\n  WHY: A partial listing can make start create duplicate pickups, wake terminate without draining the queue, and stop leave triggers enabled; the cited test fails against this file.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Pickup step 1 must define an incomplete listing when the fifth page still has `has_more`, or when a `list_triggers` call fails twice or returns a page with no boolean `has_more`; stop reading there, keep the pages already read with their cursors, and ensure start, wake, stop, and catch-up fail safe without inferring that unseen pickup triggers are absent.\n  expected_change_site: .claude/commands/claude-issue-pickup.md, step 1 (lines 32-40) and step 4 (line 84)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna]\n  EVIDENCE: `.claude/commands/claude-issue-pickup.md` at the current head defines an incomplete listing only as \"When the fifth page still has `has_more`\" (line 32); `.claude/commands/claude-issue-pickup.md` at head commit 0dd08ed retains the previous \"after 5 pages\" wording at lines 32, 33, 39, and 40, and does not define a failed page call or page without boolean `has_more` as incomplete; current instructions at lines 32\u201340 define an incomplete listing only when the fifth page still has `has_more`, and the catch-up guard at line 84 uses that same incomplete-listing state; `tests/test_implement_issue_claude_command.py::test_pickup_step_one_fails_safe_on_an_incomplete_trigger_listing` fails or asserts instructions absent from the command file, including lines 395-406 and `tests/test_implement_issue_claude_command.py:390-406`. The change is explicitly deferred pending a `[claude-twin-sync]` commit because the command file has no `workflow-templates/` twin.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Task gap: `.claude/commands/claude-issue-pickup.md` does not define a `list_triggers` call that fails twice or a page without boolean `has_more` as making the listing incomplete. The contract test asserts updated instructions that are not present in the working tree pickup command. This is explicitly deferred by the PR description because the pickup command has no `workflow-templates/` twin; the exact diff and target sha256 are in the twin-sync hold comment (entry[36]). The deferred test failure is expected and documented. No action is needed in this review pass.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/commands/claude-issue-pickup.md:lines 32-40 and line 84 | severity=high | confidence=5\n  PROBLEM: Step 1 does not treat a `list_triggers` API call that fails twice or a page without boolean `has_more` as an incomplete listing before branches act on absence of unseen pickup triggers.\n  WHY: If an intermediate page read fails or returns a page lacking a boolean `has_more`, start can create duplicate pickups, wake can falsely report that it is not active and terminate without draining the queue, and stop can leave triggers enabled; the cited test fails against this file.\n- Requirement: Pickup step 1 must define an incomplete listing when the fifth page still has has_more, or when a list_triggers call fails twice or returns a page with no boolean has_more: stop reading there, keep the pages already read with their cursors, and ensure start, wake, stop, and catch-up fail safe without inferring that unseen pickup triggers are absent.\n  Expected change site: .claude/commands/claude-issue-pickup.md, step 1 (lines 32-40) and step 4 (line 84)\n  Evidence of absence: .claude/commands/claude-issue-pickup.md at head commit 0dd08ed retains the previous \"after 5 pages\" wording at lines 32, 33, 39, and 40, and does not define a failed page call or page without boolean has_more as incomplete. As a result, tests/test_implement_issue_claude_command.py::test_pickup_step_one_fails_safe_on_an_incomplete_trigger_listing fails on lines 395-406. This change is deferred pending a [claude-twin-sync] commit because the command file has no workflow-templates twin under CLAUDE.md section 28.C.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 3 (failback minimax/minimax-m2.5).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cA failed or malformed `list_triggers` page read makes the listing incomplete too\u201d; stop reading at that page and make `start`, wake, `stop`, and catch-up fail safe rather than treating unseen triggers as absent.\n  Expected change site: `.claude/commands/claude-issue-pickup.md`, step 1 and the `start`, wake, `stop`, and catch-up branches.\n  Evidence of absence: The current instructions at lines 32\u201340 define an incomplete listing only when the fifth page still has `has_more`; the catch-up guard at line 84 uses that same incomplete-listing state. They do not define a failed page read or a page without boolean `has_more` as incomplete. The new assertions in `tests/test_implement_issue_claude_command.py:390-406` require those instructions, but they are absent from the command file. Consequently, these branches can act on a partial listing. The PR description says the change is fixed, but its diff is deferred to a `[claude-twin-sync]` hold and is not included in the PR diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4b796832df200cfed11a0ce85d898520efb554cc2065a100fd636d410e576ded",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5755,
+    "run_id": "36841806775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36841806775",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001095759_03e692b88a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5755,
+    "run_id": "36841806775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T09:57:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:lines 38-39 (LAST RUN DIFF) | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: An uncommitted exclusion for `tests/test_audit_plans_command.py` in the workspace isolation filter is unrelated to issue #6249 and would weaken review coverage if committed.\n  WHY: Reviewers disagreed on severity (NIT vs MAJOR); retaining the highest severity because committing the exclusion would silently remove the contract test from review transfer.\n- .ai/.workspace_source_manifest.txt:line 210 in the PR diff (changelog.d/6222-review-command-isolation.md entry added) | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The workspace manifest includes an entry for `changelog.d/6222-review-command-isolation.md`, unrelated to the merge-guard redirect fix for issue #6249.\n  WHY: The fragment belongs to a different issue and its manifest entry introduces unrelated drift in this commit.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cFail closed when redirect parsing is ambiguous.\u201d\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py::_shell_segments_with_operators` and `_guarded_git_invocations`, mirrored in `workflow-templates/.claude/hooks/pr_merge_status_guard.py`.\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The parser skips redirect targets without validating that the redirect operator is understood; if tokenization raises `ValueError`, `_guarded_git_invocations` returns an empty list and `_evaluate_bash` checks no push targets and returns success; the PR changes redirect handling for `&>` and `&>>` but adds no fail-closed behavior for ambiguous parsing.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_untrusted_workspace.py: lines 38-39 in the LAST RUN DIFF | severity=high | confidence=[5]\n  PROBLEM: Uncommitted changes add an exclusion for `tests/test_audit_plans_command.py` that is unrelated to issue #6249.\n  WHY: If committed, workspace isolation for `tests/test_audit_plans_command.py` would be silently excluded from review transfer, so an operator-facing command contract test would no longer be checked for tampering in the editor output.\n- .ai/.workspace_source_manifest.txt: line 210 in the PR diff (changelog.d/6222-review-command-isolation.md entry added) | severity=low | confidence=[4]\n  PROBLEM: The commit adds `changelog.d/6222-review-command-isolation.md` to the workspace manifest, unrelated to the merge-guard redirect fix (#6249).\n  WHY: The manifest update reflects a fragment from a different issue and introduces unrelated drift.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py: lines 38-39 (LAST RUN DIFF, uncommitted working tree change not present in PR commit ae021d4) | severity=low | confidence=[4]\n  PROBLEM: A hard-coded exclusion `if name == \"tests/test_audit_plans_command.py\": return False` was introduced by the LAST RUN DIFF but is unrelated to issue #6249 and not in the PR.\n  WHY: If committed as-is in this PR, the editor loses visibility of `tests/test_audit_plans_command.py` for any future review pass on #6249-related work, weakening test-driven review for that file.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cFail closed when redirect parsing is ambiguous.\u201d\nExpected change site: `.claude/hooks/pr_merge_status_guard.py::_shell_segments_with_operators` and `_guarded_git_invocations`, mirrored in `workflow-templates/.claude/hooks/pr_merge_status_guard.py`.\nEvidence of absence: The parser skips redirect targets without validating that the redirect operator is understood. If tokenization raises `ValueError`, `_guarded_git_invocations` returns an empty list; `_evaluate_bash` then checks no push targets and returns success. The PR changes redirect handling for `&>` and `&>>` but adds no fail-closed behavior for ambiguous parsing.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_untrusted_workspace.py: lines 38-39 (uncommitted working tree change) | severity=high | confidence=[5]\n  PROBLEM: The last autofix run added an exclusion for `tests/test_audit_plans_command.py` in the workspace isolation filter, but this change is unrelated to issue #6249 and is not reflected in the PR's committed changes.\n  WHY: If committed, it would weaken the review workspace isolation for a file that has no connection to the merged-PR guard redirect parsing issue.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "dae044a1e5136193a3e471398052b37238b85448692ab5083a1c821e79c62488",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6250,
+    "run_id": "37245749818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37245749818",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005001255_e8eca2ce2d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6250,
+    "run_id": "37245749818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T00:12:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

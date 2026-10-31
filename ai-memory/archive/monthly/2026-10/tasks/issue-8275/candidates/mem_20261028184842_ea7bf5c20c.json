@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"[E2E Orchestrate Smoke 40746491161] Update two smoke canary files in parallel\",\"issues\":[{\"id\":\"issue-1\",\"title\":\"[E2E Orchestrate Smoke 40746491161] Set status and decompose-run lines in tests/e2e_smoke_canary.txt\",\"priority\":1},{\"id\":\"issue-2\",\"title\":\"[E2E Orchestrate Smoke 40746491161] Set status and decompose-run lines in tests/e2e_smoke_canary_b.txt\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "cacc6c20b0efd2db302dcefa04589058e9c55d3ae308a92ca316fa93616b272e",
+  "lineage": {
+    "issue_number": 8275,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40747100247",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40747100247",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261028184842_ea7bf5c20c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8275,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40747100247"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project '[E2E Orchestrate Smoke 40746491161] Update two smoke canary files in parallel' into 2 issues (tracking #8275)",
+  "timestamps": {
+    "created_at": "2026-10-28T18:48:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:384-391 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The wait loop may consume its full 1-second deadline on successful exits because killed descendant zombies can keep the process group visible to `os.killpg(proc.pid, 0)`.\n  WHY: This adds up to about 1 second of test runtime per poller subprocess, creating a measurable regression across the module's many subprocess tests.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py | `_run_poller_subprocess`, lines 384-391 (the new wait loop) | severity=low | confidence=3\n  PROBLEM: The poller subprocess is launched with `start_new_session=True` (line 355), making `proc.pid` the process-group ID. After `os.killpg(proc.pid, signal.SIGKILL)`, the child processes in the group die but become zombies until reaped. Because the test process is not the parent of those descendants (the main child was, and `proc.communicate()` already reaped the main child), the zombies are reparented to init/subreaper but remain in the process group. `os.killpg(proc.pid, 0)` succeeds as long as any process (including zombies) exists in the group, so `ProcessLookupError` is not raised until init reaps them. The loop therefore runs the full 1-second deadline on nearly every non-crash exit.\n  WHY: Each poller subprocess test now pays up to ~1 second of wall time even on the success path. The module has many tests that spawn the poller, and CI shards them across 4 local workers per matrix group. The bounded wait prevents the `[Errno 39] Directory not empty` race the change targets, but the fixed 1-second cost per subprocess is a measurable test-runtime regression. A short fixed sleep (e.g., 0.1-0.2s) would cover the detach window for git auto-gc without polling the full deadline, or the loop could call `os.waitpid(-proc.pid, os.WNOHANG)` to reap zombies in the group and let the group dissolve sooner.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- The reviewer reported that no actual task was included: the message ended at the `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder, and requested the task and any missing severity-classification reference content.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1096de015ec78f945e84302719084a5a923c4e1c61db9093b5b891ad014cfc20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38347501982",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38347501982",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013052539_283e2f4d46",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38347501982"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T05:25:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

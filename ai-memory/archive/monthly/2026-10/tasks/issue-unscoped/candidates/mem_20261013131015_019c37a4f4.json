@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_isolated_run.sh:50-53 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The `ref_failed` diagnostic is suppressed only when `SANDBOX_IMAGE_REGISTRY` is exactly `off`, so invalid registry values normalized to `off` by `sandbox_image.sh` are misleadingly logged as reference failures.\n  WHY: Invalid registry configurations intentionally use the local-build fallback, but the caller discards the helper diagnostic and logs `ref_failed` instead.\n- scripts/clarify_isolated_run.sh:53 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The registry-off conditional branch lacks regression testing.\n  WHY: A future edit could remove or invert the conditional without a test detecting the resulting log pollution.\n- tests/test_clarify_sandbox_base_image_preseed.py: after `test_isolated_run_skips_preseed_when_prebuilt_pulls` (around line 624) | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: No regression test exercises the `SANDBOX_IMAGE_REGISTRY=off` branch that suppresses the `ref_failed` log.\n  WHY: A future edit could remove or invert the conditional without a test detecting the regression.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Regression tests cover any newly wired caller\" and the consensus requirement for a test covering the registry-off conditional branch.\n  expected_change_site: tests/test_clarify_sandbox_base_image_preseed.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The last autofix run did not add a test case covering the `SANDBOX_IMAGE_REGISTRY=off` branch in `scripts/clarify_isolated_run.sh`. The test file `tests/test_clarify_sandbox_base_image_preseed.py` shows no test for `SANDBOX_IMAGE_REGISTRY=off` or the associated log suppression.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/clarify_isolated_run.sh: `clarify_image_build`, the `sandbox_image.sh ref` failure handler\n  severity=low | confidence=4\n  PROBLEM: The guard only recognises the literal value `off`; invalid registry values normalized to `off` by `sandbox_image.sh` are logged as `ref_failed` for an intentional local-build fallback.\n  WHY: A misconfigured registry produces a misleading `ref_failed` line, although control flow is unaffected and the local build still runs.\n- tests/test_clarify_sandbox_base_image_preseed.py: no test references `SANDBOX_IMAGE_REGISTRY` or `ref_failed`\n  severity=low | confidence=4\n  PROBLEM: The new registry-off branch in `clarify_image_build` is untested.\n  WHY: A later edit could remove or invert the conditional without any test failing.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/clarify_isolated_run.sh: 53 | confidence=4\n  PROBLEM: The new registry-off conditional branch lacks regression testing.\n  WHY: A future edit could remove or invert this conditional, causing log pollution without any test detecting the regression.\n- TASK_GAP\n  Requirement: \"Regression tests cover any newly wired caller\" and the consensus requirement for a test covering the registry-off conditional branch.\n  Expected change site: tests/test_clarify_sandbox_base_image_preseed.py\n  Evidence of absence: The last autofix run did not add a test case covering the `SANDBOX_IMAGE_REGISTRY=off` branch in `scripts/clarify_isolated_run.sh`. The test file `tests/test_clarify_sandbox_base_image_preseed.py` shows no test for `SANDBOX_IMAGE_REGISTRY=off` or the associated log suppression.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/clarify_isolated_run.sh: 53 \u2014 `[ \"${SANDBOX_IMAGE_REGISTRY:-}\" = off ] || echo \"SANDBOX_IMAGE family=clarify outcome=ref_failed\" >&2`\n  severity=low | confidence=4\n  PROBLEM: The conditional suppresses the `ref_failed` log only when the original `SANDBOX_IMAGE_REGISTRY` value is exactly `off`, so invalid registry values normalized to `off` are logged as reference failures.\n  WHY: Misconfigured registry values use the intentional fallback path but log `outcome=ref_failed` on every affected attempt.\n- tests/test_clarify_sandbox_base_image_preseed.py: after `test_isolated_run_skips_preseed_when_prebuilt_pulls` (around line 624) and its `main()` registration\n  severity=low | confidence=4\n  PROBLEM: No test exercises a `ref` that exits 1 with `SANDBOX_IMAGE_REGISTRY=off` set in the harness env.\n  WHY: Without a regression test, the conditional has no in-tree guard against silent regression.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_isolated_run.sh: 50-53 | severity=low | confidence=4\n  PROBLEM: The `ref_failed` diagnostic is suppressed only when `SANDBOX_IMAGE_REGISTRY` is exactly `off`; invalid registry values normalized to `off` cause the caller to report `outcome=ref_failed`.\n  WHY: With an invalid registry configuration, logs misidentify the intentional local-build fallback as a ref failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/clarify_isolated_run.sh: 53 | severity=low | confidence=4\n  PROBLEM: The diagnostic check only matches the literal string `off`, so invalid registry values normalized to `off` are logged as `ref_failed`.\n  WHY: The helper exits 1 intentionally for an invalid value, but the caller logs a misleading `ref_failed` diagnostic.\n- tests/test_clarify_sandbox_base_image_preseed.py: after test_isolated_run_skips_preseed_when_prebuilt_pulls (around line 623)\n  severity=low | confidence=4\n  PROBLEM: No regression test covers the conditional branch that suppresses the `ref_failed` log for `SANDBOX_IMAGE_REGISTRY=off` or an invalid value.\n  WHY: A future edit could remove or invert the conditional without any test catching it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "626b0035b1631a837f00999084e5c4d1fae95d54a27053303b57e8dee0e3c94e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7225,
+    "run_id": "38399311379",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38399311379",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013131015_019c37a4f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7225,
+    "run_id": "38399311379"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T13:10:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

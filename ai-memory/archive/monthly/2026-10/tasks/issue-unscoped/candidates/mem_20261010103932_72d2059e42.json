@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_assemble_agents.py:288 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `test_real_agents_md_and_pending_fragments_fold_cleanly` fails because the assembled output does not contain the expected placement of `ZZ_TEST_PREFIX` after `VALIDATION_HARNESS_SANDBOX`.\n  WHY: CI reports the assertion failure, causing `static-checks` and the aggregate `lint` check to fail; all reviewers rated this BLOCKER.\n- tests/test_assemble_agents.py:118-124 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The empty-registry test's blank-line behavior depends on a pre-existing blank line in its input.\n  WHY: The reviewer traced the test as passing and identified no defect, but noted that its behavior relies on subtle index shifting.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description's \"Change\" section says: \"Both fail open: a fragment that cannot fold stays for the next run with an AGENTS_ASSEMBLE_V1: skipped=<file> reason=<r> warning. CI's agents.d fragment check and tests step runs assemble_agents.py check, which fails on any such fragment.\"\n  expected_change_site: Either scripts/assemble_agents.py (so the assembler produces the expected substring) or tests/test_assemble_agents.py:288-289 (so the test's expected substring matches the assembler's actual output).\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The CI log confirms test_real_agents_md_and_pending_fragments_fold_cleanly fails. The LAST RUN's diff only addresses the empty-registry case in apply_block, not the case this test exercises. The PR therefore has a failing contract test that the LAST RUN did not catch and did not fix.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_assemble_agents.py, Line or code reference: 288 | severity=BLOCKER | confidence=5\n  PROBLEM: `test_real_agents_md_and_pending_fragments_fold_cleanly` fails in CI because the assembled output does not contain the expected string `- \\`VALIDATION_HARNESS_SANDBOX\\`\\n- \\`ZZ_TEST_PREFIX\\`\\n\\nWhen \\`EVENTS_JSONL_ENABLED=true\\``.\n  WHY: The reviewer notes that the static analysis appears to suggest the assertion should pass, so a runtime interaction or stale expectation may explain the CI failure; the failing `static-checks` job blocks the PR from merging.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_assemble_agents.py, Line: 288 | severity not stated | confidence=5\n  PROBLEM: The test test_real_agents_md_and_pending_fragments_fold_cleanly consistently fails in CI.\n  WHY: The assembler logic does not correctly fold the fragment bullet into an existing registry, leading to an assertion failure and CI job rejection.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_assemble_agents.py:274-289 | severity=BLOCKER | confidence=5\n  PROBLEM: The assertion for `test_real_agents_md_and_pending_fragments_fold_cleanly` fails because the expected substring is absent from the assembled text.\n  WHY: The latest change handles the empty-registry case, while this test exercises the existing-bullet path; the failure blocks the PR through `static-checks` and `lint`.\n- tests/test_assemble_agents.py:118-124 | severity=NIT | confidence=2\n  PROBLEM: `test_empty_registry_keeps_bullets_before_names` relies on subtle index shifting and a pre-existing blank line.\n  WHY: The reviewer traced the test as passing and noted no defect.\n- Requirement: The PR description's \"Change\" section says: \"Both fail open: a fragment that cannot fold stays for the next run with an AGENTS_ASSEMBLE_V1: skipped=<file> reason=<r> warning. CI's agents.d fragment check and tests step runs assemble_agents.py check, which fails on any such fragment.\"\n  Expected change site: Either scripts/assemble_agents.py (so the assembler produces the expected substring) or tests/test_assemble_agents.py:288-289 (so the test's expected substring matches the assembler's actual output).\n  Evidence of absence: The CI log confirms test_real_agents_md_and_pending_fragments_fold_cleanly fails. The LAST RUN's diff only addresses the empty-registry case in apply_block, not the case this test exercises. The PR therefore has a failing contract test that the LAST RUN did not catch and did not fix.\n  severity=BLOCKER | confidence=5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_assemble_agents.py, Line or code reference: `test_real_agents_md_and_pending_fragments_fold_cleanly`, line 288; `scripts/assemble_agents.py`, lines 309\u2013322 | severity=BLOCKER | confidence=5\n  PROBLEM: The real-`agents.md` folding test fails because the assembled text does not contain the expected placement of `ZZ_TEST_PREFIX` after `VALIDATION_HARNESS_SANDBOX`.\n  WHY: CI confirms the assertion fails, causing `static-checks` and the aggregate `lint` check to fail; the latest assembler change handles the no-existing-bullet case, but this test exercises the existing-bullet path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_assemble_agents.py, Line: 288 | severity=BLOCKER | confidence=4\n  PROBLEM: `test_real_agents_md_and_pending_fragments_fold_cleanly` fails because the expected sequence with `ZZ_TEST_PREFIX` after `VALIDATION_HARNESS_SANDBOX` is absent.\n  WHY: The test expects the new bullet before the blank line and the \"When...\" prose; the reviewer could not determine whether the assembler inserts it incorrectly or the test expectation needs updating. The CI `static-checks` failure blocks the aggregate `lint` check and prevents merge.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "56798eeaa0925e400fae33664351d4a92029c01cf4c12878b1daa58127d0fe70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7058,
+    "run_id": "38041767694",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38041767694",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010103932_72d2059e42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7058,
+    "run_id": "38041767694"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T10:39:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

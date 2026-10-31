@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:21439-21446 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: When `ALLOW_WORKFLOW_EDITS=false`, staged protected paths can trigger an `exit 1` before `rb_fix_scope_check`, bypassing its structured rejection path.\n  WHY: The rejection is reported only as a non-zero exit, so structured logs, Telegram warnings, state-change tracking, and retry-counter handling are skipped.\n- scripts/orchestrate_poll_process.sh:21891-21893, 21894+ | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The pre-existing `exit 1` for `ALLOW_WORKFLOW_EDITS=false` can fire before the new scope guard handles a staged protected path.\n  WHY: The early exit bypasses structured rejection, alerting, state-change tracking, and retry-counter handling; the differing protected-path patterns also produce inconsistent behavior for `.claude/*`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cA protected path may be committed only if the blocked PR itself already changed that exact path. Otherwise it is rejected, whatever ALLOW_WORKFLOW_EDITS says.\u201d\n  expected_change_site: scripts/orchestrate_poll_process.sh, the staging logic before `rb_fix_scope_check`.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: At lines 21431-21435, when `ALLOW_WORKFLOW_EDITS=false`, `git add` excludes `scripts/`, `prompts/`, `.github/ai/`, and `.github/workflows/`. Thus a protected file changed by the blocked PR is not staged for the new guard to authorize; the fix is rejected as empty instead of allowing the clarified exception.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: lines 21891-21893 (old `exit 1` block) and 21894+ (new `if rb_fix_scope_check`) | severity=MAJOR | confidence=4\n  PROBLEM: The pre-existing `exit 1` for `ALLOW_WORKFLOW_EDITS=false` fires before the new scope guard, bypassing the structured rejection path.\n  WHY: An operator reviewing the rejection would see only a generic exit-1 instead of a structured rejection with reason and paths. The retry- and state-machine logic also does not advance cleanly because the state-change flag is never set. The pattern mismatch means a fix that legitimately needs to update a `.claude/*` file (e.g., a hook) that was in the original PR's file list would be correctly handled by the scope guard, but a fix that needs to update a `.github/workflows/*` file under the same conditions would hit the exit-1 gate and never reach the scope guard's PR-list-aware logic.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: 21094, 21439-21441, 21575-21580 | severity=MAJOR | confidence=4\n  PROBLEM: When `ALLOW_WORKFLOW_EDITS=false`, a staged protected path hits the existing `exit 1` before `rb_fix_scope_check` can reject it through the new reporting path.\n  WHY: The poller exits without the structured rejection log or warning, and before reaching the retry-counter increment. Repeated runs can retry the same fix without consuming the configured retry budget.\n- TASK_GAP\n  Requirement: \u201cA protected path may be committed only if the blocked PR itself already changed that exact path. Otherwise it is rejected, whatever ALLOW_WORKFLOW_EDITS says.\u201d\n  Expected change site: scripts/orchestrate_poll_process.sh, the staging logic before `rb_fix_scope_check`.\n  Evidence of absence: At lines 21431-21435, when `ALLOW_WORKFLOW_EDITS=false`, `git add` excludes `scripts/`, `prompts/`, `.github/ai/`, and `.github/workflows/`. Thus a protected file changed by the blocked PR is not staged for the new guard to authorize; the fix is rejected as empty instead of allowing the clarified exception.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: 21439-21446 (exit 1 paths before rb_fix_scope_check call at 21891) | severity=MAJOR | confidence=4\n  PROBLEM: When ALLOW_WORKFLOW_EDITS=false and protected paths are staged, or when .github/prompts/.github/scripts are staged, the script exits with code 1 before rb_fix_scope_check runs.\n  WHY: The outer retry ladder receives only a non-zero exit code instead of a distinguishable rejection reason. Operators lose visibility into why the fix was rejected (no structured log, no Telegram alert), and the retry counter may not increment correctly. The .claude/ coverage gap means those files take a different code path than other protected directories.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9676c9f7ab3e4350237c96e396cc5afb95da4d6c71ffa48376237a2fb2ecd531",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6331,
+    "run_id": "37287528087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37287528087",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005095232_b9bbfcdf34",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6331,
+    "run_id": "37287528087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T09:52:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

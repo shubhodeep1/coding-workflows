@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: GitHub reports PR #6667 (`orchestrator/project-6664`) as still open and not merged into `main`. The plan sets a hard precondition at docs/plans/claude-pool-capacity-tiers-remaining-callers-plan.md:104-111: dispatch only after #6667 merges. Each phase must also run `grep -q '_AI_ENGINE_EXIT_REFUSED' scripts/ai_engine.sh` first and stop rather than rebuild the plumbing. Plan decision D11 (lines 384-389) rejects option C because it would duplicate `claude_run_selected` and the fallback-policy code. Option B would drop the gap tracking, and nothing would bring it back automatically. So the issue waits. The first gap (\"merge #6667\") belongs to project #6664's own completion path; this issue should not do it.\nQ2: Plan decision D10 (lines 377-382) and the \"Phases & Merge Strategy\" section (lines 391-394) set four independently mergeable phases, one PR each, so each caller can be reverted on its own. Doing all four in one PR (B) goes against D10 and would likely run past the 60-minute implement budget. Option C splits the work outside the plan's own orchestration. Running the merged plan document as an orchestrator project keeps the four phases as the plan defines them.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are letters. Notes for the planner:\n- While #6667 is unmerged, this issue makes no code changes. It is not actionable yet, so it emits a blocker that cites the plan precondition (lines 104-111) and #6667's open state. It must not reimplement exit 76 or `AI_ENGINE_FALLBACK_POLICY`.\n- Once #6667 is on the default branch (check that `grep -q '_AI_ENGINE_EXIT_REFUSED' scripts/ai_engine.sh` succeeds on the default branch):\n  - Start an orchestrator project from `docs/plans/claude-pool-capacity-tiers-remaining-callers-plan.md`, with four phases and one PR each:\n    1. Capacity tiers.\n    2. `MEMORY_LEARNINGS`.\n    3. `SOFT_ERROR_ANALYZER`.\n    4. `JUDGE_INTERIM`.\n  - Close this issue with a `Refs #<tracking>` link. Do not use a closing keyword against the tracking issue (\u00a721).\n- Reversibility: if a human prefers per-phase standalone issues, they can close the tracking project and file the issues by hand. No code will have landed from this issue.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "0e78172f04a003c3d48f81ba3762f745d5d002d29e950fe7d22cd0ea9dfd5327",
+  "lineage": {
+    "issue_number": 7047,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38031583681",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38031583681",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7047"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010064624_135f5feb3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7047,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38031583681"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7047",
+  "timestamps": {
+    "created_at": "2026-10-10T06:46:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-judge-review-blocked.txt:118-125 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The last autofix run replaced one line with two (lines 121-122), growing the file from 250 to 251 lines, above the DEFAULT-tier limit of 250 enforced by tests/prompt_size_budget.py:69-74.\n  WHY: The static-checks CI job fails with \"251 lines exceeds DEFAULT limit of 250\", which fails the aggregate lint check and blocks merge. All reviewers rated it BLOCKER with no severity disagreement, which maps to critical here. Fix: put the wording back on one line, and make the same edit in prompts/_templates/mode-judge-review-blocked.txt.\n- prompts/_templates/mode-judge-review-blocked.txt:111-118 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The template copy is claimed to exceed the 250-line limit because it holds the same content as the prompts/ copy.\n  WHY: Gemini rated it BLOCKER. Other reviewers (minimax, qwen, anthropic, z-ai) say the template is 244 lines and not covered by the budget gate, but its lines 114-115 must get the same one-line fix so the two copies stay in sync.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Fix the line count in prompts/mode-judge-review-blocked.txt and prompts/_templates/mode-judge-review-blocked.txt to be 250 lines or less.\n  expected_change_site: prompts/mode-judge-review-blocked.txt and prompts/_templates/mode-judge-review-blocked.txt\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: prompts/mode-judge-review-blocked.txt and prompts/_templates/mode-judge-review-blocked.txt currently have 251 lines, causing the static-checks CI job to fail.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- prompts/mode-judge-review-blocked.txt:121-122 | severity=BLOCKER | confidence=5\n  PROBLEM: The last autofix run replaced one line with two, so the prompt grew from 250 to 251 lines, above the DEFAULT limit of 250 in tests/prompt_size_budget.py.\n  WHY: static-checks failed on head 93f8aa4, so CI / lint cannot pass and merge is blocked. Fix: keep the replacement on one line, and make the same edit in prompts/_templates/mode-judge-review-blocked.txt (around lines 114-115).\n- HARDENING (risk 0): .github/workflows/forward-merge-stable-to-main.yml fallback step reads env.GITHUB_REPOSITORY in the `gh api --jq` filter. Reviewed earlier and left as is; no fix required.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- prompts/mode-judge-review-blocked.txt:118-125 | severity=BLOCKER | confidence=5\n  PROBLEM: The file exceeds the 250-line limit (251 lines), so the static-checks CI job fails.\n  WHY: tests/prompt_size_budget.py fails the build, blocking CI and auto-merge.\n- prompts/_templates/mode-judge-review-blocked.txt:111-118 | severity=BLOCKER | confidence=5\n  PROBLEM: The file exceeds the 250-line limit because it holds the same content as prompts/mode-judge-review-blocked.txt.\n  WHY: tests/prompt_size_budget.py fails the build, blocking CI.\n- TASK_GAP:\n  Requirement: Fix the line count in prompts/mode-judge-review-blocked.txt and prompts/_templates/mode-judge-review-blocked.txt to be 250 lines or less.\n  Expected change site: prompts/mode-judge-review-blocked.txt and prompts/_templates/mode-judge-review-blocked.txt\n  Evidence of absence: The files currently have 251 lines, causing the static-checks CI job to fail.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- prompts/mode-judge-review-blocked.txt:121-122 | severity=BLOCKER | confidence=5\n  PROBLEM: The last autofix run replaced one line with two, taking the file from 250 to 251 lines, above the DEFAULT limit of 250 in tests/prompt_size_budget.py:69-74.\n  WHY: static-checks fails on head 93f8aa4 (run 40324360544, job 121577109252), which fails the aggregate lint job and blocks merge. Fix: keep the wording on one line, and apply the same one-line form to prompts/_templates/mode-judge-review-blocked.txt (lines 114-115).\n- HARDENING (risk 1): .github/workflows/forward-merge-stable-to-main.yml:288 compares `(.head.repo.full_name // \"\") == env.GITHUB_REPOSITORY` inside the gh `--jq` filter. If gojq does not expose env, no PR is ever reused and the duplicate-PR bug returns silently. Suggested fix: pass the value with `--arg repo` or compare in bash (about 3 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- prompts/mode-judge-review-blocked.txt:121-122 | severity=BLOCKER | confidence=5\n  PROBLEM: The edit adds a line, bringing this DEFAULT-tier prompt to 251 lines, above its 250-line limit (tests/prompt_size_budget.py:69-74).\n  WHY: The prompt_size_budget.py check fails, so static-checks and the required CI gate fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- prompts/mode-judge-review-blocked.txt:121-122 | severity=BLOCKER | confidence=5\n  PROBLEM: The last autofix run split one line into two, taking the file from 250 to 251 lines, above the DEFAULT limit of 250 (tests/prompt_size_budget.py:14, lines 71-73).\n  WHY: static-checks fails, which fails the aggregate lint job and blocks merge. The same edit in prompts/_templates/mode-judge-review-blocked.txt (lines 114-115) must also be compressed so both copies stay in sync, though the template is under budget at 244 lines.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- prompts/mode-judge-review-blocked.txt:119-122 | severity=BLOCKER | confidence=5\n  PROBLEM: The last run replaced one line with two (a net +1 line), so the file has 251 lines, above the 250-line DEFAULT limit in tests/prompt_size_budget.py:13-14.\n  WHY: static-checks fails (run 40324360544, job 121577109252), as does the required CI / lint job. Fix: fold the wording back onto one line in prompts/mode-judge-review-blocked.txt, and apply the same edit to prompts/_templates/mode-judge-review-blocked.txt.\n- HARDENING (risk 1): tests/prompt_size_budget.py tier_prompt_paths() (lines 33-37) does not cover the _templates/mode-*.txt copies, so a template can drift over budget unnoticed. Suggested follow-up: glob PROMPTS_DIR / \"_templates\" with the same patterns (about 3 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fa3db77df642279f5d663d7b854bb03d71999f54a37fde64fcdb43fde77df9cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8183,
+    "run_id": "40324361227",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40324361227",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026132119_e215a00676",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8183,
+    "run_id": "40324361227"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T13:21:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

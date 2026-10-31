@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the steps to move out of `tests-release-and-log-analysis` be chosen without the run's step timings?\nChoices:\nA: Use the step timings from run 40750326439. Whoever answers reads them from the run's job page and lists the slowest steps here, then move enough of them to bring the job back under about 11 minutes (comfortably below the 15-minute / 75% warning line). (RECOMMENDED)\nB: Estimate from the code: move the steps that run the most tests. Candidates are \"Promote cycle and blocked-verdict unit tests\" (the largest step body, ci.yml lines 2074\u20132153) and the three coverage gates at the end (\"Workflow log collector / analyzer / scenario trace renderer coverage gate\"). Accept that this is a guess.\nC: Move a fixed contiguous block from the end of the job: \"Soft-error report consolidator unit tests\" through \"Workflow scenario trace renderer coverage gate\" (8 steps).\nQ2: Which existing job should receive the moved steps?\nChoices:\nA: The worker job with the shortest duration in run 40750326439, out of `tests-hooks-and-orchestrator`, `tests-heal-plan-and-validation` and `tests-promote-stall-and-review`. If those durations are not available, use `tests-hooks-and-orchestrator`. (RECOMMENDED)\nB: `static-checks` (15-minute budget, so less headroom).\nC: The `orchestrate-poll` matrix. **Note:** steps there run once in every group unless they are gated to one group, as the single-file module step is. That adds cost and needs extra gating.\nD: Split the moved steps across two of the three test jobs so neither gets close to its budget.",
+  "fingerprint": "ee88b91ac9e8d30c6cb47deebad4d9ce1a33a322c222a17bab8633481920a069",
+  "lineage": {
+    "issue_number": 8278,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40753400822",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40753400822",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261028193027_95eedb5b6b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8278,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40753400822"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8278 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-28T19:30:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

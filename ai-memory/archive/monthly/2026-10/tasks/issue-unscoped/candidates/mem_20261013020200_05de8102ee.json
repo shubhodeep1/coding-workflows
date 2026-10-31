@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_update_workflows_template_gate.py: lines 120-122 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The test comment says a missing `statuses: write` permission causes status posting to fail closed, but the status posts now retry with `GH_PAT`.\n  WHY: This is a stale comment that misrepresents the current behavior; reviewers classified it as a nit.\n- tests/test_update_workflows_template_gate.py: lines 433-438 | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `test_status_post_failure_blocks_the_merge` does not assert that both status-post attempts were made.\n  WHY: A regression removing the `GH_PAT` fallback from the publish step could still pass the test; reviewers classified this as a nit or low-risk coverage gap.\n- .github/workflows/update_workflows.yml: lines 1611, 1972, 2019\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The verify job uses different environment variable names for the same status-post token across its three status-post steps.\n  WHY: Functional behavior is identical, but the inconsistency makes the near-identical post blocks harder to read and search.\n- agents.d/7294-updater-default-on.md: lines 8-10\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fragment implies the failure-status post logs the GH_PAT-success warning, but that step stays silent when GH_PAT succeeds.\n  WHY: The fragment misdescribes the failure step, which warns only when both tokens fail.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_update_workflows_template_gate.py: lines 120-122 | severity=NIT | confidence=4\n  PROBLEM: The comment says \"without statuses: write its status post fails and the job fails closed\". After this PR, all three verify-job status posts retry with `GH_PAT`.\n  WHY: It does not fail at runtime, and the assertions below the comment still hold; a maintainer could misread the comment as the current behaviour.\n- tests/test_update_workflows_template_gate.py, `test_status_post_failure_blocks_the_merge`\n  PROBLEM: The test asserts that no merge happens and that `reason=status_post_failed` is logged, but does not assert that two POSTs were attempted.\n  WHY: Removing the `GH_PAT` retry from the publish step would still pass the test when both tokens are refused. Suggested minimal fix: `assert sum(call.startswith(\"api -X POST\") for call in calls) == 2`.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_update_workflows_template_gate.py: lines 120-122 (`test_verify_job_asks_for_no_job_level_permissions`)\n  PROBLEM: The comment says \"without statuses: write its status post fails and the job fails closed.\" After this PR's bootstrap fix, the status posts (pending, success) retry once with `GH_PAT` before failing closed, and the failure post never fails closed.\n  WHY: The assertion itself (`assert \"permissions\" not in _verify_job()`) is still correct, but the comment misrepresents runtime behavior and could mislead a maintainer. Suggested minimal fix: update the comment to reflect the current fallback behavior.\n- tests/test_update_workflows_template_gate.py: lines 433-438 (`test_status_post_failure_blocks_the_merge`)\n  PROBLEM: The test does not assert that exactly two POST attempts were made.\n  WHY: With `status_rc=1`, the fake GH refuses every API call regardless of token, so removing the `GH_PAT` fallback from the verify_publish step would still pass. Suggested minimal fix: add `assert sum(call.startswith(\"api -X POST\") for call in calls) == 2`.\n- .github/workflows/update_workflows.yml: lines 1611, 1972, 2019 (three status-post steps in the verify job)\n  PROBLEM: The same `github.token` value is bound to two different env var names across the three status-post steps of the verify job.\n  WHY: `verify_inputs` and Mark verify failure use `GH_TOKEN`, but `verify_publish` uses `STATUS_TOKEN`; functional behavior is identical, but the inconsistency makes the near-identical post blocks harder to read and grep. Suggested minimal fix: rename `STATUS_TOKEN` to `GH_TOKEN` in the verify_publish step's env block and its `post_verify_status \"${STATUS_TOKEN:-}\"` call. Keep `MERGE_TOKEN` as-is.\n- agents.d/7294-updater-default-on.md: lines 8-10 (the parenthetical about the failure post)\n  PROBLEM: The fragment describes all three status posts as logging `::warning::UPDATER_PR_VERIFY posted the status with GH_PAT ...` when the second attempt succeeds, but the Mark verify failure step does not emit that warning.\n  WHY: If `GH_PAT` succeeds, the failure step stays silent; it only warns with the generic `::warning::UPDATER_PR_VERIFY could not post the ${VERIFY_STATE} status.` when both tokens fail. Suggested minimal fix: reword the fragment to say the GH_PAT-success warning applies to pending and success posts, while the failure post only warns when both tokens fail.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_update_workflows_template_gate.py: 120-122 (`test_verify_job_asks_for_no_job_level_permissions` comment) | severity=NIT | confidence=4\n  PROBLEM: The comment says \"without statuses: write its status post fails and the job fails closed,\" but the last run diff added `GH_PAT` fallback to all three status posts (pending, success, and failure).\n  WHY: It doesn't fail at runtime; this is a stale comment, not a runtime failure. But it misleads maintainers about the current contract.\n- tests/test_update_workflows_template_gate.py: 433-438 (`test_status_post_failure_blocks_the_merge`) vs 499-503 (`test_pending_status_fails_closed_when_both_tokens_are_refused`) | severity=NIT | confidence=3\n  PROBLEM: The existing publish test does not assert the number of POSTs, unlike the new pending test.\n  WHY: A regression that removed the `GH_PAT` fallback from the publish step would still pass the publish test; this is a test coverage asymmetry, not a runtime failure.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "22cc919be9c3aa7ac5578172016671173f73b7468a65e5c76478af4c99974d32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7294,
+    "run_id": "38324367260",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38324367260",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013020200_05de8102ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7294,
+    "run_id": "38324367260"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T02:02:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

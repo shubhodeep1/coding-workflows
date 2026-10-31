@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Separate execution of generated shell tests from the credentialed validation job: no GH_PAT, GH_TOKEN, or checkout authentication may reach them.\"\n  expected_change_site: `.github/workflows/nightly-validation-selftest.yml` and `scripts/validation_selftest_matrix.py::_stage_runtime`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The nightly self-test workflow runs `bash scripts/validate_driver.sh` directly via `--runtime-command` without the sandbox; its per-test credential scrub masks global and system git config but not the enclosing checkout's local `.git/config`. The nightly workflow still runs `bash scripts/validate_driver.sh` directly via `--runtime-command`; no implementation in this PR updates this workflow to use the newly created `validation_harness_sandbox.sh` for the nightly self-test, leaving it exposed to checkout credentials. Neither file is changed in the PR; the nightly workflow still invokes `bash scripts/validate_driver.sh` directly, and `_run_command` inherits `os.environ`; the driver's per-test scrub does not prevent tests from accessing the checkout's local `.git/config` authentication.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nRequirement: \"Separate execution of generated shell tests from the credentialed validation job: no GH_PAT, GH_TOKEN, or checkout authentication may reach them.\"\nExpected change site: `.github/workflows/nightly-validation-selftest.yml` and `scripts/validation_selftest_matrix.py`\nEvidence of absence: The nightly self-test workflow runs `bash scripts/validate_driver.sh` directly via `--runtime-command` without the sandbox. The driver's per-test credential scrub masks global and system git config but not the enclosing checkout's local `.git/config`. No sandbox is used for this path.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nRequirement: \"Separate execution of generated shell tests from the credentialed validation job: no GH_PAT, GH_TOKEN, or checkout authentication may reach them.\"\nExpected change site: .github/workflows/nightly-validation-selftest.yml\nEvidence of absence: The nightly workflow still runs bash scripts/validate_driver.sh directly via --runtime-command; no implementation in this PR updates this workflow to use the newly created validation_harness_sandbox.sh for the nightly self-test, leaving it exposed to checkout credentials.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cSeparate execution of generated shell tests from the credentialed validation job: no GH_PAT, GH_TOKEN, or checkout authentication may reach them.\u201d\nExpected change site: `.github/workflows/nightly-validation-selftest.yml` and `scripts/validation_selftest_matrix.py::_stage_runtime`.\nEvidence of absence: Neither file is changed in the PR. The nightly workflow still invokes `bash scripts/validate_driver.sh` directly, and `_run_command` inherits `os.environ`; the driver\u2019s per-test scrub does not prevent tests from accessing the checkout\u2019s local `.git/config` authentication.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "65574f755ae0d81d7fd99c7598bdecd1a19673c74928fbf3bcbc344d77d273b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6569,
+    "run_id": "37885998892",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37885998892",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009052732_3a3c92e085",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6569,
+    "run_id": "37885998892"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T05:27:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

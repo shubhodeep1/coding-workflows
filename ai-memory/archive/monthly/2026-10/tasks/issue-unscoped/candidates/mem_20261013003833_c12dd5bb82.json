@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_release_ci_gate.py:test_pending_then_timeout_after_polling (RELEASE_CI_GATE_WAIT_SECS=\"2\") | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The 2-second wait budget may make the polling test flaky on a heavily loaded runner.\n  WHY: The test can fail if the gate polling logic takes 2 seconds or more.\n- PR Body (PR Description): \"Closes https://github.com/shubhodeep1/coding-workflows/issues/7205\" | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Using the auto-close keyword \"Closes\" against a potential tracking issue could close it when the PR merges.\n  WHY: If issue #7205 carries the `ai:orchestrator-tracking` label, closing it on merge could kill the remaining waves of the orchestrator project.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep the original security finding open until the fix merges with required checks passing.\"\n  expected_change_site: PR body / PR metadata\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR body uses \"Closes https://github.com/shubhodeep1/coding-workflows/issues/7205\", which forces closure of the linked issue upon merge, contradicting the requirement to keep it open through the merge and subsequent release gates.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_release_ci_gate.py, Location: `test_pending_then_timeout_after_polling`, `RELEASE_CI_GATE_WAIT_SECS=\"2\"`\n  PROBLEM: On a very slow runner, the first poll could take 2 seconds or more, leaving a single read so the `outcome=waiting` regex and the `>= 2` assertion would both fail.\n  WHY: The script makes two `gh` calls and one `python3 -I` call per poll, so this is unlikely.\n  Suggested minimal fix: Raise the wait budget to \"3\".\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_release_ci_gate.py | severity=MAJOR | confidence=3\n  PROBLEM: The test wait budget of 2 seconds is tight for a heavily loaded runner, potentially causing flakey test failures on CI when the runner cannot complete two `gh` and one `python3` invocation within that time.\n  WHY: The test will fail if the gate polling logic takes >= 2 seconds.\n- PR Body (PR Description) | severity=MAJOR | confidence=3\n  PROBLEM: The use of an auto-close keyword (\"Closes\") against a potential tracking issue risks prematurely closing the orchestrator's state machine for this project.\n  WHY: If issue #7205 carries the `ai:orchestrator-tracking` label, this PR will close it upon merge, killing the remaining waves of the orchestrator project it manages.\n- TASK_GAP\n  Requirement: \"Keep the original security finding open until the fix merges with required checks passing.\"\n  Expected change site: PR body / PR metadata\n  Evidence of absence: The PR body uses \"Closes https://github.com/shubhodeep1/coding-workflows/issues/7205\", which actively forces the closure of the linked issue upon merge, directly contradicting the requirement to keep the security finding open until the fix merges (the tracker needs to remain open for the merge and the subsequent release gates).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nNo task was provided \u2014 the message contains only the unattended system preamble with an unfilled `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder.\n\nTo proceed, send the actual task (issue text, instructions, or repo change request). If the intent was to inject the severity-classification reference, send that content and I'll treat it as part of the system context.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0b015e1e5cc5ec61ae69115e742916a8dd96c04ddf9888ea91bce437c135cd2d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7207,
+    "run_id": "38323762766",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38323762766",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013003833_c12dd5bb82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7207,
+    "run_id": "38323762766"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T00:38:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

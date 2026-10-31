@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this heal issue deliver, given that its frozen scope covers only `.github/workflows/test-and-mark-stable.yml`, `tests/**` and `changelog.d/*.md`?\nChoices:\nA) Fix only failure 1 (the Phase 3b stall check). Add a working-run id: the newest matching run with `status == \"in_progress\"`, falling back to the latest run. Read the step name from it and add it to `CUR_STATE`. `PHASE_TIMEOUT`, `IMPL_RUN_ID_LATEST`, `IMPL_RUN_STATUS` and the log line stay unchanged. Add a regression test under `tests/` and a changelog fragment. Failure 2 (decompose child count, `orchestrate.yml` diagnostics and the issue-create failure check) is listed in the plan's `## Deferred scope` for a separate issue once orchestrate run 40609251819's \"Create Wave 1 issues only\" / \"Partition guard\" lines are available. (RECOMMENDED)\nB) Fix failure 1 as in A, and also plan the `orchestrate.yml` diagnostics and the issue-create failure check in this issue. **Note:** these paths are outside the frozen heal scope, so the plan would be held and `/approved` alone would not help; it needs `/reclarify` or a fix outside the heal pipeline.\nC) Fix only failure 1 and drop failure 2 entirely, with no deferred item, treating the one-child result as transient.",
+  "fingerprint": "d71d912512ae1fb2d53ea26fa71ec39a0662e3bb970e64b867d784623a83362a",
+  "lineage": {
+    "issue_number": 8241,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40617695964",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40617695964",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261028015953_b635521425",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8241,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40617695964"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8241 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-28T01:59:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

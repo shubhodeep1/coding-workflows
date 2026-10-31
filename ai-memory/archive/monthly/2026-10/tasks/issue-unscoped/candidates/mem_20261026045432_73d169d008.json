@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  expected_change_site: .github/workflows/ci.yml (selection of steps moved out of `tests-hooks-and-orchestrator` and choice of destination job `tests-promote-stall-and-review`)\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  EVIDENCE: .github/workflows/ci.yml lines 1504-1510 (also cited as 1507-1511 and 1508-1510) and the changelog fragment say the run's step timings were not readable and the steps were chosen by estimated test and subprocess counts, so the diff does not establish that the moved steps were the slowest or that the destination was chosen from measured headroom, and no comparative headroom analysis against the other CI test jobs is given. All three reviewers rated it NIT. The deliverable is present and the limitation is disclosed. The next budget-watch run on main would check it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom.\u201d\nExpected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-hooks-and-orchestrator` and their destination job.\nEvidence of absence: The diff\u2019s comments at `.github/workflows/ci.yml` lines 1504-1510 say the run\u2019s step timings were not readable and the three steps were selected using estimated test and subprocess counts. The diff therefore does not establish that the moved steps were the slowest or that the destination was selected based on the requested timings.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\nExpected change site: .github/workflows/ci.yml (step selection and destination job choice)\nEvidence of absence: The workflow comment at lines 1507-1511 and the changelog fragment both disclose that step timings were not readable and the three steps were chosen by estimated test and subprocess counts. The destination job `tests-promote-stall-and-review` was chosen because \"it has the most room: its last budget-watch issue was #7677, and six steps have moved out of it since\" (changelog), but no comparative headroom analysis against the other four CI test jobs is provided. The deliverable (moving steps to reduce load) is present and the limitation is disclosed; the next budget-watch run will validate the choice.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml` \u2014 selection and relocation of steps out of `tests-hooks-and-orchestrator`.\nEvidence of absence: The deliverable itself is present (three steps moved verbatim, names kept, `timeout-minutes` untouched, no new job). However, the diff's own comments state the run's step timings were not readable and the three steps were chosen by estimated test/subprocess counts (ci.yml:1508-1510; changelog fragment lines 6-7: \"The steps were picked by test and subprocess counts, because the run's step timings could not be read\"). The diff therefore does not establish these were the slowest steps or that the destination was chosen from measured headroom; both are disclosed estimates. The limitation is self-correcting: the next `budget-watch` run on `main` measures every job and would open a follow-up issue if the estimate missed. No code is missing.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "353af0d8c85d26f67a2d408f4baf83e63fcfa95510edfe0158d03807582de53d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8184,
+    "run_id": "40269520971",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40269520971",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026045432_73d169d008",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8184,
+    "run_id": "40269520971"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T04:54:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

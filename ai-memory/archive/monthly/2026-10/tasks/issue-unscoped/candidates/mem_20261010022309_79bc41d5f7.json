@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/propagate_consumer_secrets.sh:135-215 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: An empty source secret is skipped without counting as a failure, so propagation can exit successfully while leaving the consumer unconfigured and the onboarding instructions do not prompt manual setup.\n  WHY: A green run can omit a required secret without alerting the operator, who may rely on the onboarding instructions that manual setup is needed only after a failed run.\n- scripts/propagate_consumer_secrets.sh:166, 179-184 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: Only-missing mode uses a one-time snapshot of present secret names and can overwrite a secret added or changed by the consumer before the script reaches it.\n  WHY: The script may replace a consumer\u2019s manual addition or rotation, contrary to the intent to leave existing values untouched.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Remove the contradictory manual-secrets onboarding step\" and instruct manual consumer secret setup only after a failed run.\n  expected_change_site: .claude/commands/seed-repo.md, workflow-templates/.claude/commands/seed-repo.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Both files direct manual setup only for a `no-register` seed or when the step-8 report records a failed propagation run, but an empty source secret is skipped without making the run fail.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/propagate_consumer_secrets.sh:135-137, 174-178, 211-214 | severity=high | confidence=4\n  PROBLEM: An empty source secret is logged as a warning and then skipped with status=skipped_empty, which is counted under skipped_count, not failed_count. The script exits 0 when no other failures occurred. The updated seed-repo instructions at .claude/commands/seed-repo.md:22 (and its workflow-templates twin) now say manual secret setup is needed only for a no-register seed or when the propagation run fails, treating a green propagation run as proof the consumer received all four secrets.\n  WHY: If CHECK_TRIAGE_ISSUES_TOKEN or OPENROUTER_API_KEY is unset in the library, the weekly run reports success (exit 0, green, no Telegram alert) while omitting that required secret. The seed-repo agent sees the green run and tells the operator no manual setup is needed, leaving the consumer unconfigured.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/propagate_consumer_secrets.sh:140-144 | severity=high | confidence=5\n  PROBLEM: If a required secret is empty, the script skips it without error, but the onboarding instructions rely on the workflow to fully configure the consumer.\n  WHY: The script logs `status=skipped_empty` and continues successfully, leaving the consumer repository unconfigured for that secret. The onboarding documentation (`.claude/commands/seed-repo.md` and `workflow-templates/.claude/commands/seed-repo.md`) states that manual setup is only needed if propagation fails, but this silent skip means the consumer stays broken without the operator realizing.\n- scripts/propagate_consumer_secrets.sh:166, 179-184 | severity=high | confidence=4\n  PROBLEM: The `only-missing` check uses a stale snapshot of present secrets to decide whether to set a secret.\n  WHY: If a user manually adds or rotates a secret in the target repository after `gh secret list` has returned but before `gh secret set` for a particular secret is called, the script will overwrite the manual addition/rotation, violating the intent to leave existing values untouched.\n- Requirement: \"Remove the contradictory manual-secrets onboarding step\" and instruct manual consumer secret setup only after a failed run.\n  Expected change site: .claude/commands/seed-repo.md, workflow-templates/.claude/commands/seed-repo.md\n  Evidence of absence: The instructions in both files still suggest: \"Only for a `no-register` seed, or when the step-8 report records a failed propagation run, name those four secrets for the user to add by hand in the target's Settings \u2192 Secrets and variables \u2192 Actions\". However, if a secret is simply skipped because it was empty in the source, the script does not trigger a \"failed propagation run\" (the script returns success, status=skipped_empty), so the operator is never prompted to add the missing secret by hand, even though the consumer repository remains unconfigured for that secret.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/propagate_consumer_secrets.sh:166, 179-184 | severity=high | confidence=4\n  PROBLEM: Only-missing mode checks secret names once, then writes any names absent from that snapshot without checking again.\n  WHY: If a consumer adds or changes a secret after the listing but before the loop reaches that name, the scheduled run overwrites the consumer\u2019s value, contrary to the documented behavior of leaving existing secrets untouched.\n- scripts/propagate_consumer_secrets.sh; .claude/commands/seed-repo.md: `propagate_consumer_secrets.sh` lines 135-137 and 211-215; `seed-repo.md` line 22 | severity=high | confidence=5\n  PROBLEM: An unset source secret is logged as `skipped_empty` without incrementing `failed_count`, so propagation can exit successfully despite not copying a required secret. The seeding instructions request manual setup only after a failed run or for a `no-register` seed.\n  WHY: If a required library secret such as `CHECK_TRIAGE_ISSUES_TOKEN` or `OPENROUTER_API_KEY` is unset, the workflow skips it and can finish green. The consumer remains unconfigured, but the seeding instructions do not direct the user to add the missing secret.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "73bf9f5f7d8ea433184de1bc1ff49e77ce736678c42d9ed571344f81fa92fe9e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6722,
+    "run_id": "38015653238",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38015653238",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010022309_79bc41d5f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6722,
+    "run_id": "38015653238"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T02:23:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

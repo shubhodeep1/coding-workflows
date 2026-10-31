@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:1278-1284 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The hold-comment refresh in the `unknown)` arm uses `unblock_patch_comment ... || true`, so a failed PATCH is swallowed, the hold's `updatedAt` stays stale and the judge can be re-dispatched on every scan.\n  WHY: This needs the condition read and the PATCH to both fail. The poller keys on `updatedAt`, so dispatch repeats until the hold lifetime ends. Severity disagreement: gemini rated it MAJOR (mapped to high), and the others rated it NIT.\n- agents.d/7361-unblock-wait-verdict.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The sentence \"A failed read leaves the hold untouched.\" contradicts the `unknown)` arm in scripts/unblock_judge.sh:1275-1287, which now refreshes the hold comment on a failed read.\n  WHY: A maintainer reading the contract text may remove the refresh, which brings back the repeated judge dispatch the refresh was added to stop. All four reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_judge.sh:1278-1283 | severity=NIT | confidence=3\n  PROBLEM: The `unknown)` arm refreshes the hold comment with `unblock_patch_comment ... || true`. A failed PATCH is not recorded, and the log still reads `outcome=skip reason=hold_check_unavailable`.\n  WHY: If the condition read and the PATCH both fail, `updatedAt` stays old and the poller can re-dispatch the judge on every scan until the 14-day hold lifetime ends. A one-line log on PATCH failure would make it visible.\n- agents.d/7361-unblock-wait-verdict.md:2 | severity=NIT | confidence=4\n  PROBLEM: The sentence \"A failed read leaves the hold untouched.\" contradicts the `unknown)` arm in scripts/unblock_judge.sh (lines 1275-1287), which now patches the hold comment.\n  WHY: A maintainer may remove the refresh as a bug and bring back the repeated dispatch. The suggested replacement sentence says a failed read refreshes the open hold in place but never resumes or ends it before `UNBLOCK_JUDGE_WAIT_MAX_DAYS`.\n- HARDENING: scripts/unblock_judge.sh, `unknown)` arm. Replace `|| true` with `|| unblock_log \"item=${ITEM} op=hold hold=${hold_kind} ref=${hold_ref} outcome=skip reason=hold_refresh_failed\"` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:1280 | severity=MAJOR | confidence=4\n  PROBLEM: The refresh of the hold marker when a condition read fails ignores a failed comment update, because `unblock_patch_comment` is suppressed with `|| true`.\n  WHY: If the PATCH fails, `updatedAt` stays old and the poller re-dispatches the judge every poll tick (every 5 minutes) instead of waiting `UNBLOCK_JUDGE_RETRY_HOURS` (default 6 hours). This puts unnecessary load on the API.\n- agents.d/7361-unblock-wait-verdict.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment says \"A failed read leaves the hold untouched.\"\n  WHY: It contradicts scripts/unblock_judge.sh (lines 1275-1287), which now refreshes the hold marker on a failed read, and this could lead to the refresh being removed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/7361-unblock-wait-verdict.md:2 | severity=NIT | confidence=4\n  PROBLEM: The sentence \"A failed read leaves the hold untouched.\" no longer matches `scripts/unblock_judge.sh:1275-1287`, where the `unknown)` arm now refreshes the hold comment via `unblock_patch_comment`.\n  WHY: `scripts/assemble_agents.py` folds the fragment into `agents.md`. A maintainer may remove the PATCH and reintroduce the every-poll redispatch.\n- scripts/unblock_judge.sh:~1279-1282 | severity=NIT | confidence=4\n  PROBLEM: The new `unblock_patch_comment \"${hold_id}\" \"...\" || true` swallows a failed PATCH and the function still returns 0.\n  WHY: If the condition read and the PATCH both fail, `updatedAt` is not advanced. The poller (`scripts/orchestrate_poll_process.sh:19026`, `unblock_scan` keyed on `updatedAt // created_at`) then keeps dispatching the judge, which is the failure the fix was meant to prevent. The `|| true` in the `unmet)` arm (line ~1305) is the codebase convention.\n- HARDENING: scripts/unblock_judge.sh, ~lines 1280-1282. On PATCH failure, return non-zero after an `unblock_log ... reason=patch_failed` line, or log a structured `op=hold outcome=skip reason=patch_failed` line (about 4 lines). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:1280-1284 | severity=NIT | confidence=5\n  PROBLEM: The hold-comment refresh suppresses a failed PATCH with `|| true` and returns as though the retry timestamp was refreshed.\n  WHY: If the condition check and the PATCH both fail, the hold's `updatedAt` stays stale. The poller then treats the hold as eligible again after `UNBLOCK_JUDGE_RETRY_HOURS` and re-dispatches the judge until the hold expires.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7361-unblock-wait-verdict.md:2 | severity=NIT | confidence=4\n  PROBLEM: The sentence \"A failed read leaves the hold untouched.\" contradicts the `unknown)` arm in `scripts/unblock_judge.sh:1275-1287`, which now refreshes the hold comment on a failed condition read.\n  WHY: The fragment will be folded into agents.md at release time. A maintainer may remove the refresh and bring back the repeated-judge-dispatch bug.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fb9330a29640a50aeb29770f13a552e3c4ecc36fb4f41fa7ed3910dde7cb0ac6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7361,
+    "run_id": "38516385190",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38516385190",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014060058_0266a1e2c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7361,
+    "run_id": "38516385190"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T06:00:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

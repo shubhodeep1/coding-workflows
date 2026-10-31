@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\" (issue #8072; plural \"steps\")\n  expected_change_site: .github/workflows/ci.yml, orchestrate-poll steps \"Orchestrator judges on the Claude engine tests (Phase 5c)\" and \"Validation harness sandbox tests\" (both still `if: strategy.job-index == 3`)\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: Only the unblock judge step moved (ci.yml hunk around line 2481, now `strategy.job-index == 1`), no hunk moves the other two group-3 steps. The ci.yml comment and changelog fragment document the deferral because step timings were unreadable from CI or the sandbox. Rated NIT (residual, not a blocker).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\" (issue #8072; plural \"steps\")\n  Expected change site: .github/workflows/ci.yml, orchestrate-poll steps \"Orchestrator judges on the Claude engine tests (Phase 5c)\" and \"Validation harness sandbox tests\" (both still `if: strategy.job-index == 3`)\n  Evidence of absence: Only the unblock judge step moved (ci.yml hunk around line 2481). No hunk moves the other two group-3 steps. Earlier editor summaries deferred this because step timings can't be read from CI or the sandbox. The ci.yml comment and changelog fragment say so, and the next budget-watch run on main will measure it. Residual NIT, not a blocker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\" (issue #8072, plural \"steps\")\n  Expected change site: .github/workflows/ci.yml orchestrate-poll job, the remaining `if: strategy.job-index == 3` steps \"Orchestrator judges on the Claude engine tests (Phase 5c)\" and \"Validation harness sandbox tests\"\n  Evidence of absence: Only the \"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)\" step (378 tests) carries `if: strategy.job-index == 1`. The other two group-3 steps still hold `if: strategy.job-index == 3`. The changelog documents the partial move. The justification (step timings from run 40112590944 unreadable, implement sandbox could not measure them because PyYAML is missing, moving more without measurements could overload group 1) is recorded in the ci.yml comment and changelog, so this is a defensible scope reduction, but the issue is plural and the diff is singular.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a1255ba15ac83ea077afcb0ff109d4727958911090864ce7f6c1ad25c62bf5b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8078,
+    "run_id": "40121118462",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40121118462",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024185404_49070dfe9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8078,
+    "run_id": "40121118462"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T18:54:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

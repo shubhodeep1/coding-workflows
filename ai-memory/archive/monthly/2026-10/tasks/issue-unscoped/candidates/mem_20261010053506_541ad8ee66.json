@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/apply_analysis_on_main.sh:286 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The comment lookup requests only `comments?per_page=100` and does not paginate.\n  WHY: If an open tracking issue has more than 100 comments and its trusted `apply-analysis-source-doc:` marker is outside the returned page, `in_flight_docs` omits that document, allowing the purge to delete a report the open project still needs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/apply_analysis_on_main.sh:286 | severity=high | confidence=4\n  PROBLEM: The comment lookup requests only `comments?per_page=100` and does not paginate.\n  WHY: When an open tracking issue has more than 100 comments and its trusted `apply-analysis-source-doc:` marker is outside the returned page, `in_flight_docs` omits that document. The purge then treats it as unused and can delete a report that the open project still needs.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "6a50c3c81e26dcdb8aa46913784918cbff41ef711aec5c8fe987b6142092c7a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7025,
+    "run_id": "38024781466",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38024781466",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010053506_541ad8ee66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7025,
+    "run_id": "38024781466"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T05:35:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

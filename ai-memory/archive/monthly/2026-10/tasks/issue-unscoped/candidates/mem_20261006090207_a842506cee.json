@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5166-5220 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The GPT fallback's `skipped_budget` status is not included in `pass_budget_skipped`, so the soft-deadline partial-finalize path is missed when the fallback runs out of budget.\n  WHY: When Mistral is skipped and the GPT fallback is budget-skipped, the lite zero-success guard treats the GPT slot as a failure and exits with \"All reviewers failed\" instead of partial-finalizing; severity ranged from MAJOR to BLOCKER, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_run_reviewers.sh:5210-5216, interaction with 5166 and 5218 | severity=high | confidence=4\n  PROBLEM: When the sole lite Mistral reviewer is skipped_unmapped or skipped_open and the GPT fallback is budget-killed, pass_budget_skipped stays 0.\n  WHY: The soft-deadline partial-finalize check is skipped, and the lite zero-success guard kills the review with \"All reviewers failed\" instead of taking the graceful partial-finalize path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_run_reviewers.sh:5166-5190, 5210-5219 (loop aggregating pass outcomes + partial-finalize gate) and the new lite fallback block at 5194-5216; budget-skip writes at 4803-4836 | severity=critical | confidence=4\n  PROBLEM: The new lite-tier Mistral fallback calls `run_reviewer \"openai/gpt-6-luna\"` and writes its outcome into a separate file (`status_${pass_prefix}_openai_gpt-6-luna.txt`), but a `skipped_budget` result from that fallback is never folded into `pass_budget_skipped`.\n  WHY: The function returns `pass_successful=0` without a partial-finalize request; the caller's zero-success guard treats the fallback's `skipped_budget` as a failure and exits 1 with \"All reviewers failed.\" The test cases at `tests/test_review_autofix_review_pipeline_contract.py:4598-4689` only exercise `FALLBACK_STATUS` values of `success` / `failed`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_run_reviewers.sh:5210-5219 | severity=high | confidence=5\n  PROBLEM: The Mistral fallback's `skipped_budget` result is not included in `pass_budget_skipped`, which was calculated before the fallback runs.\n  WHY: The partial-finalize check misses budget exhaustion, and the lite zero-success guard exits with \u201cAll reviewers failed\u201d instead of taking the soft-deadline partial-finalize path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_run_reviewers.sh:5194-5220 (GPT fallback block), 5218-5220 (partial-finalize check) | severity=high | confidence=4\n  PROBLEM: When the GPT fallback reviewer is skipped due to budget constraints (writes `skipped_budget` to its status file at lines 4818 or 4835), the outcome is not reflected in `pass_budget_skipped`, which was calculated before the fallback ran.\n  WHY: The partial-finalize check does not request partial finalize, and the lite zero-success guard exits with \"All reviewers failed\" instead of taking the soft-deadline partial-finalize path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_run_reviewers.sh:5166-5192 (pass_budget_skipped computed from Mistral's status only), 5210-5214 (GPT fallback only checks for \"success\"), 5218-5220 (partial-finalize check uses stale pass_budget_skipped) | severity=high | confidence=4\n  PROBLEM: The GPT fallback's `skipped_budget` status is never reflected in `pass_budget_skipped`.\n  WHY: When Mistral is `skipped_unmapped` or `skipped_open` and the GPT fallback hits the budget limit, the partial-finalize check does not fire; the lite zero-success guard then exits 1 with \"All reviewers failed\" instead of taking the graceful partial-finalize path.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "39ade769ff78fb8ab35aebc783b9fb345e008855d54ca01f1cd76ade366602e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6438,
+    "run_id": "37429100061",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37429100061",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006090207_a842506cee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6438,
+    "run_id": "37429100061"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T09:02:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

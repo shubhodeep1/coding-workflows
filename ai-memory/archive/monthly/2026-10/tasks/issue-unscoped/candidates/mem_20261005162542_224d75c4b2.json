@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15783-15795 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The poller can accept a trusted `project-failed` close verdict from a previous failure because it does not bind the verdict\u2019s fingerprint to the current failure occurrence.\n  WHY: After a project resumes and fails again, the stale verdict still matches the generic `failed` state, allowing someone with label access to add `ai:unblock-closed` and cause the poller to abandon the new failure; all reviewers rated severity MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:15783 (jq projection: `{id: .id, stop: $marker.stop, verdict: $marker.verdict}`) | severity=high | confidence=4\n  PROBLEM: The close-verdict check discards the marker fingerprint and does not bind the verdict to the specific failure occurrence.\n  WHY: A trusted close verdict from an earlier failure can authorize abandoning a later failure when the project is failed again and someone with label access adds `ai:unblock-closed`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: lines 15789-15795 (close marker parsing and the `if [ \"${close_stop}\" = \"project-failed\" ]` branch in `handle_unblock_judge_project_hooks`) | severity=high | confidence=4\n  PROBLEM: The close-verdict authorization discards the marker fingerprint and does not bind the trusted marker to the current failed-state occurrence.\n  WHY: A stale trusted close marker can match a later `failed` state after the project is resumed, allowing someone with label access to add `ai:unblock-closed` and cause the poller to abandon the new failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: 15791-15793 | severity=high | confidence=5\n  PROBLEM: A trusted `project-failed` close marker is not bound to the current failure occurrence.\n  WHY: `/judge_resume` leaves the old verdict comment in history, so after a later failure someone with label access can add `ai:unblock-closed` and the poller can abandon the new failure without a current close verdict.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: 15792-15793 | severity=high | confidence=4\n  PROBLEM: A `project-failed` close verdict is not bound to the current failed-state occurrence.\n  WHY: After the project is resumed and fails again, an old trusted close marker still matches the generic `failed` status, allowing someone with label access to add `ai:unblock-closed` and the poller to abandon the new failure.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "411ee18b00b9fb2dace2e0ec864ec3f9a80b7e0833a5ba55e5c673b402ab9143",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6318,
+    "run_id": "37338488742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37338488742",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005162542_224d75c4b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6318,
+    "run_id": "37338488742"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T16:25:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

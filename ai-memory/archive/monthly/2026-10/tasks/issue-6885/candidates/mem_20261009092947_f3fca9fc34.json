@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The evidence we have only shows `orchestrate-poll shard 1 failed (exit 1)`. The failing test name is inside a `::group::` block that the triage log tail does not reach, and the full log needs a login, so neither the clarify pipeline nor the triage pipeline can see it. Option C waits on data a person has to paste in, which the data-provision guard rules out. Option B ships nothing and lets the same blind failure happen again. Option A is a small, reversible diagnostics change that fixes the real gap: a failing shard should name its failing test in the annotations. It changes no test or poller behaviour.\nQ2: The same shard tally loop exists in three places with the same text: `.github/workflows/ci.yml:1422-1441`, `.github/workflows/mark-stable.yml:377-396` and `.github/workflows/test-and-mark-stable.yml:4845-4864`. `tests/test_ci_poll_test_sharding.py` already pins all three (`RELEASE_WORKFLOWS` at lines 50-51, plus the matching release-gate test class from line 334). Changing only `ci.yml` would make the three copies differ, and the release gates would keep the same blind spot.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml (lines ~1394-1442: per-shard log `/tmp/poll_shard_${shard}.txt` handling, the `::group::` and `::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})` lines)\n    - .github/workflows/mark-stable.yml (lines ~377-396, same loop)\n    - .github/workflows/test-and-mark-stable.yml (lines ~4845-4864, same loop)\n    - tests/test_orchestrate_poll_process.py (~23312-23345: the runner prints a `FAIL` line naming the test when it catches an exception)\n    - tests/test_ci_poll_test_sharding.py (the existing failing-shard tests at lines 256, 354 and 467, and the shard tally helper tests from line 440)\n  steps:\n    - In each of the three workflow loops, inside the branch that already prints `::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})`, find the shard's `FAIL` lines in its log file. Use the exact `FAIL` prefix the runner in `tests/test_orchestrate_poll_process.py` prints; read it from that file rather than guessing.\n    - Print each match as `::error::orchestrate-poll shard ${shard}: <line>`. Cap the count at about 20 lines. Escape `%`, CR and LF the way GitHub workflow-command data needs (`%25`, `%0D`, `%0A`).\n    - If the failed shard's log has no `FAIL` line (for example the process was interrupted), print its last ~20 lines outside any `::group::` block, after an `::error::orchestrate-poll shard ${shard} had no FAIL line; last log lines follow` annotation, so they show up in the job log tail.\n    - Keep the step's exit status, the `shard_failures` count, the `::group::` output and the missing-log branch exactly as they are.\n    - Keep the three loops identical, apart from paths that already differ.\n    - In `tests/test_ci_poll_test_sharding.py`, add contract tests for both the CI step and the release-gate copies. They should assert that a failed shard prints its `FAIL` lines as `::error::` annotations, that the no-`FAIL` fallback prints the log tail, and that a passing shard prints neither. If the existing shard tally helper runs the loop body, add those behavioural cases there too.\n    - Per \u00a724, run `wc -c .github/workflows/test-and-mark-stable.yml` after the edit and confirm it is still under 480,000 bytes.\n    - Add a changelog fragment `changelog.d/6885-poll-shard-fail-annotations.md`.\n  replaces_acceptance_criterion: \"Fix the failing test or poller behavior identified in shard 1\" becomes \"a failing orchestrate-poll shard names its failing test(s), or prints its log tail, in `::error::` annotations\"\n  equivalence_argument: The original failure cannot be reproduced or identified from the available evidence. The triage report itself says not to change the gate without evidence. This change makes the next failure diagnosable straight from the annotations and log tail that check-failure-triage can read, and it does not weaken any gate. If PR #6648's head still fails after a rerun, the next triage will carry the test name.\n  reversibility: The change only adds diagnostic output in three loops plus tests, so reverting the commit restores the previous output exactly. Exit codes and gate semantics stay the same.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml (the loop locations listed under Q1)\n    - tests/test_ci_poll_test_sharding.py (RELEASE_WORKFLOWS, line 50-51)\n  steps:\n    - Apply the Q1 edit the same way in all three files, and extend both the CI test class and the release-gate test class.\n  replaces_acceptance_criterion: none\n  equivalence_argument: The existing contract test keeps these three copies in step, so changing all of them keeps that guarantee.\n  reversibility: Revert the commit.\n\nAssumptions: The `FAIL` line format is the one printed by the runner in `tests/test_orchestrate_poll_process.py` around lines 23312-23345; the implementer should read it from there. The edit touches `.github/workflows/`, so the issue's `files_touched` must list all three workflow files, `tests/test_ci_poll_test_sharding.py` and the changelog fragment; otherwise the automation-path guard will block it.\nMissing context: The actual shard-1 `FAIL` line from run 37907020014. It needs a login to read, and this plan does not depend on it.",
+  "fingerprint": "182b4bb16322022e70e8ebde990cecea095ba7c9319eaf935813dd0340bc0b97",
+  "lineage": {
+    "issue_number": 6885,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37910571693",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37910571693",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6885"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009092947_f3fca9fc34",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6885,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37910571693"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6885",
+  "timestamps": {
+    "created_at": "2026-10-09T09:29:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/8279-heal-job-steps-to-release.md:11 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The sentence \"since its last budget-watch issue (#8268) it gave up four steps in each of #8208, #8245 and #8268\" implies these events occurred after #8268, which is contradictory given the lower issue numbers for 8208 and 8245.\n  WHY: No runtime failure, but the documentation is confusing and technically inaccurate. The source rated it NIT.\n- .github/workflows/ci.yml:2170-2179 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The comment repeats the same contradictory phrasing as the changelog fragment: \"since its last budget-watch issue (#8268) it gave up four steps in each of #8208, #8245 and #8268\".\n  WHY: No runtime failure, but the documentation is confusing and technically inaccurate. The source rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation to tests-release-and-log-analysis\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml:2172-2173 says the run's step timings were not read and the steps were chosen by test and subprocess counts, the changelog fragment (line 11) repeats this, so the PR does not establish that the moved steps were the slowest. anthropic_claude-sonnet-5_5 rated it NIT with confidence 2 and treated it as a documented fallback. The other two rated it MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the selection of steps moved from `tests-heal-plan-and-validation`.\nEvidence of absence: The workflow comment and the changelog both say the step timings could not be read, so the steps were chosen by test and subprocess counts. This does not prove they were the slowest steps. The reviewer reported it as a documented fallback, not an actionable defect. The other requirements are met.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/8279-heal-job-steps-to-release.md:11 | severity=NIT | confidence=3\n  PROBLEM: The sentence \"since its last budget-watch issue (#8268) it gave up four steps in each of #8208, #8245 and #8268\" implies these events occurred after #8268, which is contradictory given the lower issue numbers for 8208 and 8245.\n  WHY: No runtime failure, but the documentation is confusing and technically inaccurate.\n- .github/workflows/ci.yml:2170-2179 | severity=NIT | confidence=3\n  PROBLEM: Same contradictory phrasing as found in the changelog fragment.\n  WHY: No runtime failure, but the documentation is confusing and technically inaccurate.\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation to tests-release-and-log-analysis\nEvidence of absence: .github/workflows/ci.yml lines 2172\u20132173 (and the corresponding changelog fragment) explicitly state that the run's step timings were not read and the steps were selected by test and subprocess counts instead. The PR did not establish that the moved steps were indeed the slowest per the required run timings.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` to `tests-release-and-log-analysis`.\nEvidence of absence: `.github/workflows/ci.yml:2172-2173` says the run's step timings were not read and the steps were selected by test and subprocess counts instead. The changelog repeats this at line 11. The PR therefore does not establish that the moved steps were the slowest according to the specified run timings.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "7d5a74586082d96be0a1344675556bee52051eba3a6c7cc8229cae3def8ae7b7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8283,
+    "run_id": "40769481440",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40769481440",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028212456_47c03815c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8283,
+    "run_id": "40769481440"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T21:24:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

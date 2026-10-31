@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_codex_agent_isolation_contract.py:300 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The assertion `assert text.count(\"ORCH_CODEX_ISOLATED_EXEC\") == 1` counts raw text occurrences, so harmless comments, strings, or references can make the contract test fail.\n  WHY: This can fail CI without detecting an isolation regression, even when every judge still runs through the review sandbox.\n- .github/workflows/ci.yml:1429-1442 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The `orchestrate-poll (3)` CI shard exits nonzero despite reporting 33 passed and 0 failed, and the supplied log tail does not identify the cause.\n  WHY: The unexplained nonzero result fails the aggregate `lint` check; Gemini and OpenAI classify this as a blocker, while DeepSeek says the CI failure is pre-existing and unrelated to this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_codex_agent_isolation_contract.py:300 | severity=low | confidence=3\n  PROBLEM: `assert text.count(\"ORCH_CODEX_ISOLATED_EXEC\") == 1` counts raw string occurrences across the entire 26K-line poller script, so a future comment, string literal, or log message mentioning this variable name would increment the count.\n  WHY: The test would fail CI, blocking a documentation change or unrelated update, without detecting an actual isolation regression.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_codex_agent_isolation_contract.py:300 | severity=low | confidence=4\n  PROBLEM: The test assertion `assert text.count(\"ORCH_CODEX_ISOLATED_EXEC\") == 1` is fragile.\n  WHY: A future change introducing a second export, comment, string literal, or reference elsewhere in the script could fail the test even if no judge uses it for execution.\n- .github/workflows/ci.yml:CI orchestrate-poll (3) shard failure | severity=critical | confidence=5\n  PROBLEM: The `orchestrate-poll (3)` shard failed in CI with exit code 1.\n  WHY: The available log tail reports \"33 passed, 0 failed, 33 total\" followed by \"##[error]1 orchestrate-poll shard(s) failed.\" and \"Process completed with exit code 1.\" without specifying which test or component failed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_codex_agent_isolation_contract.py:300 | severity=low | confidence=4\n  PROBLEM: This checks raw text occurrences rather than whether a judge uses the variable.\n  WHY: A harmless comment or log string containing the name makes the contract test fail even when the poller still runs every judge through the review sandbox.\n- .github/workflows/ci.yml:1429-1442 | severity=critical | confidence=5\n  PROBLEM: The PR check run reports `orchestrate-poll (3)` failed.\n  WHY: The supplied log tail reports `33 passed, 0 failed`, but does not show why the shard exited nonzero; the workflow treats a nonzero shard result as failure and exits 1, causing the aggregate `lint` check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "1089b7bca86f2f3fbc63e1766df2157b7662ba7d8afb6bf9eec4d7dada9cafdf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6611,
+    "run_id": "37922280661",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37922280661",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009121931_ba25fb4c1d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6611,
+    "run_id": "37922280661"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T12:19:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

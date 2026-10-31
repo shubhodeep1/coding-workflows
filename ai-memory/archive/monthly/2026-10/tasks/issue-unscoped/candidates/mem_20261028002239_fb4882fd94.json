@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:2947-2963 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: the consumer-app-defect arm has no _branch_exists fallback. The workflow-defect arm (lines 2916-2929) clears TARGET_BRANCH with a warn when the resolved branch does not exist, but this arm composes the issue with the raw HEAL_CONSUMER_APP_TARGET_BRANCH even if the head branch was deleted.\n  WHY: a failed release run on a since-deleted head branch (non-mirror case, SOURCE_KIND=workflow_run) files a heal issue whose Target-branch header names a nonexistent branch, and the implement phase cannot plan against it. The reviewer rated it SEVERITY: NIT and noted it is pre-existing in the PR, not introduced by the last run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal_intake.sh:2947-2963 | severity=low | confidence=3\n  PROBLEM: the consumer-app-defect arm has no _branch_exists fallback. The workflow-defect arm (lines 2916-2929) clears TARGET_BRANCH with a warn when the resolved branch does not exist, but this arm composes the issue with the raw HEAL_CONSUMER_APP_TARGET_BRANCH even if the head branch was deleted.\n  WHY: a failed release run on a since-deleted head branch (non-mirror case, SOURCE_KIND=workflow_run) files a heal issue whose Target-branch header names a nonexistent branch, and the implement phase cannot plan against it. The reviewer rated it SEVERITY: NIT and noted it is pre-existing in the PR, not introduced by the last run.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e8cfb757c967729d8a78b1b833bae660bcedf51ab154e2ea0d012ad71796e625",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8231,
+    "run_id": "40605930436",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40605930436",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028002239_fb4882fd94",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8231,
+    "run_id": "40605930436"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-28T00:22:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

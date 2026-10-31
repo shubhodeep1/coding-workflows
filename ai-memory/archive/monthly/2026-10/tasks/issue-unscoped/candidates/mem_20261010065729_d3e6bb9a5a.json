@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:466-495, 507-514, 518-535 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The regrant and fix-up escalation marker checks use non-atomic read-then-write operations, allowing concurrent runs to perform the same action more than once.\n  WHY: Concurrent runs can both see no prior marker and trigger duplicate regrant or escalation operations; severity was reported as MAJOR by three reviewers and NIT by minimax_minimax-m3.\n- .github/workflows/unblock_judge_dispatch.yml:14-20, 30-35 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The dispatcher has no per-item concurrency group to serialize concurrent workflow_dispatch runs.\n  WHY: Concurrent dispatches for the same item can pass the marker checks before either run writes a marker; severity was reported as MAJOR by three reviewers and NIT by minimax_minimax-m3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh: unblock_try_regrant() (lines 466-495) and unblock_escalate_fixup() (lines 521-530) | severity=MAJOR | confidence=4\n  PROBLEM: The regrant marker check and the fix-up escalation check perform read-then-write operations without serialization or atomicity, and the dispatcher accepts concurrent workflow_dispatch triggers without concurrency grouping.\n  WHY: Multiple concurrent dispatches or poll ticks can read the comment history before any of them write the regrant marker or the escalation marker. This results in duplicate regrant markers, duplicate resume commands, or multiple fix-up escalations, leading to race conditions where multiple implementation runs are triggered incorrectly.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh: unblock_fixup_origin lines 507-514 and unblock_escalate_fixup lines 518-535 in this file; unblock_judge_dispatch.yml has no concurrency block | severity=NIT | confidence=2\n  PROBLEM: The once-per-fixup check in unblock_escalate_fixup is a read-then-write against the issue's comment history.\n  WHY: Two near-simultaneous dispatches of the same item can both find no prior escalation marker and both post one, with no in-workflow guard. The poller's UNBLOCK_JUDGE_INFLIGHT_MINUTES guard mitigates most of this in production, but it does not serialize against manual gh workflow run dispatch or against a stale run that finished after the guard's window expired.\n- .github/workflows/unblock_judge_dispatch.yml and .github/workflows/unblock_judge.yml | Location: top-level concurrency: block (currently absent in both files)\n  Issue: No workflow-level concurrency group keys dispatches on the same item, so the in-script \"once per rejection run\" and \"once per fix-up\" guards rely entirely on the poller's UNBLOCK_JUDGE_INFLIGHT_MINUTES window to prevent two near-simultaneous dispatches of the same item. Peer workflows that gate per-item work (internal-review.yml, review_autofix_sweep.yml) declare `concurrency: { group: <name>, cancel-in-progress: false }` for exactly this reason.\n  Suggested minimal fix: add a workflow-level concurrency block to unblock_judge_dispatch.yml (the only entry point that takes a per-item input), keyed on the item, e.g. `concurrency: { group: unblock-judge-${{ inputs.item }}, cancel-in-progress: false }`. The reusable unblock_judge.yml inherits the caller's group when invoked, so a single line in the dispatcher is enough.\n  Estimated lines changed: 2-3\n  HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh; .github/workflows/unblock_judge_dispatch.yml | `unblock_fixup_origin()` at `scripts/unblock_judge.sh:509-513` now recognizes a marker after leading blank lines; `unblock_escalate_fixup()` checks for an existing marker at lines 521-530 before running escalation ops. The dispatch workflow accepts `workflow_dispatch` at `.github/workflows/unblock_judge_dispatch.yml:14-20` and defines no concurrency group at lines 30-35. | severity=MAJOR | confidence=4\n  PROBLEM: Fix-up escalation\u2019s \u201conce\u201d check is not serialized with the writes that follow it.\n  WHY: Two dispatches for the same blocked fix-up can fetch comments before either posts the escalation marker. Both then pass the check, run the escalation operations, post a marker comment, and send a WARNING. The latest change makes project fix-ups with leading blank lines eligible for this same race.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh; .github/workflows/unblock_judge_dispatch.yml | `unblock_try_regrant()` lines 466-495 and `unblock_escalate_fixup()` lines 521-530 perform read-then-write marker checks; the dispatcher accepts `workflow_dispatch` at lines 14-20 and has no concurrency group at lines 30-35. | severity=MAJOR | confidence=4\n  PROBLEM: The \"once per rejection run\" and \"once per fix-up\" checks are not atomic or serialized.\n  WHY: Two concurrent dispatches can both read comment history before either writes its marker. Both then post the regrant marker and resume command, or both escalate the fix-up and send a WARNING. This violates the once-only behavior documented in README and agents.md, and can trigger duplicate implementation runs or duplicate operator-step entries. The scan's in-flight check (`_has_active_autofix_run` pattern) reduces but does not eliminate the race window between poller ticks or for manual `workflow_dispatch` calls.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "8d6585816230d7ecaf9429251f2947123f8e525f818faaa35a1349c336c25f42",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7038,
+    "run_id": "38029176636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38029176636",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010065729_d3e6bb9a5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7038,
+    "run_id": "38029176636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T06:57:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

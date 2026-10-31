@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7349,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7349\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7360\",\"pr_number\":7360,\"branch\":\"ai/issue-7349\",\"run_id\":\"38504396066\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38504396066\",\"changed_files\":[\"agents.d/7349-validation-harness-pid-namespace.md\",\"changelog.d/7349-validation-harness-pid-namespace.md\",\"scripts/validation_harness_sandbox.sh\",\"tests/test_validation_harness_sandbox.py\"]}",
+  "fingerprint": "37d901fc0b04a9394b8517e192de29270bbb86bf1efbdefbf8671c629ce5016e",
+  "lineage": {
+    "issue_number": 7349,
+    "parent_ids": [],
+    "pr_number": 7360,
+    "run_id": "38504396066",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38504396066",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7360"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261014033330_7a1797f397",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7349,
+    "level": "run",
+    "pr_number": 7360,
+    "run_id": "38504396066"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7349: https://github.com/shubhodeep1/coding-workflows/pull/7360",
+  "timestamps": {
+    "created_at": "2026-10-14T03:33:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

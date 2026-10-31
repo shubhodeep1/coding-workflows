@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_engine.sh:226-236 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `_ai_engine_isolation_preflight` accepts duplicate entries in `AI_ENGINE_ISOLATED_READ_PATHS`, allowing duplicate destination bind mounts to reach Docker.\n  WHY: The duplicate input is not rejected during preflight; reviewers differed on whether Docker merely incurs duplicate-snapshot cost or rejects container startup.\n- scripts/ai_engine.sh:339-376 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Auxiliary snapshot and session-mount fallback paths use literal `return 75` instead of `return \"${_AI_ENGINE_EXIT_FALLBACK}\"`.\n  WHY: The values match today, but these paths would return a different status than the other fallback paths if `_AI_ENGINE_EXIT_FALLBACK` changes.\n- scripts/ai_engine.sh:_ai_engine_isolation_preflight | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The candidate path check compares literal candidate strings against `${RUNTIME_DIR}` paths before the subsequent realpath-based check.\n  WHY: The realpath check re-accepts paths rejected by the strict string comparison today, but the redundant gate creates a string-formatting dependency.\n- scripts/workflow_failure_heal_intake.sh | severity=low | confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `env` invocation explicitly re-exports `RUNTIME_DIR` even though it is already inherited by the bash subshell.\n  WHY: The explicit export is redundant and does not fail at runtime.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/ai_engine.sh: lines 226-235 (preflight loop) and lines 354-368 (auxiliary snapshot loop) | severity=low | confidence=[3]\n  PROBLEM: Duplicate entries in `AI_ENGINE_ISOLATED_READ_PATHS` pass preflight, causing two snapshots of the same worktree and two Docker mount arguments for the same destination.\n  WHY: The trailing-colon guard does not reject duplicate elements; the immediate caller does not emit duplicates, but malformed input is not rejected.\n- scripts/ai_engine.sh: lines 352-353 and 363-364 | severity=low | confidence=[3]\n  PROBLEM: The auxiliary-snapshot block uses literal `return 75` instead of `return \"${_AI_ENGINE_EXIT_FALLBACK}\"`.\n  WHY: Both resolve to 75 today, but the literal returns would bypass the fallback protocol if `_AI_ENGINE_EXIT_FALLBACK` changes.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/ai_engine.sh: _ai_engine_isolation_preflight (lines 226-235)\n  PROBLEM: Duplicate entries in `AI_ENGINE_ISOLATED_READ_PATHS` pass preflight, generating duplicate destination bind-mount options for Docker and triggering an isolation_container_start_failed fallback at container startup.\n- scripts/ai_engine.sh: _ai_engine_claude_run_isolated (lines 352-376)\n  PROBLEM: Snapshot extraction and session-directory fallback exits use literal 75 instead of `${_AI_ENGINE_EXIT_FALLBACK}`.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_engine.sh: _ai_engine_claude_run_isolated, the two `ai_engine_fallback ...; return 75;` error handlers inside the auxiliary snapshot loop | severity=low | confidence=[3]\n  PROBLEM: Both inner auxiliary-snapshot error paths return literal 75 instead of `return \"${_AI_ENGINE_EXIT_FALLBACK}\"`.\n  WHY: The auxiliary-snapshot paths would diverge from the main-snapshot branch if `_AI_ENGINE_EXIT_FALLBACK` changes.\n- scripts/ai_engine.sh: _ai_engine_isolation_preflight, the candidate path check | severity=low | confidence=[2]\n  PROBLEM: The first gate compares the literal `${candidate}` against the un-resolved strings `${RUNTIME_DIR}/heal_src` and `${RUNTIME_DIR}/heal_branch_tip`.\n  WHY: The realpath-based check below re-accepts the candidate today, but the strict gate creates a string-formatting dependency.\n- scripts/ai_engine.sh: _ai_engine_isolation_preflight, the for-each-candidate directory check | severity=low | confidence=[2]\n  PROBLEM: The loop does not compare entries to each other, so the same path can pass preflight and produce duplicate Docker mount destinations.\n  WHY: Docker may fail to start with a duplicate-destination error, causing a timeout and fallback that is misattributed to Claude availability.\n- scripts/workflow_failure_heal_intake.sh: the `env -u ... AI_ENGINE_MODEL_HINT=... AI_ENGINE_EFFORT_HINT=... RUNTIME_DIR=\"${RUNTIME_DIR}\" AI_ENGINE_ISOLATED_READ_PATHS=\"${heal_isolated_paths}\" bash -c '...'` invocation | severity=low | confidence=[1]\n  PROBLEM: The invocation explicitly re-exports `RUNTIME_DIR`, which is already inherited by the bash subshell.\n  WHY: The redundant export is harmless at runtime.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/ai_engine.sh: Line: 339-340, 349-350 (auxiliary snapshot loop in _ai_engine_claude_run_isolated) | severity=low | confidence=[4]\n  PROBLEM: Four fallback returns in the auxiliary-snapshot block use literal `return 75` instead of `return \"${_AI_ENGINE_EXIT_FALLBACK}\"`.\n  WHY: If the fallback variable changes, these sites would return a different status from the other fallback paths.\n- scripts/ai_engine.sh: Line: 227-236 (preflight path validation in _ai_engine_isolation_preflight) | severity=low | confidence=[3]\n  PROBLEM: Duplicate entries in `AI_ENGINE_ISOLATED_READ_PATHS` pass preflight and produce two Docker `--mount` arguments with the same `dst=`.\n  WHY: The failure surfaces as an opaque Docker run error rather than a clean `isolation_read_path_invalid` fallback.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/ai_engine.sh: Location: lines 352, 353, 363, 364 \u2014 auxiliary snapshot fallback paths\n  PROBLEM: Four `return 75` literals are used instead of the `return \"${_AI_ENGINE_EXIT_FALLBACK}\"` pattern used by every other fallback in the same function.\n  WHY: A future change to `_AI_ENGINE_EXIT_FALLBACK` would leave these paths inconsistent.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2d8bb03158a9e4f751b646c09916110bb5b09cf194a29a59657ec6a615ae791e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37310842659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37310842659",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005130726_e0432d4baf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37310842659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T13:07:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

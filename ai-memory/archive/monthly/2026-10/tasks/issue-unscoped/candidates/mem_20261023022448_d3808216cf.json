@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:1619-1642 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The record-failure WARNING at line 1625 is gated on `invalid_park != true`, so when the marker POST fails on a park run and the park is then abandoned (`decide_failed` at 1630-1634 or `validate_failed` at 1638-1642), the function returns 0 with no alert and nothing written to the issue.\n  WHY: The item falls back to a silently retried block every `--marker-hours`, which is the behaviour this change exists to remove; the reviewer rated it NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:1619-1642 | severity=NIT | confidence=3\n  PROBLEM: The WARNING that reports \"the refused answer was not recorded\" is gated on `invalid_park != true` (line 1625). When `invalid_park` is true, the code assumes the park itself will alert, and the two park-abandon paths (1630-1634, 1638-1642) return 0 with no alert of any kind.\n  WHY: Run 2 computes `invalid_park=true`, the marker POST at line 1620 fails, and line 1625 suppresses the only WARNING. If `decide --pending-invalid-verdicts 1` then fails or returns a non-`invalid_verdicts` decision, nothing is written to the issue and nothing is paged. The item is silently retried every `--marker-hours`.\n- HARDENING: scripts/unblock_judge.sh line 1625 (WARNING gate) and lines 1632 / 1640 (park-abandon returns): on a park run the record-failure WARNING is suppressed, so if the park is abandoned nothing reaches a person. Suggested fix: drop `invalid_park != true` from the gate at line 1625 so a failed record write always pages once (about 1 line).\n- HARDENING: scripts/unblock_judge.sh line 1630 (`--pending-invalid-verdicts 1`): the pending refusal is added even when the marker POST failed, so a single recorded refusal can reach the cap. Suggested fix: `[ \"${invalid_record_rc}\" -eq 0 ] && decide_pending=1` and pass `--pending-invalid-verdicts \"${decide_pending:-0}\"` (about 2 lines).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b51b5ac3e38c2807456f2286cb59afc4c4e1533f7a199509d647b0e8b2d68185",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7901,
+    "run_id": "39886528570",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39886528570",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023022448_d3808216cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7901,
+    "run_id": "39886528570"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T02:24:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

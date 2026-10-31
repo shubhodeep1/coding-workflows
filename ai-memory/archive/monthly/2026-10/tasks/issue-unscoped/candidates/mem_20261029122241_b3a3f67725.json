@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:4993 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The \"Conflict-safe PR-close cleanup\" bullet states unconditionally that PRs queued on the former base wait for the next scheduled sweep after a retarget between closes.\n  WHY: With `cancel-in-progress: false`, an already-running earlier close run continues and releases PRs on its own event's base, so the delay is not guaranteed (both reviewers rated it NIT; anthropic_claude-sonnet-5_5 reviewed the same wording and judged it accurate, so the finding is disputed).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:4993 | severity=NIT | confidence=4\n  PROBLEM: The clause \"its merge-train release scan uses its own event's base, so if the PR was retargeted between the closes, PRs queued on the former base wait for the next scheduled sweep\" states the delay as unconditional.\n  WHY: `cancel-in-progress: false` in `.github/workflows/cancel_on_pr_close.yml` (lines 19\u201320 of the PR diff) means an already-started earlier close run is not replaced. It runs its release scan with its own `BASE_BRANCH`, so the former base's queued PRs are released by that run and do not wait for the sweep. Only a still-pending earlier run is dropped.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:4993 (also `.github/workflows/cancel_on_pr_close.yml` lines 23 and 404; `scripts/review_merge_train.sh` line 1360) | severity=NIT | confidence=4\n  PROBLEM: The statement that PRs queued on the former base \"wait for the next scheduled sweep\" is unconditional, but that delay is not guaranteed.\n  WHY: With `cancel-in-progress: false`, an already-running earlier close run continues when a newer same-PR close run is queued. That run uses its own event's `BASE_BRANCH` and can release queued PRs on the former base before the scheduled sweep.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "c2a5748f9dd45cee2afa5261deb2a8a226c30b5ce08853385cb17a835bcd06ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8331,
+    "run_id": "40864194229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40864194229",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029122241_b3a3f67725",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8331,
+    "run_id": "40864194229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T12:22:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

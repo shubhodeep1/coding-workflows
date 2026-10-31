@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/issue-4887-archive-finished-sessions-plan.md:9-292 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The plan retains statements that issue-start sessions are superseded by later stages, including a required test and an auto-decision, while the new note only identifies the Goals as historical.\n  WHY: A later conformance run could follow the unchanged plan and restore the supersede behavior; severity disagreement: minimax_minimax-m3 rated the related documentation issue NIT, while openai_gpt-6-luna rated it MAJOR.\n- scripts/claude_session_janitor.py:lines 281-339 | severity=low | confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new `classify()` body removes the supersede branch and checks whether the issue is closed, which the reviewer says is correct.\n  WHY: The reviewer found no runtime failure or defect.\n- scripts/claude_session_janitor.py:lines 327-330 | severity=low | confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new code preserves the fail-safe behavior that keeps a session when an issue read fails.\n  WHY: The reviewer found no runtime failure or defect.\n- scripts/claude_session_janitor.py:line 114 | severity=low | confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `NON_SUPERSEDING_STAGE_PATTERN` is retained with a comment even though `classify()` no longer uses it.\n  WHY: The reviewer says this honors CLAUDE.md \u00a76 and found no defect.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the historical Tests section so it does not present superseding by a later stage as current required behavior; clarify that the historical tests text must not restore the rule.\n  expected_change_site: docs/plans/issue-4887-archive-finished-sessions-plan.md\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: lines 233-234 describe issue-start sessions as superseded by a later stage, while the new Notes section at lines 286-292 says the Goals are historical but does not address the Tests section\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_session_janitor.py:lines 281-339 and lines 322-330 | severity=low | confidence=[1]\n  PROBLEM: The `classify()` body removes the `later_stages` collection and supersede branch; issue-start sessions are checked for issue closure.\n  WHY: The reviewer says this matches the plan and is the correct fail-safe approach.\n- scripts/claude_session_janitor.py:lines 327-330 | severity=low | confidence=[1]\n  PROBLEM: The code preserves the existing behavior that keeps a session and lists an error when an issue read fails.\n  WHY: The reviewer says the surrounding error handling catches the read failure.\n- scripts/claude_session_janitor.py:line 114 | severity=low | confidence=[1]\n  PROBLEM: `NON_SUPERSEDING_STAGE_PATTERN` is retained with a comment although it is no longer used by `classify()`.\n  WHY: The reviewer says this honors CLAUDE.md \u00a76 and AD-2 documents the decision.\n- TASK_GAP\n  Requirement: The historical Tests section still says \"an issue-start session is superseded by a later stage, not by a checker or an earlier stage, and not by a newer issue-start session\" \u2014 which is now factually incorrect after issue #5664.\n  Expected change site: docs/plans/issue-4887-archive-finished-sessions-plan.md\n  Evidence of absence: The new Notes section says \"The Goals keep the original text as history; do not restore the rule\", but that note refers to the Goals section, not the Tests section.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/plans/issue-4887-archive-finished-sessions-plan.md: Lines 9\u201311, 233\u2013235, and 277\u2013278; compared with the new note at lines 286\u2013292 | severity=high | confidence=[5]\n  PROBLEM: The plan still says issue-start sessions are archived after the chain moves past them, lists superseding by a later stage as a required test, and records that behavior as the chosen auto-decision. The new note says only the Goals are historical.\n  WHY: A later conformance run following the plan\u2019s unchanged tests and decision can restore the supersede behavior, reintroducing the recovery-session archival defect this change is intended to prevent.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_claude_session_janitor.py:Location: Line 378-379 | PROBLEM: The comment \"session_a's stage is live\" is ambiguous. session_a is an issue-start session (kind=\"issue_start\"), not a stage session. The comment intends to say that a stage session for session_a's issue (5126) is live, but the wording could be read as \"session_a, which is a stage, is live.\" | WHY: Suggested minimal fix: Reword to \"a stage for session_a's issue is live, but only a closed issue ends an issue-start session (issue #5664).\"\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b6e643308d1bfcf06d1200f2aee51ea18b607e65a800ebbf1b08c9e360eb67b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5674,
+    "run_id": "36817875130",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36817875130",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001052251_8944024a0d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5674,
+    "run_id": "36817875130"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T05:22:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:lines 501-506 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: An unresolved shell-variable push destination falls back to checking the checkout\u2019s current branch instead of requiring confirmation or checking the actual destination.\n  WHY: The guard sees the literal variable, cannot resolve the destination, and may allow a push to a merged branch without checking that branch.\n- .claude/hooks/pr_merge_status_guard.py:lines 503-506 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Removing the safe-source-refspec check changes guard behavior for commands such as `git push origin $SRC:main`, which now check the destination instead of falling back to HEAD.\n  WHY: Callers or tests relying on the former fallback behavior may observe a different guard result.\n- .claude/hooks/pr_merge_status_guard.py:line 262 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The lexer\u2019s `previous_token_end = -1` sentinel can cause its first-token slice to rely on Python negative-index behavior.\n  WHY: This is currently described as safe, but the implicit bounds behavior is fragile if the check logic changes.\n- .claude/hooks/pr_merge_status_guard.py:lines 262-277 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The redirect parser does not fully consume `2>&1`, allowing the fd target to be treated as a push refspec instead of checking the current branch.\n  WHY: If branch `1` exists without a merged PR, the guard can check that branch and miss a merged PR on the branch actually being pushed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The cross-pollination consensus finding claims `_branch_ref` at line 503-505 falls back to the current branch when a push refspec contains a shell variable.\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py:_branch_ref` or `_push_targets` (lines 500-505)\n  confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: This code path at line 503-505 is pre-existing and NOT modified by the LAST RUN DIFF. The LAST RUN DIFF only changes `_shell_segments_with_operators` (lines 262-288) and the test file. The `branch is None` \u2192 check-current-branch fallback has always been there for unresolvable refspecs including shell variables. This is not a regression introduced by the last autofix run.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nTASK_GAP\nRequirement: The cross-pollination consensus finding claims `_branch_ref` at line 503-505 falls back to the current branch when a push refspec contains a shell variable.\nExpected change site: `.claude/hooks/pr_merge_status_guard.py:_branch_ref` or `_push_targets` (lines 500-505)\nEvidence of absence: This code path at line 503-505 is pre-existing and NOT modified by the LAST RUN DIFF. The LAST RUN DIFF only changes `_shell_segments_with_operators` (lines 262-288) and the test file. The `branch is None` \u2192 check-current-branch fallback has always been there for unresolvable refspecs including shell variables. This is not a regression introduced by the last autofix run.\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:lines 501-506 | severity=high | confidence=4\n  PROBLEM: When a push refspec contains a shell variable, `_branch_ref` returns None and the guard falls back to checking the current checkout\u2019s HEAD branch, which may not be the actual destination.\n  WHY: The guard sees the pre-expansion command line, so a push to a merged branch can proceed without checking that destination.\n- .claude/hooks/pr_merge_status_guard.py:lines 503-506 | severity=low | confidence=3\n  PROBLEM: Removing the `not re.fullmatch(r\"[A-Za-z0-9_./-]+|HEAD\", source)` check changes behavior for commands like `git push origin $SRC:main`, which now check the destination rather than falling back to HEAD.\n  WHY: Tests or callers relying on the former fallback behavior may observe a different guard result.\n- .claude/hooks/pr_merge_status_guard.py:line 262 | severity=low | confidence=2\n  PROBLEM: `previous_token_end = -1` makes the first-token slice rely on Python negative-index behavior.\n  WHY: The current outcome is described as safe, but the implicit bounds behavior is fragile if the check logic changes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py: `_push_targets`, lines 503-506; `_evaluate_bash`, lines 1321-1326 | severity=high | confidence=5\n  PROBLEM: An unresolved shell-variable destination falls back to checking the checkout\u2019s current branch instead of requiring confirmation.\n  WHY: The parser sees the literal variable, `_branch_ref` returns `None`, and a push to a merged destination can proceed without checking that destination.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- `.claude/hooks/pr_merge_status_guard.py`: `_shell_segments_with_operators`, lines 263-275 | severity=high | confidence=3\n  PROBLEM: The guard does not recognize `2>&1` as a file descriptor redirect and treats it as a refspec.\n  WHY: The guard checks branch `2>&1` instead of the actual current branch, potentially allowing a push without checking that branch.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/pr_merge_status_guard.py: _shell_segments_with_operators, lines 262-277 | severity=high | confidence=4\n  PROBLEM: The `2>&1` fd-redirect pattern is not fully consumed, leaving the fd target `1` to be treated as a push refspec.\n  WHY: If branch `1` exists and has no merged PR, the guard can skip checking the current branch actually being pushed.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "c4b9cb859121186a7b43163fd29e4512301e6d7f479e5304349c3ae39195c28c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37224795486",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37224795486",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004192253_f0fa7cd182",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37224795486"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T19:22:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

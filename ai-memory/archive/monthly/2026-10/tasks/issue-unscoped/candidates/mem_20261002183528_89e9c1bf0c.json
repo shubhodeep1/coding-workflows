@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/scripts/permission_prompts.py:532\u2013536 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `_strip_shell_comments` treats `)` as a word boundary even when it closes a command substitution in the same shell word, so `X=$(pwd)#suffix; git status` is misclassified.\n  WHY: `#suffix` is part of the assignment word, not a comment, so stripping from it removes `; git status` and can file or comment under the wrong family.\n- .claude/scripts/permission_prompts.py:693-700 | severity=low | confidence=[2]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: `_family_code_span()` does not strip zero-width Unicode or bidirectional control characters from rendered paths or script names.\n  WHY: These characters can visually misrepresent the command or family inside the code span, potentially misleading the issue implementer.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: .claude/scripts/permission_prompts.py\n  Location: _family_code_span function (lines 690-705)\n  PROBLEM: The function escapes backticks, line breaks, and trims whitespace, but does not handle zero-width Unicode (U+200B-U+200D, U+FEFF) or bidirectional control characters (U+202A-U+202E, U+2066-U+2069).\n  WHY: An untrusted command shape, script basename, or family label containing a bidi override character could render with misleading visual ordering, making a file path or family label appear to refer to a different command.\n- File: .claude/scripts/permission_prompts.py\n  Location: _occurrence_block function (line 715-716) and _family_code_span\n  PROBLEM: A reason containing only whitespace can produce an empty bullet in the issue body.\n  WHY: Although whitespace is collapsed, the reason strings are only truncated to 300 characters and a whitespace-only reason could still render as `- `.\n- File: .claude/scripts/permission_prompts.py\n  Location: file_patterns function (lines 901-936)\n  PROBLEM: The in-memory `families` dict update happens inside the try/except, so if the update raises after issue creation succeeds, the summary would still mark it as filed.\n  WHY: The reviewer says this is best-effort tracking, that the exception should not occur, and that no fix is needed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: .claude/scripts/permission_prompts.py\n  Line or code reference: _strip_shell_comments, lines 532\u2013536\n  Problem: The comment detector treats `)` as a word boundary even when it closes a command substitution that is still part of the same shell word.\n  Why it fails at runtime: For `X=$(pwd)#suffix; git status`, `#suffix` is part of the assignment word, not a comment. This code strips the rest of the line, including `; git status`, so `command_family` classifies the report under an empty-command substitution family instead of `git status + subst`. The report can then be filed or commented under the wrong family.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: .claude/scripts/permission_prompts.py\n  Line or code reference: _family_code_span() at lines 693-700\n  Problem: The function escapes backticks and newlines but does not strip zero-width Unicode characters (U+200B, U+FEFF, etc.) or bidirectional control characters (U+202A-U+202E, U+2066-U+2069). A file path or script name containing these characters could visually misrepresent the command or family within the code span.\n  Why it fails at runtime: A path like `/tmp/\u00e2\u20ac\u00aegpj/\u00e2\u20ac\u00acfile.py` (with bidi overrides) would render with reversed text segments inside the backtick fence, potentially misleading the Claude issue implementer about which command or family is being reported. The backtick fence prevents breakout but not visual spoofing within the span.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9ecff335d1cb3c4833319f5ea8912425045574eb3483524d9b2977b56232bf3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5697,
+    "run_id": "37045284983",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37045284983",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002183528_89e9c1bf0c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5697,
+    "run_id": "37045284983"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T18:35:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

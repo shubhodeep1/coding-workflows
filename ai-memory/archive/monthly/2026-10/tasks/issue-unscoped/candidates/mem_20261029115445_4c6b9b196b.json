@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_codex_step_extraction.py:37-39 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The history comment's parenthetical \"(264 -> 260 lines, 17_390 -> 17_142 bytes)\" gives the inline-prompt pin deltas of scripts/run_plan_codex.sh, but the sentence places them next to prompts/mode-plan.txt's 250-line budget. prompts/mode-plan.txt itself went 254 -> 250.\n  WHY: A later editor could record these numbers as the prompts/mode-plan.txt line history. There is no runtime impact. All reviewers rated it NIT. Confidence ranged from 2 to 4. z-ai_glm-5_3-flash disputed it in its narration and called the numbers consistent with the comment's convention, but it listed no finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_plan_codex_step_extraction.py: history comment above `PRE_EXTRACTION_PROMPT_SHA256`, the sentence \"The rule was then cut to two lines to keep prompts/mode-plan.txt within its 250-line budget (264 -> 260 lines, 17_390 -> 17_142 bytes).\" | severity=NIT | confidence=2\n  PROBLEM: The parenthetical numbers are the inline-prompt pin deltas in `scripts/run_plan_codex.sh`, not the line history of `prompts/mode-plan.txt` (254 -> 250). A later editor could mistake them for that file's numbers.\n  WHY: There is no runtime failure. The comment is only history for a pin, and the pinned constants are correct.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_plan_codex_step_extraction.py:37-39 | severity=NIT | confidence=4\n  PROBLEM: The history comment conflates the inline-prompt pin changes with the line-count history of prompts/mode-plan.txt.\n  WHY: There is no runtime failure, but maintainers tracking the file line-count budget could be confused.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_plan_codex_step_extraction.py:37-39 | severity=NIT | confidence=4\n  PROBLEM: The sentence \"cut to two lines to keep prompts/mode-plan.txt within its 250-line budget (264 -> 260 lines, 17_390 -> 17_142 bytes)\" uses numbers from the inline-prompt pin (PRE_EXTRACTION_PROMPT_LINES, PRE_EXTRACTION_PROMPT_BYTES), not from prompts/mode-plan.txt (254 -> 250). The wording is likely to mislead a future maintainer who updates the pins.\n  WHY: There is no runtime impact. The test logic, pin values and the three prompt copies are correct, and the defect is only misleading comment phrasing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "350ea9d27f58317de6f47d1d7bd9a9607e9e912eb5f1c3e645d7fdc2861f308d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8332,
+    "run_id": "40857992399",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40857992399",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029115445_4c6b9b196b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8332,
+    "run_id": "40857992399"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T11:54:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

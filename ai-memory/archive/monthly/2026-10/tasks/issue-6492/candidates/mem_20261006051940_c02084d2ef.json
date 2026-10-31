@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6492,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6492\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6496\",\"pr_number\":6496,\"branch\":\"ai/issue-6492\",\"run_id\":\"37416738080\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37416738080\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/ci.yml\",\".github/workflows/workflow-log-analysis.yml\",\"changelog.d/6492-workflow-log-analysis-mount-run-logs.md\",\"docs/INVENTORY.md\",\"scripts/stage_workflow_log_bundle.py\",\"tests/test_codex_agent_isolation_contract.py\",\"tests/test_stage_workflow_log_bundle.py\",\"tests/test_workflow_log_analysis_failure_contract.py\"]}",
+  "fingerprint": "53e6cfef2b32908e50bd17094e5f5b68d79f6041d33401671f394e09f4771bff",
+  "lineage": {
+    "issue_number": 6492,
+    "parent_ids": [],
+    "pr_number": 6496,
+    "run_id": "37416738080",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37416738080",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6496"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006051940_c02084d2ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6492,
+    "level": "run",
+    "pr_number": 6496,
+    "run_id": "37416738080"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6492: https://github.com/shubhodeep1/coding-workflows/pull/6496",
+  "timestamps": {
+    "created_at": "2026-10-06T05:19:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

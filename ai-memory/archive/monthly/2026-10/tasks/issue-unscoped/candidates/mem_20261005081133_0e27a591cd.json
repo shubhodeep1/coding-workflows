@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:274-279 | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The adjacent file-descriptor detection fails to remove the numeric token before a redirect, leaving it as an extra push refspec.\n  WHY: For `git push origin HEAD:feature/open 2>/dev/null`, the `2` remains in the parsed push arguments and can trigger an erroneous branch lookup or merged-PR guard decision.\n- .claude/hooks/pr_merge_status_guard.py:271-279 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The parser does not recognize `>&1` as a redirect token because the redirect-token condition rejects tokens containing digits.\n  WHY: For `git push origin HEAD:feature/open 2>out 2>&1`, `>&1` is treated as a regular argument and the preceding `2` is not removed.\n- changelog.d/6271-guard-redirect-parsing.md:1-6 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The changelog fragment claims adjacent `2>` or `2>&1` redirects are ignored as file descriptors, but the parser does not implement that behavior.\n  WHY: The fragment describes a fix that is not in effect.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The merged-PR guard must distinguish numeric push refspecs from file-descriptor redirects, so that an adjacent `2>` is treated as an FD and does not create a numeric refspec.\n  expected_change_site: .claude/hooks/pr_merge_status_guard.py:274-279 and workflow-templates/.claude/hooks/pr_merge_status_guard.py:274-279\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Both hook copies carry the same broken check; tests/test_pr_merge_status_guard.py:933,965,966 encode the expected behavior but the parser does not implement it.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:274-279 | severity=critical | confidence=[5]\n  PROBLEM: The FD-detection check compares the wrong slice, so the adjacent FD digit is not popped from the segment.\n  WHY: For `git push origin HEAD:feature/open 2>/dev/null`, `2` remains in the parsed arguments as an extra refspec; the regression cases fail.\n- changelog.d/6271-guard-redirect-parsing.md:1-6 | severity=high | confidence=[5]\n  PROBLEM: The changelog fragment claims adjacent `2>` or `2>&1` redirects are ignored as file descriptors, but the parser does not implement that behavior.\n  WHY: The fragment describes a fix that is not in effect.\n- Requirement: The merged-PR guard must distinguish numeric push refspecs from file-descriptor redirects, so that an adjacent `2>` is treated as an FD and does not create a numeric refspec.\n  Expected change site: .claude/hooks/pr_merge_status_guard.py:274-279 (the FD-pop condition) and the matching template copy at workflow-templates/.claude/hooks/pr_merge_status_guard.py:274-279\n  Evidence of absence: The current check `command[raw_start:previous_end - 1] == segment[-1]` never matches for adjacent FDs because it compares a one-character separator slice against the digit string. Both hook copies carry the same broken check. The new regression tests in tests/test_pr_merge_status_guard.py:933,965,966 encode the correct expected behavior but the parser does not implement it, so the tests fail.\n  SEVERITY: critical\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:274-279 | severity=critical | confidence=[5]\n  PROBLEM: The adjacent file-descriptor detection does not remove the numeric token before a redirect.\n  WHY: The `2` remains in the parsed push arguments and is treated as another refspec; the regression cases fail their assertion that only `origin` and `HEAD:feature/open` remain.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py:271-279 | severity=critical | confidence=[5]\n  PROBLEM: The parser does not recognize `>&1` as a redirect token because the condition `set(token) <= set(\"<>\") | {\"&\"}` rejects tokens containing digits.\n  WHY: In `git push origin HEAD:feature/open 2>out 2>&1`, `>&1` is treated as a regular argument and the preceding `2` is not removed.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "03b2e0eca11c9bb1f9a893eb422ec21ab146c8d8c23e1f80d0e6009578105ca8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6271,
+    "run_id": "37279474546",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37279474546",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005081133_0e27a591cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6271,
+    "run_id": "37279474546"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T08:11:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

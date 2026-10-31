@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:472 | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The change sets `rb_used_engine` but may not propagate the fallback engine correctly when Claude fails with exit 75 and the run retries in OpenCode.\n  WHY: `rb_judge_last_engine` may not be updated in every fallback path, so the commit identity could be inconsistent. Severity was not stated by the source, so medium is a placeholder.\n- scripts/review_apply_fixes.sh:279 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `[ \"${editor_claude_rc}\" -ne 75 ]` condition treats any exit code other than 75 as success or a non-unavailable failure.\n  WHY: After another transient Claude error such as 80, `REVIEW_EDITOR_ENGINE_FELL_BACK` is not updated, so the commit step may use the `claude-bot` identity even though Claude did not edit the files. Severity was not stated by the source, so medium is a placeholder.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Every other pipeline commit stays `codex-bot`, with the new email. That covers merges.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh::_premerge_align_pr\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: Lines 2184-2186 (merge) and 2231-2233 (rebase) of scripts/orchestrate_poll_process.sh still use `orchestrator <orchestrator@coding-workflows>` instead of the new codex-bot identity. Both reviewers rated it NIT. Four other reviewers (sonnet, minimax, qwen, glm) judged it out of scope or already rejected.\n- requirement: Trusted-evidence comment for gate C should describe the matcher the gate actually uses.\n  expected_change_site: scripts/orchestrate_poll_process.sh lines 31657-31659 (comment)\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The comment names `NOOP_PRODUCTIVE_COMMIT_NAME / _EMAIL`, but the gate now reads `NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON`. Rated NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:472 | confidence=3\n  PROBLEM: The change sets `rb_used_engine` but does not correctly propagate the fallback engine logic when the Claude run fails in a way that requires retrying in OpenCode.\n  WHY: If Claude exits with 75, `rb_used_engine` is set to \"codex\", but the commit identity logic that relies on the `rb_judge_last_engine` file may still be inconsistent. `poller_judge_isolated` does not fully ensure that file is updated in every fallback scenario.\n- scripts/review_apply_fixes.sh:279 | confidence=4\n  PROBLEM: The `if` condition `[ \"${editor_claude_rc}\" -ne 75 ]` assumes that any exit code other than 75 implies success or a non-Claude-unavailable failure.\n  WHY: After another transient Claude error (80 capacity wait, or other non-zero codes), `REVIEW_EDITOR_ENGINE_FELL_BACK` is not updated or is set to false. The commit step might then use the `claude-bot` identity even though Claude did not successfully edit the files.\n- TASK_GAP: requirement: \"Every other pipeline commit stays `codex-bot`, with the new email. That covers merges.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh::_premerge_align_pr\n  EVIDENCE: Lines 2184-2186 (merge) and 2231-2233 (rebase) still use `orchestrator <orchestrator@coding-workflows>`.\n  ISSUE_CONFIDENCE: 4, SEVERITY: NIT\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: scripts/orchestrate_poll_process.sh:31658-31659 | confidence=3\n  PROBLEM: The \"Trusted evidence\" comment for gate C names `NOOP_PRODUCTIVE_COMMIT_NAME / _EMAIL`, but the gate now reads `NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON`.\n  WHY: It does not fail at runtime. It is doc drift, and a reader following the comment would look for constants the gate no longer uses. Rated NIT.\n- HARDENING_SUGGESTION: scripts/orchestrate_poll_process.sh:31657-31659 \u2014 update the comment to reference `NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: requirement: \"Every other pipeline commit stays `codex-bot`, with the new email. That covers merges.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh::_premerge_align_pr\n  EVIDENCE: The merge and rebase identity configuration in `_premerge_align_pr` is not updated. Those commits keep `orchestrator <orchestrator@coding-workflows>` instead of `codex-bot <codex-bot@users.noreply.invalid>`.\n  ISSUE_CONFIDENCE: 4, SEVERITY: NIT\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "48c57e4ac22646507ffb9d8731d0d6a92120a4206a3114059871a631f6addc67",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8203,
+    "run_id": "40356840881",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40356840881",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026170205_a28baca465",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8203,
+    "run_id": "40356840881"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T17:02:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

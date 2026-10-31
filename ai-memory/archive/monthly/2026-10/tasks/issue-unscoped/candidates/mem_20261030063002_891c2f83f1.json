@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_phase7_cancel_timeout_status.py:126 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Redundant assertion `assert \"status=\" not in lines` is trivially true because `lines` holds full lines such as \"status=timeout\", never the bare string \"status=\".\n  WHY: It cannot detect an empty `status=` write, and the strict equality check on line 125 already covers the regression. Both reviewers rated it NIT; z-ai_glm-5_3-flash confirmed it in its notes but did not list it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Bring over the matching regression tests from `main` with the change: the Phase 7 timeout and status contract ... They should fail on `2ad4b6b6` and pass after the change.\"\n  expected_change_site: `.github/workflows/ci.yml`, \"Test-and-mark-stable ...\" unit-test step block (sibling wiring at ci.yml:1642-1657, 1662-1677)\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: `tests/test_test_and_mark_stable_phase7_cancel_timeout_status.py` is wired only into `.github/workflows/test-and-mark-stable.yml:3985` and appears in no `ci.yml` step, while every sibling `test_test_and_mark_stable_*` test is wired in `ci.yml` (1642, 1647, 1652, 1657, 1667, 1672, 1677), so a Phase 7 timeout regression would be invisible on PR CI. The heal-scope marker does not list `ci.yml`, so this wiring may be outside the locked scope. Severity is NIT for all three reviewers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_phase7_cancel_timeout_status.py:126 | severity=NIT | confidence=4\n  PROBLEM: Redundant assertion `assert \"status=\" not in lines`.\n  WHY: It is trivially true, since \"status=\" is not an exact element of `lines` (e.g. \"status=timeout\"). It does not check for the \"status=\" prefix as intended.\n- TASK_GAP\n  Requirement: Bring over the matching regression tests from `main` with the change: the Phase 7 timeout and status contract. The new test is wired only into the release gate's Unit tests step (`.github/workflows/test-and-mark-stable.yml:3985`), not into the PR CI gate.\n  Expected change site: `.github/workflows/ci.yml`, \"Test-and-mark-stable ...\" unit-test step block (sibling wiring at `ci.yml:1642-1657`)\n  Evidence of absence: Every sibling contract test is wired in both places on this branch (`ci.yml:1642`, `1647`, `1652`, `1657`). The new test appears in no `ci.yml` step, so a Phase 7 timeout regression would be invisible on PR CI and surface only at the next stable release gate run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_test_and_mark_stable_phase7_cancel_timeout_status.py:126 | severity=NIT | confidence=4\n  PROBLEM: The assertion `assert \"status=\" not in lines` in `test_timeout_branch_behaviour` is trivially true, because `lines` is a list of full lines and never contains the bare string \"status=\". It cannot detect an empty `status=` write.\n  WHY: It does not fail at runtime, since `lines` equals `want_lines` (line 125) before it runs. Line 125's strict equality is what pins the regression, so a maintainer could delete this assertion without losing coverage.\n- TASK_GAP\n  Requirement: \"Bring over the matching regression tests from `main` with the change: the Phase 7 timeout and status contract ... They should fail on `2ad4b6b6` and pass after the change.\"\n  Expected change site: `.github/workflows/ci.yml`, a new step block alongside the sibling test-and-mark-stable wiring at lines 1639-1677 (e.g. adjacent to `test_test_and_mark_stable_cancel_on_close_single_fetch.py` at line 1657)\n  Evidence of absence: Every sibling test is wired into `ci.yml` (1642, 1647, 1652, 1657, 1667, 1672, 1677). The new test is wired only into `test-and-mark-stable.yml:3985`, so a Phase 7 timeout regression would be invisible on PR CI. The heal-scope marker (`paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md`) does not list `ci.yml`, so the wiring is technically outside the locked scope.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Bring over the matching regression tests from `main` with the change: the Phase 7 timeout and status contract, and the concurrency-group contract. They should fail on `2ad4b6b6` and pass after the change.\" The delivered regression test is wired only into the release gate's own `validate-scripts` Unit tests step.\n  Expected change site: `.github/workflows/ci.yml`, the \"Test-and-mark-stable ...\" unit-test step block (sibling wirings at ci.yml:1642, 1647, 1652, 1657, 1662-1677).\n  Evidence of absence: Grep for `test_test_and_mark_stable_phase7_cancel_timeout_status` across `.github/workflows/` matches only `.github/workflows/test-and-mark-stable.yml:3985`. Every sibling `test_test_and_mark_stable_*` test is wired in ci.yml, and the new test is in none of them, so a timeout-reporting regression would be invisible on PR CI. The heal-scope marker does not list `ci.yml`, so this wiring likely needs an explicit scope grant or a follow-up on `main` first.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- .github/workflows/test-and-mark-stable.yml:3434 (hardening suggestion) | severity=NIT | confidence=(not stated; HARDENING_RISK_SCORE: 1)\n  PROBLEM: STATUS/NEW_RUN_ID come from the runs-list API response and are echoed raw into the `::error::` annotation `cancel-on-close run #${NEW_RUN_ID} did not complete within ... (status=${STATUS:-?})`. The no-run diagnostic block (lines 3400-3415) neutralises run fields as data.\n  WHY: The values are GitHub enum fields, so exploitability is low, and the pre-existing lines 3121 and 3440 share the pattern. The suggested one-line fix is to pipe the echoed line through the `tr -d '\\r' | sed -e 's/^\\(::\\|##\\[\\)/[neutralised]\\1/'` neutralisation used at line 3403.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c54a656fd712802005191499acee140b2b8d9b3a869221cafdea687c3c1fda04",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8437,
+    "run_id": "41006348665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41006348665",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030063002_891c2f83f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8437,
+    "run_id": "41006348665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T06:30:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

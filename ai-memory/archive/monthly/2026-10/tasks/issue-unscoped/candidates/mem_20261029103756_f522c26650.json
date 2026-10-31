@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:4993 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The documentation calls repeated close runs of the same PR \"harmless\", but the release scan is filtered by the base branch (BASE_BRANCH from the event; scripts/review_merge_train.sh:1359-1361). If the PR is retargeted between two closes, the surviving run scans only the new base.\n  WHY: Queued PRs on the old base wait for the next scheduled global scan (about 5 minutes), so the claim holds for run cancellation only. Severity is NIT in all three sources; minimax_minimax-m3 saw the same caveat and did not report it as a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:4993 | severity=NIT | confidence=2\n  PROBLEM: The \"harmless\" claim about two close runs of the same PR sharing a group holds for run cancellation only. BASE_BRANCH comes from github.event.pull_request.base.ref (workflow line 404), so after a retarget the surviving run scans only the new base.\n  WHY: This needs an unusual sequence: close, reopen, retarget, close again while the first close run is pending. The 5-minute scheduled sweep recovers the queued PRs, so this is a documentation precision point and not a defect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:4993 | severity=NIT | confidence=3\n  PROBLEM: The documentation says concurrent close runs for the same PR are harmless, but the release scan also filters by the PR's base branch (scripts/review_merge_train.sh:1359-1361).\n  WHY: If a PR is reopened, retargeted and closed again, the new run scans a new base branch. PRs queued on the old base may then not be handled by the earlier run.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:4993; .github/workflows/cancel_on_pr_close.yml:22,404,416; scripts/review_merge_train.sh:1359-1361 | severity=NIT | confidence=4\n  PROBLEM: The documentation describes repeated close runs for the same PR as harmless, but the per-PR concurrency group does not include the base branch. Each close run passes its event's base to the release scan, which skips queued PRs on other bases.\n  WHY: If a PR is reopened, retargeted and closed again while its earlier close run is pending, the later run replaces it. The later run's scan uses the new base, so queued PRs on the former base wait for a scheduled global scan.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "ef62e93d60d493761bf7d56dadda247998a67cab362b5ce80b6c06a690efef1f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8331,
+    "run_id": "40848392257",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40848392257",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029103756_f522c26650",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8331,
+    "run_id": "40848392257"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T10:37:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

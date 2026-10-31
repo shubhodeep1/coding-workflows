@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The new default-on IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED switch should be documented for operators in the README variable reference.\n  expected_change_site: README.md, under #### Variables\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: README.md has no entry for IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED, although the switch is added in .github/workflows/implement.yml (lines 4075-4076 and 5088-5089) and described in changelog.d/7624-restore-tracked-symlinks.md. minimax_minimax-m3 notes the issue scope excludes README.md and treats this as a documented deferral. Severity stated as NIT by all.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP\nRequirement: The new default-on IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED switch should be documented for operators.\nExpected change site: README.md, under #### Variables\nEvidence of absence: The switch is added to implement.yml and described in the changelog fragment, but the README variable reference section has no entry for it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\nRequirement: The linked issue requires \"Add a default-on switch\" for the new restore behavior so operators can disable the restore and know it exists.\nExpected change site: README.md, under `#### Variables`, alongside the other `IMPLEMENT_*` workflow variables.\nEvidence of absence: No diff hunk in README.md adds a row for `IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED`. The variable is implemented in `.github/workflows/implement.yml` and described in `changelog.d/7624-restore-tracked-symlinks.md`, but the README variable reference is not updated. The fix scope in the issue explicitly excludes README.md, and the changelog fragment names the switch, so this is a documented deferral rather than a missing implementation.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\nRequirement: The new default-on repository variable should be documented in the README's `#### Variables` reference.\nExpected change site: `README.md`, under `#### Variables`.\nEvidence of absence: The PR adds `IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED` in `.github/workflows/implement.yml` and mentions it in the changelog fragment, but does not add it to the README variable reference.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP\nRequirement: The new default-on `IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED` switch should be documented for operators in the README variable reference.\nExpected change site: README.md, under the `#### Variables` section\nEvidence of absence: The switch is added to `.github/workflows/implement.yml` (lines 4075-4076 and 5088-5089) and described in the changelog fragment `changelog.d/7624-restore-tracked-symlinks.md`, but the README variable reference table has no entry for it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "aed197cb12eed2e03a778c6cc86c3a54408e64a29f8aed1164e7886af4224087",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7626,
+    "run_id": "39118534337",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39118534337",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018103408_f312dfc552",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7626,
+    "run_id": "39118534337"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T10:34:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

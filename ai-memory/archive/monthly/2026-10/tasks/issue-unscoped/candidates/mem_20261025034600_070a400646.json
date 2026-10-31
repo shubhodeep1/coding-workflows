@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:826-838 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The `elif [ \"${1:-}\" = \"_safe_gh_jq\" ]` branch in `_gh_cmd_log_summary` is unreachable, because the only caller (line 1331) passes `gh api \"$@\"`.\n  WHY: It is harmless dead code that could mislead maintainers. All reviewers rated it NIT, and the line cites differ slightly (826-830, 826-828, 837-838).\n- scripts/gh_helpers.sh:871-889 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A dash-prefixed flag value is processed as a flag instead of being skipped. For example, `gh issue comment 5 --body --secret123` adds `--secret123` to the summary's flag names.\n  WHY: A comment body that starts with flag-shaped text can still reach workflow logs, which violates the redaction requirement. The reviewer rated it MAJOR.\n- scripts/gh_helpers.sh:828 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The word regex `^[a-z][a-z-]{0,30}$` rejects commands or subcommands that contain digits, so they fall back to the generic `<command>` summary.\n  WHY: The log loses some context. The reviewer rated it NIT.\n- scripts/gh_helpers.sh:835-839 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Subcommand word capture stops at two levels, so `gh issue comment create` is truncated to `gh issue comment`.\n  WHY: The log diagnostics could be ambiguous. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"For other subcommands, the first positional argument only when it is a plain issue/PR number.\"\n  expected_change_site: scripts/gh_helpers.sh, _gh_cmd_log_summary()\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The parser checks only the argument immediately after the subcommand words for a number (lines 841-851). `gh issue view --repo o/r 42` therefore omits the issue number, and the added tests do not cover a number that follows flags.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/gh_helpers.sh:~828-830 | severity=low | confidence=5\n  PROBLEM: The `elif [ \"${1:-}\" = \"_safe_gh_jq\" ]` branch in `_gh_cmd_log_summary` never runs, because the only caller (line 1331) passes `gh api \"$@\"`.\n  WHY: It does not fail. The branch is defensive and harmless.\n- Other categories: NONE. The reviewer found no task gaps.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:826-827 | severity=low | confidence=5\n  PROBLEM: The elif branch for `_safe_gh_jq` is unreachable code.\n  WHY: The caller at line 1331 invokes `_gh_cmd_log_summary gh api \"$@\"`, so the first branch always matches.\n- scripts/gh_helpers.sh:828 | severity=low | confidence=4\n  PROBLEM: The word regex `^[a-z][a-z-]{0,30}$` is overly restrictive.\n  WHY: Commands containing digits (e.g. `gh2`, `api-v2`) fall back to the generic `<command>` summary and lose context.\n- scripts/gh_helpers.sh:835-839 | severity=low | confidence=3\n  PROBLEM: Subcommand word capture is limited to the first two levels of nesting.\n  WHY: `gh issue comment create` is truncated to `gh issue comment`, which could make diagnostics ambiguous.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh:837-838 | severity=low | confidence=5\n  PROBLEM: The `_safe_gh_jq` branch in `_gh_cmd_log_summary` is unreachable, because the call site at line 1331 always passes `gh api \"$@\"`.\n  WHY: It does not fail at runtime. It is dead code that adds clutter and could suggest that a direct `_safe_gh_jq` call is supported.\n- HARDENING_SUGGESTIONS: remove the dead `elif` block (about 3 lines changed). HARDENING_RISK_SCORE: 1.\n- Task completeness: the reviewer verified all deliverables and reported no gaps.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/gh_helpers.sh:871-889 | severity=high | confidence=4\n  PROBLEM: A dash-prefixed flag value is processed as a flag instead of being skipped. For example, `gh issue comment 5 --body --secret123` adds `--secret123` to the summary's flag names.\n  WHY: A comment body that starts with flag-shaped text can still reach workflow logs, which violates the redaction requirement. The reviewer rated it MAJOR.\n- TASK_GAP:\n  Requirement: \"For other subcommands, the first positional argument only when it is a plain issue/PR number.\"\n  Expected change site: scripts/gh_helpers.sh, _gh_cmd_log_summary()\n  Evidence of absence: The parser checks only the argument immediately after the subcommand words for a number (lines 841-851). `gh issue view --repo o/r 42` therefore omits the issue number, and the added tests do not cover a number that follows flags.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/gh_helpers.sh:837 | severity=low | confidence=5\n  PROBLEM: The `_safe_gh_jq` branch in `_gh_cmd_log_summary` is unreachable dead code, because the only call site (line 1331) passes `gh api \"$@\"`.\n  WHY: It is harmless. A future caller without the `gh api` prefix would get a wrong summary (`_safe_gh_jq gh api \u2026`).\n- Task completeness: the reviewer reported no gaps.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/gh_helpers.sh:826-828 | severity=low | confidence=5\n  PROBLEM: The `_safe_gh_jq` elif branch is dead code, because its only call site (scripts/gh_helpers.sh:1331) passes `gh api \"$@\"`.\n  WHY: It has no behavioural impact today. It could mislead maintainers, and a future bare call would produce a `_safe_gh_jq gh api` summary.\n- Task completeness: the reviewer verified every listed requirement and reported no gaps. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b4ef6b5fbf233557d8b8bddd02cdfea109892f666c49ec89e74b6f404da685f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8103,
+    "run_id": "40156741687",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40156741687",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025034600_070a400646",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8103,
+    "run_id": "40156741687"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T03:46:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

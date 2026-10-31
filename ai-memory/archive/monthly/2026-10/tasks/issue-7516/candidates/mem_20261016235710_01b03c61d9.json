@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should `clarify.yml` do when the resolver refuses with `reason=label_missing`?\nChoices:\n- A: Keep refusing the routing and never fall back to the default branch. Post one deduplicated issue comment naming what is missing (`ai:check-triage`, or a `- Tracking issue (untrusted): #N` line on a managed issue) and the operator fix (relabel and post `/reclarify`). Add `ai:blocked` so the unblock scan picks the issue up. End the job as a held skip, not a failure, so the heal pipeline stops re-reporting it. Add a regression test that drives the step with a resolver stub returning exit 3 `label_missing`. (RECOMMENDED)\n- B: Same comment and `ai:blocked` label, but the job still fails with exit 1. Heal reports keep coming and the lineage reaches its cap of 3 and escalates.\n- C: No code change. An operator fixes #7515's labels by hand, and this heal issue is closed as not planned.\nQ2: Should the same PR also guard the `always()` steps that failed afterwards in run 38983115876? These are `scripts/tg_helpers.sh: No such file or directory` and `RUNTIME_DIR: unbound variable`, which happen when the job stops before setup finishes.\nChoices:\n- A: Yes. Make those steps in `clarify.yml` skip with a `::warning::` when the support files or `RUNTIME_DIR` are missing, so the only error left is the real one. (RECOMMENDED)\n- B: No. Keep this PR to the `label_missing` handling only.\nQ3: The script that swapped `ai:check-triage` for `ai:orchestrator-managed` on #7511 and #7515 may turn out to be under `scripts/`, which this heal issue cannot change. If planning finds it, what should happen?\nChoices:\n- A: The plan records the path and the evidence and files a separate follow-up issue whose scope covers that script. This PR stays within the heal scope. (RECOMMENDED)\n- B: Stop and ask an operator to widen the scope before implementing.",
+  "fingerprint": "f5523cac371310de0c3561ac6a812d3157bfae84ef1f8c8215c3836265531fb7",
+  "lineage": {
+    "issue_number": 7516,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38983542780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38983542780",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261016235710_01b03c61d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7516,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38983542780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7516 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-16T23:57:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

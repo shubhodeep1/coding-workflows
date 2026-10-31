@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh: lines ~15820-15910 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: If persisting the once-only `.merged_state_heal` marker fails after the label edit, the pending marker permits another heal attempt, and the helper repeats user-visible notifications before the marker is persisted.\n  WHY: The pending marker keeps the heal eligible on subsequent poll cycles, so the issue comment, healing note, and Telegram warning can repeat until the final state write succeeds.\n- scripts/orchestrate_poll_process.sh: lines ~15868-15880 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The warning for a failed final state write says the issue is not healed again unless `.merged_state_heal_pending` is set, although that marker is set in this failure path and the heal runs again.\n  WHY: The warning's condition contradicts the retry behavior when the pending marker survives the failed write.\n- README.md: line ~209 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `ENABLE_MERGED_STATE_HEAL` documentation says each issue is healed at most once, but a failed final state write can cause repeated notifications on retries.\n  WHY: An operator relying on that wording may misread the documented failure-mode behavior.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: lines 15868-15887 (_heal_rejected_merged_state, the once-only marker write and subsequent notification posting) | severity=low | confidence=4\n  PROBLEM: If the once-only marker write fails, the function still posts the issue comment, healing note, and Telegram warning; the pending marker allows the heal to retry and repeat those notifications on later poll cycles.\n  WHY: A state-file write failure after the label edit succeeds can produce duplicate user-visible notifications on every poll cycle until the marker is persisted.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/orchestrate_poll_process.sh: 15868-15888 | severity=low | confidence=4\n  PROBLEM: If persisting the once-only `.merged_state_heal` marker fails after the label edit, the helper still emits an issue comment and Telegram warning before the state update is committed.\n  WHY: The pending marker permits the heal to retry on subsequent poll cycles, repeating those notifications until the marker write succeeds.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: lines ~15820-15910, the heal path of `_heal_rejected_merged_state` (function body covering the entry guard, the status+pending rewrite at ~15826-15840, the label edit at ~15846-15860, the final once-only-marker write at ~15868-15880, and the user-visible notifications posted immediately afterward at ~15882-15910) | severity=low | confidence=4\n  PROBLEM: When the final state write fails, the pending marker survives and the helper continues to post the explanatory issue comment, `MERGED_STATE_HEALED` log line, healing note, and Telegram warning, repeating those notifications on retry.\n  WHY: The pending marker makes the heal eligible on the next cycle, but the new test covers only label-edit failure and does not exercise or assert against final-state-write failure.\n- scripts/orchestrate_poll_process.sh: lines ~15868-15880, the `else` branch of the final once-only-marker write inside `_heal_rejected_merged_state` | severity=low | confidence=4\n  PROBLEM: The warning emitted when the final state write fails says the issue is not healed again unless `.merged_state_heal_pending` is set, but that marker is set in this failure path.\n  WHY: The heal runs again on the next cycle, contrary to the warning's stated condition.\n- README.md: line ~209, the `ENABLE_MERGED_STATE_HEAL` row in the variables table (the segment \"Each issue is healed at most once. A closed issue, an issue already healed, or any issue while this is `false` only logs \u2026\") | severity=low | confidence=3\n  PROBLEM: The documentation says each issue is healed at most once, but a failed final state write can cause the explanatory comment, healing note, and Telegram warning to be posted more than once.\n  WHY: An operator relying on the documented contract may misread the duplicate-notification failure mode.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: 15868-15880 | severity=low | confidence=5\n  PROBLEM: If writing the `.merged_state_heal` marker fails after the label edit succeeds, the pending marker remains, but the helper continues to post an issue comment and send a Telegram warning.\n  WHY: The pending marker makes the heal eligible on the next poll, so the helper repeats the label edit and posts another comment and warning.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: _heal_rejected_merged_state, lines 15868-15880 (the once-only marker write and the subsequent comment/Telegram calls) | severity=low | confidence=4\n  PROBLEM: When the final state-file write fails, the pending marker remains and the heal retries, re-posting the explanatory issue comment and Telegram warning because those calls are unconditional after the label edit.\n  WHY: Each retry cycle until the state write succeeds can produce a duplicate issue comment and Telegram alert.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh: _heal_rejected_merged_state, lines ~15859-15885 (final marker write failure path) | severity=low | confidence=4\n  PROBLEM: When the final marker write fails after the label edit, the pending marker remains and each retry can repeat the issue comment and Telegram notification; there is no \"already commented\" guard.\n  WHY: A transient local-file write failure leaves the pending marker in place, allowing subsequent cycles to re-enter the heal and send duplicate notifications.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "18aa7461000dc27bdde7f76a289a03d3cea58ac2aababf0a0455639aaa39f486",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "37000852220",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37000852220",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002114415_1614eb387a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "37000852220"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T11:44:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

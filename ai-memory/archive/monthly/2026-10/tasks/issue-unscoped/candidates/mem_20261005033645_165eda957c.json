@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:267-270 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The redirect parser drops a trailing numeric push refspec, causing `_push_targets` to check the current branch instead of the remote branch named `1`.\n  WHY: A push to a merged-PR branch named `1` can pass the guard when the current branch is not associated with that PR; severity was reported as NIT by deepseek_deepseek-v4-pro and minimax_minimax-m3, and MAJOR by openai_gpt-6-luna.\n- .claude/hooks/pr_merge_status_guard.py:264-271 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The redirect parser consumes only `&` from a `2>&1` redirect, leaving `1` to be parsed as a push refspec.\n  WHY: The guard can check the state of branch `1` rather than the actual pushed branch, potentially causing a false block or approval.\n- .claude/hooks/pr_merge_status_guard.py:328-330 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `||` exit check recognizes only a first token exactly equal to `exit`, so a brace group that exits can leave the guard using an incorrect working directory.\n  WHY: Subsequent git commands may be checked against the wrong repository after `cd dir || { echo fail; exit; }`.\n- tests/test_audit_plans_command.py:29-30 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `test_template_parity` fails because `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md` differ.\n  WHY: The byte-equality test failure causes `tests-hooks-and-orchestrator` and the aggregate `lint` check to fail; reviewers identify the mismatch as pre-existing and outside the PR's changed files.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Byte-for-byte sync of `.claude/hooks/pr_merge_status_guard.py` with its `workflow-templates` twin\n  expected_change_site: .claude/hooks/pr_merge_status_guard.py\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The reviewer states the diff contains the twin's changes, all seven listed fixes are present, and the two hook files now have identical content; no absence is reported.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py:267-270 | severity=low | confidence=[4]\n  PROBLEM: The redirect parser drops a trailing numeric token even when it is a push refspec, so `_push_targets` does not see the refspec.\n  WHY: A push to remote branch `1` followed by a redirect can make the guard check the current branch instead of branch `1`, potentially allowing a push to a merged-PR branch.\n- .claude/hooks/pr_merge_status_guard.py:264-271 | severity=low | confidence=[3]\n  PROBLEM: When `2>&1` is tokenised as `2`, `>`, `&`, `1`, the parser consumes only `&` as the redirect target and leaves `1` to be parsed as a push positional argument.\n  WHY: The guard may check branch `1` instead of the real pushed branch, potentially falsely blocking or allowing the push.\n- .claude/hooks/pr_merge_status_guard.py:328-330 | severity=low | confidence=[2]\n  PROBLEM: The `||` exit check triggers only when the first token is exactly `exit`.\n  WHY: With `cd dir || { echo \"fail\"; exit 1; }`, the guard may keep the changed working directory for subsequent git commands and check the wrong repository.\n- Requirement: Byte-for-byte sync of `.claude/hooks/pr_merge_status_guard.py` with its `workflow-templates` twin\n  Expected change site: .claude/hooks/pr_merge_status_guard.py\n  Evidence of absence: The diff shows the live copy modified with the twin's changes. All five fixes from the PR description table (redirect targets, fd digits, `|| exit` working directory, `+=` assignment form, `--repo` positional handling, HEAD resolution, SHA resolution) are present in the diff. The changelog fragment is also present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:267-270 | severity=low | confidence=[4]\n  PROBLEM: A bare-digit push refspec followed by a redirect is treated as a file-descriptor number and removed before `_push_targets` processes it.\n  WHY: If remote branch `1` belongs to a merged PR but the current local branch does not, the guard may approve the push without checking the actual target.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:267-270 | severity=high | confidence=[5]\n  PROBLEM: The redirect parser removes a trailing numeric token even when it is a push refspec, so the guard checks the current branch instead.\n  WHY: A push to remote branch `1` associated with a merged PR can pass the guard when the current branch is not associated with that PR.\n- tests/test_audit_plans_command.py:29-30 | severity=high | confidence=[5]\n  PROBLEM: The command and template files are not byte-identical, so the reported `tests-hooks-and-orchestrator` failure is reproducible.\n  WHY: `test_template_parity` fails, causing `tests-hooks-and-orchestrator` and the aggregate `lint` check to fail; the mismatch is outside the PR's changed files.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_audit_plans_command.py: test_template_parity (line 29-30) | severity=high | confidence=[5]\n  PROBLEM: The `tests-hooks-and-orchestrator` CI job fails because `test_template_parity` compares `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md` byte-for-byte, and they differ.\n  WHY: The test asserts the files are identical, so their mismatch fails the test and aggregate `lint` check; the failure is pre-existing and not caused by this PR.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "79bc4552ad9e8b048961cfb545d1cdfbc7ff1d964f4a08ba736728b44e608c53",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6286,
+    "run_id": "37258030581",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37258030581",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005033645_165eda957c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6286,
+    "run_id": "37258030581"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T03:36:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

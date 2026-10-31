@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The failure is already fixed on `main`. What should this issue deliver?\nChoices:\nA. A test-only change on `main`, in `tests/test_issue_7251_dependency_wait.py` only. The `FAKE_GH` stub (line 33) would write one physical log line per invocation by flattening newlines in its arguments. All current `count(\"api graphql\") == 1` assertions stay, and no production script changes. This is what the issue suggested, and no branch routing is needed now that the file is on `main`. (RECOMMENDED)\nB. No code change. Close the issue as already fixed by PR #7259's merge, citing the `count(\"api graphql\")` assertions now on `main`.\nC. Option A, plus going back to the `.splitlines()`-based one-call assertion the issue described.\n   **Note:** C changes assertions that already pass on `main`. It adds churn and no extra protection.",
+  "fingerprint": "b92aa8e24a60d1684f771bd99be752d9ffd7df180f0440fa30d8dcb162fd0e54",
+  "lineage": {
+    "issue_number": 7332,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38507542778",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38507542778",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261014034808_54af85c5fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7332,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38507542778"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7332 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-14T03:48:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

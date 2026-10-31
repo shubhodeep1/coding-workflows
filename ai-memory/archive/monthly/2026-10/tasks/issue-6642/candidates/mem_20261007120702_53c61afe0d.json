@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The decomposer already runs Claude in the credential-free container with the host relay. What should this issue deliver?\nChoices:\nA. Treat the finding as already fixed on `main`. Add contract tests that pin the boundary, so a later change cannot reintroduce host Claude or a mounted token. The tests would check four things: the ORCHESTRATE Claude path in `orchestrate.yml` goes only through `claude_run`; `claude_run` never runs `claude -p` on the host; the token reaches only `--claude-token-file` and the relay; and the pool directory is never inside the workdir or an `--include` path. Also add a changelog fragment. (RECOMMENDED)\nB. Move the decomposer from `codex_isolated_exec.sh` to `scripts/review_untrusted_sandbox.sh` as the issue literally asks, and add the same contract tests.\nC. Close the issue with a comment saying it is already fixed, and change no code.\n**Note:** B replaces a working isolation boundary with a second one. Pick B only if there is a specific gap in `codex_isolated_exec.sh` that the review sandbox closes.\nQ2: Should the decomposer also lose its write and shell tools? ORCHESTRATE is not a read-only role in `scripts/claude_engine.py`, so it currently gets the `write` profile (`Read,Grep,Glob,Bash,Edit,Write`, `bypassPermissions`, `workspace` mode).\nChoices:\nA. Yes. Set `AI_ENGINE_READ_ONLY=true` on the decomposer's `claude_run` call (or add ORCHESTRATE to the read-only roles) so it runs with the `read` profile in `read-only` mode. The decomposer only needs to write its plan JSON to the output file. This is extra defence on top of the container. (RECOMMENDED)\nB. No. Keep the write profile; the container boundary is enough.\n**Note:** if you chose Q1:C, ignore this question.",
+  "fingerprint": "c60db08eab1fab9d9bfeec958d723ddd0f27b2b9a3a609867723a7d07e6b7eb5",
+  "lineage": {
+    "issue_number": 6642,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618051460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618051460",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007120702_53c61afe0d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6642,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618051460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6642 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T12:07:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

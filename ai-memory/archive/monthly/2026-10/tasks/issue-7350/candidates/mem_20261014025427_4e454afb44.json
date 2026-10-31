@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The control the finding asks for is already on the default branch. In `scripts/validate_process.sh` (lines 4269-4276), when the canonical wrapper is not used, `ensure_runtime_validation_driver` runs and `GENERATED_VALIDATE_SCRIPT_PATH` is set to `${VALIDATION_RUNNER_FILE}`. That path is then started only as `\"${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}\" bash \"${VALIDATION_HARNESS_SANDBOX_SCRIPT}\" run \u2026`. In `scripts/validation_harness_sandbox.sh`, `cmd_run` (lines 756-766) copies an absolute entry from outside the workspace into the screened copy as `.validation-harness/<basename>` and runs it as the sandbox user. Removing the fallback (C) would break validation for consumers without a driver and is not needed.\n\nClosing without a change (B) leaves gaps that would let this finding come back. `tests/test_validation_harness_sandbox.py::test_validate_process_phase3_launches_only_through_the_sandbox` pins the shared launch line, but nothing checks:\n- that the fallback branch resolves to `VALIDATION_RUNNER_FILE`;\n- that the credential scrub prefixes the launch;\n- that `cmd_run` stages an outside entry as an overlay rather than running it from its host path.\n\nRegression tests on those three points close the finding with a lasting guard.\n\nEXECUTION PLAN:\nQ1:\n  strategy: derive_from_repo (lettered choice A, with test steps)\n  inputs:\n    - scripts/validate_process.sh (Phase 3 block: lines 4263-4276, including `validation_harness_scrub_append`, the `VALIDATION_USE_CANONICAL_WRAPPER` if/else, and the sandbox `run` launch)\n    - scripts/validation_harness_sandbox.sh (`cmd_run`, lines 735-784: outside-workspace `.validation-harness/` overlay and `entry_unsafe` check)\n    - tests/test_validation_harness_sandbox.py (existing helpers `_run`, `_stub_bin`, the `PROCESS` / `HELPER` constants, and `test_validate_process_phase3_launches_only_through_the_sandbox`)\n  steps:\n    - Add tests to tests/test_validation_harness_sandbox.py, which already runs in CI and in both release gates' `validate-scripts` jobs, so no new wiring is needed:\n      1. Pin the fallback branch in the Phase 3 text:\n         - the `else` arm calls `ensure_runtime_validation_driver` and sets `GENERATED_VALIDATE_SCRIPT_PATH=\"${VALIDATION_RUNNER_FILE}\"`;\n         - the launch line begins with `\"${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}\" bash \"${VALIDATION_HARNESS_SANDBOX_SCRIPT}\" run`;\n         - `validation_harness_scrub_append` appears before the launch;\n         - no line in Phase 3 starts `VALIDATION_RUNNER_FILE` or `GENERATED_VALIDATE_SCRIPT_PATH` directly, with or without `bash`.\n      2. Pin `cmd_run` staging by text: the outside-workspace arm sets `entry_rel=\".validation-harness/$(basename -- \"${entry}\")\"` and appends to `overlays`, and the `*/../*` case fails with `entry_unsafe`.\n      3. Behavioural test, reusing the fail-closed stub pattern of `test_run_and_selfcheck_fail_closed_without_sudo`. Call `run` with an absolute entry outside the cwd workspace (a fake runner under a separate temp dir that touches a marker). Assert exit 3 and that the marker never exists, so an outside entry is never run on the host when the sandbox is unavailable.\n    - Add a changelog fragment `changelog.d/<issue>-validation-fallback-sandbox-tests.md`. No agents.md edit is needed: the behaviour is unchanged and already documented under \"Validation harness isolation\".\n    - Change no runtime script.\n  replaces_acceptance_criterion: \"Apply the same credential-free user and PID isolation to the fallback runner, or fail closed\" is replaced by \"Prove with regression tests that the fallback runner already runs only under that isolation.\"\n  equivalence_argument: The fallback runner already goes through the same `run` path as the canonical wrapper (provision, selfcheck against `$$`, `env -i`, sandbox user, `setsid --wait`, screened copy). The tests make any future host-exec of the fallback, or a dropped credential scrub, fail CI. That gives the recommendation's protection deterministically, as \u00a720 requires.\n  reversibility: Tests only, so reverting the PR restores the current state. If a human later prefers C, the fail-closed change can be added on top and these tests still hold.",
+  "fingerprint": "58ec73d52d3e926e1d94422edbb6f2b5ca014590a45c7c2277d17e2e43d04a70",
+  "lineage": {
+    "issue_number": 7350,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38502736105",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38502736105",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7350"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261014025427_4e454afb44",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7350,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38502736105"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7350",
+  "timestamps": {
+    "created_at": "2026-10-14T02:54:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

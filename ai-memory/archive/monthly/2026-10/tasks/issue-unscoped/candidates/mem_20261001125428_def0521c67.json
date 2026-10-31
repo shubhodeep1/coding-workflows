@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:Line 352 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: The required support-ref lookup has no transient rate-limit retry, so an HTTP 403 rate-limit response fails the gate before review starts.\n  WHY: Under `set -euo pipefail`, the failed `gh api` call exits the step; other reviewers assessed this as a pre-existing infrastructure issue rather than a defect in the PR diff.\n- agents.md:lines 72-87 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, z-ai_glm-5_2]\n  PROBLEM: The Claude-fixer mode description says the GPT conflict resolver and review-blocked judge are always skipped, while the updated documentation describes conditions in which they run.\n  WHY: Agents relying on `agents.md` receive an inaccurate account of workflow execution; another reviewer noted this wording was outside the PR's stated scope.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/review_autofix.yml:job review / gate, Resolve review support ref step | severity=low | confidence=5\n  PROBLEM: The support ref lookup calls gh api repos/shubhodeep1/coding-workflows/branches/main without transient retry handling.\n  WHY: As proven by the failed check-run review / gate on head commit a15f18c8ab6d2d30f8fa3cb0084bc8f64e53c33a, encountering an HTTP 403 API rate limit error causes the step to exit 1 under set -e, aborting the gate job before review execution can begin.\n- agents.md:lines 72-77 | severity=low | confidence=5\n  PROBLEM: The architecture summary in agents.md states that the GPT conflict resolver and review-blocked judge are skipped for Claude-fixer PRs without qualification. However, CLAUDE.md and workflow commands were updated in this PR to document that the GPT conflict resolver runs for conflicts touching .claude/** and the review-blocked judge runs in Claude mode.\n  WHY: Agents relying on agents.md for repository architecture facts receive an inaccurate model of workflow execution, which can lead to misdiagnosing conflict handoffs or judge dispatches on claude/* branches.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 3 (failback minimax/minimax-m2.5).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:Line 352, `support_main_json=\"$(gh api repos/shubhodeep1/coding-workflows/branches/main)\"` | severity=high | confidence=5\n  PROBLEM: This required support-ref lookup has no rate-limit retry.\n  WHY: The supplied run received HTTP 403 for rate limiting. Under `set -euo pipefail`, the failed command substitution terminates support-ref resolution, so `review / gate` fails before review starts.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- agents.md:lines 72-87, the phase 7 (review autofix) Claude-fixer mode description: \"the GPT editor, conflict resolver, push / re-trigger tail and review-blocked judge are skipped\" | severity=low | confidence=5\n  PROBLEM: The PR updates CLAUDE.md \u00a726.H (line 2093) and `implement-plan-claude.md` Rules (line 424) to say the GPT conflict resolver \"runs only for a conflict that touches `.claude/**`\" and the review-blocked judge \"runs only in its Claude mode,\" but agents.md's phase 7 description at lines 72-87 still says all four (editor, conflict resolver, push/re-trigger tail, and review-blocked judge) are unconditionally skipped. The two documents now describe different behaviour for the same mode.\n  WHY: An agent or operator reading agents.md to understand the review autofix pipeline receives an inaccurate account of which GPT components run on `claude/*` heads, potentially misdiagnosing a blocked PR or a conflict resolution path.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "645a73c0ac142b3ec36ea21a7c96f3f8b09f95c6af5101d6305eb860c888de2f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5893,
+    "run_id": "36856324154",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36856324154",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001125428_def0521c67",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5893,
+    "run_id": "36856324154"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T12:54:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

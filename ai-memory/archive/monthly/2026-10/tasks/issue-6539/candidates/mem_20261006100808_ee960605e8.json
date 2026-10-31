@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6539,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6539\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6549\",\"pr_number\":6549,\"branch\":\"ai/issue-6539\",\"run_id\":\"37446094206\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37446094206\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"README.md\",\"agents.md\",\"changelog.d/6539-security-pass-keep-fixing-cap-fails.md\",\"prompts/_templates/mode-judge-security-pass-exhaustion.txt\",\"prompts/mode-judge-security-pass-exhaustion.txt\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "a284139726ff6f2953dc7e9092b19588a0851fbba1a2284d518eb82a751b2856",
+  "lineage": {
+    "issue_number": 6539,
+    "parent_ids": [],
+    "pr_number": 6549,
+    "run_id": "37446094206",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37446094206",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6549"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006100808_ee960605e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6539,
+    "level": "run",
+    "pr_number": 6549,
+    "run_id": "37446094206"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6539: https://github.com/shubhodeep1/coding-workflows/pull/6549",
+  "timestamps": {
+    "created_at": "2026-10-06T10:08:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

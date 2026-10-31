@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:40 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The hardcoded filename exclusion can silently stop matching after a test rename, causing the test to enter the isolated workspace without its required operator-command file.\n  WHY: The test may fail with `FileNotFoundError`; both reviewers identify the filename-tied exclusion as fragile.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_untrusted_workspace.py | severity=NIT | confidence=3\n  PROBLEM: The exclusion is a hardcoded exact filename. If the test is renamed in a future refactor, the exclusion silently stops matching and the test re-enters the isolated workspace where it will fail reading the still-excluded `.claude/commands/audit-plans.md`. Similarly, any future test with the same operator-command dependency would need its own hardcoded exclusion added.\n  WHY: After a rename of `tests/test_audit_plans_command.py`, the isolated editor snapshot would include the renamed test. The test would then fail at import time or fixture setup with `FileNotFoundError` because its required operator-command input remains excluded from the snapshot. This would block review/autofix runs with a non-code defect, while host CI still runs the same test against real files and passes.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8_flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8_flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py:40\n  Issue: The exclusion is tied to a literal filename. A future rename of tests/test_audit_plans_command.py silently unbreaks the isolation, and the test then raises FileNotFoundError when fixture setup reads the still-excluded .claude/commands/audit-plans.md. The companion regression test in tests/test_review_autofix_review_pipeline_contract.py:8213 also asserts by name and would fail at CI, but the cross-file coupling remains fragile and there is no general mechanism for future tests that depend on excluded operator files (each new dependency profile needs its own hardcoded line).\n  Suggested minimal fix: Anchor the exclusion on a sentinel the test owns rather than its filename. Two options, both under ten lines: (a) look for a sibling marker file (for example tests/test_audit_plans_command.py.isolate_skip) and return False only when it exists, so a rename forces an explicit marker decision; (b) read the test file's first lines for a fixed marker comment such as `# review-isolation-exclude: <reason>` and skip the file when present. Either approach moves the intent from the workspace allowlist onto the test itself, and survives renames.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f352c2a6dcb9edec0fbab3a1ff2750eeb9d428861aa6fc343eec84931b511fa6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6135,
+    "run_id": "37276375290",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37276375290",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005074349_5475e5649e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6135,
+    "run_id": "37276375290"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:43:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

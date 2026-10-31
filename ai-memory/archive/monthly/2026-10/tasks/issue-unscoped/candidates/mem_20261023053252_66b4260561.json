@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_isolated_exec.sh:409-429 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The nested Node install loop (lines 409-422) runs before the Python install block (line 423) inside the shared 900-second container timeout. It can starve the Python install.\n  WHY: If the nested installs use up the budget, the container is killed and `pip install` never runs, so validators are marked UNVERIFIED. Severity disagreement: minimax and qwen rated it NIT, and gemini gave no severity. The highest stated is NIT, but medium is used here as the gemini finding framed it as a functional failure.\n- scripts/codex_isolated_workspace.py:763-768 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `target.mkdir(parents=True)` and the two `write_bytes` calls in `stage_nested_node` have no error handling.\n  WHY: An OSError propagates out of `stage_nested_node` and `stage_deps`, which skips the whole dependency phase for every project. Severity disagreement: qwen rated it NIT, and gemini gave no severity. minimax and sonnet explicitly did not report this, as it matches the unguarded root-level staging pattern.\n- scripts/codex_isolated_workspace.py:809-815 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A failed `os.rename` in `handoff_nested` is now only counted as skipped, with no reason token and no caller warning.\n  WHY: The failure is silent: the agent proceeds with no `node_modules` and no diagnostic. The reviewer rated it NIT.\n- scripts/codex_isolated_workspace.py:791 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: `parts[0].isdigit()` in `handoff_nested` accepts non-ASCII digits.\n  WHY: This is a hardening suggestion only (risk score 1); the downstream `walk_no_follow` would raise and the entry would be counted as skipped.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nHardening suggestion only: scripts/codex_isolated_workspace.py `handoff_nested` index check; use `parts[0].isascii() and parts[0].isdigit()` (HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/codex_isolated_exec.sh:409-422, followed by 423-433 | confidence=4\n  PROBLEM: The nested Node install loop runs before the Python dependency block.\n  WHY: The two share a 900-second budget. A timeout during the nested installs skips the Python install entirely.\n- scripts/codex_isolated_workspace.py:763-766 | confidence=4\n  PROBLEM: `target.mkdir` and `write_bytes` in `stage_nested_node` lack error handling, unlike `os.rename` in `handoff_nested`.\n  WHY: An OSError propagates to `stage_deps` and fails the dependency phase for all projects, including the root.\n- Hardening: scripts/codex_isolated_workspace.py:791 (`handoff_nested`) accepts non-ASCII digits via `isdigit()`; use `isascii() and isdigit()` (HARDENING_RISK_SCORE: 1).\n- Task gaps: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/codex_isolated_exec.sh:409-422 (consumed at line 423) | severity=NIT | confidence=3\n  PROBLEM: The new nested install block sits before the Python install inside the single 900s `timeout` docker run, and nothing bounds it per project.\n  WHY: Nested installs can exhaust the budget, so `pip install` never runs and the pre-existing Python guarantee is lost with only a generic warning (line 434). Moving the block after the Python `case` restores the old precedence.\n- scripts/codex_isolated_workspace.py:809-815 | severity=NIT | confidence=4\n  PROBLEM: The `except OSError` around `os.rename` in `handoff_nested` increments `skipped` with no reason token.\n  WHY: The failure is silent, as exit status is 0 and the caller warning at `scripts/codex_isolated_exec.sh:441` no longer fires. Every other failure branch logs a reason.\n- Hardening 1: scripts/codex_isolated_workspace.py `handoff_nested` lines 809-813; log `rename_failed=<type>` in the except branch (1 line).\n- Hardening 2: scripts/codex_isolated_exec.sh lines 409-422; relocate the nested block after the Python `case` (about 14 lines moved). HARDENING_RISK_SCORE: 2.\n- Task gaps: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/codex_isolated_exec.sh:409-429 | severity=NIT | confidence=4\n  PROBLEM: The nested Node install loop runs before the Python install block at line 423, and both share the 900-second timeout. The loop itself is unbounded.\n  WHY: If the nested installs use up the budget, Python dependencies are never installed and validators are marked UNVERIFIED.\n- scripts/codex_isolated_workspace.py:763-768 | severity=NIT | confidence=4\n  PROBLEM: `target.mkdir(parents=True)` and the two `write_bytes` calls in `stage_nested_node` are unguarded.\n  WHY: An OSError propagates out of `stage_deps`, and the wrapper at `codex_isolated_exec.sh:353` skips the whole dependency phase.\n- Task gaps: NONE.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f7e1ffa44a49677148ee461e1bf563c491dd0c67d425e2bb57264ce71c383936",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7930,
+    "run_id": "39902070213",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39902070213",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023053252_66b4260561",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7930,
+    "run_id": "39902070213"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T05:32:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

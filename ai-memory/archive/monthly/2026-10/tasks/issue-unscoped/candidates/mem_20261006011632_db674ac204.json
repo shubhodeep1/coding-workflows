@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/python-repo-checks/tests/20_import_audit.sh.j2:14 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `${CONTAINER_IMPORT_AUDIT}` is unquoted inside the inner `sh -c` command, so an override path containing whitespace is split into separate arguments.\n  WHY: The default path works, but a whitespace-containing override makes the inner shell pass separate arguments to `python3`, causing the audit to fail.\n- tests/test_family_python_repo_checks.py:147-154 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new invariants test does not assert the `APP_SERVICE` default or the TAP-comment-on-failure pattern.\n  WHY: Removing the failure diagnostic helper could go unnoticed, leaving operators without helpful context when the audit fails inside the container.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/validation-harness/python-repo-checks/tests/20_import_audit.sh.j2:14 | severity=low | confidence=3\n  PROBLEM: `${CONTAINER_IMPORT_AUDIT}` is unquoted inside the inner `sh -c \"...\"` string. The outer shell expands the variable before the inner shell parses the command, so the inner shell sees raw, unquoted text. If an operator overrides `CONTAINER_IMPORT_AUDIT` with a path containing whitespace (for example `/workspace/path with spaces/script.py`), the inner shell will word-split it and pass `/workspace/path`, `with`, `spaces/script.py` as separate arguments to `python3`, producing `python3: can't open file '/workspace/path': [Errno 2] No such file or directory` instead of running the audit.\n  WHY: The default value `/workspace/out/tests/_lib/import_audit.py` contains no whitespace, so the shipped default is fine. Any override with a space in the path would split and fail the audit, and the failure would surface as `ModuleNotFoundError` rather than a clear configuration error (the same broken-path bug as the original `#6031` failure mode, just with a different trigger).\n- tests/test_family_python_repo_checks.py:147-154 | severity=low | confidence=2\n  PROBLEM: The new invariants test pins only four strings (two defaults, the docker-compose-exec substring, and the absence of the host-form `python3 \"${SCRIPT_DIR}/_lib/import_audit.py\"`). The matching `python-mongo-flask` family invariants test (`tests/test_family_python_mongo_flask.py:135-142`) additionally asserts the `APP_SERVICE=\"${APP_SERVICE:-app}\"` default and the `printf '%s\\n' \"${audit_output}\" | sed 's/^/# /'` TAP-comment-on-failure pattern. The `python-repo-checks` template's failure branch still relies on the same printf/sed helper; if a future edit accidentally drops it, the family-specific test won't notice.\n  WHY: A regression that removed the TAP-comment-on-failure helper would still pass this PR's new assertions, but operators would lose the helpful \"import audit failed inside app container\" diagnostic context when the audit fails inside the container (the original `#6031` failure mode became diagnosable because the script wrote the failure to stderr; the new helper comment block is the in-container equivalent).\nTASK_GAP: No TASK_GAP findings emitted.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "b213243613d4fe3494ddcde6c776aa6b3ae54ad1cd33a8123a6b41632d5bc0b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6432,
+    "run_id": "37396782023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37396782023",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006011632_db674ac204",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6432,
+    "run_id": "37396782023"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T01:16:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

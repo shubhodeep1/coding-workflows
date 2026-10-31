@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue stated \"A `curl` shim in the harness makes poller tests fail fast without network access\"\n  expected_change_site: tests/test_orchestrate_poll_promote_cycle.py\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `_write_poller_curl_shim` is provided in tests/test_orchestrate_poll_process.py, but it is not explicitly initialized in tests/test_orchestrate_poll_promote_cycle.py's test environment, so it could fall back to the real network if the PATH or bin_dir setup differs (reviewer severity: MAJOR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nNote: the reviewer's TASK COMPLETENESS section considered one candidate gap and dismissed it as deferred, so it is not reported as a gap.\n- Requirement: Bound `curl_gh_api` in `scripts/gh_helpers.sh` with `CURL_GH_API_CONNECT_TIMEOUT_SECS` and `CURL_GH_API_MAX_TIME_SECS`, plus a regression test for the timeout (suggested fix items 1 and 3a).\n  Expected change site: `scripts/gh_helpers.sh` (`curl_gh_api`) and `tests/test_gh_helpers_curl_timeout.py`\n  Evidence of absence: Neither file appears in PR CHANGED FILES. The frozen heal scope (`paths=.github/workflows/ci.yml,tests/**,changelog.d/*.md`) excludes `scripts/`, AD-1 chose option A, and the changelog fragment says \"that fix is tracked separately\". The reviewer concluded this is not a gap.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: The issue stated \"A `curl` shim in the harness makes poller tests fail fast without network access\". The implementation provides `_write_poller_curl_shim` in `tests/test_orchestrate_poll_process.py`, but it is not wired into `tests/test_orchestrate_poll_promote_cycle.py`'s own test logic to ensure it doesn't leak live network requests, it relies on it being in the bin_dir.\n  Expected change site: `tests/test_orchestrate_poll_promote_cycle.py`\n  Evidence of absence: While `_assert_completion_cleanup_hit_curl_shim` is added to verify cleanup, the actual `_write_poller_curl_shim` is not explicitly initialized in the test environment in `tests/test_orchestrate_poll_promote_cycle.py`, potentially allowing it to fall back to the real network if the PATH or bin_dir setup isn't identical.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nNote: the reviewer reported a hardening suggestion only (HARDENING_RISK_SCORE: 1), not a finding.\n- HARDENING: tests/test_orchestrate_poll_process.py, `_POLLER_CURL_SHIM` (lines 627-648). The capture shim redacts Authorization headers but would log credentials passed as `-u <user:pass>` / `--user <user:pass>` (curl basic-auth form) verbatim into `curl_calls.log`. Suggested minimal fix: extend the redact loop with `-u|--user` next-arg redaction plus a `--user=*` / `-u*` glued-value case, mirroring the existing `-H` handling (about 4 lines changed).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e038e984c36bb71c195bfdfa8585a5a92790184f9d35bd54c44a0448d6349cf8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8131,
+    "run_id": "40189808647",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40189808647",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025115931_574214c86a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8131,
+    "run_id": "40189808647"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T11:59:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

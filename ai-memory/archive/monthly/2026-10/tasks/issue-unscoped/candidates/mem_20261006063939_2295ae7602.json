@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge_security_pass.sh:332-339 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The nonzero-exit override preserves `label_write_failed` but not `pending_marker_failed`, so the hold reason is reported as `gate_failed`.\n  WHY: Minimax says this loses the dedicated pending-marker diagnostic; deepseek and qwen report that the current HEAD already preserves both reasons.\n- tests/test_review_rb_judge_security_pass.py:436-439 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The added parametrized cases do not test `hold=true`, `hold_reason=pending_marker_failed`, and `gate_rc=1`.\n  WHY: Minimax says the documented pending-marker contract would remain untested; deepseek and qwen report that the current HEAD has a test covering this case.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A failed pending-marker write must keep pending_marker_failed even on a nonzero exit\"\n  expected_change_site: scripts/review_rb_judge_security_pass.sh, in the new override block the LAST RUN DIFF inserts just before the rb_security_log call\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Minimax reports the LAST RUN DIFF body compares only `label_write_failed` and that its parametrized matrix lacks the pending-marker failure case; deepseek and qwen report that the current HEAD handles both reasons and tests `pending_marker_failed` at tests/test_review_rb_judge_security_pass.py:434-435 and tests/test_review_rb_judge_security_pass.py:434, respectively.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge_security_pass.sh:332-339 | severity=high | confidence=5\n  PROBLEM: The LAST RUN DIFF's override block preserves `label_write_failed` but not `pending_marker_failed`, leaving `RB_SECURITY_HOLD_REASON` as `gate_failed`.\n  WHY: A failed pending-marker write keeps the merge held, but the alert caller loses the dedicated diagnostic and reports `gate_failed`.\n- tests/test_review_rb_judge_security_pass.py:436-439 | severity=high | confidence=5\n  PROBLEM: The added parametrized cases omit `hold=true\\nhold_reason=pending_marker_failed\\n` with `gate_rc=1`.\n  WHY: A regression in the pending-marker path would not be caught by this parametrization.\n- TASK_GAP: Requirement: \"A failed pending-marker write must keep pending_marker_failed even on a nonzero exit\"\n  Expected change site: scripts/review_rb_judge_security_pass.sh, in the new override block the LAST RUN DIFF inserts just before the rb_security_log call\n  Evidence of absence: The LAST RUN DIFF body is exactly `[ \"${hold}\" = \"true\" ] && [ \"${hold_reason}\" = \"label_write_failed\" ]` \u2014 a single-literal comparison with no branch for `pending_marker_failed`. The matching parametrized matrix in tests/test_review_rb_judge_security_pass.py adds cases for `audit_dispatched`, `$(id)`, empty `hold`, and an empty-output case, but no case for `hold=true\\nhold_reason=pending_marker_failed\\n` with `gate_rc=1` and the expected `hold_reason=pending_marker_failed`. The doc comment above the LAST RUN DIFF's edit is untouched, so the contract remains in force and remains partially unmet.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "23dcb0f3110df0e2acb17bc79e3f12a2fa79888c86971936c738ee98b10a0fc6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6489,
+    "run_id": "37422708691",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37422708691",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006063939_2295ae7602",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6489,
+    "run_id": "37422708691"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T06:39:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

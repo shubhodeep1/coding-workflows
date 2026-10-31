@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6547,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6547\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6556\",\"pr_number\":6556,\"branch\":\"ai/issue-6547\",\"run_id\":\"37449578444\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37449578444\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/ci.yml\",\".github/workflows/promote-main-to-stable.yml\",\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/6547-smoke-test-repo-allowlist.md\",\"tests/test_test_and_mark_stable_test_repo_allowlist.py\"]}",
+  "fingerprint": "fb79a7e7a75aef65a86838a398a7a6aabab6208caf180b9c21b26b75c46f6a5c",
+  "lineage": {
+    "issue_number": 6547,
+    "parent_ids": [],
+    "pr_number": 6556,
+    "run_id": "37449578444",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37449578444",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6556"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006104200_f28a0d1cc2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6547,
+    "level": "run",
+    "pr_number": 6556,
+    "run_id": "37449578444"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6547: https://github.com/shubhodeep1/coding-workflows/pull/6556",
+  "timestamps": {
+    "created_at": "2026-10-06T10:42:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

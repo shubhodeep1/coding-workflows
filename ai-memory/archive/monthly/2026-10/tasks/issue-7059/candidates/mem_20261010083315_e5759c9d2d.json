@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What code changes does this issue deliver? The pipeline cannot start a heal issue through intake itself; that needs a reporter dispatch with verified failed-run metadata.\nChoices:\nA) Both changes, on this issue: (1) the intake refuses to file a heal issue when `heal-scope render` produces an empty or invalid marker, and reports an intake defect instead; (2) the rejection-category diagnostics. Re-filing waits for the next real failure to go through intake. (RECOMMENDED)\nB) Only the rejection-category diagnostics. The intake keeps filing heal issues that have no marker.\nC) Only the intake fail-closed marker guard. No diagnostics change.\nQ2: Which rejection path should report the new bounded, path-safe categories? #6866's plan is not available here.\nChoices:\nA) The review sandbox snapshot/transfer in `scripts/review_untrusted_workspace.py`. Rejections that today fall back to legacy codes or `reason=unknown` get a fixed `category=` token. Existing `reason=` tokens stay unchanged. (RECOMMENDED)\nB) The heal isolated editor transfer in `scripts/heal_isolated_implement.sh:131-133`. Today every transfer rejection collapses to `reason=out_of_heal_scope`; it would carry the underlying transfer reason and category through, alongside the existing token.\nC) Both A and B.\n**Note:** Q1:C (no diagnostics) makes this question moot.\nQ3: Should this run also re-dispatch a heal report for #6866's failed runs?\nChoices:\nA) No. This issue only delivers code and tests. #6866 stays as-is, and no marker is copied or edited in. (RECOMMENDED)\nB) Yes. Add a one-off step that re-reports #6866's runs to intake. This needs the verified run IDs from #6866 to be pasted into this issue.",
+  "fingerprint": "937eb224679b65e207a422f9a006bac2e8fa389312664becc328dac84d4d29b0",
+  "lineage": {
+    "issue_number": 7059,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38037670040",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38037670040",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010083315_e5759c9d2d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7059,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38037670040"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7059 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T08:33:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

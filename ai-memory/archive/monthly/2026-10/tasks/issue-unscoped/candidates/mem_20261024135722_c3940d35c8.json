@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh:1006-1054 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: Every `head_blob()` failure path returns None, so the staging loop silently stages the working-tree file with no log line.\n  WHY: A transient git failure leaves the run testing the working-tree helper this change was meant to exclude, and the log doesn't show it. Severity disagreement: google_gemini-3_1-flash-lite said MAJOR, and the other five reviewers said NIT. The highest severity was used and mapped to \"high\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/validation_harness_sandbox.sh:1006-1034, 1049-1054 | severity=NIT | confidence=4\n  PROBLEM: Every `head_blob` failure path returns None, and the loop silently stages the working-tree file with nothing logged.\n  WHY: A transient git error, such as a timeout, leaves the sandbox testing the working-tree copy that this change was meant to exclude. The other skip paths log `outcome=skip`, and a one-line `stage_log(\"skip\", \"support_from_head_unavailable\", name)` would fix this.\n- HARDENING_SUGGESTION: scripts/validation_harness_sandbox.sh, the `if committed is not None` branch. Add an `else: stage_log(\"skip\", \"support_from_head_unavailable\", name)` branch that still falls through to the working-tree copy (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_harness_sandbox.sh:1049-1054 | severity=MAJOR | confidence=4\n  PROBLEM: Every head_blob failure path returns None, and the staging loop silently stages the working-tree file with no log signal.\n  WHY: A transient git failure or a missing HEAD blob makes the run test the working-tree helper this change was meant to exclude. The staging step wrongly believes it staged the committed version, which could mask a sync issue.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validation_harness_sandbox.sh:1049-1054 and 1006-1034 | severity=NIT | confidence=4\n  PROBLEM: Every failure path inside `head_blob` returns None silently: a non-zero `ls-tree` or `cat-file` exit, a non-regular record, a timeout, or a missing git binary. The loop then falls through to the working-tree path with no `phase=stage` log line.\n  WHY: The screened copy is meant to hold the committed helper. A silent fallback restores the working-tree copy, and an operator cannot tell \"not applicable\" from \"the substitution failed\". `scripts/validation_refresh_runner.py` also drops `outcome=ok` lines from its failure diagnostic, so the missing line is the only signal.\n- HARDENING_SUGGESTION: Emit `stage_log(\"skip\", \"support_from_head_unavailable\", name)` when `name in head_support_paths` and `head_blob(name)` returns None, before falling through (about 2 lines).\n- HARDENING_SUGGESTION: In `head_blob()` (lines 1006-1034), keep the fail-open return None. Return a reason token to tell \"no such path in HEAD\" from a command failure, and let the caller log it (about 4 lines, optional).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validation_harness_sandbox.sh:1014-1034, 1050-1054 | severity=NIT | confidence=4\n  PROBLEM: When the HEAD lookup fails, `head_blob()` returns None and staging silently falls through to the working-tree copy.\n  WHY: A git read error or timeout makes the validation run use the working-tree helper instead of the committed copy, and no log shows that the substitution was skipped.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/validation_harness_sandbox.sh:1006-1034, 1049-1054 | severity=NIT | confidence=4\n  PROBLEM: When `head_blob()` fails, it returns None and the staging loop silently falls through to working-tree staging with no log line. Other STAGE_PY skips emit `stage_log(\"skip\", ...)`.\n  WHY: A transient git failure reproduces the wrong-copy condition #8064/#8065 set out to prevent, and the failure is invisible in workflow logs. The reviewer called it an observability gap, not a correctness bug.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/validation_harness_sandbox.sh:1049-1054 (head_blob at 1006-1034) | severity=NIT | confidence=4\n  PROBLEM: Every head_blob() failure path returns None, and the loop silently stages the working-tree file with no log line, unlike the other staging decisions in STAGE_PY (lines 1069-1080).\n  WHY: A transient git failure reproduces the wrong-copy condition #8064/#8065 set out to eliminate, and the `support_from_head` audit trail has a silent hole where it matters most. The suggested fix is an `else: stage_log(\"skip\", \"support_from_head_unavailable\", name)` arm of about 3 lines.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b17aa9b9588db718cc1603034c0a08a6986c33337b11ab6e0b21a359653b9f51",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8068,
+    "run_id": "40098185512",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40098185512",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024135722_c3940d35c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8068,
+    "run_id": "40098185512"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T13:57:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

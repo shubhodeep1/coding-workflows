@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue deliver, given the root cause is unknown?\nChoices:\nA) Reproduce first: run `tests/test_orchestrate_poll_process.py` on the PR #6922 head (`481d3df`). Fix the code only if a test fails there. If nothing fails, make no code change and close the issue as a transient or cancellation side effect. (RECOMMENDED)\nB) Better diagnostics only: extend the shard summary loop in `.github/workflows/ci.yml` (lines 1417-1442) so each failed shard's `::error::` line also names its failing test(s) and first error line. Future log tails will then show the cause. Make no poller code change.\nC) Both A and B: try to reproduce and fix, and also add the per-shard failing-test names to the `::error::` annotation.\nD) Wait for a human to paste the failing shard's `FAIL` lines from run 37920705068 into this issue before planning.\n**Note:** B and C edit `.github/workflows/ci.yml`. That needs `ALLOW_WORKFLOW_EDITS=true` and an exact `files_touched` grant under the automation-path guard.\nQ2: Which branch should a fix target?\nChoices:\nA) PR #6922's head branch `ai/issue-6908`, since the failure was seen on that PR's head and may come from its diff. (RECOMMENDED)\nB) The default branch `main`, treating it as a defect already on main.\nC) `main` for a diagnostics-only change (Q1 B), and `ai/issue-6908` for any test or poller fix.\n**Note:** with Q1 D, the target follows whatever the pasted failure shows.\nQ3: Should this issue also look at why `tests-hooks-and-orchestrator` was cancelled?\nChoices:\nA) No. Leave that job's cancellation out of scope; it may simply follow the run being cancelled or superseded, and a separate triage can handle it if it happens again. (RECOMMENDED)\nB) Yes, but investigate only. Report whether it hit its 20-minute `timeout-minutes` and make no timeout change.\nC) Yes, and raise that job's timeout if the investigation shows it hit the 20-minute limit.",
+  "fingerprint": "5431dc707ba235f88b8d2ae9d9acd3c733f217997872d74fad1aa2176116dc72",
+  "lineage": {
+    "issue_number": 6930,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37924312848",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37924312848",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009114731_4d86fac16b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6930,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37924312848"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6930 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T11:47:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7616,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7616\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7618\",\"pr_number\":7618,\"branch\":\"ai/issue-7616\",\"run_id\":\"39105231665\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39105231665\",\"changed_files\":[\"changelog.d/7614-promote-gate-failure-linkage.md\",\"scripts/promote_main_cycle.sh\",\"tests/test_promote_main_cycle.py\"]}",
+  "fingerprint": "8df226a2b9be66fef82f202c50d9d770b5b7cadd15189ef6263d59663fb7aa55",
+  "lineage": {
+    "issue_number": 7616,
+    "parent_ids": [],
+    "pr_number": 7618,
+    "run_id": "39105231665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39105231665",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7618"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261018070213_c0c9144160",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7616,
+    "level": "run",
+    "pr_number": 7618,
+    "run_id": "39105231665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7616: https://github.com/shubhodeep1/coding-workflows/pull/7618",
+  "timestamps": {
+    "created_at": "2026-10-18T07:02:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

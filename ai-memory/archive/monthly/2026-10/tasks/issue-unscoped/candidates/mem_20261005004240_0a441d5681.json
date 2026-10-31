@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_anthropic_relay.py:106 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: _reject catches only three OSError subclasses, so other OSError subclasses raised by send_error can escape as unhandled exceptions.\n  WHY: During the upstream-failure path, an OSError raised by _reject inside the active exception handler is not caught by that handler and can produce a server traceback.\n- changelog.d/6238-claude-read-profile-no-shell.md:1-4 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The changelog fragment has no \u201cWhat this means for <audience>\u201d closing paragraph.\n  WHY: openai_gpt-6-luna considers that paragraph required by the entry structure; deepseek_deepseek-v4-pro disputes that it is missing because the lead paragraph already gives the security takeaway and considers the structure advice conditional.\n- tests/test_claude_anthropic_relay.py:267 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: test_upstream_failure_is_a_bare_502 does not exercise send_error raising an OSError subclass during the 502 response.\n  WHY: Without that coverage, peer-disconnect-during-response scenarios on the upstream-failure 502 path are untested.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog fragment must follow the structure in CLAUDE.md \u00a720.D, which requires an audience closing paragraph (\"What this means for <audience>:\")\n  expected_change_site: changelog.d/6238-claude-read-profile-no-shell.md\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The fragment has a headline and lead paragraph but no \"What this means for <audience>:\" closing paragraph. CLAUDE.md \u00a720.D lists the audience closing as a required element (item 4 of 5), and \u00a720 states \"PR review checks new fragments against this section's structure, voice rules, and audience split.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_anthropic_relay.py:106 | severity=high | confidence=[4]\n  PROBLEM: The _reject method catches only three OSError subclasses: BrokenPipeError, ConnectionResetError, and ConnectionAbortedError. Other OSError subclasses from send_error, such as TimeoutError or ConnectionRefusedError, are not caught and will propagate as unhandled exceptions.\n  WHY: In the upstream-failure path at line 182-185, self._reject(502) is called inside an except (OSError, http.client.HTTPException) block. A new OSError raised inside that active except handler is not re-caught by the same handler; it propagates upward and is logged as a server traceback by http.server handle_one_request.\n- changelog.d/6238-claude-read-profile-no-shell.md:1-4 | severity=low | confidence=[2]\n  PROBLEM: The changelog fragment follows CLAUDE.md section 20.D items 1 and 2 (headline and lead paragraph) correctly. Items 3 (numbers table), 4 (audience closing paragraph), and 5 (for contributors) all fall under the preamble \"Follow this order when the information exists.\"\n  WHY: No measurable numbers apply here and no contributor-only detail needs to be split out; the lead paragraph already describes the security takeaway for operators. This is a structural-advice borderline call, not a defect.\n- tests/test_claude_anthropic_relay.py:267 | severity=low | confidence=[3]\n  PROBLEM: The test_upstream_failure_is_a_bare_502 function does not exercise the case where send_error raises an OSError subclass during the 502 response.\n  WHY: The LAST RUN DIFF added parametrized peer_error_type coverage for this path, but the working tree does not carry that parametrization. Without this coverage, the narrow exception gap in _reject at line 106 has no test protection.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/6238-claude-read-profile-no-shell.md: line 4 | severity=low | confidence=[5]\n  PROBLEM: The fragment has no \u201cWhat this means for <audience>\u201d closing paragraph, as required by the changelog entry structure.\n  WHY: Release automation assembles the fragment into the changelog, leaving the published entry without the required audience-specific takeaway.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: The changelog fragment must follow the structure in CLAUDE.md \u00a720.D, which requires an audience closing paragraph (\"What this means for <audience>:\")\n  Expected change site: changelog.d/6238-claude-read-profile-no-shell.md\n  Evidence of absence: The fragment has a headline and lead paragraph but no \"What this means for <audience>:\" closing paragraph. CLAUDE.md \u00a720.D lists the audience closing as a required element (item 4 of 5), and \u00a720 states \"PR review checks new fragments against this section's structure, voice rules, and audience split.\"\n  SEVERITY: low\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f06653f2fe848bd8f0137c4a41beb57c15e4d512505b55e006c305536ea4f33e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6242,
+    "run_id": "37244875357",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37244875357",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005004240_0a441d5681",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6242,
+    "run_id": "37244875357"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T00:42:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

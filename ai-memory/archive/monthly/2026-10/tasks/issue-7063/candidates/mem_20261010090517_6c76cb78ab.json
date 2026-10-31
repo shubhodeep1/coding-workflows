@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The sandbox user's systemd cgroup slice (`user-1002.slice`) is missing or can't be set up. What should provisioning do?\nChoices:\nA) Fail closed only: try to set up the user session and cgroup delegation (for example linger plus a `systemd --user` session). Verify it with a test container start. If that fails, stop with a specific provisioning error, as the issue says. Validation stays blocked on such runners.\nB) Try A first. If delegation can't be set up, restart the rootless daemon with the `cgroupfs` cgroup driver, re-run the test container start, and continue only if that passes. Log that container resource limits are not enforced. Fail closed if the fallback test also fails. (RECOMMENDED)\nC) Always start the rootless daemon with the `cgroupfs` driver and skip the systemd session setup. Keep the test container start, and fail closed when it fails.",
+  "fingerprint": "61d0db1505d4f32f303f4db28fd5f6b2fad5346eab7f07720f32393161ce5c7f",
+  "lineage": {
+    "issue_number": 7063,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38039760320",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38039760320",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010090517_6c76cb78ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7063,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38039760320"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7063 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T09:05:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should happen when a file in the audit's scope is larger than the 2 MiB read-only snapshot limit?\nChoices:\nA) Give the oversized file to the audit agent in bounded, size-capped chunks so it can still read it. Fail the audit only if the file or the total goes over a hard upper cap. (RECOMMENDED)\nB) Always fail the audit when any scoped file is left out (emit `security-audit` failure, no tracker/clean marker, no `passed` security-pass state).\nC) Don't fail. Mark the result \"incomplete coverage\" instead of clean, list the omitted files on the tracker or in the findings JSON, and don't move the last-audited-commit marker forward or record a `passed` SHA.\nQ2: Which files does the \"never record a clean result while scoped files are omitted\" rule cover?\nChoices:\nA) Only the files the audit was explicitly scoped to: the diff-range or incremental changed-file list, prior-finding files and fix-cycle diff files. Full-repository scans with no explicit scope just list the skipped oversized files as a coverage note. (RECOMMENDED)\nB) Every tracked file, including full-repository scans (first runs, history rewrites, diffs over 200 files, `/re-security-pass` full-range audits).\n**Note:** B together with Q1:B would make full scans fail on any repo that tracks a file over 2 MiB, such as large lockfiles or data fixtures, until that file is removed.\nC) Like A, but skip known generated or lock files (for example `*-lock.json`, `*.lock`, `go.sum`) so they never trigger the rule.",
+  "fingerprint": "bfffb04d1c7c3b76ac8e3a317d38a957e6110db82f9f7ab0a025300a4df999e0",
+  "lineage": {
+    "issue_number": 6230,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37240268767",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37240268767",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261004223832_489f6bef59",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6230,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37240268767"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6230 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-04T22:38:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

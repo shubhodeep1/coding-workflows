@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_codex_step_extraction.py:44-48 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The pin constants PRE_EXTRACTION_PROMPT_SHA256 (762902538b6fa853079f2d35ea8106fc80b45d02ceea2b63e51882574ff9decf), PRE_EXTRACTION_PROMPT_BYTES = 17_308 and PRE_EXTRACTION_PROMPT_LINES = 261 do not match the inline prompt heredoc at scripts/run_plan_codex.sh:80, which the reviewer computes as about 17_144 bytes, 260 lines and SHA256 starting 744aff0d\u2026\n  WHY: test_extracted_prompt_matches_pre_extraction_bytes (lines 116-124) would fail its byte, line and SHA256 assertions. The source severity was BLOCKER, mapped here to high. z-ai_glm-5_3-flash disputed this finding: it says the pins are the PR's own CI-validated final state and head CI shows 0 failed check-runs.\n- tests/test_plan_codex_step_extraction.py:30-43 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The pin-history comments give inconsistent accounts of the #8339 change (260 lines / 17,144 bytes in one, 261 lines / 17,308 bytes after the merge with #8327 in the other).\n  WHY: A future maintainer could re-pin to the wrong values. Documentation defect, source severity NIT. z-ai_glm-5_3-flash judged the two accounts arithmetically consistent (166 bytes and 1 line added in each).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_plan_codex_step_extraction.py:30-41 | severity=low (source: NIT) | confidence=3\n  PROBLEM: The pin-history comment block gives inconsistent accounts of #8339 (260 lines / 17,144 bytes) and the later merge with #8327 (261 lines / 17,308 bytes).\n  WHY: Documentation defect; a future maintainer might re-pin to the wrong values.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_plan_codex_step_extraction.py:44-48 (versus scripts/run_plan_codex.sh:80) | severity=high (source: BLOCKER) | confidence=5\n  PROBLEM: The pin constants (SHA256 762902538b6fa853079f2d35ea8106fc80b45d02ceea2b63e51882574ff9decf, 17_308 bytes, 261 lines) do not match the inline prompt heredoc, which the reviewer computes as about 17_144 bytes, 260 lines and SHA256 744aff0d\u2026\n  WHY: test_extracted_prompt_matches_pre_extraction_bytes (lines 116-124) would fail its byte, line and SHA256 assertions in any environment that can run it.\n- tests/test_plan_codex_step_extraction.py:33-34 and 42-43 | severity=low (source: NIT) | confidence=3\n  PROBLEM: The two pin-history comments give inconsistent figures for #8339 (259 -> 260 lines, 16_978 -> 17_144 bytes versus 260 -> 261 lines, 17_142 -> 17_308 bytes after the merge).\n  WHY: Documentation and maintainability defect; the next re-pin may use the wrong numbers.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "17dda9a74d17b513693b4b45ba85eb0276bfd402fe672d1c831701652cc6ea03",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8349,
+    "run_id": "40886599829",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40886599829",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029152733_c0700ad0f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8349,
+    "run_id": "40886599829"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T15:27:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

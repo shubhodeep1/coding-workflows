@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Implement conflict-aware merge-train gating (P1): Add the merge-tree conflict check, bounded head age and priority-label handling to review_merge_train.sh, wire their default-on settings in review_autofix.yml, and add parity tests.\"\n  expected_change_site: scripts/review_merge_train.sh, .github/workflows/review_autofix.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/cancel_on_pr_close.yml, tests/test_review_merge_train.py\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: All three features are implemented. The merge-tree conflict check is in `_mt_conflict_probe` (scripts/review_merge_train.sh:623-676). The bounded head age is in `_mt_blocker_is_stale` (scripts/review_merge_train.sh:587-609). The priority-label handling is in `_mt_pr_is_priority` (scripts/review_merge_train.sh:560-577). All three variables are wired into all three workflows (review_autofix.yml:115-117, orchestrate_poll.yml:197-199, cancel_on_pr_close.yml:341-343). Parity tests cover all three features (tests/test_review_merge_train.py:1774-2153). The last-run diff fixed the test fixture by adding `--no-local` to the git clone command (tests/test_review_merge_train.py:1815), which is correct because a plain local clone copies all objects even with `--single-branch`, making the test assertions that the work clone lacks branch objects fail.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nRequirement: \"Implement conflict-aware merge-train gating (P1): Add the merge-tree conflict check, bounded head age and priority-label handling to review_merge_train.sh, wire their default-on settings in review_autofix.yml, and add parity tests.\"\nExpected change site: scripts/review_merge_train.sh, .github/workflows/review_autofix.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/cancel_on_pr_close.yml, tests/test_review_merge_train.py\nEvidence of absence: All three features are implemented. The merge-tree conflict check is in `_mt_conflict_probe` (scripts/review_merge_train.sh:623-676). The bounded head age is in `_mt_blocker_is_stale` (scripts/review_merge_train.sh:587-609). The priority-label handling is in `_mt_pr_is_priority` (scripts/review_merge_train.sh:560-577). All three variables are wired into all three workflows (review_autofix.yml:115-117, orchestrate_poll.yml:197-199, cancel_on_pr_close.yml:341-343). Parity tests cover all three features (tests/test_review_merge_train.py:1774-2153). The last-run diff fixed the test fixture by adding `--no-local` to the git clone command (tests/test_review_merge_train.py:1815), which is correct because a plain local clone copies all objects even with `--single-branch`, making the test assertions that the work clone lacks branch objects fail.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "91c21c3877ab77e6b9394b80813fd6f50c5bccf0bff72a455fb3bca71e551c04",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6574,
+    "run_id": "37900356888",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37900356888",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009080226_3bbf68fe5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6574,
+    "run_id": "37900356888"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T08:02:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

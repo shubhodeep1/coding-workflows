@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The frozen heal scope (`ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/**,changelog.d/*.md`) covers only `.github/workflows/ci.yml`, `tests/**` and `changelog.d/*.md`, plus this issue's own `agents.d/<N>-*.md` fragment. Implement enforces that marker whatever the approval says, so option B would be held at plan or refused at implement. The curl shim fixes the actual CI failure: the poller tests make live, unbounded HTTPS calls through `tg_cleanup_msgs`. `tests/test_orchestrate_poll_process.py` contains no `curl` reference, so no current poller test depends on a real `curl` response. Option C would drop a real production risk: `scripts/gh_helpers.sh:1369` runs `curl` with no `--max-time` or `--connect-timeout`. So the production bound has to be recorded as follow-up work, not lost.\n\nEXECUTION PLAN:\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - tests/test_orchestrate_poll_process.py (`_run_poller`: `bin_dir = tmp / \"bin\"` at line 972; the `capture_telegram_calls` branch at line 1152; PATH set near line 3831)\n    - tests/test_orchestrate_poll_promote_cycle.py (`test_proving_run_completion_dispatches_verifying_run`, `test_proving_run_completion_reports_when_verifying_run_cannot_be_dispatched`)\n    - scripts/tg_helpers.sh (`tg_cleanup_msgs`, lines 449-473) and scripts/gh_helpers.sh (`curl_gh_api`, lines 1350-1403). Read only, not edited.\n  steps:\n    - In `_run_poller`, write an executable `curl` shim into `bin_dir` whenever the harness builds `bin_dir`. The shim appends its arguments, one invocation per line, to a file under `runtime_dir` (for example `curl_calls.log`), prints nothing, and exits 7 (couldn't connect). `curl_gh_api` then records `http_code=000` and the real `tg_cleanup_msgs` takes its existing warning path at once. If the harness lets a test supply its own `bin_dir` scripts, do not overwrite a `curl` the test already supplied.\n    - Expose the shim's log path the same way the harness exposes its other captured files, so tests can read it.\n    - In `tests/test_orchestrate_poll_promote_cycle.py`, add an assertion to the existing completion-path tests (or a new focused test) that the shim log has an `api.github.com/.../issues/<tracking>/comments` call from `tg_cleanup_msgs`. That proves the completion path never reaches the network.\n    - Run the full `tests/test_orchestrate_poll_process.py` and `tests/test_orchestrate_poll_promote_cycle.py` locally (sharded like CI) to confirm nothing relied on real `curl` behaviour.\n    - Add `changelog.d/<issue>-poller-test-curl-shim.md`. It describes the test-harness change and says the `curl_gh_api` timeout bound is still open.\n    - Put a \"Follow-up (out of heal scope)\" note in the PR body. It specifies the `curl_gh_api` change: add `--connect-timeout \"${CURL_GH_API_CONNECT_TIMEOUT_SECS:-15}\"` and `--max-time \"${CURL_GH_API_MAX_TIME_SECS:-60}\"` at `scripts/gh_helpers.sh:1369`, with a fallback to the default for values that are not positive integers. It also names a regression test, `tests/test_gh_helpers_curl_timeout.py`, that stubs a `curl` which sleeps and checks that both flags were passed. The note is for a maintainer or the review pipeline to file as an ordinary issue. Do NOT use a `## Deferred scope` section: partial delivery would reopen this heal issue and send it back to clarify with the same scope limit.\n    - Do not raise `POLLER_SUBPROCESS_TIMEOUT_SEC` and do not add retries.\n  replaces_acceptance_criterion: The issue's suggested fix 1 (bound `curl_gh_api` in `scripts/gh_helpers.sh`) and its regression test are moved out of this heal issue.\n  equivalence_argument: The CI failure comes from the tests not being hermetic: the poller reaches `api.github.com` in tests. The shim removes that dependency for every poller test, so the 180 s timeouts cannot come back from a network stall. The production timeout is a separate hardening item, and it stays recorded instead of being dropped.\n  reversibility: The shim affects only the test harness and can be removed or narrowed in one edit. If a maintainer wants the `gh_helpers.sh` bound in the same change, they can carry it outside the heal pipeline with no conflict, because this change does not touch that file.\n  \nSETUP REQUIRED:\n- None.",
+  "fingerprint": "82be347dbb02786823174a9f36f772d311b84d9feeebb1b5ccddba76affd1b70",
+  "lineage": {
+    "issue_number": 8124,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40185993580",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40185993580",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8124"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261025105508_9fa34b76e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8124,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40185993580"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8124",
+  "timestamps": {
+    "created_at": "2026-10-25T10:55:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

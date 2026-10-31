@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/settings.json:69-88 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: Force-prefixed default-branch refspecs such as `+main` and `+master` match the `claude/*` push allow rule but none of the ask rules, allowing a push of the local default branch without a prompt.\n  WHY: The highest reported severity is MAJOR, though anthropic_claude-sonnet-5_5 rated this NIT; both reviewers identify the same unprompted-push gap, and the review outputs say it is documented but not enforced.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"pushes that use `--delete`, `-d` or `--prune`, or name a plain `main`/`master` destination, now always ask\"\n  expected_change_site: .claude/settings.json and workflow-templates/.claude/settings.json permissions.ask block\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: The settings files have no ask rules for `+main` or `+master` force-prefixed refspecs; `.claude/settings.json` and `workflow-templates/.claude/settings.json` contain ask patterns that do not catch these forms; `tests/test_pr_merge_status_guard.py:2362-2401` verifies 9 forms but does not test `+main` or `+master` forms.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/.claude/settings.json and .claude/settings.json: permissions.ask | severity=NIT | confidence=3\n  PROBLEM: Force-prefixed default-branch refspecs such as `+main` and `+master` match the trailing `*` of the `claude/*` allow rules but none of the ask rules, allowing an unprompted push of the local default branch.\n  WHY: The stated purpose is that a push naming `main` or `master` as a destination always asks, but the gap is only documented and not enforced; the review recommends adding ask rules in both settings copies.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Pushes that name a plain `main`/`master` destination, now always ask.\"\n  Expected change site: .claude/settings.json and workflow-templates/.claude/settings.json\n  Evidence of absence: The ask rules for `main` and `master` use broad `*` wildcards, which may capture branches like `claude/fix-master` and fail to target the \"plain\" destination as required, while also failing to block `+main`/`+master` forms. As noted in the documentation in `CLAUDE.md`, these gaps persist because the settings files cannot be updated from the sandbox to address them directly.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/settings.json:69-88 | severity=MAJOR | confidence=4\n  PROBLEM: Force-prefixed refspecs such as `git push --force-with-lease origin claude/x +main` match the allow rule but none of the ask rules, allowing a force-push of the local default branch without a prompt.\n  WHY: The PR's stated goal is that pushes naming `main`/`master` \"now always ask\", but the last autofix run only documented this gap and no ask rules were added to enforce it.\n- TASK_GAP\n  Requirement: \"pushes that use `--delete`, `-d` or `--prune`, or name a plain `main`/`master` destination, now always ask\"\n  Expected change site: .claude/settings.json and workflow-templates/.claude/settings.json permissions.ask block\n  Evidence of absence: The ask rules catch `* main`, `* main *`, `* master`, `* master *`, `*:main*`, `*:master*`, `*refs/heads/main*`, `*refs/heads/master*`, but no rules catch `+main` or `+master` force-prefixed refspecs. The command `git push --force-with-lease origin claude/x +main` matches the allow rule `Bash(git push --force-with-lease origin claude/*)` through its trailing `*` and matches no ask rule. The test in tests/test_pr_merge_status_guard.py:2362-2401 verifies 9 forms that should match both allow and ask rules, but does not test `+main` or `+master` forms. The PR changelog headline says \"name a plain `main`/`master` destination, now always ask\", but force-prefixed destinations are not plain and bypass the ask rules.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7ea142a09ab7eca5bad0c5816512e740e52798726f9b9e38e5f990a56f85dfa5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7204,
+    "run_id": "38207023231",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38207023231",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012053249_88ffac0ac7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7204,
+    "run_id": "38207023231"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T05:32:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

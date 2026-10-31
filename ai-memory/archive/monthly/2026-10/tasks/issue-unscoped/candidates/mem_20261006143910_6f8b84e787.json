@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1914-1915, 1963-1964, 2461-2463 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: When auto-merge is disabled, judge-approved manual-merge paths do not post `ai-review/head-gate` success.\n  WHY: If the status is required by branch protection, GitHub blocks the manual merge and the PR and linked issues can remain stuck; severity ranged from MAJOR to BLOCKER, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:1914-1915, 1963-1964, 2461-2463 | severity=MAJOR | confidence=5\n  PROBLEM: The judge posts `ai-review/head-gate` success only when `ENABLE_AUTO_MERGE` is `true`; when it is not, merge-ready paths do not post the status.\n  WHY: When `ai-review/head-gate` is required in default-branch protection, the pending status blocks the manual merge, leaving the PR and linked issues stuck.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_head_gate.sh: Lines 44-78 (review_head_gate_withdraw_auto_merge) | severity=MAJOR | confidence=4\n  PROBLEM: When `known_enabled=\"false\"`, the function returns success without clearing `REVIEW_HEAD_GATE_LIVE_PR_JSON`, which is only updated on the live-read path.\n  WHY: Subsequent calls in the same bash session may use stale JSON content and evaluate state incorrectly.\n- scripts/review_rb_judge.sh: Lines 1897-1915, 1954-1965, and 2461-2463 | severity=BLOCKER | confidence=5\n  PROBLEM: With auto-merge disabled, the judge can authorize merge labels or wait for a manual merge without posting the `ai-review/head-gate` success status.\n  WHY: If the repository requires this status check in branch protection, GitHub blocks the manual merge, leaving the PR and linked issues stuck.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh: Lines ~1897-1915 and ~1954-1965 (auto-merge attempt paths); the `merge_with_followup` arm is not shown to receive a `review_head_gate_post_status` call. | severity=MAJOR | confidence=3\n  PROBLEM: The `merge_with_followup` verdict has no status POST when `ENABLE_AUTO_MERGE=false`; the cited status calls cover auto-merge paths or a synchronous fallback instead.\n  WHY: If branch protection requires `ai-review/head-gate`, GitHub blocks the manual merge and the PR and linked issues stay stuck in `ai:review-blocked`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh: Lines 1914-1915, 1963-1964, and 2461-2463 | severity=MAJOR | confidence=5\n  PROBLEM: Judge-approved paths that require a manual merge do not post `ai-review/head-gate` success.\n  WHY: When the status is required in branch protection, GitHub blocks the manual merge, so the judge\u2019s documented manual-merge path cannot complete.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh: Lines 1914-1915 (merge action), 1963-1964 (fix action), 2461-2463 (merge_with_followup action) | severity=MAJOR | confidence=5\n  PROBLEM: When `ENABLE_AUTO_MERGE` is not `true`, the judge does not post the `ai-review/head-gate` success status.\n  WHY: If the status is required in branch protection, GitHub blocks manual merging and the PR and linked issues remain stuck in `ai:review-blocked`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_rb_judge.sh: Lines 1914-1915 (merge branch), 1963-1964 (fix/IS_FINAL branch), 2461-2463 (merge_with_followup branch) | severity=MAJOR | confidence=4\n  PROBLEM: When `ENABLE_AUTO_MERGE=false`, the judge's merge decision paths do not call `review_head_gate_post_status ... success`.\n  WHY: If `ai-review/head-gate` is required in branch protection, the manual merge is blocked and the PR and linked issues stall until an operator bypasses the check.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "26b7e1680cb016cce69010cafc839bf160d83678e58cbee3b0dcf8987ee98692",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6536,
+    "run_id": "37472124378",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37472124378",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006143910_6f8b84e787",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6536,
+    "run_id": "37472124378"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T14:39:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_guard_differential.py:1040-1044 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The Python-invocation scan misses `python3 -c` or `python3 -m` invocations when an option that takes an argument precedes them.\n  WHY: A workflow change could add an unisolated Python invocation before the pinned verifier and still pass this test, allowing PR-controlled modules from the checkout to execute in the verifier's job.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_guard_differential.py:1040-1044 | severity=high | confidence=4\n  PROBLEM: The scan misses python3 -c or python3 -m invocations when an option that takes an argument precedes them. For example, with python3 -W ignore -c 'import json', the regex captures only -W and does not check for the unsafe -c.\n  WHY: A workflow change could add an unisolated Python invocation before the pinned verifier and still pass this test. That invocation can import PR-controlled modules from the checkout and execute their code in the verifier's job.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "46b7b13c6835f13e4aa118e8f380ebd51660aeeca6bff1a41bf6f5626e8fde21",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5647,
+    "run_id": "36794122710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794122710",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001003130_37564b5d79",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5647,
+    "run_id": "36794122710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T00:31:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

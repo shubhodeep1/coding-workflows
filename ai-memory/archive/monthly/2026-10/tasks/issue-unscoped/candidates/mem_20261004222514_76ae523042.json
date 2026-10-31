@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py:30 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash]\n  PROBLEM: The root and template `audit-plans.md` command files are out of parity, causing `test_template_parity` to fail.\n  WHY: The test asserts byte-for-byte equality, and its failure makes the required `tests-hooks-and-orchestrator` and aggregate `lint` checks fail.\n- .claude/commands/audit-plans.md:1, 29, 126-127 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The root command describes `/implement-plan-claude` as an in-session project while the template describes it as an orchestrator hand-off for new invocations.\n  WHY: The parity test requires the files to be byte-identical, and the supplied CI run confirms the test and aggregate `lint` check fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The `tests-hooks-and-orchestrator` CI check, which gates the aggregate `lint` check, must pass; update the root command to match the template's current wording about legacy in-flight projects and new invocations dispatching the orchestrator.\n  expected_change_site: .claude/commands/audit-plans.md\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  EVIDENCE: Neither command path resolves via glob in the working tree and the LAST RUN DIFF does not touch `.claude/commands/`; neither the LAST RUN DIFF nor the full PR DIFF touches `.claude/commands/audit-plans.md`; the root file still describes the old flow while the template has the updated wording; CI confirms `test_template_parity` fails.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: The CI check `tests-hooks-and-orchestrator` which in turn gates the aggregate `lint` check must pass (the PR should be mergeable). The failing test is `test_template_parity` in `tests/test_audit_plans_command.py:29-30`, which requires `.claude/commands/audit-plans.md` to match `workflow-templates/.claude/commands/audit-plans.md` byte-for-byte. The PR diff updates the template copy (lines 1, 29, 32, 103, 126, 127 per prior editor summaries) to reflect the retired `/implement-plan-claude` session-based path, but the root command file either was not updated alongside or is absent from this checkout entirely.\n  Expected change site: .claude/commands/audit-plans.md\n  Evidence of absence: Neither `.claude/commands/audit-plans.md` nor `workflow-templates/.claude/commands/audit-plans.md` resolves via glob in the working tree. The LAST RUN DIFF does not touch any `.claude/commands/` path. CI confirms `tests-hooks-and-orchestrator` is red specifically on this parity assertion, which cascades to a failing `lint` aggregate check. This was flagged by three pass-1 reviewers and confirmed by every prior editor summary.\n  SEVERITY: critical\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_audit_plans_command.py:30 | severity=critical | confidence=[5]\n  PROBLEM: The root command file .claude/commands/audit-plans.md and its template workflow-templates/.claude/commands/audit-plans.md are out of parity.\n  WHY: `test_template_parity()` asserts byte-for-byte equality, so this fails the `tests-hooks-and-orchestrator` CI job and aggregate `lint` check.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:275 | severity=low | confidence=[1]\n  PROBLEM: The reviewer reports the `last_segment_word_end = 0` reset after `segment.pop()` as a correct, minimal fix for chained redirections, not as a defect.\n  WHY: The reviewer says the fix passes four new test cases and is applied to both hook copies, preserving their byte-identity contract.\n- .claude/hooks/pr_merge_status_guard.py:270 | severity=low | confidence=[1]\n  PROBLEM: The reviewer suggests a defensive `fd_start >= 0` guard to make the negative-offset case explicit.\n  WHY: The reviewer states current behavior is correct because the empty-slice comparison prevents an incorrect pop; the suggestion is described as belt-and-suspenders.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `.claude/commands/audit-plans.md`:1, 29, 126-127 | severity=critical | confidence=[5]\n  PROBLEM: The root command describes `/implement-plan-claude` as an in-session project, while the template describes new invocations as orchestrator hand-offs and limits the old flow to legacy projects.\n  WHY: The parity test requires the files to be byte-identical; `test_template_parity` fails and the supplied CI run confirms the aggregate `lint` check fails.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: The `tests-hooks-and-orchestrator` CI job (required for the aggregate `lint` check) must pass. It currently fails because `tests/test_audit_plans_command.py:29-30` (`test_template_parity`) asserts byte-for-byte equality between `.claude/commands/audit-plans.md` (root) and `workflow-templates/.claude/commands/audit-plans.md` (template), and the two files differ.\n  Expected change site: `.claude/commands/audit-plans.md` \u2014 the root copy must be updated to match the template's current wording, which describes `/implement-plan-claude` as a \"legacy\" hand-off and says new invocations dispatch the orchestrator rather than creating in-session projects.\n  Evidence of absence: Neither the LAST RUN DIFF nor the full PR DIFF touches `.claude/commands/audit-plans.md`. The root file (line 1) still says \"`/implement-plan-claude` projects (in-progress `docs/implement-plan/<slug>.md` logs...)\" as active projects, while the template (line 1) says \"legacy `/implement-plan-claude` projects still in flight\" and \"New `/implement-plan-claude` invocations dispatch the orchestrator rather than creating in-session projects.\" The CI log tail confirms `1 failed, 8 passed` in `tests/test_audit_plans_command.py` with a pytest diff showing the two wording variants.\n  SEVERITY: critical\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2",
+  "fingerprint": "0dbb1ba491f6c86451e3fc700d4efaad0dabaff2aacac317266aebb0b3ba01b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37237917652",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37237917652",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004222514_76ae523042",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37237917652"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T22:25:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:python3 -m pip install --quiet pytest | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Package installation lacks signature verification or pinning.\n  WHY: The workflow installs pytest from PyPI and apt-get without pinning or signature verification, which could allow malicious packages to be installed in the workflow environment.\n- .github/workflows/test-and-mark-stable.yml:timeout-minutes: 45 (job) and timeout-minutes: 35 (dispatch step) | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Insufficient headroom for watcher waits and analysis.\n  WHY: The 15-minute buffer for the job and 5-minute buffer for the dispatch step are insufficient to cover watcher waits, retry headroom, and the always() soft-error analyser, leading to premature cancellation as observed in the original failure.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:assert step_timeout * 60 >= watcher_wait + 180 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Assertion allows inadequate headroom.\n  WHY: 180 seconds of headroom is insufficient for the standalone watcher's 1800s wait plus retry headroom, potentially causing the test to pass even when the configuration is insufficient for production runtime.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:assert job_timeout >= step_timeout + 10 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Assertion allows inadequate headroom between job and step timeout.\n  WHY: 10 seconds of headroom is insufficient for setup, teardown, and the always() soft-error analyser to execute, leading to premature job cancellation before the analyser can finish.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Inspect child run 37625817450 before proposing any fix to validation itself.\"\n  expected_change_site: A new diagnostic step or issue comment analyzing child run 37625817450.\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No diff hunk in .github/workflows/test-and-mark-stable.yml or tests/test_test_and_mark_stable_review_blocked_budget.py implements a child run inspection step for run 37625817450. The PR assumes timeouts are the root cause without analyzing the evidence requested by the linked issue.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:python3 -m pip install --quiet pytest | severity=MAJOR | confidence=3\n  PROBLEM: Package installation lacks signature verification or pinning.\n  WHY: The workflow installs pytest from PyPI without verifying signatures, and uses apt-get to install python3-pytest without pinning or signature verification, which could allow malicious packages to be installed in the workflow environment.\n- .github/workflows/test-and-mark-stable.yml:timeout-minutes: 45 (job) and timeout-minutes: 35 (dispatch step) | severity=MAJOR | confidence=4\n  PROBLEM: Insufficient headroom for watcher waits and analysis.\n  WHY: The 15-minute buffer for the job (45-30) and 5-minute buffer for the dispatch step (35-30) are insufficient to cover watcher waits, retry headroom, and the always() soft-error analyser, leading to premature cancellation as observed in the original failure.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:assert step_timeout * 60 >= watcher_wait + 180 | severity=MAJOR | confidence=4\n  PROBLEM: Assertion allows inadequate headroom.\n  WHY: 180 seconds of headroom is insufficient for the standalone watcher's 1800s wait plus retry headroom, potentially causing the test to pass even when the configuration is insufficient for production runtime.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:assert job_timeout >= step_timeout + 10 | severity=MAJOR | confidence=4\n  PROBLEM: Assertion allows inadequate headroom between job and step timeout.\n  WHY: 10 seconds of headroom is insufficient for the setup, teardown, and the always() soft-error analyser to execute, leading to premature job cancellation before the analyser can finish.\n- Requirement: \"Inspect child run 37625817450 before proposing any fix to validation itself.\"\n  Expected change site: A new diagnostic step or issue comment analyzing child run 37625817450.\n  Evidence of absence: No diff hunk in .github/workflows/test-and-mark-stable.yml or tests/test_test_and_mark_stable_review_blocked_budget.py implements a child run inspection step for run 37625817450. The PR assumes timeouts are the root cause without analyzing the evidence requested by the linked issue.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "e7b6a832ad5d2d67a1de07b8ba71653f0d7890bd9e4622e5a99994fca9ae1b5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6676,
+    "run_id": "37636932498",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37636932498",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007144626_0fa5e00a43",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6676,
+    "run_id": "37636932498"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T14:46:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

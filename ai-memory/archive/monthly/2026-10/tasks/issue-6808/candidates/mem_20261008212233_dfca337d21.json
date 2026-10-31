@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How will this issue get the automation-path grant that implement needs before it can commit the edit to `scripts/check_failure_triage.sh`?\nChoices:\nA) A trusted author (the pipeline's GH_PAT login or an OWNER/MEMBER/COLLABORATOR) edits this issue body to add a `files_touched` list. It names `scripts/check_failure_triage.sh`, the new or updated `tests/test_check_failure_triage*.py` file, the README row for `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED`, and a `changelog.d/<issue>-check-triage-pr-head-routing.md` fragment. Implementation goes ahead after that edit. (RECOMMENDED)\nB) Narrow the scope to the non-automation parts (tests, README, changelog) and leave `scripts/check_failure_triage.sh` alone. The routing behaviour then does not ship in this issue.\nC) Go ahead without a grant and accept that the commit will be blocked again with `ai:scope-blocked`.\nQ2: The final body validator rejects every `Integration branch:` line. How should the trusted line be let through?\nChoices:\nA) Allow exactly one line, `- Integration branch: <head ref>`, at a fixed position in the header the script builds itself. Only accept it when `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED=true`, its value equals the verified PR head ref, and it appears only once. Keep rejecting every other routing key, including any routing key in the neutralized diagnosis or evidence. With the flag off, the validator behaves exactly as it does today. (RECOMMENDED)\nB) Run the existing validator first, then append the `Integration branch:` line after validation passes, with a separate exact-match check on the appended line.\nC) Drop the routing-key rule for `integration branch` from the validator entirely while the flag is on.\n**Note:** C would let CI-log or model text supply a routing key whenever neutralization misses a variant, so it weakens the existing security control.",
+  "fingerprint": "994cf5b905d058beecdfb863790c5a6bced5a94aecea56fc0e227e7aa1ee20ef",
+  "lineage": {
+    "issue_number": 6808,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37845658542",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37845658542",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008212233_dfca337d21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6808,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37845658542"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6808 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T21:22:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

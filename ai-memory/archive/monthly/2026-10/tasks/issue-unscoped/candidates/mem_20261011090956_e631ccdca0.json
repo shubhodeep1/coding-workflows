@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_agents_md_direct_edits.py:144 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Ref validation rejects valid short Git commit hashes.\n  WHY: CI environments may provide short hashes, causing the direct-edit check to fail with `invalid_ref`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says the script logs `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|skipped|error`.\n  expected_change_site: `scripts/check_agents_md_direct_edits.py`, `main()`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The script emits only `ok`, `violation` and `error`, not `skipped`; the CI step skips excluded PRs without running the script.\n- requirement: PR description states \"It logs `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|skipped|error`.\"\n  expected_change_site: PR description body, the bullet list of outcome values\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `scripts/check_agents_md_direct_edits.py:113-157` only emits `outcome=ok` (line 153), `outcome=violation` (line 162), and `outcome=error` (lines 138, 147) \u2014 there is no code path that emits `outcome=skipped`; the skip path lives in the `ci.yml` `if:` predicate, which never invokes the script.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP\nRequirement: The PR description says the script \"logs `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|skipped|error`.\"\nExpected change site: `scripts/check_agents_md_direct_edits.py`, `main()`\nEvidence of absence: The script emits only `ok`, `violation` and `error`. This was deliberate: an earlier autofix turned the old `skipped` path into `outcome=error reason=invalid_ref`. The script docstring, README, `agents.d` fragment and changelog all list `ok|violation|error` and agree with the code. The CI step skips excluded PRs without running the script, so no `skipped` line is ever emitted. The mismatch is only in the PR description wording.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_agents_md_direct_edits.py:144 | severity=BLOCKER | confidence=4\n  PROBLEM: The validation strictly requires 40-character SHA1 hex strings or \"HEAD\", rejecting valid short Git commit hashes.\n  WHY: CI environments commonly provide short Git commit hashes. This check will incorrectly fail with an invalid_ref error, blocking the direct-edit check entirely for valid CI runs.\nTASK_GAP\nRequirement: The PR description states that the script logs \"AGENTS_MD_DIRECT_EDIT outcome=ok|violation|skipped|error\".\nExpected change site: scripts/check_agents_md_direct_edits.py, within main() output handling.\nEvidence of absence: The script logic does not implement the skipped outcome; when the CI step if condition skips, the script is never executed, so the skipped outcome is never logged.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\nRequirement: PR description states \"It logs `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|skipped|error`.\"\nExpected change site: PR description body, the bullet list of outcome values\nEvidence of absence: `scripts/check_agents_md_direct_edits.py:113-157` only emits `outcome=ok` (line 153), `outcome=violation` (line 162), and `outcome=error` (lines 138, 147) \u2014 there is no code path that emits `outcome=skipped`. The PR description text remains unchanged across all four editor summaries despite the editor noting the gap; the editor marked it TASK_GAP_DEFERRED because it cannot edit PR descriptions. A human PR-description edit would resolve the mismatch (remove `skipped` from the bullet, since the skip path lives in the `ci.yml` `if:` predicate which never invokes the script).\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\nRequirement: The PR description says the script \u201clogs `AGENTS_MD_DIRECT_EDIT outcome=ok|violation|skipped|error`.\u201d\nExpected change site: `scripts/check_agents_md_direct_edits.py`, outcome handling in `main()`.\nEvidence of absence: `main()` emits `error`, `ok`, or `violation`, but never `skipped`. The CI step condition skips excluded PRs without running the script, so it emits no `skipped` outcome either.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5f26f369226571f7143f4e1f976655733bc20186aa1baa96f8fba5c1c48d1f29",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7139,
+    "run_id": "38122757067",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38122757067",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011090956_e631ccdca0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7139,
+    "run_id": "38122757067"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T09:09:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1239-1249 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_autofix_pr_named_review_runs` matches PR-named review runs by path and title without verifying that `head_branch` is the repository's default branch.\n  WHY: A matching run from a non-default branch could suppress a legitimate dispatch or consume the per-head retry budget.\n- .claude/scripts/check_in_status.py:313-327 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_active_run_count` matches PR-named active runs by path and display-title pair without verifying `event == workflow_dispatch` or `head_branch == default_branch`.\n  WHY: A matching run from another branch could make the checker believe review runs are active and prevent a stuck or conflicted PR from being handed back to the fixer.\n- .claude/scripts/check_in_status.py:136 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `DISPATCHED_REVIEW_RUNS_PATH` is preserved for backward compatibility but is no longer referenced by any function code path.\n  WHY: External consumers expecting the constant's former behavior could encounter dead code; the reviewer notes current code and tests are consistent and flags this as advisory.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/gh_helpers.sh:1239-1249 | severity=low | confidence=3\n  PROBLEM: `_autofix_pr_named_review_runs` matches runs by path regex and title without verifying that `head_branch` equals the repository's default branch.\n  WHY: For `autofix_retrigger_has_inflight_peer` (fail-open), a spoofed active run could skip a legitimate dispatch; for `autofix_changes_lost_head_retry_consumed` (fail-closed), a spoofed completed run could consume the per-head retry budget and block a legitimate retry.\n- .claude/scripts/check_in_status.py:313-327 | severity=low | confidence=3\n  PROBLEM: `_active_run_count` matches by `(path, display_title)` pair without verifying `event == workflow_dispatch` or `head_branch == default_branch`.\n  WHY: A run from any branch with a matching wrapper path and PR-number title could count as active and prevent the checker from handing a stuck or conflicted PR back to the fixer session.\n- .claude/scripts/check_in_status.py:294-317, line 136 | severity=low | confidence=1\n  PROBLEM: `DISPATCHED_REVIEW_RUNS_PATH` is preserved for backward compatibility but is no longer referenced by any function code path.\n  WHY: External modules or scripts importing it may encounter dead code; current code and tests are consistent, so this is advisory.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_merge_train.sh, `_mt_inflight_review_branches`, line 441-449\n  Issue: The path check uses exact equality `.path == \".github/workflows/internal-review.yml\"`. The sibling code in `.claude/scripts/check_in_status.py:317-321` strips any `@ref` suffix before comparing. An unexpected path format could disable PR-named matching and cause duplicate dispatches.\n  Suggested minimal fix: Normalize the path with `split(\"@\", 1)[0]` before comparing.\n  HARDENING_RISK_SCORE: 1\n- scripts/review_merge_train.sh, `_mt_inflight_review_branches`, line 437\n  Issue: `local mt_inflight_default_branch=\"${1:-}\"` silently uses an empty `default_branch` when called without arguments. A future caller passing an unset value could silently lose `pr:` keys instead of getting an error.\n  Suggested minimal fix: When `$1` is empty and a caller expects provenance verification, log a one-line `::warning::`.\n  HARDENING_RISK_SCORE: 1\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b6276bf77d39c1d1f6b0e2bc2b59ad5db5e300712c7b8eeb40b560910fc85e87",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37100578716",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37100578716",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003055223_3628c318f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37100578716"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-03T05:52:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

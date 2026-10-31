@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_wait_review.sh:85-87 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The extension check in review_phase_deadline_extension_allowed reserves only POLL_INTERVAL before REVIEW_PHASE_DEADLINE_CEILING and ignores the time the poll's GitHub API calls take, including gh_api_safe rate-limit backoffs, so a poll can end past the ceiling.\n  WHY: The overrun is bounded to one iteration, because the next deadline check exits through the timeout path, but it eats into the time reserved for Phase 4b, Phase 6, Phase 7 and finalization. Severity disagreement: gemini and luna said MAJOR, while sonnet, minimax, qwen and glm said NIT. The highest severity is used here.\n- scripts/stable_e2e_step_wait_review.sh:773-818 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: A queued run produces no state change, so IDLE grows to INACTIVITY_LIMIT (30 minutes) and the stall exit at 816-818 fires without consulting the extension function. The queued branch at line 95 therefore only helps within the first 30 minutes, which contradicts changelog.d/8004-phase4-review-deadline-extension.md line 2.\n  WHY: A bait-covering review queued for more than 30 minutes still fails Phase 4 with status=timeout, the failure the extension was meant to remove.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stable_e2e_step_wait_review.sh:~84-87 | severity=low (NIT) | confidence=2\n  PROBLEM: The extension check does not account for time spent inside the poll itself.\n  WHY: The reviewer judged this covered by the existing 20-minute finalization reserve and bounded by the next iteration's deadline check, so it is not a defect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stable_e2e_step_wait_review.sh:85 | severity=high (MAJOR) | confidence=4\n  PROBLEM: review_phase_deadline_extension_allowed has an insufficient safety margin, because it accounts only for the sleep period (ext_margin = POLL_INTERVAL) and not for API call execution time.\n  WHY: A poll starting near the ceiling could finish well after it, infringing on the time reserved for subsequent phases.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stable_e2e_step_wait_review.sh (review_phase_deadline_extension_allowed margin check) | severity=low (NIT) | confidence=3\n  PROBLEM: The margin check reserves only POLL_INTERVAL, but the poll's GitHub API calls can take longer because gh_api_safe backs off 30, 60 and 120 seconds.\n  WHY: The overrun is bounded to one extra poll, but the code does not enforce the documented contract. The reviewer called the practical impact small.\n- Hardening suggestion: raise the margin, for example ext_margin=$((POLL_INTERVAL + 60)) or add an E2E_REVIEW_API_RESERVE_SECONDS variable defaulting to 60. Risk score 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stable_e2e_step_wait_review.sh:85-87 (API calls at 425-429, 477, 500, 576, 696, 719, 723, 739, 743) | severity=high (MAJOR) | confidence=4\n  PROBLEM: The deadline check reserves only POLL_INTERVAL for a poll, not the time spent on its API requests.\n  WHY: gh_api_safe retries and sleeps on rate limits and transient failures, so Phase 4 can pass REVIEW_PHASE_DEADLINE_CEILING and consume time reserved for later phases.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/stable_e2e_step_wait_review.sh:85-87 | severity=low (NIT) | confidence=4\n  PROBLEM: The extension check accounts for the next POLL_INTERVAL sleep but not the time spent polling GitHub, so a poll can run past REVIEW_PHASE_DEADLINE_CEILING.\n  WHY: gh_api_safe backoffs (scripts/comprehensive_test_and_release_gh_api.sh:121-147) can make a poll take 210 seconds or more with POLL_INTERVAL=10, which reduces the time left for Phase 4b.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stable_e2e_step_wait_review.sh:773-818 (and line 95; changelog.d/8004-phase4-review-deadline-extension.md line 2) | severity=low (NIT) | confidence=4\n  PROBLEM: A queued run produces no state change, so IDLE reaches INACTIVITY_LIMIT and the stall exit at 816-818 fires without consulting the extension function. The queued-status branch at line 95 therefore only helps within the first 30 minutes.\n  WHY: A run queued for more than 30 minutes still kills Phase 4 with status=timeout, so the changelog claim holds only for queue waits under 30 minutes.\n- scripts/stable_e2e_step_wait_review.sh:85-87 (API retry sleeps in scripts/comprehensive_test_and_release_gh_api.sh:126-148) | severity=low (NIT) | confidence=4\n  PROBLEM: The margin covers only the POLL_INTERVAL sleep, not the API time an iteration spends before that sleep.\n  WHY: The overrun is bounded to about 3.5 minutes in the worst case, and later phases compute their own deadlines, so this is a soft-bound gap. The reviewer downgraded it from MAJOR to NIT.\n- Hardening suggestion 1: add a fixed API-time allowance to the comparison, for example EXT_API_MARGIN_SECS=180, at lines 85-87.\n- Hardening suggestion 2: add a clause to changelog.d/8004-phase4-review-deadline-extension.md line 2 saying the queued wait is bounded by the 30-minute inactivity stall exit. Risk score 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1a30d1db88c0a444d5fd91ff654b5f30269d34da31491b004d1e40c656c88ff6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8027,
+    "run_id": "40036337074",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40036337074",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023232905_1f9ad8e93a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8027,
+    "run_id": "40036337074"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T23:29:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

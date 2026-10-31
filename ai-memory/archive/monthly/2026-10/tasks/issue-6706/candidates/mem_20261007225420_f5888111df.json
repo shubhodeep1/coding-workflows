@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: REFRAME\n\nRATIONALE:\nQ1: The checked-out default branch already has the guarded integration-branch manifest resolution. `scripts/review_conflict_prepare.sh` lines 731 and 735 emit the `detail=fingerprint_unverified` and `detail=fingerprint_violations` errors, and the commit waits on `_mu_defer_commit`. `tests/test_conflict_manifest_union_contract.py` already covers the stage `1 2` manifest-only case on `orchestrator/project-123`, in both directions (`test_manifest_only_conflict_on_integration_sync_branch_is_resolved`, line 723). It also covers the other-conflict refusal (line 642), the fingerprint-violation refusal (line 750) and the unverified-check refusal (line 769). Porting again would change nothing. The only missing requirement is showing that the old workflow source fails and the fix passes, which A provides. C's re-check would end in A anyway.\nQ2: GitHub facts show PR #6043 is closed and was never merged, so it cannot be \"rerun\" as asked. The 30-minute sweep only looks at open PRs, and a `force_rb_judge` dispatch on a closed PR does nothing useful. The criterion becomes a statement in the PR body that names the automatic path that reviews #6043 if it is reopened. Nothing is dispatched and nothing is left as a manual step.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ2:\n  strategy: reframe\n  inputs:\n    - GITHUB FACTS: PR #6043 is closed and not merged, base `main`, head `orchestrator/project-6031`; the branch still exists at 49ccadd74b23\n    - agents.md: in this repository, review stages its support scripts from the verified protected `main` SHA, so once the fix is on `main` every later review run uses it\n  steps:\n    - The implementation does not dispatch any review run and adds no \"Setup required\" item for one.\n    - The PR body states that PR #6043 is closed and unmerged, so this change triggers no rerun.\n    - The PR body also states that if #6043 is reopened, or a new final PR is opened from `orchestrator/project-6031`, the `pull_request` event or the 30-minute review sweep reviews it, using the fixed `main` workflow source.\n  replaces_acceptance_criterion: \"After required checks pass and the fix reaches the verified workflow source used by review, rerun PR #6043's review check.\"\n  equivalence_argument: The rerun was meant to prove that #6043 gets past the manifest-only conflict on the fixed source. A closed PR runs no review, so that proof is impossible now. Any reopened or replacement PR from that branch gets reviewed automatically on the fixed `main` source, which is the same outcome. The Q1 regression test separately proves the old block fails and the current block passes on the stage `1 2` manifest-only case.\n  reversibility: An operator can reopen #6043, or dispatch `internal-review.yml` with `force_rb_judge=true` for it, at any time. This decision does not prevent either.\n\nQ1 (letter A, implementation notes for the planner):\n  - Change no code under `scripts/`.\n  - Add one test to `tests/test_conflict_manifest_union_contract.py` that reuses `_make_one_sided_manifest_conflict` and the `orchestrator/project-123` setup from `_run_integration_sync_manifest_only`. It runs an embedded copy of the old conflict-handling block, which refuses every integration-sync branch, and asserts `unhandled reason=integration_sync stages=1 2` with a non-zero exit. It then runs the live block and asserts that resolution succeeds.\n  - Record in the test docstring, as heal #6608 did, that the old block fails and the current block passes. Name issue #6699, this re-issue, and PR #6043 as the incident.\n  - Write the PR summary with no auto-close keyword against any `ai:orchestrator-tracking` issue (\u00a721).",
+  "fingerprint": "8613fa089782d6b42af3cfefa56fff4f2ba5954d8e3841032eb404afba0cad4d",
+  "lineage": {
+    "issue_number": 6706,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37698228788",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37698228788",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6706"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007225420_f5888111df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6706,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37698228788"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6706",
+  "timestamps": {
+    "created_at": "2026-10-07T22:54:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

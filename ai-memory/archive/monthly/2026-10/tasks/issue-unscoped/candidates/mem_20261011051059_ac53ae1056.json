@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-judge-review-blocked.txt:124-134 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The prompt incorrectly says that failed completed informational check-runs block `merge_with_followup`, although the shared gate ignores completed failures for non-required checks.\n  WHY: The judge may refuse a merge the shared gate allows, leaving the PR review-blocked and triggering unnecessary recovery; severity disagreement: minimax rated this NIT, while the other reviewers rated it MAJOR.\n- prompts/_templates/mode-judge-review-blocked.txt:118-119 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The template incorrectly says that failed completed informational check-runs block `merge_with_followup`, although the shared gate ignores completed failures for non-required checks.\n  WHY: The judge may refuse a merge the shared gate allows, leaving the PR review-blocked and triggering unnecessary recovery.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- prompts/mode-judge-review-blocked.txt line 124 | severity=high | confidence=[4]\n  PROBLEM: The prompt incorrectly states that all check-runs, including informational ones, must complete successfully, neutrally, or be skipped for a merge to be valid.\n  WHY: The shared gate ignores completed failures for non-required checks, so the judge may refuse `merge_with_followup` even when informational checks fail.\n- prompts/_templates/mode-judge-review-blocked.txt line 119 | severity=high | confidence=[4]\n  PROBLEM: The prompt incorrectly states that all check-runs, including informational ones, must complete successfully, neutrally, or be skipped for a merge to be valid.\n  WHY: The shared gate ignores completed failures for non-required checks, so the judge may refuse `merge_with_followup` even when informational checks fail.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- prompts/mode-judge-review-blocked.txt:125-126 | severity=low | confidence=[3]\n  PROBLEM: The prompt says the merge is gated on ALL check-runs (required AND informational) completing success/neutral/skipped, but the shared gate blocks completed failures only for required checks.\n  WHY: When an informational check fails, the prompt directs the judge to refuse `merge_with_followup` even though the shared gate allows the merge.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- prompts/mode-judge-review-blocked.txt; prompts/_templates/mode-judge-review-blocked.txt:125-126; prompts/_templates/mode-judge-review-blocked.txt:118-119 | severity=high | confidence=[5]\n  PROBLEM: The prompt says all check-runs, including informational ones, must complete with success, neutral, or skipped, but the shared gate allows completed failures for non-required checks.\n  WHY: A failed completed advisory check can pass the shared gate while the prompt instructs the judge to refuse `merge_with_followup`, leaving the PR review-blocked and sending it through judge recovery again.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- prompts/mode-judge-review-blocked.txt 125-126 | severity=high | confidence=[4]\n  PROBLEM: The prompt says all check-runs, including informational ones, must complete success/neutral/skipped, but the shared gate only enforces those conclusions for required checks.\n  WHY: The judge may refuse `merge_with_followup` when an informational check has a bad conclusion even though the shared gate allows it.\n- prompts/_templates/mode-judge-review-blocked.txt:118-119 | severity=high | confidence=[4]\n  PROBLEM: The template carries the same misleading check-run requirement as the rendered prompt.\n  WHY: The template is assembled into the judge prompt, causing the same mismatch between prompt instructions and gate behavior.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- prompts/mode-judge-review-blocked.txt (same text at prompts/_templates/mode-judge-review-blocked.txt:118-119) | lines 125-126 (\"Both the standalone and orchestrator paths gate the merge on ALL check-runs (required AND informational) completing success/neutral/skipped (a cancelled newest run blocks)\") and line 134 (\"any check-run is still pending or has a non-success conclusion\") | severity=high | confidence=[4]\n  PROBLEM: The prompt says all check-runs, including informational ones, must finish success/neutral/skipped, and says any check-run with a non-success conclusion is a refusal condition, although the shared gate ignores completed failures of non-required checks.\n  WHY: The judge may refuse `merge_with_followup` when an informational check has failed even though the gate allows it, leaving the PR review-blocked and causing avoidable judge recovery cycles.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5f36d24336dfdbd687d55cdb0ae1f8ae0f9f2340fb1b6426059480e747b49d6d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7133,
+    "run_id": "38110044934",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38110044934",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011051059_ac53ae1056",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7133,
+    "run_id": "38110044934"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T05:10:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

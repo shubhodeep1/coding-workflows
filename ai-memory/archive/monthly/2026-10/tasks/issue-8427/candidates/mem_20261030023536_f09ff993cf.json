@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Keep unattended work going until the change is delivered and verified (persistent-unattended-workflows plan P1-P11)\",\"issues\":[{\"id\":\"p1\",\"title\":\"Persistent unattended workflows P1: implement plan phase P1 (default-off repo variable)\",\"priority\":1},{\"id\":\"p2\",\"title\":\"Persistent unattended workflows P2: implement plan phase P2 (default-off repo variable)\",\"priority\":2},{\"id\":\"p3\",\"title\":\"Persistent unattended workflows P3: implement plan phase P3 (default-off repo variable)\",\"priority\":3},{\"id\":\"p4\",\"title\":\"Persistent unattended workflows P4: implement plan phase P4 (default-off repo variable)\",\"priority\":4},{\"id\":\"p5\",\"title\":\"Persistent unattended workflows P5: implement plan phase P5 (default-off repo variable)\",\"priority\":5},{\"id\":\"p6\",\"title\":\"Persistent unattended workflows P6: implement plan phase P6 (default-off repo variable)\",\"priority\":6},{\"id\":\"p7\",\"title\":\"Persistent unattended workflows P7: implement plan phase P7 (default-off repo variable)\",\"priority\":7},{\"id\":\"p8\",\"title\":\"Persistent unattended workflows P8: implement plan phase P8 (default-off repo variable)\",\"priority\":8},{\"id\":\"p9\",\"title\":\"Persistent unattended workflows P9: implement plan phase P9 (default-off repo variable)\",\"priority\":9},{\"id\":\"p10\",\"title\":\"Persistent unattended workflows P10: implement plan phase P10 (default-off repo variable)\",\"priority\":10},{\"id\":\"p11\",\"title\":\"Persistent unattended workflows P11: implement plan phase P11 (default-off repo variable)\",\"priority\":10}],\"dependency_edges\":[{\"from\":\"p1\",\"to\":\"p2\"},{\"from\":\"p2\",\"to\":\"p3\"},{\"from\":\"p3\",\"to\":\"p4\"},{\"from\":\"p4\",\"to\":\"p5\"},{\"from\":\"p5\",\"to\":\"p6\"},{\"from\":\"p6\",\"to\":\"p7\"},{\"from\":\"p7\",\"to\":\"p8\"},{\"from\":\"p8\",\"to\":\"p9\"},{\"from\":\"p9\",\"to\":\"p10\"},{\"from\":\"p10\",\"to\":\"p11\"}]}",
+  "fingerprint": "540a9b1a134faea784055e689661e683f24381aaeb4c790c8e7734a592466473",
+  "lineage": {
+    "issue_number": 8427,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40991481033",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40991481033",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261030023536_f09ff993cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8427,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40991481033"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Keep unattended work going until the change is delivered and verified (persistent-unattended-workflows plan P1-P11)' into 11 issues (tracking #8427)",
+  "timestamps": {
+    "created_at": "2026-10-30T02:35:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

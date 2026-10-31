@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: issue fixup-issue-2-canary-b (project 8299)\n\nPlanning ref: `orchestrator/project-8299` at `43446af53001fc98947abd0b18e4c32603d8997c`. The integration branch matches, so the plan is not blocked.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for a one-line content change in one existing data file. I read the file on the planning ref. It holds `status: ok` and `decompose-run: 40427433026`, and every line ends with a newline. No helper or new code is needed. Expanding the scope would break the rule that no other file is modified.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\n- None. Rewrite the file so it contains exactly `status: ok\\ndecompose-run: 40794181365\\n`.\n\n## Data structures affected\n- The smoke canary data file: line 2's run ID changes from 40427433026 to 40794181365.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Rewrite the file's content directly\n- Chosen: Overwrite the file with exactly two lines and a trailing newline.\n- Alternatives considered: Edit only line 2 in place.\n- Why: Both give the same bytes. Rewriting the whole file guarantees exactly two lines and no stray whitespace.\n\n## Security considerations\n- No trust boundary, endpoint or external input is touched. The file is static test data with no secrets.\n\n## Potential risks or edge cases\n- The file must not end up with a missing trailing newline, CRLF line endings or a blank third line.\n- `tests/e2e_smoke_canary.txt` must not be modified.\n- The PR must target `orchestrator/project-8299` and be merged, not closed. Per \u00a721, the PR body must not use auto-close keywords against tracking issue #8299.\n\n## Testing considerations\n- `cat -A tests/e2e_smoke_canary_b.txt` should show exactly `status: ok$` and `decompose-run: 40794181365$`.\n- `git diff --stat` should show only this file changed.\n\n## Pre-execution self-check\nThe plan covers every acceptance criterion, uses a single file and needs no external inputs.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "6308168043d3b04e8ce87c8ce8df5dd66809a9f06d4203be3b4faa11dc5bfa3d",
+  "lineage": {
+    "issue_number": 8306,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40797086394",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40797086394",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8306"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261029011953_4fb017f35e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8306,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40797086394"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8306",
+  "timestamps": {
+    "created_at": "2026-10-29T01:19:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

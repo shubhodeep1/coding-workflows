@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/escalation-judge.md:Line 54 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The close path may treat matching repository, head ref, and base ref as proof the project chain opened a PR, allowing it to close an unrelated PR with matching refs.\n  WHY: The highest reported severity is MAJOR; minimax_minimax-m3 disagrees, describing this as a NIT-level design concern that does not fail at runtime under the stated threat model.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/escalation-judge.md\n  Line or code reference: step 8 `close` branch, \"Its head repository (`head.repo.full_name`) must be this repository, and its head ref and base ref must fit one of these\"\n  Problem: The check verifies ref patterns but not whether the chain opened the PR. A stale or tampered log entry could name a PR whose refs match rule (b)/(c) coincidentally.\n  Why it fails at runtime: It does not, in the current threat model. The log lives on the project's branch, so writing to it requires push access. Anyone with push access can already create a branch matching the chain's pattern. The check is defense in depth against operator/stage errors (a mistyped PR number, a PR the chain never opened) rather than against malicious tampering. Rules (a)/(b)/(c) require exact `<slug>-<kind>` matches with specific kinds (`phase-<n>`, `complete`, `conformance-fix-<k>`, `conformance-fix-budget-<n>`, `validation-fix-<cycle>`, `descope-<n>`, `activation-fix-<k>`), and rule (a) requires head exactly `claude/implement-plan-<slug>` with no suffix.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/escalation-judge.md: Line 54, PR-close ownership check in the `close` branch. | severity=high | confidence=4\n  PROBLEM: The judge treats a matching repository, head ref, and base ref as proof that the chain opened a PR. Those refs can also belong to an unrelated PR.\n  WHY: If a stale or tampered progress log names an unrelated PR using matching refs, the judge passes this check and calls `mcp__github__update_pull_request` with `state: closed`. The check does not verify that the PR was created by this project\u2019s chain.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ecb1115300da29851d940977cab5e1c07a5096d75de5749c5cf1db1e8ef0491a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36977059406",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36977059406",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002073043_ecc749d4d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36977059406"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T07:30:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

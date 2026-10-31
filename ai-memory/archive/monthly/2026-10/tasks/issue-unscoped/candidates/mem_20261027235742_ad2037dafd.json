@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:694-700,2822,2950-2960 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The consumer-app-defect arm sets only HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE and never assigns the shared TARGET_BRANCH_SOURCE. With the scope guard off, the skip log at line 696 reports target_branch_source=none and exits before the `created` line at 2960.\n  WHY: CI run 40602928927 shows 3 failures at tests/test_workflow_failure_heal.py:2261, where `target_branch=<expected> target_branch_source=pipeline_mirror_branch` is never printed. Reviewers rated this BLOCKER, mapped here to high with no disagreement. The fix is to assign TARGET_BRANCH and TARGET_BRANCH_SOURCE from the HEAL_CONSUMER_APP_* variables before _open_issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says the intake logs `target_branch_retarget ...` and `target_branch_source=pipeline_mirror_branch`. The README says the `created` log line records the choice as `target_branch_source=...`.\n  expected_change_site: scripts/workflow_failure_heal_intake.sh, consumer-app-defect arm (shared TARGET_BRANCH_SOURCE)\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The shared TARGET_BRANCH_SOURCE is never assigned in lines 2947-2960, so the scope-guard-disabled skip line (line 696) reports target_branch_source=none. This is the same defect as the correctness finding.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh:2950-2960 (also 694-700, 2822; test tests/test_workflow_failure_heal.py:2261) | severity=BLOCKER | confidence=5\n  PROBLEM: The consumer-app-defect arm sets only HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE and never the shared TARGET_BRANCH_SOURCE. With the scope guard off, the skip line reads `target_branch=main target_branch_source=none` and exits before the `created` line.\n  WHY: The new assertion fails for (\"main\",\"main\"), (\"develop\",\"develop\") and (\"\",\"main\"). CI run 40602928927 reports 3 failed, 91 passed.\n- TASK_GAP:\n  Requirement: The PR description says the intake logs `target_branch_retarget ...` and `target_branch_source=pipeline_mirror_branch`. The README says the `created` log line records the choice as `target_branch_source=...`.\n  Expected change site: scripts/workflow_failure_heal_intake.sh, consumer-app-defect arm\n  Evidence of absence: The shared TARGET_BRANCH_SOURCE is never assigned in lines 2947-2960, so the skip line at line 696 reports none.\n  severity=MAJOR | confidence=4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_intake.sh:2947-2960 (interacting with 694-700, called from 2822) | severity=BLOCKER | confidence=5\n  PROBLEM: The arm assigns only the prefixed HEAL_CONSUMER_APP_TARGET_BRANCH and HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE variables. The scope-guard skip line at line 696 reads the global TARGET_BRANCH_SOURCE, which stays unset and prints none, and the script exits before the `created` line at 2960.\n  WHY: tests/test_workflow_failure_heal.py:2261 asserts `target_branch={expected} target_branch_source=pipeline_mirror_branch`, which is never printed, so every parametrization fails. The workflow-defect arm at lines 2846-2857 sets the globals, so its sibling test passes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh:2951-2958 (also 696, 2960) | severity=BLOCKER | confidence=5\n  PROBLEM: The consumer-app-defect arm does not propagate its routing source to TARGET_BRANCH_SOURCE, the variable read by the scope-guard skip log.\n  WHY: The test harness disables the scope guard, so the skip path exits before the created log at line 2960 and reports target_branch_source=none instead of pipeline_mirror_branch. CI fails all three cases of test_intake_consumer_app_defect_on_promote_candidate_targets_the_default_branch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/workflow_failure_heal_intake.sh:2950-2960 (skip log at 696; test tests/test_workflow_failure_heal.py:2261) | severity=BLOCKER | confidence=5\n  PROBLEM: The arm sets only the new HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE and never the shared global TARGET_BRANCH_SOURCE, which every other arm assigns. The test harness sets HEAL_INTAKE_SCOPE_GUARD_ENABLED=false, so the guard-off skip line prints target_branch_source=none and exits before the `created` line at 2960.\n  WHY: CI run 40602928927 (tests-heal-plan-and-validation) fails all three parametrizations at tests/test_workflow_failure_heal.py:2261. The fix is TARGET_BRANCH_SOURCE=\"${HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE}\" after line 2958.\n- HARDENING (risk score 1): scripts/workflow_failure_heal_intake.sh:2958-2959. The parallel HEAL_CONSUMER_APP_TARGET_BRANCH* variables let the skip line report none. Assign TARGET_BRANCH and TARGET_BRANCH_SOURCE after line 2958 (about 2 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bb45673128bc16024fdffb948f6d231f03ba5b767bd2efcf59e53a6a942a6ea1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8231,
+    "run_id": "40602929015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40602929015",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027235742_ad2037dafd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8231,
+    "run_id": "40602929015"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T23:57:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

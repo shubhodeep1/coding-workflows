@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/settings.json:130-142 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The live `.claude/settings.json` omits the Bash hook registered in the template, and `.claude/hooks/prepush_affected_tests.py` is absent from the live directory.\n  WHY: The missing live copies cause the template-parity and session-start tests to fail, which blocks the aggregate `lint` check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CI must pass (the aggregate `lint` check requires every CI job to succeed), including byte-for-byte parity between live `.claude/` copies and `workflow-templates/.claude/`.\n  expected_change_site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: The PR changed-files list contains neither `.claude/settings.json` nor `.claude/hooks/prepush_affected_tests.py`; `workflow-templates/.claude/settings.json` registers `prepush_affected_tests.py`, but `.claude/settings.json` does not and `.claude/hooks/prepush_affected_tests.py` does not exist; `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical` (line 2451) fails `tests-hooks-and-orchestrator`, `tests/test_session_start_extract_repo_slug.py` fails `tests-release-and-log-analysis`, and both failures cascade into aggregate `lint`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- `.claude/settings.json` (live copy), checked against `workflow-templates/.claude/settings.json`; `workflow-templates/.claude/settings.json:145` | severity=BLOCKER | confidence=5\n  PROBLEM: The template and live copies have drifted apart: the template registers a Bash hook that the live settings omit, and `.claude/hooks/prepush_affected_tests.py` does not exist.\n  WHY: CI run 38464517558 shows `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical` (line 2451) and `tests/test_session_start_extract_repo_slug.py` failing, causing the aggregate `lint` check to fail.\n- TASK_GAP\n  Requirement: The PR must pass CI, and the aggregate `lint` check requires every CI job to succeed. In particular, the live `.claude/` copies must match `workflow-templates/.claude/` byte for byte.\n  Expected change site: `.claude/settings.json`, plus a new `.claude/hooks/prepush_affected_tests.py` copied from `workflow-templates/.claude/hooks/prepush_affected_tests.py`.\n  Evidence of absence: The PR changed-files list contains neither `.claude/settings.json` nor `.claude/hooks/prepush_affected_tests.py`. The checkout's `.claude/hooks/` has only `gh_api_write_guard.py`. This is a sandbox-excluded path, so it needs the trusted-session step described above.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py` | severity=BLOCKER | confidence=5\n  PROBLEM: The prepush_affected_tests.py hook is registered in the template but missing in the live `.claude/` directory, and the hook file itself is missing in the live `.claude/hooks/` directory.\n  WHY: This causes tests/test_pr_merge_status_guard.py::test_template_copies_are_identical and tests/test_session_start_extract_repo_slug.py to fail in CI, blocking the aggregate lint check.\n- TASK_GAP\n  Requirement: CI must pass (aggregate lint check requires every CI job to succeed).\n  Expected change site: .claude/settings.json and .claude/hooks/prepush_affected_tests.py (live copies must match workflow-templates/ byte-for-byte).\n  Evidence of absence: workflow-templates/.claude/settings.json registers prepush_affected_tests.py, but .claude/settings.json does not and .claude/hooks/prepush_affected_tests.py does not exist. Parity tests fail, causing aggregate lint failure.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/settings.json, PreToolUse hook array, lines 130-142; compare workflow-templates/.claude/settings.json:140-148 and tests/test_pr_merge_status_guard.py:2447-2454 | severity=BLOCKER | confidence=5\n  PROBLEM: The live settings omit the Bash hook registered in the template, and the live .claude/hooks/prepush_affected_tests.py file is absent.\n  WHY: CI run 38464517558 confirms the template-parity test fails; tests/test_session_start_extract_repo_slug.py also fails because the settings differ, causing aggregate lint to fail.\n(No task gaps reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: CI must pass (aggregate `lint` check requires every CI job to succeed).\n  Expected change site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py` (live copies must match `workflow-templates/.claude/settings.json` and `workflow-templates/.claude/hooks/prepush_affected_tests.py` byte-for-byte).\n  Evidence of absence: The latest sync of `main` into this branch registered a new pre-push hook `prepush_affected_tests.py` in `workflow-templates/.claude/settings.json`. The live `.claude/settings.json` does not register it, and `.claude/hooks/prepush_affected_tests.py` does not exist. Two tests require byte-identical copies: `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical` (line 2451, fails `tests-hooks-and-orchestrator`) and `tests/test_session_start_extract_repo_slug.py` (fails `tests-release-and-log-analysis`). Both job failures cascade into the aggregate `lint` failure. This is a sandbox-excluded path: the review sandbox's `.claude/` contains only `commands/` and `hooks/gh_api_write_guard.py`, so creating either missing file would make the result transfer fail closed. Fix requires a trusted interactive session to copy the template files over the live paths byte-for-byte, or the post-merge live-copy sync PR to land and `main` to be merged again.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "931978fc3d3f1cb8fcdd0dcf880eae08ab64268edf1640b7458cd15684f4c257",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38464517978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38464517978",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013205809_48e2a81780",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38464517978"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T20:58:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

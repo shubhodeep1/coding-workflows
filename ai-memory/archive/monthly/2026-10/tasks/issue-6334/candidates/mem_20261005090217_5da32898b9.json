@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6334,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6334\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6345\",\"pr_number\":6345,\"branch\":\"ai/issue-6334\",\"run_id\":\"37285513820\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37285513820\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6334-heal-evidence-same-repo-run-binding.md\",\"scripts/workflow_failure_heal_evidence.py\",\"tests/test_workflow_failure_heal_evidence.py\"]}",
+  "fingerprint": "e278a72ca39164e860a9c420661cef531bf16b5c16069579f9112aea8fbb2be3",
+  "lineage": {
+    "issue_number": 6334,
+    "parent_ids": [],
+    "pr_number": 6345,
+    "run_id": "37285513820",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37285513820",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6345"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005090217_5da32898b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6334,
+    "level": "run",
+    "pr_number": 6345,
+    "run_id": "37285513820"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6334: https://github.com/shubhodeep1/coding-workflows/pull/6345",
+  "timestamps": {
+    "created_at": "2026-10-05T09:02:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_data_provision_guard.py:94-100 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_parse_answers` stops parsing bare answer lines after the first, so subsequent fallback answers are not checked by the data-provision guard.\n  WHY: The standalone fallback writes answers without a `DECISIONS:` header; after parsing Q1, `answers` is non-empty and `in_decisions` remains false, leaving later data-requiring answers unguarded.\n- .claude/hooks/pr_merge_status_guard.py:459-469 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The push-option parser accepts abbreviated options that git does not support, so the guard can report a block for a command git itself rejects.\n  WHY: This is an inaccuracy in the prefix list, not a runtime defect; git rejects the command before it can strand a branch.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/clarify_data_provision_guard.py | severity=MAJOR | confidence=5\n  PROBLEM: `_parse_answers` only parses `Q<n>: <letter>` lines inside a `DECISIONS` section or while no answer has yet been parsed; the standalone fallback writes bare answer lines without section headers, so only the first answer is parsed.\n  WHY: If a later question's recommended option requires external data, the guard does not check it and the unguarded answer reaches the answer poster.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/clarify_data_provision_guard.py; .github/workflows/orchestrate_clarify_respond.yml line 1114 | severity=MAJOR | confidence=5\n  PROBLEM: The parser stops parsing bare fallback answers after the first line because `not answers` becomes false and the fallback writes no `DECISIONS:` header.\n  WHY: Later questions are dropped from the parsed answers and a data-request answer can be posted without being overridden.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/clarify_data_provision_guard.py | severity=MAJOR | confidence=4\n  PROBLEM: `_parse_answers` drops every bare fallback answer after Q1 because there is no section header and `not answers` becomes false.\n  WHY: Later questions' recommended options are not screened for data requirements and may be posted unguarded.\n- .claude/hooks/pr_merge_status_guard.py | severity=NIT | confidence=2\n  PROBLEM: The parser accepts abbreviated push options such as `--rep` that git does not accept, so the guard may report a block for a command that git itself rejects.\n  WHY: It does not fail at runtime; this is an inaccuracy in the prefix list, not a correctness bug.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_data_provision_guard.py; `_parse_answers`, lines 94-100; caller `.github/workflows/orchestrate_clarify_respond.yml`, lines 1113-1117 and 1148-1150 | severity=MAJOR | confidence=5\n  PROBLEM: The RECOMMENDED fallback writes bare answers, but `_parse_answers` only parses answers after the first when `in_decisions` is true.\n  WHY: With no `DECISIONS` heading, subsequent answers are skipped and a later answer requiring external data is passed to the answer poster unchanged.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/clarify_data_provision_guard.py | severity=MAJOR | confidence=5\n  PROBLEM: The `if in_decisions or not answers` condition stops parsing bare answer lines after Q1.\n  WHY: If a later recommended option requires external data, the guard never sees or overrides it, and the answer is posted unguarded.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/clarify_data_provision_guard.py; lines 94, `_parse_answers`; orchestrate_clarify_respond.yml line 1114; line 1133 condition; line 1164 | severity=MAJOR | confidence=4\n  PROBLEM: The standalone fallback writes bare answer lines, and `_parse_answers` stops parsing after Q1 because no section header was seen.\n  WHY: Later questions requiring external data are not screened by the guard and may be posted as-is.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3f7294304d6a17c29faf68036732cdb6320bff518a5c31d30b166f7ed7d614a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6283,
+    "run_id": "37270933730",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37270933730",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005064511_b8251bf9d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6283,
+    "run_id": "37270933730"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T06:45:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

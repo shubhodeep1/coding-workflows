@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A PR diff or last-run diff to compare against the linked issue (the review contract). This is the reviewer's paraphrase, not a quote from the issue.\n  expected_change_site: review context (PR DIFF / LAST RUN DIFF input)\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: z-ai_glm-5_3-flash reports that no PR DIFF or LAST RUN DIFF was supplied in its review context, so it could not compare the linked issue to the delivery. It rated this SEVERITY: MAJOR, ISSUE_CONFIDENCE: high. anthropic_claude-sonnet-5_5 did review a diff, which changed only tests/e2e_smoke_canary.txt.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: A PR DIFF or LAST RUN DIFF is supplied in the review context so the linked issue can be compared with the delivery.\n  Expected change site: review context (PR DIFF / LAST RUN DIFF input)\n  Evidence of absence: No PR DIFF or LAST RUN DIFF was supplied, so the lens comparison cannot be performed. The reviewer treated the missing diff as itself the gap against the review contract.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: high\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9eb41d83799f504c02aabdd8d3b86bcdb28ed190d77ab896cb5b090ce353700b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41006233701",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41006233701",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030062323_51ae71d11c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41006233701"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T06:23:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

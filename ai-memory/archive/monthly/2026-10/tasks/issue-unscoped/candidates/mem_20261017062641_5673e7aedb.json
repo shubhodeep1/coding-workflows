@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_pool_daily_usage.sh:`message_id=\"$(tg_send_report_msg \"${text}\" 2>/dev/null)\" || message_id=\"\"` in daily_usage_send | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `2>/dev/null` on the `tg_send_report_msg` call discards the `::warning::Telegram send failed` diagnostic that `tg_helpers.sh` writes to stderr when curl fails.\n  WHY: A failed send shows only `outcome=not_delivered`, so the cause is hidden. This costs diagnostics only, because the retry on the next tick still works. All three reviewers rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/claude_pool_daily_usage.sh:`message_id=\"$(tg_send_report_msg \"${text}\" 2>/dev/null)\" || message_id=\"\"` in daily_usage_send | severity=NIT | confidence=3\n  PROBLEM: The `2>/dev/null` discards the `::warning::Telegram send failed` line that `tg_send_report_msg` in `scripts/tg_helpers.sh` writes to stderr when curl fails.\n  WHY: When Telegram is unreachable, the job log shows only `outcome=not_delivered truncated=...`. This loses diagnostics only, and the retry still works. The same redirect also drops stderr from the helper's `jq` call.\n- HARDENING_SUGGESTIONS: drop `2>/dev/null` from the `tg_send_report_msg` call in `daily_usage_send` (about 1 line changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_pool_daily_usage.sh:`message_id=\"$(tg_send_report_msg \"${text}\" 2>/dev/null)\" || message_id=\"\"` | severity=NIT | confidence=4\n  PROBLEM: The `2>/dev/null` redirection suppresses the `::warning::Telegram send failed` diagnostic emitted by `tg_send_report_msg` when the Telegram API call fails.\n  WHY: If the send fails, the log shows only `outcome=not_delivered` without the actual error message, which makes debugging difficult.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_pool_daily_usage.sh:`message_id=\"$(tg_send_report_msg \"${text}\" 2>/dev/null)\" || message_id=\"\"` | severity=NIT | confidence=4\n  PROBLEM: The `2>/dev/null` swallows the `::warning::Telegram send failed` diagnostic that `tg_helpers.sh::tg_send_report_msg` writes to stderr when its curl fails. The function returns 0 even then, so the caller's `|| message_id=\"\"` never fires and the caller reports `outcome=not_delivered`.\n  WHY: Every other `tg_send_msg` caller in this repo lets the helper's stderr through. A token revocation or network blip surfaces only as `outcome=not_delivered`, with no `::warning::` line. The retry on the next tick is preserved. The fix is to drop the trailing `2>/dev/null`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2ae2e43c7fa420bbfcbed8355e7f6049e6dfeed1bc241794d5763c798d1f3257",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7541,
+    "run_id": "39008311322",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39008311322",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017062641_5673e7aedb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7541,
+    "run_id": "39008311322"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T06:26:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_sandbox.sh:500 | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The unguarded diagnostic pipeline can fail under `set -euo pipefail` and abort the crash path before `rc=1; break` runs.\n  WHY: If reading `crash_result.txt` or a pipeline stage fails, the intended handled-crash flow is lost; reviewers characterize this as a corner case because the file was just written.\n- scripts/review_run_reviewers.sh:5319-5323 | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: An existing `rejected_*` file is not removed when an attempt produces no output, so a reused attempt number and persistent directory could leave stale evidence.\n  WHY: A stale file could be mistaken for the current round's evidence, although the logged `bytes=0` line would contradict it.\n- agents.md:2158, 2417-2418 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The new `REVIEWER_POOL_REJECTED_OUTPUT` prefix and `CLAUDE_POOL crash_detail` shape are absent from the stable log-prefix registry.\n  WHY: Log-analysis and runbook readers lack an authoritative registry entry for the new observable log forms; reviewers note that no `agents.d/` fragment was added.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Register the new log prefix and the new CLAUDE_POOL crash_detail sub-form in the stable log-prefix registry.\n  expected_change_site: `agents.d/<issue-or-pr>-<slug>.md`, targeting `## Stable log prefixes (contractual)`\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The changed-files list has no `agents.d/` entry; the new `REVIEWER_POOL_REJECTED_OUTPUT` prefix and `CLAUDE_POOL crash_detail` shape are not registered.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_untrusted_sandbox.sh: line 500 | severity=low | confidence=[2]\n  PROBLEM: The diagnostic pipeline can return non-zero under `set -euo pipefail`, ending the script before `rc=1; break` runs.\n  WHY: If `crash_result.txt` becomes unreadable between the `extract` check and the read, a handled crash becomes an abrupt exit and the `rc` that `claude_run` expects is lost.\n- scripts/review_run_reviewers.sh: lines 5319-5323 | severity=low | confidence=[2]\n  PROBLEM: The code never removes an existing `rejected_*` file for an attempt that produced no output.\n  WHY: If the directory persists across rounds and an attempt number is reused, a stale file could look like this round's evidence, though the logged `bytes=0` line would contradict it.\n- scripts/review_run_reviewers.sh:5324 and scripts/review_untrusted_sandbox.sh:501-503 | severity=low | confidence=[3]\n  PROBLEM: The new log prefixes are not registered in agents.md's \"Stable log prefixes (contractual)\" section.\n  WHY: `REVIEWER_POOL_REJECTED_OUTPUT` has no registry entry, and `crash_detail` is a new sub-form of the existing `CLAUDE_POOL` prefix.\n- Requirement: The agents.md registry entry noted under NAMING / BACKWARD COMPATIBILITY.\n  Expected change site: agents.md registry via an `agents.d/` fragment.\n  Evidence of absence: The changed-files list has no `agents.d/` entry.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_sandbox.sh: line 500 | severity=low | confidence=[3]\n  PROBLEM: The unguarded pipeline can fail under `set -euo pipefail` and abort the script before `rc=1; break` runs.\n  WHY: A transient filesystem race, quota/permission flip, I/O error, or `tr` error can prevent the intended crash-path handling and fallback.\n- scripts/review_run_reviewers.sh and scripts/review_untrusted_sandbox.sh (agents.md registry) | severity=low | confidence=[4]\n  PROBLEM: Two new observable log identifiers are introduced without registration in the stable-log-prefix registry.\n  WHY: `REVIEWER_POOL_REJECTED_OUTPUT` is absent from the registry, and its existing `CLAUDE_POOL` entry does not include the new `crash_detail` sub-pattern.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md (via missing agents.d fragment); new prefix emitted at scripts/review_run_reviewers.sh:5324 and new `CLAUDE_POOL` shape emitted at scripts/review_untrusted_sandbox.sh:501/503 | severity=low | confidence=[3]\n  PROBLEM: Two new observable log lines are introduced without registering them in the contractual stable-log-prefix registry.\n  WHY: Workflow-log-analysis and runbook readers lack an authoritative registry entry for the new prefix and shape.\n- scripts/review_untrusted_sandbox.sh: line 500\n  PROBLEM: If the pipeline inside the command substitution fails, the assignment can exit the script before `rc=1; break` runs.\n  WHY: The script runs under `set -euo pipefail` (line 3); the pipeline failure is described as unreachable in the normal flow because `extract` just wrote the file.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "addf70fc59d246b908a88f1f7df665d14f23871b6a8e354c0b616278b9ba0722",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7132,
+    "run_id": "38106710590",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38106710590",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011032301_eaea0f511f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7132,
+    "run_id": "38106710590"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T03:23:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

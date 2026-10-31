@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2183-2218 | severity=high | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Potential correctness issue if tests-heal-plan-and-validation is not a matrix job, since `if: strategy.job-index == 1` is only valid in matrix jobs.\n  WHY: Without a matrix, the condition may fail evaluation or skip incorrectly, preventing the required tests from running (reported as MAJOR).\n- .github/workflows/ci.yml:2186-2198 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The justification comment gives no rationale for choosing group 1 over groups 2 or 3, which could equally host the moved step.\n  WHY: No runtime failure; a future maintainer cannot tell whether the choice of `strategy.job-index == 1` was arbitrary (reported as NIT).\n- changelog.d/7575-ci-merge-train-step-to-poll-group.md:1-4 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The fragment gives measurable details (15m52s, 20-minute timeout, ~4.5 minute estimate) in prose and omits the \"The numbers that matter\" table required by CLAUDE.md \u00a720.D.\n  WHY: No runtime failure; the entry does not follow the documented structure (all reported as NIT; confidence ranged 2-4).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"CI's merge-train tests now run in group 1 of the orchestrate-poll matrix.\" (from changelog description)\n  expected_change_site: changelog.d/7575-ci-merge-train-step-to-poll-group.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The changelog says the tests move to orchestrate-poll group 1, but ci.yml moves them into tests-heal-plan-and-validation, so the documented intent and the implementation contradict each other (reported as MAJOR).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2183-2218 (if: strategy.job-index == 1) | severity=MAJOR | confidence=2\n  PROBLEM: Potential correctness issue if tests-heal-plan-and-validation is not a matrix job.\n  WHY: strategy.job-index is only available in matrix jobs, so the condition may fail evaluation or skip incorrectly and prevent the required tests from running.\n- TASK_GAP: Requirement: \"CI's merge-train tests now run in group 1 of the orchestrate-poll matrix.\" (from changelog description)\n  Expected change site: changelog.d/7575-ci-merge-train-step-to-poll-group.md\n  Evidence of absence: The changelog says the tests move to orchestrate-poll group 1, but the implementation in ci.yml moves them into tests-heal-plan-and-validation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP: Requirement: \"The numbers that matter \u2014 a short table when the change has real measurable details\" (CLAUDE.md \u00a720D)\n  Expected change site: changelog.d/7575-ci-merge-train-step-to-poll-group.md\n  Evidence of absence: The fragment gives the 15m52s duration in prose and lacks the \"The numbers that matter\" table.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:2186-2198 | severity=NIT | confidence=3\n  PROBLEM: The justification comment gives no rationale for choosing group 1 over groups 2 or 3, which could equally host the moved step.\n  WHY: No runtime failure; a future maintainer cannot tell whether the choice of `strategy.job-index == 1` was arbitrary.\n- changelog.d/7575-ci-merge-train-step-to-poll-group.md:1-4 | severity=NIT | confidence=2\n  PROBLEM: The fragment carries concrete numbers (15m52s, 20-minute timeout, ~4.5 minute estimate, ~5 minute orchestrate-poll group) as prose and has no \"The numbers that matter\" table (CLAUDE.md \u00a720.D step 3).\n  WHY: No runtime failure; the fragment still folds and renders, so this is a \u00a720 structure nit.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/7575-ci-merge-train-step-to-poll-group.md:1-4 | severity=NIT | confidence=4\n  PROBLEM: The fragment includes measurable details (15m52s job duration, 20-minute timeout, 4.5-minute estimate) but omits the \"The numbers that matter\" table required by CLAUDE.md \u00a720.D.\n  WHY: No workflow execution fails; the changelog fragment does not follow the documented entry structure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3d0092bc16aec54769659d5343a528edd7b4cd79f424b1d2530ce4d26321cce3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7577,
+    "run_id": "39042453171",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39042453171",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017150714_9a95497aad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7577,
+    "run_id": "39042453171"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T15:07:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

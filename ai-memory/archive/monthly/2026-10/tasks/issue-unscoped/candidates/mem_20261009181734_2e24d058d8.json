@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Job names, step names and the `lint` aggregate's `needs` are unchanged, so required-check names stay the same.\"\n  expected_change_site: .github/workflows/ci.yml \u2014 both the lint job's `needs` list and the job-id keys\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Lines 1064 (`tests-release-and-log-analysis:`) and 1653-1656 list every worker job (`tests-hooks-and-orchestrator`, `tests-heal-plan-and-validation`, `tests-promote-stall-and-review`, `tests-release-and-log-analysis`) and the lint aggregate's `needs` references all four by the same ids. No step name moves from one job to another in name; the moved steps keep their original `name:` values. Required-check names (job ids) and the `lint` aggregate wiring are preserved.\n- requirement: \"Neither moved test reads the checkout's git history, so the shallow checkout of the target job is enough.\"\n  expected_change_site: tests/test_review_merge_train.py, tests/test_gh_helpers_parse_reset_header.py, tests/test_gh_retry_stdout_isolation.py, tests/test_orchestrate_integration_ahead_by_gate.py\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The four files only import stdlib + pytest + yaml + scripts/orchestrate_lib, drive scripts through a fake `gh` placed first on PATH, and operate on tmpdirs/PATH fixtures. None reads `git log`, `git rev-list`, or the checkout's `.git`. The tests-release-and-log-analysis checkout (no `with:`, defaults to `fetch-depth: 1`) supplies enough history for these tests.\n- requirement: \"tests/test_ci_job_split_contract.py, tests/test_ci_shared_shell_block_guard.py and the ci.yml assertions in tests/test_claude_template_live_parity.py pass locally.\"\n  expected_change_site: tests/test_ci_job_split_contract.py (especially `test_no_step_runs_in_more_than_one_job`), tests/test_ci_shared_shell_block_guard.py, tests/test_claude_template_live_parity.py lines 888-902\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The moved step names (\"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\" at line 1087 and \"Integration-ahead-by gate regression tests\" at line 1100) appear in exactly one job each (tests-release-and-log-analysis), so the \"no step runs in more than one job\" contract holds. The \"Prepare template-only PR live copies for parity tests\" step is still only in tests-hooks-and-orchestrator (parity test line 895). All four worker jobs retain `Checkout repository` / `Setup Python` / `Install Python CI dependencies`, and `timeout-minutes: 20` is unchanged in both touched jobs. The shell-block guard test reads from the `static-checks` job, which the PR does not touch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Job names, step names and the `lint` aggregate's `needs` are unchanged, so required-check names stay the same.\"\n  Expected change site: .github/workflows/ci.yml \u2014 both the lint job's `needs` list and the job-id keys\n  Evidence of absence: Lines 1064 (`tests-release-and-log-analysis:`) and 1653-1656 list every worker job (`tests-hooks-and-orchestrator`, `tests-heal-plan-and-validation`, `tests-promote-stall-and-review`, `tests-release-and-log-analysis`) and the lint aggregate's `needs` references all four by the same ids. No step name moves from one job to another in name; the moved steps keep their original `name:` values. Required-check names (job ids) and the `lint` aggregate wiring are preserved.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Neither moved test reads the checkout's git history, so the shallow checkout of the target job is enough.\"\n  Expected change site: tests/test_review_merge_train.py, tests/test_gh_helpers_parse_reset_header.py, tests/test_gh_retry_stdout_isolation.py, tests/test_orchestrate_integration_ahead_by_gate.py\n  Evidence of absence: The four files only import stdlib + pytest + yaml + scripts/orchestrate_lib, drive scripts through a fake `gh` placed first on PATH, and operate on tmpdirs/PATH fixtures. None reads `git log`, `git rev-list`, or the checkout's `.git`. The tests-release-and-log-analysis checkout (no `with:`, defaults to `fetch-depth: 1`) supplies enough history for these tests.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"tests/test_ci_job_split_contract.py, tests/test_ci_shared_shell_block_guard.py and the ci.yml assertions in tests/test_claude_template_live_parity.py pass locally.\"\n  Expected change site: tests/test_ci_job_split_contract.py (especially `test_no_step_runs_in_more_than_one_job`), tests/test_ci_shared_shell_block_guard.py, tests/test_claude_template_live_parity.py lines 888-902\n  Evidence of absence: The moved step names (\"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\" at line 1087 and \"Integration-ahead-by gate regression tests\" at line 1100) appear in exactly one job each (tests-release-and-log-analysis), so the \"no step runs in more than one job\" contract holds. The \"Prepare template-only PR live copies for parity tests\" step is still only in tests-hooks-and-orchestrator (parity test line 895). All four worker jobs retain `Checkout repository` / `Setup Python` / `Install Python CI dependencies`, and `timeout-minutes: 20` is unchanged in both touched jobs. The shell-block guard test reads from the `static-checks` job, which the PR does not touch.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "112de73b5fb1d485ba1c65e3d9a3f601dd0f5b30a6f22d6bd6eb55e5f6095a64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6962,
+    "run_id": "37969717006",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37969717006",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009181734_2e24d058d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6962,
+    "run_id": "37969717006"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T18:17:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1420-1445 | severity=blocker | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The required lint aggregate failed on the reviewed head, but the available log excerpt does not identify which child job, test, or assertion failed.\n  WHY: The aggregate exits non-zero when a required child job fails, leaving CI red and blocking merge; the provided log evidence is insufficient to map the failure to a specific code change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description and the LINKED ISSUE block list no concrete deliverables unmet by the LAST RUN DIFF. The last run diff only handles merged-PR guard hardening for commits with unresolved working directories, which is reflected in the code changes.\n  expected_change_site: N/A\n  confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: N/A\n- requirement: successful CI/lint runs for the new workflow automation.\n  expected_change_site: .claude/commands/\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: tests-hooks-and-orchestrator and lint jobs consistently fail in CI due to missing root command file assets; these files are excluded from the review workspace transfer policy, so the CI parity failure cannot be repaired in this checkout.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: The PR description and the LINKED ISSUE block list no concrete deliverables unmet by the LAST RUN DIFF. The last run diff only handles merged-PR guard hardening for commits with unresolved working directories, which is reflected in the code changes.\n  Expected change site: N/A\n  Evidence of absence: N/A\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: successful CI/lint runs for the new workflow automation.\n  Expected change site: .claude/commands/\n  Evidence of absence: tests-hooks-and-orchestrator and lint jobs consistently fail in CI due to missing root command file assets. Because these files are excluded from the review workspace transfer policy, the CI parity failure cannot be repaired in this checkout, blocking verification of the new features.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:lint aggregate, lines 1420-1445 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The supplied check-run context confirms that `CI / lint` failed on head `ac221f66e8487cad244579fd07e53dd939bdb5fb`. The available log excerpt does not identify which required job failed.\n  WHY: The aggregate exits non-zero when any required job is unsuccessful, leaving the required CI check red. The provided evidence is insufficient to map the failure to a specific child job or code change.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/ci.yml:lint aggregate job (run 37419289588, job 112127407353) | severity=BLOCKER | confidence=[5]\n  PROBLEM: The required lint CI check failed on the reviewed head, but the visible log excerpt (1327 bytes of runner setup) does not identify the failing child job, test, or assertion. The last run diff modifies `.claude/hooks/pr_merge_status_guard.py`, `tests/test_pr_merge_status_guard.py`, and the workflow-templates twin, any of which could be the failure source.\n  WHY: The aggregate lint job exits non-zero when any required child job fails, leaving the PR check red and blocking merge. Without the full failure log, the specific assertion or test that failed cannot be mapped to the code changes, preventing targeted repair.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "10263b92e040ec12fa7235612924bf3a8819f6640bf2676f496178fe325ef832",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37419311531",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37419311531",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006055644_57ac5dbf08",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37419311531"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T05:56:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

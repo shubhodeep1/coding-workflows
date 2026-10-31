@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\nQ4: A\n\nRATIONALE:\nQ1: Docker isolation is the only option that matches the finding's recommendation, which asks for isolated process visibility and no credential mounts. `scripts/review_untrusted_sandbox.sh` already runs the review editor with `--network none --read-only --cap-drop ALL --security-opt no-new-privileges` in its own PID namespace (lines 198-199 and 306-307). From inside that container, the runner's `/proc/<pid>/environ` can't be seen even with the same uid. Model calls go through host-side brokers (`clarify_openrouter_broker.py` for OpenCode, `claude_anthropic_relay.py` for Claude), and `review_untrusted_workspace.py` copies back only validated files. Option B leaves the network and process listing visible. Option C keeps the token in same-user processes, which is the exact leak in the finding.\nQ2: The leak is the same at both launch sites. `grep` shows `bash scripts/codex_thread_reuse.sh direct-run` at `implement.yml:2881` (the main attempt loop) and `implement.yml:4152` (the syntax-repair loop), and both run on the host as the runner user. Fixing only one would leave the same exploit open in the other. Doing every phase at once (option C) would cover several workflows with different editor contracts, so those go to follow-up issues.\nQ3: Review and clarify already fail closed. The review sandbox exits with `::error::Review isolation support missing`, and agents.md says isolation failures \"never fall back to host Codex\". So consumer runners already need Docker for those phases, and a host fallback (B or C) would bring back the critical leak.\nQ4: A codex fallback on the host would reopen the finding, and dropping the fallback (option B) would lose resilience. This repo already has a pinned image with both engines: `scripts/clarify_isolated_run.sh` builds `scripts/clarify_sandbox/Dockerfile` with `CODEX_VERSION=v0.114.0` and `CLAUDE_CLI_VERSION` (line 133), and runs codex behind the OpenRouter broker with no network. Reusing that build pattern for the implement editor keeps both engine paths isolated.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone; every decision is a lettered option. Constraints that bind the planner:\n- Q1/Q2: Add an implement sandbox runner, either a new `scripts/implement_untrusted_sandbox.sh` or an extension of `review_untrusted_sandbox.sh`. It reuses `review_untrusted_workspace.py` (snapshot and validated transfer) and the broker/relay pattern. Both launches go through it: `implement.yml:2881` and `:4152`.\n  - The container gets no `GH_PAT`, `GH_TOKEN`, `GITHUB_TOKEN`, `TG_*`, `ACTIONS_*` or OpenRouter key, and no mount of `RUNNER_TEMP` credential files, the Claude pool tokens, `.git` auth config, or the `GITHUB_ENV` and `GITHUB_PATH` files.\n  - It runs with `--network none` and its own PID namespace, as the review sandbox does.\n  - Commit and push stay on the host, in `implement_commit_changes.sh` running from the runtime dir, after transfer-back.\n- Keep these contracts unchanged:\n  - the staged-support restore/reinstall around each loop\n  - the `CODEX_THREAD_REUSE_*` pass-through and the `env -u STAGED_SUPPORT_*` scrub (`tests/test_implement_post_codex_recovery.py` pins them)\n  - `editor_git_credentials.sh` hide/restore\n  - the `codex_success_noop.flag` and `codex_blocked.flag` semantics, which depend on the editor's final output being written to the host `RUNTIME_DIR`\n- Q3: If Docker, the image build, or a support file is missing, emit `::error::Implement isolation \u2026` and exit non-zero into the existing implement-failure path. Never fall back to the host.\n- Q4: Build the image with both CLIs, following the `clarify_sandbox/Dockerfile` pattern. When Claude is unavailable (exit 75, `AI_ENGINE_FALLBACK`), the codex attempt runs in the same sandbox behind the OpenRouter broker.\n- Follow-up issues (out of scope here): implement-diagnose, plan, and validate generate/fix-harness/self-heal editor launches.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED:\nNone. Consumer runners need Docker, which they already need for the review editor and clarify.",
+  "fingerprint": "07b0e7a0f7b14fe44eb2dba7b685de67e7303cae4f10af7b15ce091854b43918",
+  "lineage": {
+    "issue_number": 6440,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37398977684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37398977684",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6440"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006013212_b6ad54fe09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6440,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37398977684"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6440",
+  "timestamps": {
+    "created_at": "2026-10-06T01:32:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: The root cause is the stage check at `scripts/review_conflict_prepare.sh:393`. This issue's heal scope marker (`paths=.github/workflows/internal-review.yml,.github/workflows/review_autofix.yml,tests/**,changelog.d/*.md`) does not include that file, and the scope comes from the marker, not from `files_touched`. So a heal-route implement either drops the edit or refuses it (`HEAL_SCOPE_REFUSED reason=out_of_heal_scope` \u2192 `ai:needs-human`). Option A therefore costs a held plan, a maintainer `/approved`, a refused implement and a needs-human park before the unblock judge re-issues it. Option C cannot remove the cause, which breaks the issue's \"deterministic failure, no workaround\" constraint. Option B goes straight to the end state A also reaches: a standalone, pipeline-authored replacement. The automation-path guard accepts its exact `files_touched` grant, because the source chain leads back to this pipeline-authored heal issue.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - `scripts/review_conflict_prepare.sh` (folded-fragment keep block, lines 362-437; stage check at line 393)\n    - `tests/test_conflict_folded_fragment_keep.py`\n    - `.github/workflows/forward-merge-stable-to-main.yml:255` (head ref shape `auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`)\n    - GITHUB FACTS: PR #7794 is open, base `main`, head `auto/forward-merge-stable-39561253337-1` @ 3f09feaadc28. Failed runs 39587910088, 39589778236 and 39591636602 all ran on support SHA a83b079e395b.\n  steps:\n    - The planner does not plan an implementation on this heal issue. It emits exactly `BLOCKED: heal scope marker excludes scripts/review_conflict_prepare.sh; re-issue as a standalone issue with an exact files_touched grant`. Plan's BLOCKED handler then sets `ai:blocked`, and the unblock judge re-issues on that stop with no human action.\n    - The replacement issue keeps this issue's root cause, suggested fix and fix constraints word for word, without the heal markers. It carries a `files_touched:` block (two-space indent, exact files only):\n      - `scripts/review_conflict_prepare.sh`\n      - `tests/test_conflict_folded_fragment_keep.py`\n      - `agents.d/<replacement-issue-number>-forward-merge-folded-fragment-keep.md`\n      - `changelog.d/<replacement-issue-number>-forward-merge-folded-fragment-keep.md`\n      - `tests/**`\n    - The fix stays as the issue describes:\n      - accept `_ff_stages == \"1 3 \"` only when the PR head ref matches `auto/forward-merge-stable-*`;\n      - keep stage 3 (the base `main` copy) only when it is a regular `100644` file, refusing symlinks and other modes; then `git add`;\n      - log `Folded fragment keep: kept the base branch's <path>; the PR head (stable release fold) had folded and deleted it (index stages: 1 3).`;\n      - leave the existing `1 2` path and `CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED` unchanged;\n      - add a regression test for the forward-merge `1 3` case: both fragments resolve to main's content and commit as `[ai-merge-resolve]` with no resolver dispatch. Plus a negative test: the same shape on an `ai/issue-<n>` head stays unmerged and goes to the resolver;\n      - record in the PR that the test fails at a83b079e and passes with the fix.\n    - Close this heal issue as superseded once the replacement exists. The lineage (`source=shubhodeep1/coding-workflows#7794`) carries over through the unblock judge's re-issue line, so new reports for PR #7794 land as occurrences on the replacement (Q147 re-issue dedupe).\n    - After the fix merges to `main`, the new support SHA re-arms the cap on PR #7794's head (#6911), and the next review run resolves the conflict deterministically. Do not change or relax `scripts/check_resolver_diff.sh`.\n  replaces_acceptance_criterion: \"implemented on this heal issue within its frozen heal scope\"\n  equivalence_argument: The same root-cause fix, regression test, agents.d fragment and changelog fragment ship. Only the delivering issue changes, to one whose exact grant covers the one automation path the fix needs. Every guard (automation-path guard, scope lock, check_resolver_diff) stays in force.\n  reversibility: If a human prefers A, they can post `/reclarify` before the re-issue, or `/approved` on a held plan. Nothing is merged by this decision. Closing the heal issue can be undone by reopening it, and the replacement can be closed as not planned.",
+  "fingerprint": "3b8ad2120bb2cc615de70f77e36a2157191f0c3af423056374736f8e4d49e78e",
+  "lineage": {
+    "issue_number": 7802,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39594121547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39594121547",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7802"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261021115217_dd77722597",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7802,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39594121547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7802",
+  "timestamps": {
+    "created_at": "2026-10-21T11:52:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:287-298 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The CRITICAL Telegram message claims a label write failed whenever `ops_failed=true`, even though failures from other operations can trigger it.\n  WHY: Operators may investigate label-write problems instead of the actual failing operation; severity disagreement: deepseek_deepseek-v4-pro and qwen_qwen3_7-plus rated this NIT, while minimax_minimax-m3 rated it MAJOR.\n- scripts/unblock_judge.sh:519-523 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The reviewer checked whether filtering project comments to pipeline-login comments correctly excludes other authors and rejects untrusted fork or branch inputs.\n  WHY: The reviewer reports these are intended hardening checks, not defects.\n- scripts/unblock_judge.sh:694-696 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `head_ref` is redundantly read again from the same PR JSON after validation.\n  WHY: The reviewer reports no current runtime failure; the second read returns the same value.\n- scripts/unblock_judge.sh:524-531 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The reviewer checked whether the binding verification uses authenticated project-state comments and a GitHub-verified issue number.\n  WHY: The reviewer reports the membership check uses the correct issue number and is not a defect.\n- scripts/unblock_judge.sh:294-298 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The CRITICAL alert's hardcoded \u201clabel write failed\u201d wording could become misleading if a future project verdict triggers it after a non-label operation.\n  WHY: The reviewer reports the current project close path has a label write as its only operation before the alert, so the wording is currently accurate.\n- scripts/unblock_judge.sh:519-523 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: An empty project-comments array passes the non-empty file check and proceeds to extraction.\n  WHY: The reviewer reports extraction and binding verification fail closed when comments are empty, so there is no current failure.\n- tests/test_unblock_judge.py:911-932 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The CRITICAL fallback test covers label-write failure but does not protect against misleading message wording when another operation sets `ops_failed`.\n  WHY: The test does not exercise a non-label failure path, so a future message change may not be regression-protected.\n- scripts/unblock_judge.sh:393 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The reviewer checked whether renaming the local `pr_bound_issue` variable to `binding_issue` breaks compatibility.\n  WHY: The reviewer reports the variable was local to `unblock_main()` and had no external callers, so there is no compatibility impact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_judge.sh:519-523 | severity=low | confidence=1\n  PROBLEM: The state filter drops comments from other authors before binding and model context, and the fork-head and head-ref checks reject untrusted inputs.\n  WHY: These are intended hardening checks that prevent a fork PR from hijacking a project's wave; not a defect.\n- scripts/unblock_judge.sh:694-696 | severity=low | confidence=2\n  PROBLEM: `head_ref` is redundantly read again from the same PR JSON after validation.\n  WHY: No current runtime failure; `jq -r '.head.ref'` on the same JSON blob returns the same value both times.\n- scripts/unblock_judge.sh:524-531 | severity=low | confidence=1\n  PROBLEM: `unblock_state_lists_issue` uses pipeline-login-filtered comments for binding verification against a GitHub-verified issue number.\n  WHY: This is the intended fix and the membership check is against the correct issue number; not a defect.\n- scripts/unblock_judge.sh:294-298 | severity=low | confidence=2\n  PROBLEM: The CRITICAL alert message hardcodes \u201clabel write failed\u201d for project items.\n  WHY: The current project close-verdict path has `add_labels` as the only operation before the alert, so the wording is accurate; it could mislead if a future verdict adds another operation.\n- scripts/unblock_judge.sh:519-523 | severity=low | confidence=2\n  PROBLEM: An empty project-comments array passes the `jq -e` filter and the later non-empty file check.\n  WHY: Extraction and binding verification fail closed when comments are empty; no current failure results.\n- scripts/unblock_judge.sh:393 | severity=low | confidence=1\n  PROBLEM: The local `pr_bound_issue` variable was renamed to `binding_issue` and its scope widened.\n  WHY: It was local to `unblock_main()` and has no external callers, so there is no backward-compatibility impact.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:287-296 | severity=high | confidence=4\n  PROBLEM: The CRITICAL message claims a label write failed whenever `ops_failed=true`, though failures from other operations can also trigger it.\n  WHY: Operators may investigate label-write problems instead of the actual failure logged for the operation.\n- tests/test_unblock_judge.py:911-932 | severity=low | confidence=3\n  PROBLEM: The CRITICAL fallback test covers only `add_label` failure and does not cover other operations that can set `ops_failed` while `close_succeeded != \"true\"`.\n  WHY: The test does not protect against misleading message wording on a non-label failure path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh:287-296 | severity=low | confidence=4\n  PROBLEM: The CRITICAL alert message hardcodes \u201clabel write failed\u201d but fires for any `ops_failed=\"true\"` on a project item with CRITICAL level.\n  WHY: Operators may investigate label-write issues instead of the actual failure; the existing test exercises only the `add_label` failure path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "6f879c616152e8fe916d1e9408641e754b750c30bcb9d6f6da96c01da78fc0bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6278,
+    "run_id": "37265591774",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37265591774",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005051245_ccd661e39d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6278,
+    "run_id": "37265591774"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 8 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T05:12:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

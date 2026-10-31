@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the queue-time allowance for \"Dispatch & watch \u2014 validation-refresh\" be delivered, given that the script is outside the heal scope?\nChoices:\n- A: Change only `test-and-mark-stable.yml`. Raise this step's `--completion-timeout-secs` from 3720 to 5520 (the 60-minute refresh job, plus 2 minutes, plus a 1800 s queue allowance). Raise the step timeout from 65 to 95 minutes and the job timeout from 135 to 165 minutes. Correct the budget comments at lines 4133-4146 and 4211-4214, and add a static contract test plus a changelog fragment. The script and its other 5 callers stay unchanged. Queue time and run time share one total budget, so there is no separate \"still queued\" error. (RECOMMENDED)\n- B: Add the opt-in `--queue-timeout-secs` flag to `scripts/dispatch_and_watch_workflow_run.sh` as the issue suggests, with the fake-`gh` regression test. Because the script is outside the verified heal scope, the plan gate will hold the plan, and a human has to approve or re-scope it before implement can run.\n- C: Do both: ship A now inside the heal scope, and file a separate follow-up issue for the script flag in B.\nQ2: Should the Phase 3b change in suggested-fix item 4 (follow the newest `in_progress` implement run and read every page of runs) be part of this fix?\nChoices:\n- A: No. Leave Phase 3b unchanged, and have the plan record candidate 3 as unconfirmed, pending the Implement run evidence for issues #8337 and #8338. (RECOMMENDED)\n- B: Yes. Make the change now as hardening, even though the issue says to wait for confirming evidence.",
+  "fingerprint": "74bdc5afb2f181615c88d1a94b04da336a3f80be8da934fac7f28c614b4ff84a",
+  "lineage": {
+    "issue_number": 8347,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40848058954",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40848058954",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029092151_8084621280",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8347,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40848058954"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8347 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T09:21:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

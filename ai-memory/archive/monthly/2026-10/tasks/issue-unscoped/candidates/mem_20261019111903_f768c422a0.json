@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2304-2327 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Moved steps were assigned to `orchestrate-poll (2)` and `orchestrate-poll (3)` by estimated cost, and these groups may already be near capacity, so the 20-minute timeout risk may only move from `tests-release-and-log-analysis` to them.\n  WHY: A timeout would cancel the group and could break orchestrator polling or other checks. Severity is MAJOR in the source. Another reviewer (anthropic_claude-sonnet-5_5) examined the same concern and dropped it as unsupported by evidence.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection and placement of the moved steps in the orchestrate-poll matrix\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The workflow comment at lines 2289-2302 (and 2294-2296) and the changelog fragment (lines 11-12) say the step timings of run 39230958248 were not readable and the steps were chosen by estimated cost, so the steps are not confirmed as the slowest and groups 2 and 3 are not confirmed to have the most headroom. anthropic_claude-sonnet-5_5 rated this a known limitation (NIT, confidence 2) because the other issue constraints are met. The other three rated it MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: the selection of the moved steps in `.github/workflows/ci.yml`.\n  Evidence of absence: The step timings for run 39230958248 are not in the repository or the prompt, so the steps were chosen by estimated cost. The workflow comment and changelog say so, and earlier rounds (#7383, #7677) worked the same way. This is a known limitation and not a code defect. The other issue constraints are met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2304,2315,2321,2327 | severity=MAJOR | confidence=3\n  PROBLEM: The jobs `orchestrate-poll (2)` and `orchestrate-poll (3)` are assigned these moved steps based on estimated cost, but repository data suggest these groups are already near capacity, and moving subprocess-heavy steps here risks exceeding the 20-minute timeout.\n  WHY: If the group exceeds the timeout it is cancelled, potentially breaking the orchestrator polling loop or other critical checks and causing CI failures.\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, selection and placement of the moved steps in the orchestrate-poll matrix\n  Evidence of absence: The workflow hunk at lines 2289\u20132302 states that step timings were not readable, and the comments and changelog admit the choice was based on estimated cost, so it was not verified that these steps are the slowest or that the destination groups have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of steps based on the timings from run 39230958248.\n  Evidence of absence: The workflow change at lines 2289-2302 says those timings were not readable and selects steps by estimated cost instead. It does not establish that these were the slowest steps or that groups 2 and 3 had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of the moved steps in the `orchestrate-poll` matrix\n  Evidence of absence: The workflow comment at lines 2294-2296 and the changelog fragment at lines 11-12 say the timings could not be read and the steps were chosen by estimated cost, not measured. The implementation does not use the run's timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n\nAdditional context (not a separate finding): Groups 2 and 3 are described as about 5 minutes of work (ci.yml:1891, 2174), but group 1 took 15m13s in run 39047759102 (ci.yml:2177-2180). Adding the promote-cycle step (326 seconds per analysis/workflow-optimization-2026-09-28-2.md:12) and other tests may move the timeout risk to `orchestrate-poll (2)` or `(3)`. The next budget-watch run on main will show the result.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "74bd0c134ec08a152a62f41ff67e78e5780648c6445ea0cdd363d1be5245aaf0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7692,
+    "run_id": "39241568376",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39241568376",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019111903_f768c422a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7692,
+    "run_id": "39241568376"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T11:19:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

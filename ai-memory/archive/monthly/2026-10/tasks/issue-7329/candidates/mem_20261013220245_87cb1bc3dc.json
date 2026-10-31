@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: The failure exists only on PR #7288's branch. The default branch still has the `standalone_recovery` output that the test checks for (`tests/test_orchestrate_poll_workflow_contract.py:214-234`), so the test passes there; changing it on the default branch (C) would break `main`'s CI. A depends on a `Target branch:` line in this issue's body, because `scripts/resolve_integration_ref.sh` reads only the issue body (`get_issue_body`, lines 24-49 and 67-73). An `/answer` comment cannot add that line, and no later phase adds it, so choosing A would plan and implement on `main`. That is the circular result the data-provision guard forbids. The repo's documented policy is that a PR-specific failure belongs to that PR's review/autofix loop, and the loop is built for it. `scripts/review_apply_fixes.sh:1416-1418` gives the editor PR #7288's failing check-runs, including the traceback, as \"HIGH PRIORITY \u2014 FIX EVERY RUN\" items. So the next review run on `ai/issue-7284` will update this test to the branch's `has_work` probe. The planner should treat this issue as a no-change item: no edits to `tests/test_orchestrate_poll_workflow_contract.py` on the default branch, and the issue closed as not planned (superseded by PR #7288's own fix). If it is still open when PR #7288 merges with CI green, clarify's check-triage already-resolved gate (`scripts/check_triage_resolution.py`) closes it. Reversibility: if PR #7288's loop does not fix the test, an operator can add `Target branch: ai/issue-7284` to this issue's body and post `/reclarify`. That turns option A on without any other change.",
+  "fingerprint": "4298ebe9ed1fe9bc515ab300e79833c6418a6e3bcf997c41ab5817d21704360d",
+  "lineage": {
+    "issue_number": 7329,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38474138215",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38474138215",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7329"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261013220245_87cb1bc3dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7329,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38474138215"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7329",
+  "timestamps": {
+    "created_at": "2026-10-13T22:02:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

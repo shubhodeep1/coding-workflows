@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_anthropic_relay.py:151, 156, 158 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The rejection calls at lines 151, 156, and 158 lack an OSError guard, so peer disconnects during the error response can escape the handler and produce server-error tracebacks.\n  WHY: This contradicts the documented peer-disconnect behavior; DeepSeek rated this MAJOR while the other reviewers rated it NIT, so the highest severity is retained.\n- scripts/claude_anthropic_relay.py:147 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The `except OSError` catch is broader than the peer-disconnect errors it is intended to ignore and can silently swallow other socket faults.\n  WHY: BlockingIOError, InterruptedError, and TimeoutError are not disconnect signals and should not be silently suppressed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/claude_anthropic_relay.py:151, 156, 158 | severity=high | confidence=4\n  PROBLEM: Three rejection call sites lack an exception guard for peer disconnect during error-response writes.\n  WHY: Incomplete body reads, unparseable JSON, and invalid model names can reject without catching an OSError raised when the peer socket is closed or reset.\n- scripts/claude_anthropic_relay.py:147 | severity=low | confidence=4\n  PROBLEM: The `except OSError` catch is overbroad and also catches errors that do not indicate peer disconnection.\n  WHY: BlockingIOError, InterruptedError, TimeoutError, and other OS-level errors can be silently swallowed instead of surfaced as socket faults.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_anthropic_relay.py:147 | severity=low | confidence=2\n  PROBLEM: The catch was broadened from `except (BrokenPipeError, ConnectionResetError)` to `except OSError`, also covering BlockingIOError, InterruptedError, and TimeoutError.\n  WHY: A rejection-send timeout or interrupted write would be silently swallowed rather than surfaced.\n- scripts/claude_anthropic_relay.py, README.md: relay lines 151, 156, 158; README.md row for `scripts/claude_anthropic_relay.py` | severity=low | confidence=4\n  PROBLEM: The rejection paths at lines 151, 156, and 158 lack an OSError catch despite the README claim that peer disconnects during rejection are ignored.\n  WHY: A disconnect during rejection can raise an uncaught socket error and produce a traceback, contradicting that claim.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_anthropic_relay.py: Lines 149-158, rejection calls at lines 151, 156, and 158 | severity=low | confidence=4\n  PROBLEM: Rejections after a short request body, invalid JSON, or unsupported model lack the new OSError handling.\n  WHY: A client disconnect before receiving one of these rejection responses can make `send_error` raise an uncaught exception that is logged as a server error, despite the documented behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_anthropic_relay.py: Lines 151, 156, 158 | severity=low | confidence=4\n  PROBLEM: The `_reject(400)` calls at these lines are not wrapped in try/except like the early rejection.\n  WHY: When a client disconnects after passing initial validation, `self.send_error()` can raise BrokenPipeError or ConnectionResetError and produce an unhandled traceback, despite the README guarantee.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/claude_anthropic_relay.py: lines 151, 156, 158 \u2014 `return self._reject(400)` without OSError guard | severity=low | confidence=4\n  PROBLEM: The three later rejection call sites lack an OSError guard, so the README's peer-disconnect claim is only satisfied for the early-rejection path.\n  WHY: A client that disconnects before sending the full body reaches line 151, where writing the rejection can raise an uncaught BrokenPipeError or ConnectionResetError and log a traceback.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "29c35cd4411c8a98fff05b989cb2f1c0250b751dedcc815628d48ccd66cda29b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6242,
+    "run_id": "37243065625",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37243065625",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004233515_3d5e20355a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6242,
+    "run_id": "37243065625"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T23:35:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Item 11 \"Heal scopes for guard tests include the files the fix edits\" \u2014 guard tests that name other files (e.g., `tests/test_ci_job_split_contract.py`) must map to the right subjects, and the size guard must add the oversized workflow, its split registries (`scripts/stage_workflow_support.sh`, `docs/INVENTORY.md`) and one step-script glob per oversized workflow.\n  expected_change_site: `scripts/workflow_failure_heal.py::HEAL_SCOPE_GUARD_TEST_SUBJECTS`, `heal_scope_guard_subjects`, `heal_scope_step_script_glob`, `_heal_oversized_workflows`, `render_heal_scope_marker`, `verify_heal_scope`; `agents.md` documentation block; `tests/test_workflow_failure_heal_scope_tests.py` coverage\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: All required code and tests are present in the PR DIFF and confirmed in the working tree (verified `scripts/workflow_failure_heal.py:2158-2160` contains only the real `tests/test_ci_job_split_contract.py` key after the LAST RUN DIFF removed the dead `tests/test_ci_wires_every_test_file.py` entry, and `tests/test_workflow_failure_heal_scope_tests.py:313-315` now asserts every key is a real test file, with `agents.md:964-966` matching the code). The size guard test at `tests/test_workflow_failure_heal_scope_tests.py` exercises the full oversized-workflow \u2192 registries \u2192 step-glob chain.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: Item 11 \"Heal scopes for guard tests include the files the fix edits\" \u2014 guard tests that name other files (e.g., `tests/test_ci_job_split_contract.py`) must map to the right subjects, and the size guard must add the oversized workflow, its split registries (`scripts/stage_workflow_support.sh`, `docs/INVENTORY.md`) and one step-script glob per oversized workflow.\n  Expected change site: `scripts/workflow_failure_heal.py::HEAL_SCOPE_GUARD_TEST_SUBJECTS`, `heal_scope_guard_subjects`, `heal_scope_step_script_glob`, `_heal_oversized_workflows`, `render_heal_scope_marker`, `verify_heal_scope`; `agents.md` documentation block; `tests/test_workflow_failure_heal_scope_tests.py` coverage.\n  Evidence of absence: All required code and tests are present in the PR DIFF and confirmed in the working tree (verified `scripts/workflow_failure_heal.py:2158-2160` contains only the real `tests/test_ci_job_split_contract.py` key after the LAST RUN DIFF removed the dead `tests/test_ci_wires_every_test_file.py` entry, and `tests/test_workflow_failure_heal_scope_tests.py:313-315` now asserts every key is a real test file, with `agents.md:964-966` matching the code). The size guard test at `tests/test_workflow_failure_heal_scope_tests.py` exercises the full oversized-workflow \u2192 registries \u2192 step-glob chain.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "006fc79953ead368c89e8d9147819bb1d35b89995ab886ef0c81e513d7d96c91",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7016,
+    "run_id": "38025081143",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38025081143",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010054703_8518cf2540",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7016,
+    "run_id": "38025081143"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T05:47:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

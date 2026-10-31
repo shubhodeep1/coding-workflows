@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should a PR-named review run with a missing or empty `head_branch` count as a match?\nChoices:\nA. No; require exact equality with the resolved default branch, as the issue specifies. (RECOMMENDED)\nB. Yes; retain the exception recorded in the September 29 progress comment.",
+  "fingerprint": "c26a86c84aa9cc2b670a449eecc0cc7c479687c2d711389c6d4792c9639c4939",
+  "lineage": {
+    "issue_number": 5152,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37100422195",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37100422195",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261003054641_bf1266c4de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5152,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37100422195"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #5152 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-03T05:46:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

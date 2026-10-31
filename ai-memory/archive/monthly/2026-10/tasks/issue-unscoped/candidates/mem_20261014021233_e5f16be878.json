@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal_non_retryable_backfill.py:444-461 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The wiring test does not assert the backfill step's `if` predicate, so removing `!cancelled()` or an enable flag could silently re-couple the backfill to earlier step failures.\n  WHY: Without the predicate assertion, a regression that skips the backfill after an earlier step fails would not be caught by the test.\n- .github/workflows/review_autofix_sweep.yml:548-552 | severity=low | confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The comment above the `if:` condition does not explain that referencing `cancelled()` disables GitHub Actions' implicit `success()` check.\n  WHY: Without documenting this mechanism, a maintainer may simplify the condition and reintroduce the backfill skip on earlier step failures.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal_non_retryable_backfill.py:test_sweep_step_wiring | severity=low | confidence=3\n  PROBLEM: The test pins the step's order, `continue-on-error`, `run` and env, but not the `if` predicate.\n  WHY: Removing `!cancelled()` would bring back the coupling to the enumerate step and no test would catch it.\n- .github/workflows/review_autofix_sweep.yml:551-552 | severity=low | confidence=3\n  PROBLEM: The comment explains why but not the mechanism (referencing `cancelled()` disables the implicit `success()` check).\n  WHY: A maintainer could simplify the expression back to plain `vars.*` and bring the bug back.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal_non_retryable_backfill.py:test_sweep_step_wiring | severity=low | confidence=3\n  PROBLEM: The wiring test for the `review_autofix_sweep.yml` step does not assert that the `if:` predicate contains `!cancelled()`.\n  WHY: If the predicate is accidentally reverted, the backfill will incorrectly skip when previous steps fail, re-introducing the bug this PR fixes, without the test failing.\n- .github/workflows/review_autofix_sweep.yml:548 | severity not stated | confidence not stated\n  PROBLEM: The new `if:` condition logic (`!cancelled()` ensures that failures in earlier steps do not skip the backfill) is not explicitly documented.\n  WHY: It is prone to accidental \"simplification\" by future maintainers who may not know the implicit success() behavior of GitHub Actions steps.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal_non_retryable_backfill.py:test_sweep_step_wiring (~lines 444-455) | severity=low | confidence=4\n  PROBLEM: The wiring test pins the step's order, `continue-on-error: true`, `run:`, env keys, and the absence of `id-token` in `permissions`, but does not assert the `if:` predicate.\n  WHY: With the regressed condition, a failed `Enumerate open PRs and dispatch internal-review.yml` step would skip the backfill for that tick (the same runtime bug the LAST RUN DIFF set out to fix), and the regression would only be caught by manual review or by observing missed ticks in production.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_workflow_failure_heal_non_retryable_backfill.py:test_sweep_step_wiring, lines 449-461 | severity not stated | confidence not stated\n  PROBLEM: The test does not assert the step\u2019s `if` condition, so it would not catch removal of `!cancelled()` and the resulting implicit `success()` check.\n  WHY: It would not catch removal of `!cancelled()` and the resulting implicit `success()` check.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_failure_heal_non_retryable_backfill.py:test_sweep_step_wiring, after line 458 (after the continue-on-error assertion) | severity not stated | confidence not stated\n  PROBLEM: The test pins step order, continue-on-error, run, and env, but does not assert the if predicate.\n  WHY: Removing !cancelled() would restore the coupling to the enumerate step (GitHub's implicit success() check), and no test would catch it.\n- .github/workflows/review_autofix_sweep.yml:lines 550-551, the comment above the if condition | severity not stated | confidence not stated\n  PROBLEM: The comment explains why (!cancelled() makes the pass independent) but not the mechanism (that referencing cancelled() disables GitHub's implicit success() check).\n  WHY: A future maintainer unfamiliar with this GitHub Actions rule may \"simplify\" the expression back to plain vars.*, re-introducing the bug the last run fixed.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1d586d24bd34d4cc54b192f0a9a640d5916a2b0e63ee35b7a6d1606a18fac467",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7335,
+    "run_id": "38496587218",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38496587218",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014021233_e5f16be878",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7335,
+    "run_id": "38496587218"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T02:12:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: The full fix cannot be delivered from this issue, so B is the only option the pipeline can actually carry out. The fix needs `workflow-templates/ai-review.yml` and two `scripts/` files, and two checks stand in the way:\n- `scripts/implement_heal_preflight.sh` only accepts the scope marker when the heal-intake account wrote it and nobody has edited the issue since (it checks `lastEditedAt`). Editing in a wider scope (option A) would fail that check and latch `ai:needs-human`.\n- Writing outside the verified scope (`implement.yml`, `tests/**`, `changelog.d/*.md`) is refused with `out_of_heal_scope`.\n\nThe evidence also shows the guard was right: `build_automation_grant` and `check_automation_paths` in `scripts/files_touched_scope_guard.py` (lines 177\u2013238) correctly denied an ungranted `.github/workflows/ai-review.yml` with `no_allowlist`. So the right deliverable here is a regression test for that exact case plus a changelog fragment. The fix to the template and the sweep goes to a separate issue, outside this scope.\n\nQ2: This does not apply here. With Q1 = B, no sweep, template or token change is made in this issue, and the planner and implementer must not act on Q2. It is recorded only as guidance for the separate follow-up issue: use `GH_PAT` for one `/user` identity lookup, `github.token` for everything else, and refuse to run if the identity can't be resolved.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 (option B, stated as binding scope for the planner):\n  strategy: reframe\n  inputs:\n    - scripts/files_touched_scope_guard.py (`is_automation_path`, `build_automation_grant`, `check_automation_paths`)\n    - tests/test_files_touched_scope_guard.py (existing grant tests around lines 280\u2013307 and the CLI test at line 310)\n  steps:\n    - Add one regression test in `tests/test_files_touched_scope_guard.py` that reproduces the bitsafe.io#498 case:\n      - Build issue metadata authored by the pipeline login (also check the OWNER case) whose body has no `files_touched:` block. Use a security-audit-style body such as `[security-audit] moving-ref-executed-with-pat ...`.\n      - Assert `build_automation_grant(...)[\"reason\"] == \"no_allowlist\"` and that `trusted` is False.\n      - Assert `check_automation_paths([\".github/workflows/ai-review.yml\"], grant, \"true\", \"<n>\") == (\"out-of-scope\", [\".github/workflows/ai-review.yml\"], \"no_allowlist\")`.\n      - Assert the same result when `ALLOW_OUT_OF_SCOPE_FILES`-style permissiveness is not applicable. That is, the automation guard has no bypass, so passing `allow_workflow_edits=\"true\"` still denies.\n      - Optionally repeat through the CLI (`--emit-automation-grant` then `--check-automation-paths`), asserting exit code 30 and stderr starting with `reason=no_allowlist`.\n    - Add the changelog fragment `changelog.d/<this-issue-number>-heal-automation-guard-regression.md`. It should say:\n      - The automation-path grant guard correctly blocked a consumer attempt to edit an upstream-managed wrapper.\n      - The underlying `ai-review.yml` problem (the security-hold sweep running on a moving `stable` checkout with `GH_PAT`) is deliberately out of this heal's scope and is tracked separately.\n    - Do not modify `.github/workflows/implement.yml`, `scripts/**`, `workflow-templates/**`, or any guard logic.\n  replaces_acceptance_criterion: \"Suggested fix: pin the security-hold support checkout and move the sweep to github.token\". This becomes \"a regression test proves the automation-path guard denies an ungranted workflow-wrapper edit with no_allowlist, plus a changelog fragment recording the deferral\".\n  equivalence_argument: The failure being healed was the guard working as designed, and this issue's verified scope cannot hold the template fix. Pinning the guard's behaviour for this exact incident stops a future change from weakening it, which matches the issue's constraint not to weaken the failing guard. The template weakness is a separate security defect that needs its own trusted scope.\n  reversibility: The change only adds a test and a changelog fragment. If a human disagrees, they can delete both and refile the heal with a wider scope marker covering `workflow-templates/ai-review.yml`, `scripts/workflow_wrapper_refs.py` and `scripts/review_security_hold_sweep.py`.\n\nQ2:\n  strategy: reframe\n  inputs:\n    - none in this issue\n  steps:\n    - No action in this issue. Option A applies only to the separate follow-up that fixes `workflow-templates/ai-review.yml` and `scripts/review_security_hold_sweep.py`.\n  replaces_acceptance_criterion: none in this issue\n  equivalence_argument: With Q1 = B, the question has nothing to act on here.\n  reversibility: The follow-up issue can pick option B or C on its own.\n\nSETUP REQUIRED:\n- Follow-up security issue (resource): someone needs to file an `ai:security` or heal issue in coding-workflows. Its trusted `files_touched` list must cover:\n  - `workflow-templates/ai-review.yml`\n  - `scripts/workflow_wrapper_refs.py`\n  - `scripts/review_security_hold_sweep.py`\n  - `tests/test_update_workflows_guardrails.py`\n  - `tests/test_review_security_hold_sweep.py`\n  \n  The issue should pin the security-hold support checkout to the release SHA and apply Q2 option A. Until it is filed, consumers keep running the sweep from a moving `stable` checkout with `GH_PAT`, as they do today. bitsafe.io#498 stays open.",
+  "fingerprint": "4a1cf387c552b2eec0442863f8ab6ef1bcf593ca371d4b5652ccc888bd16d965",
+  "lineage": {
+    "issue_number": 7161,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38126508060",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38126508060",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7161"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261011090623_97ab1c6f69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7161,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38126508060"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7161",
+  "timestamps": {
+    "created_at": "2026-10-11T09:06:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

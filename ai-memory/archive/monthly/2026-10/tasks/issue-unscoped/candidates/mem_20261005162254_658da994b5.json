@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_anthropic_relay.py:180-188 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The test's 5-second socket timeout can cause a slow broker rejection to surface as a generic timeout instead of a clear failure identifying the broker's rejection latency.\n  WHY: This is a test-diagnostics nit, not a runtime correctness issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Make the reviewers (and any other agent step that reads files) run in the directory that holds the PR head: WORKSPACE_PATH when the workspace split is active\"\n  expected_change_site: .github/workflows/review_autofix.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The review_autofix workflow step 'Run reviewer models' still references `${GITHUB_WORKSPACE:-$(pwd)}` for `reviewer_opencode_workspace`.\n- requirement: \"Add a regression test that a dispatched run's reviewer workspace is the PR-head checkout.\"\n  expected_change_site: tests/test_review_autofix_merge_precheck.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No test in `tests/test_review_autofix_merge_precheck.py` or `tests/test_review_pr_tree_python_isolation.py` explicitly asserts that the reviewer workspace path matches the PR head checkout path after the gate checkout.\n- requirement: \"Changelog fragment (\u00a720).\"\n  expected_change_site: changelog.d/\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: There is no changelog fragment for the changes in PR #5824 itself that mentions the PR head checkout changes requested in the issue description.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_claude_anthropic_relay.py:182-184 | severity=low | confidence=2\n  PROBLEM: The test uses `connection.sock.settimeout(5)` but does not specifically assert that a rejection was caused by the broker's security policy rather than the socket timing out.\n  WHY: If the broker is slow, the test might fail with a timeout rather than verifying that the authorization header is correctly rejected by the broker's logic.\n- Requirement: \"Make the reviewers (and any other agent step that reads files) run in the directory that holds the PR head: WORKSPACE_PATH when the workspace split is active\"\n  Expected change site: .github/workflows/review_autofix.yml\n  Evidence of absence: The review_autofix workflow step 'Run reviewer models' still references `${GITHUB_WORKSPACE:-$(pwd)}` for `reviewer_opencode_workspace`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Add a regression test that a dispatched run's reviewer workspace is the PR-head checkout.\"\n  Expected change site: tests/test_review_autofix_merge_precheck.py\n  Evidence of absence: No test in `tests/test_review_autofix_merge_precheck.py` or `tests/test_review_pr_tree_python_isolation.py` explicitly asserts that the reviewer workspace path matches the PR head checkout path after the gate checkout.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Changelog fragment (\u00a720).\"\n  Expected change site: changelog.d/\n  Evidence of absence: There is no changelog fragment for the changes in PR #5824 itself that mentions the PR head checkout changes requested in the issue description.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_claude_anthropic_relay.py:180-188 | severity=low | confidence=2\n  PROBLEM: The cross-pollination summary flagged that the test's 5-second socket timeout (line 182) produces a generic socket.timeout exception when the broker rejects slowly, rather than a clear assertion identifying the broker as too slow.\n  WHY: When a CI runner is slow (load, contention), the test could fail with a generic socket.timeout that hides the actual security property under test. The failure message would not point an operator at the broker's reject latency.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_claude_anthropic_relay.py\n  Location: test_broker_rejects_client_authorization \u2014 `connection.sock.settimeout(5)` then `connection.request(...); assert connection.getresponse().status == 400`\n  Issue: A 5s socket timeout may mask a slow rejection as a generic socket.timeout rather than a security-assertion failure; the minimax finding is a valid test-diagnostics nit, but there is no current runtime failure (the test passes).\n  Suggested minimal fix: Record `start = time.monotonic()` before `connection.request(...)` and add `assert time.monotonic() - start < 2.0` inside the try block so a slow broker fails with a clear message instead of a timeout.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8d3939643deae82c668e9970eae06557a992826fd2a48e8b4ece1538123dc7cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6135,
+    "run_id": "37337678750",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37337678750",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005162254_658da994b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6135,
+    "run_id": "37337678750"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T16:22:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:757, 963 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The renderer dependency step can succeed when the renderer is absent, while the readiness signal treats any successful step as prepared.\n  WHY: The missing-renderer case is indistinguishable from successful preparation and can lead validation to report a misleading runtime-unavailable error.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fail explicitly rather than succeeding without preparing a required runtime.\"\n  expected_change_site: `.github/workflows/validate.yml`, the `renderer_dependencies` step's missing-renderer branch and readiness output\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: Lines 800-804 warn that the renderer is unavailable and write `renderer_state=absent`, but the branch exits successfully; the `validate_run` step at line 963 continues to use `steps.renderer_dependencies.outcome == 'success'` as the readiness signal; Line 962 sets `VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}`, which evaluates to `true` when the step succeeds regardless of `renderer_state`; the regression test `test_renderer_dependency_step_checks_renderer_in_workspace_path` at lines 487-490 asserts `result.returncode == 0` for the absent case.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/validate.yml:962 | Issue: `VALIDATION_RENDERER_DEPENDENCIES_READY` evaluates to `true` when the preparation step succeeds after finding the renderer absent. The `renderer_state=absent` output is not consumed to invert this truth value, so the readiness variable does not distinguish \"prepared\" from \"absent but step-skipped-prep\". | HARDENING_RISK_SCORE: 1 \u2014 the existing file-existence guard in `validate_process.sh:2025` already returns 11 without needing the runtime directory, so no incorrect exit-code or misleading message escapes today. The change would remove a latent operational signal gap.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/validate.yml:757, 963 | severity=MAJOR | confidence=5\n  PROBLEM: The workflow step `renderer_dependencies` still reports success (`renderer_state=absent`) even when the renderer is missing.\n  WHY: The `Install Python dependencies for validation renderer` step checks for the renderer's presence but marks the step outcome as 'success' regardless of whether `renderer_state` is `prepared` or `absent`. Subsequent steps (e.g., `validate_run` at line 963) rely on `steps.renderer_dependencies.outcome == 'success'`, which does not distinguish between a successful setup and a setup that skipped due to an absent renderer.\n- Requirement: \"Fail explicitly rather than succeeding without preparing a required runtime.\"\n  Expected change site: `.github/workflows/validate.yml`, the `renderer_dependencies` step's missing-renderer branch and readiness output.\n  Evidence of absence: The last run diff shows that when the renderer is absent, lines 800-804 emit a warning and set `renderer_state=absent`, but the step still concludes with success. The `validate_run` step at line 963 continues to use `steps.renderer_dependencies.outcome == 'success'` as the readiness signal, failing to account for the explicit `renderer_state` output.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: `.github/workflows/validate.yml`\n  Location: lines 800-804 (renderer_dependencies step, else branch)\n  Issue: The `renderer_state=prepared|absent` step output is written but never read by any downstream step or env propagation (no `VALIDATION_RENDERER_STATE` env var passed to validate_run). The output is dead code as shipped.\n  Suggested minimal fix: Either consume the output (e.g., export `VALIDATION_RENDERER_STATE: ${{ steps.renderer_dependencies.outputs.renderer_state }}` and have validate_process.sh distinguish absent-renderer from successful-preparation in the diagnostic), or drop the unused `echo \"renderer_state=absent\"` line to avoid leaving a misleading output.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cFail explicitly rather than succeeding without preparing a required runtime.\u201d\n  Expected change site: `.github/workflows/validate.yml`, the `renderer_dependencies` step\u2019s missing-renderer branch and readiness output.\n  Evidence of absence: Lines 800-804 warn that the renderer is unavailable and write `renderer_state=absent`, but the branch exits successfully. The validation step at line 962 treats any successful preparation step as dependencies ready, without checking `renderer_state`. The regression test at `tests/test_validate_workflow_validate_bootstrap.py:481-490` also expects the missing-renderer case to succeed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"fail explicitly rather than succeeding without preparing a required runtime\"\n  Expected change site: `.github/workflows/validate.yml` lines 796-804 (the missing-renderer branch of the `renderer_dependencies` step) and line 962 (the `VALIDATION_RENDERER_DEPENDENCIES_READY` expression)\n  Evidence of absence: When the renderer script is absent, lines 800-804 emit a warning and write `renderer_state=absent` to `$GITHUB_OUTPUT`, but the branch exits successfully (return code 0). Line 962 sets `VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}`, which evaluates to `true` when the step succeeds regardless of `renderer_state`. The `renderer_state` output is never read.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ff7802c37bdd4bbbb935b563c0816e0dbc2608202be39a276403ce86bc06ed12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6551,
+    "run_id": "37455228154",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37455228154",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006120351_5db8341a40",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6551,
+    "run_id": "37455228154"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T12:03:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

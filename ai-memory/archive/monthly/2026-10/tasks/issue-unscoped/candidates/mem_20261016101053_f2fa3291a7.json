@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Print a plain line, for example `Editor attempt N: previous attempt was stall-killed; switching model to fallback <model>.`\"\n  expected_change_site: `scripts/review_apply_fixes.sh`, editor attempt model-selection if/elif block (lines 2087-2096)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: When the previous attempt was stall-killed and the next attempt is the final attempt, the final-attempt `if` at lines 2087-2089 fires before the stall-fallback `elif` at lines 2090-2095, so only \"Final editor attempt: switching model to fallback ... (primary ... capacity-limited)\" is printed and the stall-kill message never appears, misattributing the cause to capacity. The stall message is reachable only on non-final attempts. The new tests exercise the helpers in isolation and do not cover the case where stall-kill and final-attempt coincide. (Severity NIT in all reviewers.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Print a plain line, for example `Editor attempt N: previous attempt was stall-killed; switching model to fallback <model>.`\"\nExpected change site: scripts/review_apply_fixes.sh, within the editor retry loop model-selection logic.\nEvidence of absence: The logic for stall fallback (lines 2090-2095 in the diff) is implemented in an `elif` block that follows the final-attempt capacity fallback `if` block (lines 2087-2089). When the final attempt is also a stall-killed retry, the final-attempt branch is taken, resulting in the wrong log message (\"Final editor attempt: switching model to fallback...\") instead of the required stall-killed message.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Print a plain line, for example `Editor attempt N: previous attempt was stall-killed; switching model to fallback <model>.`\" \u2014 and, by extension, identify the stall kill as the cause whenever the fallback is engaged because of one.\nExpected change site: `scripts/review_apply_fixes.sh`, the editor attempt model-selection `if`/`elif` block at lines 2087-2096 (original final-attempt arm at 2087-2089, new stall-fallback arm at 2090-2095).\nEvidence of absence: With default `editor_max_attempts=3`, when attempts 1 and 2 are stall-killed and attempt 3 begins, `editor_prev_attempt_stall_killed=1`, `editor_stall_fallback_active=0`, and `attempt == editor_max_attempts`, so the `if` arm at line 2087 fires first. The `elif` at line 2090 is skipped, and only `Final editor attempt: switching model to fallback ${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited).` is printed at line 2089. The two new behavioural tests (`test_review_apply_fixes_stall_fallback_switch_behaviour` and `test_review_apply_fixes_stall_fallback_predicate_behaviour`) exercise helpers in isolation; `test_review_apply_fixes_final_attempt_condition_unchanged` pins only the unchanged final-attempt text. No case where stall-kill and final-attempt coincide is covered.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Print a plain line, for example `Editor attempt N: previous attempt was stall-killed; switching model to fallback <model>.`\"\nExpected change site: `scripts/review_apply_fixes.sh`, editor attempt model-selection branch.\nEvidence of absence: When the previous attempt was stall-killed and the next attempt is the final attempt, the final-attempt condition at lines 2087\u20132089 selects the fallback before the stall-fallback `elif` at lines 2090\u20132095. The stall-specific line is not printed; instead, the log says the primary was \"capacity-limited.\"\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Print a plain line, for example `Editor attempt N: previous attempt was stall-killed; switching model to fallback <model>.`\"\nExpected change site: `scripts/review_apply_fixes.sh`, editor attempt model-selection branch (lines 2087-2096).\nEvidence of absence: When attempt 2 ends with `stall_state=killed` (set in the `killed)` arm at line 2398) and attempt 3 is the final attempt, the `if` at line 2087 fires before the stall-fallback `elif` at line 2090. The fallback model is selected (line 2088) but only the \"Final editor attempt: switching model to fallback ... (primary ... capacity-limited)\" message is printed (line 2089); the stall-kill message at line 2092 never fires. The message is reachable only on a non-final switch (e.g. attempt 1 killed \u2192 attempt 2), the minority path given the 3-attempt loop and incident runs (35456293637, 35473950832). Minimal fix under 10 lines: inside the final-attempt `if` branch, print the stall-kill line when `editor_prev_attempt_stall_killed -eq 1` (and/or set `editor_stall_fallback_active=1`).\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n\nVerification note: doc edits in `agents.d/wfopt-2026-09-20-2-editor-stall-fallback.md` and `changelog.d/wfopt-2026-09-20-2-editor-stall-fallback.md` are accurate; `EDITOR_STALL_FALLBACK_ENABLED` appears in no workflow file, and `review_autofix.yml:147` maps `vars.WORKFLOW_EDITOR_FALLBACK_MODEL` to `MODEL_EDITOR_FALLBACK`.\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "92e2582e64759fc295eb132aeb6b8a9da9ccb654576e2715f4ac802b55ad34f0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7497,
+    "run_id": "38882757708",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38882757708",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016101053_f2fa3291a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7497,
+    "run_id": "38882757708"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T10:10:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

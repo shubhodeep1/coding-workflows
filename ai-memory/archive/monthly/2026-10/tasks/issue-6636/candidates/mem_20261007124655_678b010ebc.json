@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6636,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6636\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6648\",\"pr_number\":6648,\"branch\":\"ai/issue-6636\",\"run_id\":\"37621063152\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37621063152\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6636-broker-exact-workflow-refs.md\",\"tests/test_claude_pool_token.py\",\"tools/claude-pool-broker/src/index.ts\",\"tools/claude-pool-broker/test/broker.test.ts\",\"tools/claude-pool-broker/wrangler.toml\"]}",
+  "fingerprint": "72fc47a0daa2f4d2e5153256bd17d1dbda4f87c2b50050f34a86cc8a0be66c38",
+  "lineage": {
+    "issue_number": 6636,
+    "parent_ids": [],
+    "pr_number": 6648,
+    "run_id": "37621063152",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37621063152",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6648"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261007124655_678b010ebc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6636,
+    "level": "run",
+    "pr_number": 6648,
+    "run_id": "37621063152"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6636: https://github.com/shubhodeep1/coding-workflows/pull/6648",
+  "timestamps": {
+    "created_at": "2026-10-07T12:46:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

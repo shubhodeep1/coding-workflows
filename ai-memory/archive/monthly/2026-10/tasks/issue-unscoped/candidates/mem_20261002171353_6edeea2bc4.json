@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:163, 333-351 | severity=critical | confidence=[5]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The optional `?` after `{_REPO_SLUG}` can match a bare GitHub host with `repo=None`, causing `session_repos` to raise `AttributeError` when it calls `.lower()`.\n  WHY: The unhandled exception propagates through the selector and prevents structured JSON output, so one malformed source URL can block the pickup wake; severity was reported as BLOCKER by Minimax and MAJOR by Qwen and GLM.\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:337-350 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `_unauthorized_reason` treats any syntactically valid `parent_session_id` as proof that the session belongs to the pickup\u2019s workflows without verifying that the parent or an ancestor is trusted.\n  WHY: An unrelated session created through `claude_code_mcp_seed` with a source in an allowed repository can pass the checks and receive a resume trigger, contrary to the PR\u2019s stated rule.\n- tests/test_usage_limit_resumes.py:lines 784-805 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The authorization test cases omit bare-hostname GitHub URLs that trigger the `SOURCE_URL_PATTERN` crash.\n  WHY: Without cases for `\"https://github.com\"` and `\"https://github.com/\"`, the test suite does not catch a regression that makes the repo group empty.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:line 163, `SOURCE_URL_PATTERN = re.compile(rf\"^https://github\\.com/(?P<repo>{_REPO_SLUG}?)(?:\\.git)?/?$\")` combined with line 333, `repos.append(match.group(\"repo\").lower())` | severity=BLOCKER | confidence=[5]\n  PROBLEM: The `?` immediately after `{_REPO_SLUG}` makes the entire named group optional, so a bare GitHub hostname can match with `repo=None` and `.lower()` raises `AttributeError`.\n  WHY: The exception propagates through the authorization path and causes `main` to exit with a traceback and no JSON, preventing resume triggers for legitimate sessions.\n- tests/test_usage_limit_resumes.py: `test_sessions_outside_the_registered_workflows_are_never_resumed` (lines 784-805) | severity=MAJOR | confidence=[5]\n  PROBLEM: The authorization tests do not cover bare-hostname GitHub source URLs.\n  WHY: A case for `\"https://github.com\"` and its trailing-slash variant would catch the regex bug and verify the `\"foreign_repo\"` skip reason.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:337-350 | severity=MAJOR | confidence=[4]\n  PROBLEM: `_unauthorized_reason` treats any syntactically valid `parent_session_id` as proof that the session belongs to the pickup\u2019s workflows without verifying that the parent or an ancestor is trusted.\n  WHY: An unrelated session created through `claude_code_mcp_seed` with a source in an allowed repository can pass all three checks and receive a resume trigger, contrary to the PR\u2019s stated rule.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:line 163 (`SOURCE_URL_PATTERN`) and line 333 (`session_repos`) | severity=MAJOR | confidence=[5]\n  PROBLEM: The `?` quantifier after `{_REPO_SLUG}` makes the repo capture group optional, so a bare GitHub host URL can match with `repo=None` and `.lower()` raises `AttributeError`.\n  WHY: The unhandled exception prevents structured JSON output and violates the documented fail-closed contract.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- workflow-templates/.claude/scripts/usage_limit_resumes.py:SOURCE_URL_PATTERN (line 163) and session_repos line 333 `repos.append(match.group(\"repo\").lower())` | severity=MAJOR | confidence=[5]\n  PROBLEM: The optional `?` quantifier after `{_REPO_SLUG}` allows a bare GitHub host URL to match with `repo=None`, so `.lower()` raises `AttributeError`.\n  WHY: The unhandled exception crashes the pickup wake without structured JSON output instead of skipping the session as `foreign_repo`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fc4169a78ee14a0536762c421944a7d8c66be50f7b921ef3eb3692ad410fb4ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6108,
+    "run_id": "37033062216",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37033062216",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002171353_6edeea2bc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6108,
+    "run_id": "37033062216"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T17:13:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

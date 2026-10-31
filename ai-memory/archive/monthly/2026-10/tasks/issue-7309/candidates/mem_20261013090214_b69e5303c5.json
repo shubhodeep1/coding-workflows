@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: Option A doesn't work unless the issue body says which branch to use. `scripts/resolve_integration_ref.sh` takes the branch only from a `Target branch:` line in the issue body (line 44 reads it from `.body`, lines 70-73). An `/answer` comment can't add that line, and no pipeline step writes it. Automatic routing to the PR's head branch (`CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED`, `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED`) is off for this issue: the triage body has no `Target branch:` line, and this run's checkout has no `STANDALONE_RECOVERY_SWEEP_ONLY` step in `.github/workflows/orchestrate_poll.yml`, so it is `main`, not `ai/issue-7174`. Picking A would therefore send plan and implement to `main`. The failing step doesn't exist there, so they would either block or write a \"fix\" that doesn't apply. That repeats Option C's problem, and the data-provision guard rules it out. Option B is what the docs say to do with a failure that only exists on a PR. agents.md says it \"belongs to the PR's review/autofix loop\" (the base-gate rule `reason=pr_specific_failure`). PR #7175 is open, its branch `ai/issue-7174` exists at 2330035fce1c, and its CI run 38369995225 failed. That loop can make the exact fix the triage describes on the branch where the step actually exists.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 (letter decision; notes for the planner):\n  strategy: close as handled by PR #7175's own review/autofix loop\n  inputs:\n    - GITHUB FACTS: PR #7175 open, base `main`, head `ai/issue-7174` @ 2330035fce1c; CI run 38369995225 failed on that head\n    - The fix described in the issue body, kept for PR #7175's loop: in `.github/workflows/orchestrate_poll.yml`, make the standalone recovery step's `env:` match \"Process each tracking issue\" exactly, except for `STANDALONE_RECOVERY_SWEEP_ONLY`:\n      - `ALERT_MSG_LEVEL` defaults to `WARNING`;\n      - `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` defaults to `true`;\n      - add `VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED`, `STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS` and `STALL_RETIRED_CONFLICT_REISSUE_ENABLED` with the full step's expressions.\n      In `tests/test_smoke_alert_silencing_contract.py`, raise the expected poller alert-declaration count from 5 to 6 and keep the `WARNING` assertion. Neither parity test is to be relaxed.\n  steps:\n    - Make no code change on the default branch from this issue.\n    - Post one comment on PR #7175 that links this issue and copies the \"Suggested fix\" above, so the PR's review/autofix loop has it.\n    - Close this issue as not planned, linking PR #7175 and noting that the failure exists only on that PR's branch.\n  replaces_acceptance_criterion: \"fix lands through this issue's own plan/implement PR\"\n  equivalence_argument: The failing code exists only on `ai/issue-7174`. A fix made on that branch by PR #7175's loop clears the same CI failure on the same head, with neither parity test relaxed.\n  reversibility: If a person would rather have this issue carry the fix (Option A), they add a standalone `Target branch: ai/issue-7174` line to the issue body and comment `/reclarify`. The resolver then checks out the PR branch for plan and implement.",
+  "fingerprint": "a97c5196fadf864a9030596e561b51ae289d4ce1572129fe5fb8627a54e94453",
+  "lineage": {
+    "issue_number": 7309,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38372374164",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38372374164",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7309"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261013090214_b69e5303c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7309,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38372374164"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7309",
+  "timestamps": {
+    "created_at": "2026-10-13T09:02:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

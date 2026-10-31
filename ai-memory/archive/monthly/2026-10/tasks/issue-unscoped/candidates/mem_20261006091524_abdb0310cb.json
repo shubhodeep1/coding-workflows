@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1568-1605 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: `workflow_run` provenance does not bind a report to the actual triggering event, allowing a dispatch caller to submit a known failed release-run ID and cause the intake to fetch its logs.\n  WHY: The verifier checks the run\u2019s repository, failure status, and approved workflow, but not event origin; severity differs (DeepSeek: MAJOR, Qwen: BLOCKER), while other reviewers characterize this as an accepted residual risk because the shared GH_PAT already has log access.\n- scripts/workflow_failure_heal_intake.sh:280-300 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The early rejection for unavailable current-run jobs relies on `RUN_COUNT -eq 1` rather than checking whether `run_id` equals `PENDING_CURRENT_RUN`, which reviewers say can allow processing older runs before rejecting the report.\n  WHY: The reviewers say a failed current-run jobs fetch should stop older-run log fetches; this is disputed by reviewers who conclude the current run is always first and the guard fires on that iteration. Qwen rates the issue BLOCKER.\n- scripts/workflow_failure_heal.py:138-139 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The approved-workflow constants have no documented review process, so future additions could expand which workflows can trigger log reads.\n  WHY: The current constants are correctly scoped, but workflow names alone form the gate and there is no kill switch or configuration mechanism.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py:1568-1570 | severity=high | confidence=[4]\n  PROBLEM: For `workflow_run` reports, the verifier does not check whether the intake invocation was triggered by that specific `workflow_run` event.\n  WHY: A dispatch-capable caller who knows a failed release-run ID can submit a dispatch payload claiming `source_kind workflow_run`; the verifier accepts it and the intake can fetch that run\u2019s logs using the shared GH_PAT.\n- scripts/workflow_failure_heal_intake.sh:283-287, 292-296, 299-305 | severity=low | confidence=[1]\n  PROBLEM: Not a defect: the `RUN_COUNT -eq 1` checks correctly identify the current run because provenance preserves ordering and rejection of the current run exits before the job-collection loop.\n  WHY: The pending current run is at position 0 when verification passes, and the intake exits if provenance rejects it.\n- scripts/workflow_failure_heal.py:138-139 | severity=low | confidence=[2]\n  PROBLEM: The approved-workflow constants have no documented review process for additions.\n  WHY: A future addition could grant another workflow the ability to trigger log reads; there is no kill switch or configuration mechanism, although the current constants are correctly scoped.\n- scripts/workflow_failure_heal_intake.sh:283, 292, 299 | confidence=[0]\n  PROBLEM: As a hardening suggestion, replacing the `RUN_COUNT` checks with `run_id == PENDING_CURRENT_RUN` would make the intent more explicit and protect against a future change to ordering assumptions.\n  WHY: The reviewer says the existing guards are correct today.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:280-285, 290-295 | confidence=[5]\n  PROBLEM: The early rejection logic for unavailable current-run jobs relies on `RUN_COUNT` rather than the validated current run ID, `PENDING_CURRENT_RUN`.\n  WHY: The reviewer says a failed current-run jobs fetch should trigger immediate exit, but the current check may allow processing and fetching logs for older runs.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py:1568-1570, 1595-1605 | severity=critical | confidence=[4]\n  PROBLEM: `workflow_run` reports are not bound to the actual triggering workflow_run event or its run ID.\n  WHY: A repository_dispatch caller can reference a known failed release-run ID; the verifier does not establish that the report originated from the event for that run.\n- scripts/workflow_failure_heal_intake.sh:280-300 | severity=critical | confidence=[5]\n  PROBLEM: The early rejection for unavailable current-run jobs checks whether `RUN_COUNT` equals 1 instead of whether `run_id` equals `PENDING_CURRENT_RUN`.\n  WHY: The reviewer says that when the current run\u2019s jobs fetch fails or returns invalid data, the loop continues to older runs and fetches their logs before the post-loop check rejects the report.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d8fa4f7a365aacf41835d681d4ba55bfb7017f58d4576b9f84a10fcdabe10d1c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6499,
+    "run_id": "37436249635",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37436249635",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006091524_abdb0310cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6499,
+    "run_id": "37436249635"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T09:15:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

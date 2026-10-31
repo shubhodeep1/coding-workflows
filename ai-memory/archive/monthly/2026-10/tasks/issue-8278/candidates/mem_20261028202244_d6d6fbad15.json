@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8278,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8278\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8284\",\"pr_number\":8284,\"branch\":\"ai/issue-8278\",\"run_id\":\"40758594755\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40758594755\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/8278-release-job-steps-moved.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "47aaa5bb54ba1e8afa769c71460b01ef1c67d0c67ad2bd023da1106de16b13a2",
+  "lineage": {
+    "issue_number": 8278,
+    "parent_ids": [],
+    "pr_number": 8284,
+    "run_id": "40758594755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40758594755",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8284"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261028202244_d6d6fbad15",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8278,
+    "level": "run",
+    "pr_number": 8284,
+    "run_id": "40758594755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8278: https://github.com/shubhodeep1/coding-workflows/pull/8284",
+  "timestamps": {
+    "created_at": "2026-10-28T20:22:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

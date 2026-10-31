@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:N/A (missing entry) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The newly added regression test file tests/test_test_and_mark_stable_phase7_timeout_status.py is not wired into any CI workflow, causing the static-checks and lint jobs to fail with an AssertionError in tests/test_ci_wires_every_test_file.py.\n  WHY: The CI pipeline rejects the PR because it fails the consistency check that requires every test file in the repository to be executed by a CI job. (Reviewer labelled this BLOCKER; mapped to critical.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add regression tests: the post-loop timeout path writes `status=timeout`, and the summary never prints SKIPPED for an empty status when a PR exists. The tests must run in CI (every tests/test_*.py must appear in a workflow, per tests/test_ci_wires_every_test_file.py).\n  expected_change_site: .github/workflows/ci.yml, in the pytest file list beside tests/test_test_and_mark_stable_phase7_unconflict.py (ci.yml:2573). The alternative is to fold the tests into tests/test_test_and_mark_stable_phase7_unconflict.py if ci.yml is outside the heal scope.\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: tests/test_test_and_mark_stable_phase7_timeout_status.py is referenced in no workflow, .github/workflows/ci.yml:2573 lists only the sibling unconflict test, tests/test_ci_wires_every_test_file.py:57-63 fails (UNWIRED_ALLOWLIST at line 25 is empty), static-checks fails in run 40877464930 and the aggregate lint check fails. All four reviewers rated this BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (No findings reported.)\nTASK_GAP:\nRequirement: Issue \"Suggested fix\" item 3 asks for regression tests: a test that the post-loop timeout path writes `status=timeout`, and a test that the summary never prints SKIPPED for an empty status when a PR exists.\nExpected change site: `.github/workflows/ci.yml`, in the pytest file list in the same step as `tests/test_test_and_mark_stable_phase7_unconflict.py` (line 2573). Add `tests/test_test_and_mark_stable_phase7_timeout_status.py` there. If `ci.yml` is outside the heal scope, move the tests into `tests/test_test_and_mark_stable_phase7_unconflict.py` instead. Do not add the file to `UNWIRED_ALLOWLIST`.\nEvidence of absence: The diff touches only `test-and-mark-stable.yml`, the changelog fragment and the new test file. No hunk references the new test in any workflow. `test_every_test_file_runs_in_a_workflow` fails in run 40877464930 (`static-checks`), which also fails the aggregate `lint` check.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:N/A (missing entry) | severity=BLOCKER | confidence=5\n  PROBLEM: The newly added regression test file tests/test_test_and_mark_stable_phase7_timeout_status.py is not wired into any CI workflow, causing the static-checks and lint jobs to fail with an AssertionError in tests/test_ci_wires_every_test_file.py.\n  WHY: The CI pipeline rejects the PR because it fails the consistency check that requires every test file in the repository to be executed by a CI job.\nTASK_GAP:\nRequirement: \"Add regression tests\" for the Phase 7 post-loop timeout path and ensure every new test file runs in some workflow (enforced by tests/test_ci_wires_every_test_file.py).\nExpected change site: .github/workflows/ci.yml\nEvidence of absence: The PR adds tests/test_test_and_mark_stable_phase7_timeout_status.py, but this file is not referenced in any step of .github/workflows/ci.yml, causing static-checks failure in run 40877464930.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- (No findings reported.)\nTASK_GAP:\nRequirement: Add regression tests for the Phase 7 timeout path and for the summary failing closed when a PR exists but its status is empty. Those tests must run in CI.\nExpected change site: `.github/workflows/ci.yml` test list near the existing Phase 7 test, or an existing CI-wired test module.\nEvidence of absence: The PR adds `tests/test_test_and_mark_stable_phase7_timeout_status.py`, but no workflow references it. `.github/workflows/ci.yml:2573` lists the related `tests/test_test_and_mark_stable_phase7_unconflict.py` without the new test. The guard in `tests/test_ci_wires_every_test_file.py:57-63` therefore fails; the PR's `static-checks` and aggregate `lint` checks failed for this reason.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (No findings reported.)\nTASK_GAP:\nRequirement: \"Add regression tests: ... a test in `tests/test_test_and_mark_stable_phase7_unconflict.py` (or a sibling) asserting that the post-loop timeout path writes `status=timeout` and that the summary never prints SKIPPED for an empty status when a PR exists.\" A regression test that no workflow ever runs does not deliver this.\nExpected change site: `.github/workflows/ci.yml`, wiring the new file beside its wired sibling `tests/test_test_and_mark_stable_phase7_unconflict.py` at ci.yml:2573 (or as a dedicated step in the ci.yml:2114-2117 family). The in-heal-scope alternative is folding the tests into the already-wired `tests/test_test_and_mark_stable_phase7_unconflict.py`, since the heal-scope marker `paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md` does not cover `ci.yml`. A `UNWIRED_ALLOWLIST` entry in `tests/test_ci_wires_every_test_file.py:25` defeats the deliverable and should not be used.\nEvidence of absence: (1) `grep -n phase7_timeout_status .github/workflows/*.yml` returns zero hits. (2) `tests/test_ci_wires_every_test_file.py:25` has `UNWIRED_ALLOWLIST: dict[str, str] = {}`. (3) CI run 40877464930 (static-checks, head SHA 7545b107) failed with `AssertionError: These test files run in no workflow ... tests/test_test_and_mark_stable_phase7_timeout_status.py` at tests/test_ci_wires_every_test_file.py:60, and the aggregate `lint` job failed with `CI jobs that did not succeed: static-checks`.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0989bddecbaee08880ff1c9be66293edac61bcb79307e522cd5f2bb3e4ab65ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8361,
+    "run_id": "40877465075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40877465075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029140753_8a61eca0a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8361,
+    "run_id": "40877465075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T14:07:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

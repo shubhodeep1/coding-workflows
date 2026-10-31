@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: smoke canary A (orchestrator E2E smoke run 39348533727)\n\nPlanning ref: `31860dca26350dac0e0aa7ef45c8572a56c5fb38` on `orchestrator/project-7706`. The integration branch matches (`Integration branch mismatch: false`).\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies one change to one file, and that file is the existing smoke canary. No helper, pattern or new code applies, and widening or narrowing the scope would break the acceptance criteria. The scope is held to exactly that one file.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data-file edit only.\n\n## Data structures affected\n`tests/e2e_smoke_canary.txt` is a plain-text canary file. After the edit:\n- Line 1 is exactly `status: ok`.\n- Line 2 is exactly `decompose-run: 39348533727`.\n\nIf the file does not exist, create it with those two lines and a trailing newline. If it exists:\n- Replace lines 1 and 2 with the two lines above.\n- Keep any lines after line 2 unchanged.\n- If an existing line 2 or a later line is an old `decompose-run:` line, the new line 2 replaces it. Remove any extra old `decompose-run:` line so the run marker is not ambiguous.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the first two lines and keep any later lines\n- Chosen: write `status: ok` and `decompose-run: 39348533727` as lines 1 and 2, and keep any other content after them.\n- Alternatives considered: replace the whole file with the two lines; append the lines at the end of the file.\n- Why: The issue requires the exact content of lines 1 and 2 and asks that other content not be disturbed. Appending would break the `head -n 2` acceptance check.\n\n## Security considerations\n- Trust boundaries: none touched. This is a static test fixture with no executable content, credentials or money-handling paths.\n- Authorization: there is no new endpoint or surface.\n- Input validation: not applicable. Both values are fixed literals from the issue.\n- Abuse cases: none. The file is not executed, and the scope guard limits the diff to this one path.\n\n## Risks and edge cases\n- A sibling issue edits `tests/e2e_smoke_canary_b.txt`. That file must not be touched, so the diff stays within this issue's scope and the two PRs cannot conflict.\n- Line endings: use LF with a trailing newline, and avoid CRLF, so `head -n 2` prints exactly the expected lines.\n- Integration-branch content can change between planning and implementation. The implementer should write lines 1 and 2 from whatever is in the file at that point.\n\n## Testing considerations\n- Run `head -n 2 tests/e2e_smoke_canary.txt`. It should print `status: ok` and then `decompose-run: 39348533727`.\n- Run `git diff --stat`. It should list only `tests/e2e_smoke_canary.txt`.\n- No changelog fragment and no `agents.d` fragment are needed. The issue forbids editing any other file, and this is an E2E smoke fixture.\n\n## Pre-execution self-check\n- Every requirement in the issue maps to the one-file edit above.\n- The scope is limited to the single allowed path.\n- There are no external inputs, credentials or dependencies.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "de8e542f59e2f00a1e0dc802ee223c8d6bbd13561c4e4f77c3dd6172cdb2d7f6",
+  "lineage": {
+    "issue_number": 7707,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39349324299",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39349324299",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7707"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261020005203_d242f9528e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7707,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39349324299"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7707",
+  "timestamps": {
+    "created_at": "2026-10-20T00:52:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

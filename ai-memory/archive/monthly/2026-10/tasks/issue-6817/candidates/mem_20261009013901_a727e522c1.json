@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nI couldn't make a code plan for #6817 because the fix is already on `main`. The current planning ref (`main` at 11c252a0565905728ecf845c2f7330f7fe2f38d1) already has both tests in the zero-argument form the earlier plan asked for. Implementing now would produce an empty change.\n\nThis also makes the earlier routing blocker and the answer \"Q1: A\" irrelevant. That answer assumed someone would add `Target branch: ai/issue-6506` to the issue body, and nobody did. It doesn't matter now, because the target is `main` and the fix is there.\n\n**What's on `main` now** (in `tests/test_orchestrate_poll_process.py`):\n- `test_judge_resume_from_unauthorized_author_is_ignored()` (line 17194) takes no arguments. It loops over `_UNAUTHORIZED_JUDGE_RESUME_COMMENTS`, which has three cases: missing association, a bot with MEMBER association, and a CONTRIBUTOR.\n- `test_revalidate_from_unauthorized_author_is_ignored()` (line 17208) takes no arguments. It loops over `_UNAUTHORIZED_REVALIDATE_COMMENTS`, which has two cases: missing association and a CONTRIBUTOR.\n- Each loop pass sets up its own state and poller run. Each assertion carries the case name, so a CI failure says which case broke.\n- A comment above the case lists (lines 17169-17172) records the rule: CI calls every test with no arguments, so these tests loop instead of using `@pytest.mark.parametrize`.\n- `parametrize` now appears only in that comment. `test_custom_runner_tests_need_no_pytest_arguments` is still at line 23471.\n\nI couldn't run these tests: pytest isn't installed in the planning sandbox, and the test module imports it.\n\nScope-mode: Hold Scope\nReuse-audit: extends test_custom_runner_tests_need_no_pytest_arguments\nScope-mode justification: The bug this triage issue reported is already fixed on the planning ref, apparently through #6506. The fix uses the loop-inside-the-test pattern already used at line 6328. Under \u00a76, correctness and safety come first: rewriting tests that already work, or adding a lint guard nobody asked for, would only add churn. The right scope is to confirm the fix, change nothing, and let the issue close.\n\n1. **Files likely to change:** none. The only work is checking `tests/test_orchestrate_poll_process.py`.\n\n2. **Functions or modules to implement:** none.\n- If the implementer finds either test still has `@pytest.mark.parametrize` or a required argument (meaning the ref moved), apply the fix from the earlier plan: inline loop, every case and assertion kept, setup rebuilt on each pass.\n\n3. **Data structures affected:** none.\n\n4. **API or interface changes:** none. The test names are unchanged, so the name-based CI shard selection in `.github/workflows/ci.yml` still matches them.\n\n## Decisions\n\n### D1 \u2014 Treat the triage finding as already fixed on `main`\n- Chosen: plan a check that changes no code.\n- Alternatives considered:\n  - Re-run the earlier plan against `ai/issue-6506`. The issue body still has no `Target branch:` line, and the fix is on `main` already.\n  - Add a lint guard against `parametrize`. Clarification rejected this as option C.\n- Why: the planning ref already contains the exact fix the triage issue asked for.\n\n### D2 \u2014 Ignore the auto-answer \"Q1: A\"\n- Chosen: target `main`, the planning ref.\n- Alternatives considered: block until a maintainer edits the issue body as option A described.\n- Why: the code that answer was routing to is already on `main`. Blocking again would only stall the issue.\n\n## Security considerations\n- Trust boundaries touched: none.\n- These tests guard against `/judge_resume --force` and `/revalidate` comments from unauthorized authors being acted on. On `main`, all five abuse cases are still asserted: the project stays `failed`, judge and recovery counters are unchanged, and no validation is dispatched.\n- Authorization and new surfaces: none. No external input is involved.\n\n5. **Risks and edge cases**\n- **Implement will make no changes.** Implement will hit the no-op handler and may label the issue `ai:implementation-failed`. The poller then reissues it up to `MAX_IMPL_NOOP_REISSUES` (2) times before closing it.\n  - The intended result is closing this issue as already fixed.\n  - A maintainer can skip the reissue cycle by closing #6817 now.\n- **Conflict with the issue text:** the triage issue says the tests exist only on PR #6572's branch. Line numbers and the parametrized form came from head 519fd8a. On the current ref, both tests are already zero-argument.\n- **Unverified:** I couldn't confirm in this sandbox whether PR #6572 merged or the fix arrived another way. Either way the fix is on the planning ref.\n\n6. **Testing considerations**\n- Install the repo's pinned test dependencies, then run the custom runner (`python3 tests/test_orchestrate_poll_process.py`, selecting by name) for these three tests:\n  - `test_judge_resume_from_unauthorized_author_is_ignored`\n  - `test_revalidate_from_unauthorized_author_is_ignored`\n  - `test_custom_runner_tests_need_no_pytest_arguments`\n- All three must pass. Until that run, treat local results as UNVERIFIED and rely on the `CI / orchestrate-poll` results for `main`.\n\n7. **Pre-execution self-check:** the evidence for \"already fixed\" comes from reading the source on the planning ref. The plan needs no secrets and no branch routing.\n\nPLAN_SELF_CHECK: WARNING: implement will produce no changes because the fix is already on main; expect the no-op path, and close #6817 as already fixed.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "61a98706852cb69edc4a0c20766c7b8f7afa9cac5b907c17ae290274626012e5",
+  "lineage": {
+    "issue_number": 6817,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37870050721",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37870050721",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6817"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261009013901_a727e522c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6817,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37870050721"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6817",
+  "timestamps": {
+    "created_at": "2026-10-09T01:39:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

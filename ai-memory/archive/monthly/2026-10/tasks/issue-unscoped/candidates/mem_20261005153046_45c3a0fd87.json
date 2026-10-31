@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"one fragment `changelog.d/6055-heal-evidence-bundle.md`\"; the PR description also says \"Changelog fragments folded into one.\"\n  expected_change_site: `changelog.d/` directory; retain `changelog.d/6055-heal-evidence-bundle.md` as the PR's single fragment and fold or remove `changelog.d/6328-heal-evidence-same-repo-run-binding.md`.\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: The PR diff adds both fragments; the 6328 fragment remains separate, while the 6055 fragment's contributor section already covers same-repository run verification.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"One fragment changelog.d/6055-heal-evidence-bundle.md\"\n  Expected change site: changelog.d/ directory\n  Evidence of absence: The PR diff includes both changelog.d/6055-heal-evidence-bundle.md and changelog.d/6328-heal-evidence-same-repo-run-binding.md as separate files, violating the requirement for a single changelog fragment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Docs and wiring: README, agents.md (heal entry, credential helper, `WORKFLOW_HEAL_EVIDENCE` / `EDITOR_GIT_CREDENTIALS` prefixes), `docs/INVENTORY.md`, `docs/scripts-pending-removal.md` (cache purge), the ci.yml heal test step, and one fragment `changelog.d/6055-heal-evidence-bundle.md`.\" The PR also states \"Changelog fragments folded into one\" as a proactive fix.\n  Expected change site: `changelog.d/6328-heal-evidence-same-repo-run-binding.md` should be folded into `changelog.d/6055-heal-evidence-bundle.md`, or the 6055 fragment's contributor section should explicitly cover the additional \"workflow name\" verification requirement that 6328 introduces.\n  Evidence of absence: `changelog.d/6328-heal-evidence-same-repo-run-binding.md` exists as a 2-line separate fragment. The 6055 contributor section at line 19 already says \"every run, including same-repo runs, must match its reported repository and head SHA, plus the PR or head branch, and must have failed\" \u2014 overlapping with 6328's \"must match the reported source repository, head SHA, workflow name and branch or PR\". The last run (`8b98d5b`-style fold of 6221) only removed one redundant fragment, not 6328. CLAUDE.md \u00a720 makes \"one fragment per PR\" a load-bearing invariant to avoid concurrent first-line edits to `CHANGELOG.md`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The PR description says the changelog fragments were folded into one and names `changelog.d/6055-heal-evidence-bundle.md`; repository guidance requires exactly one changelog fragment per PR (`CLAUDE.md`, lines 724\u2013746).\n  Expected change site: `changelog.d/6055-heal-evidence-bundle.md` and `changelog.d/6328-heal-evidence-same-repo-run-binding.md`.\n  Evidence of absence: Both fragments remain in the PR. The 6055 fragment already documents same-repository run verification, which is the behavior described by the separate 6328 fragment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"one fragment `changelog.d/6055-heal-evidence-bundle.md`\" (PR description \"Docs and wiring\" section); \"Changelog fragments folded into one\" (PR description \"Proactive fixes included\" section)\n  Expected change site: `changelog.d/` directory should contain only `changelog.d/6055-heal-evidence-bundle.md` as the changelog fragment for this PR\n  Evidence of absence: The PR diff adds both `changelog.d/6055-heal-evidence-bundle.md` (19 lines) and `changelog.d/6328-heal-evidence-same-repo-run-binding.md` (2 lines) as separate files. The PR description explicitly states fragments were \"folded into one\" and names only the 6055 fragment, but the 6328 fragment (describing same-repository run verification) remains separate instead of being incorporated into the 6055 fragment's contributor section or body.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: PR DESCRIPTION \"Docs and wiring: ... one fragment `changelog.d/6055-heal-evidence-bundle.md`\" and \u00a720 \"One fragment per PR.\"\n  Expected change site: `changelog.d/6055-heal-evidence-bundle.md` (single fragment) or `changelog.d/6328-heal-evidence-same-repo-run-binding.md` folded into 6055.\n  Evidence of absence: The PR adds TWO separate fragment files: `changelog.d/6055-heal-evidence-bundle.md` (added) and `changelog.d/6328-heal-evidence-same-repo-run-binding.md` (added in commit b79933c). The 6055 contributor section (line 19) already states \"every run, including same-repo runs, must match its reported repository and head SHA, plus the PR or head branch\" \u2014 the same content the 6328 fragment describes. The PR description promises exactly one fragment; \u00a720 mandates one fragment per PR to keep the conflict-by-construction invariant. The last-run diff correctly deleted the redundant `6221` fragment but left the equally redundant `6328` fragment in place.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2",
+  "fingerprint": "57513f6f6ed7f83515614fde1925cc7eb9fa2f68523750fffb65003dac000891",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37327459158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37327459158",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005153046_45c3a0fd87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37327459158"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T15:30:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

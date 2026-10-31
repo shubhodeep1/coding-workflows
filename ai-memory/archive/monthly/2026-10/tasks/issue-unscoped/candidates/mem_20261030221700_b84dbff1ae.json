@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/acceptance_check.py:115-164 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: parse_acceptance_lines() (lines 115-164) is too strict about whitespace and the exact format of ACCEPTANCE lines, so it fails on lines with extra spaces or tabs inside the required pattern, which plan editing can introduce.\n  WHY: The parser may return \"unknown_form\" errors for lines the user meant to be valid, so the done-check gets dropped or recorded as invalid; the source severity was MAJOR, mapped here to high, and no other reviewer flagged it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Pair workflow/script changes with the contract tests the plan calls for.\"\n  expected_change_site: tests/test_acceptance_check.py (or a new test file)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test suite in `tests/test_acceptance_check.py` covers functional validation of the `acceptance_check.py` script but lacks contract tests that enforce the workflow/script changes mandated by the plan (e.g., verifying that the default behavior of `run_plan_codex.sh` with the switch off remains byte-identical).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/acceptance_check.py:parse_acceptance_lines() (lines 115-164) | severity=MAJOR | confidence=4\n  PROBLEM: The parser is overly strict about whitespace and the exact format of the ACCEPTANCE lines. It fails on lines with additional spaces or tabs within the required pattern that might be introduced during plan editing.\n  WHY: The parser may return \"unknown_form\" errors for valid but slightly malformed-looking lines, causing the done-check to be dropped or recorded as invalid despite the user's intent to provide a valid check.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"Pair workflow/script changes with the contract tests the plan calls for.\"\n  Expected change site: tests/test_acceptance_check.py (or a new test file)\n  Evidence of absence: The test suite in `tests/test_acceptance_check.py` covers functional validation of the `acceptance_check.py` script but lacks contract tests that enforce the workflow/script changes mandated by the plan (e.g., verifying that the default behavior of `run_plan_codex.sh` with the switch off remains byte-identical).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "45edd472eccfd193c68ddcad413add76c5e40776b4429c32cc23c172add66c30",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8482,
+    "run_id": "41133725672",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41133725672",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030221700_b84dbff1ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8482,
+    "run_id": "41133725672"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T22:17:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

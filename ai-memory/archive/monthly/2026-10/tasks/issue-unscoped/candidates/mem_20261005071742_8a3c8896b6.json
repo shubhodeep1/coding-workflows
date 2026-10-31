@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_data_provision_guard.py:90 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The section-header guard no longer recognizes `EXECUTION PLAN`, so a single-letter Q-line in that section could be parsed as a decision.\n  WHY: The reviewer notes that realistic strategy tokens do not match the single-letter regex, so this would only trigger for a literal single-letter answer.\n- scripts/clarify_data_provision_guard.py:83-94 | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: Section detection does not recognize Markdown-formatted DECISIONS or RATIONALE headers, so Q-lines in a RATIONALE section may be parsed as decisions.\n  WHY: A bare-letter rationale line could be misparsed; reviewers describe this as low-risk hardening, and one notes the prompt requests plain headings, so this is not a demonstrated runtime defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/clarify_data_provision_guard.py:90 | severity=NIT | confidence=2\n  PROBLEM: The section-header guard `stripped.upper().startswith(\"RATIONALE\")` was changed from `startswith(\"RATIONALE\") or startswith(\"EXECUTION PLAN\")` to only check for RATIONALE. When the model emits `EXECUTION PLAN:` as a section header, `in_decisions` stays True and any single-letter Q-line inside that section would be mistakenly parsed as a decision.\n  WHY: An EXECUTION PLAN section line such as `Q1: B` (a sample strategy label) could be parsed as a decision, overriding the guard's data-provision override with a wrong letter. The regex requires `[A-Z](?:\\+[A-Z])*` ending at `$`, so realistic strategy tokens like `DERIVE_FROM_REPO` do not match; only a literal single letter like `B` could trigger this.\n- scripts/clarify_data_provision_guard.py:83-94 | severity=NIT | confidence=1\n  PROBLEM: The section-header detection uses bare `startswith(\"DECISIONS\")` and `startswith(\"RATIONALE\")` which do not match markdown-emphasized headers such as `**DECISIONS:**` or `**RATIONALE:**` or heading-formatted `## DECISIONS:` that models occasionally emit. When a bold header is used, `in_decisions` stays its initial value of True and never flips; all Q-lines everywhere in the output are parsed as decisions.\n  WHY: A rationale line such as `Q1: B` inside a bold-headed RATIONALE section would be parsed as a decision, potentially picking a different option than the guard intended. As with the EXECUTION PLAN issue, realistic rationale text does not match the single-letter regex, so only a rationale that happens to be a bare letter would trigger.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/clarify_data_provision_guard.py:87-92 | \n  PROBLEM: The section-header detection uses `stripped.upper().startswith(\"DECISIONS\")` and `.startswith(\"RATIONALE\")` after only a `line.strip()`. Models occasionally emit bold or markdown-emphasized section headers such as `**DECISIONS:**`, `**RATIONALE:**`, or `## RATIONALE:`, and the `**` / `## ` prefix would defeat the current `startswith` check.\n  WHY: The companion reader `auto_decisions.py::_answer_sections` already strips those via its `SECTION_RE` regex (`^(?:#{1,6}\\s*)?(?:\\*\\*)?([A-Z]\u2026)`), so the two readers disagree on what counts as a section header.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/clarify_data_provision_guard.py:87-91 | severity=NIT\n  PROBLEM: Section detection recognizes plain DECISIONS and RATIONALE headings, but not Markdown-formatted headings.\n  WHY: The prompt requests exact plain headings, so this is not a demonstrated runtime defect; accepting formatting variants would make the guard more resilient to model output variation.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/clarify_data_provision_guard.py:87-91 (_parse_answers header detection) | \n  PROBLEM: Header detection uses `stripped.upper().startswith(\"DECISIONS\")` / `stripped.upper().startswith(\"RATIONALE\")`, which does not match markdown-emphasized headers a model may emit (`**RATIONALE:**`, `## RATIONALE:`, `**DECISIONS:**`).\n  WHY: If a model emits an emphasized RATIONALE header and a rationale line happens to be a bare letter (e.g. `Q1: B`), the guard would mis-parse it as a decision. The primary safeguard \u2014 the single-letter regex \u2014 protects against prose rationale lines, so this only bites for the rare bare-letter rationale case.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "493148374a909dccd450940129851ee6cee093bb1116ce3eafb570b04acb03bf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6283,
+    "run_id": "37274399163",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37274399163",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005071742_8a3c8896b6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6283,
+    "run_id": "37274399163"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:17:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

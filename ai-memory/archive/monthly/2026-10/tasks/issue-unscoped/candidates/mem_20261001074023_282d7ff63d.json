@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:2577-2665 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: After a rate-limited PR-state read, the loop falls through to run-status polling, which clears the owed-read flag; a completed run can break the loop before PR state is rechecked, bypassing the PR-closure guard.\n  WHY: A PR closed during the rate-limit wait can incorrectly proceed to Phase 4b attempt 2, and at the deadline the intended final PR-state read can be skipped; severity differed, with Google Gemini rating this BLOCKER and the other reviewers rating it MAJOR.\n- .github/workflows/test-and-mark-stable.yml:2577-2579, interacting with `phase4b_wait_out_rate_limit` at 2339-2342 and the while-loop condition at 2564 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Adding `continue` to the PR-state rate-limit branch without first clearing a pre-existing `RETRY_READ_AFTER_RATE_LIMIT_WAIT=1` flag could cause an infinite loop after the deadline.\n  WHY: When the wait duration is zero, the helper does not reset the existing flag, so repeated rate-limited PR-state reads can keep the loop condition true.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:Behavioral test suite | severity=high | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: No test exercises a rate-limited PR-state read followed by PR closure during the wait and a completed adopted review run on the same iteration.\n  WHY: Without this scenario, the suite does not verify that the PR-closure guard is re-evaluated after the rate-limit wait.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:2577-2579 | severity=MAJOR | confidence=[4]\n  PROBLEM: After a rate-limited PR-state read, the loop falls through to the run-status read, clears `RETRY_READ_AFTER_RATE_LIMIT_WAIT`, and can break on a completed run without re-evaluating the PR closure guard.\n  WHY: If the PR closes during the wait and the run is completed, Phase 4b proceeds to canary verification and reports `success_after_retry` on a closed PR.\n- .github/workflows/test-and-mark-stable.yml:2577-2579, interacting with `phase4b_wait_out_rate_limit` at 2339-2342 and the while-loop condition at 2564 | severity=NIT | confidence=[3]\n  PROBLEM: Adding `continue` after the rate-limit wait without first clearing a pre-existing `RETRY_READ_AFTER_RATE_LIMIT_WAIT=1` flag creates an infinite-loop risk after the deadline.\n  WHY: A zero-second wait does not reset the pre-existing flag, leaving the loop condition true for repeated rate-limited PR-state reads.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/test-and-mark-stable.yml:Lines 2577-2580, 2642-2665 | severity=BLOCKER | confidence=[5]\n  PROBLEM: The PR-state rate-limit branch falls through to run polling, where the owed-read flag is cleared; a completed run can break the loop without rechecking PR state, and at the deadline the intended final PR-state read can be skipped.\n  WHY: Phase 4b can proceed with attempt 2 on a closed or merged PR, bypassing `pr_closed_during_retry`, or return `retry_timeout` without the owed final PR-state read.\n- tests/test_test_and_mark_stable_review_blocked_budget.py: lines 524-534 | confidence not stated\n  PROBLEM: Test only verifies closed PR detection when the review run status is in_progress; it does not test PR closure during a rate limit when the review run is already completed.\n  WHY: The suggested test case would assert `status=pr_closed_during_retry` when `pr_states=[\"closed\"]` and `run_statuses=[\"completed\"]` under a rate limit.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 3 (failback minimax/minimax-m2.5).\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:Lines 2577\u20132579 and 2642\u20132664 | severity=MAJOR | confidence=[5]\n  PROBLEM: After a rate-limited PR-state read, the loop falls through to run polling, where `RETRY_READ_AFTER_RATE_LIMIT_WAIT` is cleared.\n  WHY: If the PR closes during the wait and the registered run is already completed, the loop breaks before the PR-closure guard runs again and proceeds instead of reporting `pr_closed_during_retry`.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Phase 4b poll loop, `if [ \"${PR_STATE}\" = \"rate_limited\" ]` branch (approximately line 2577-2579 in the diff) | severity=MAJOR | confidence=[4]\n  PROBLEM: A rate-limited PR-state read falls through to the run-list and run-status reads instead of continuing the loop; if the adopted run is completed, the loop breaks without rechecking PR state.\n  WHY: The PR-closure guard only runs at the top of each iteration, so it can be bypassed when the run completes during the rate-limit wait.\n- tests/test_test_and_mark_stable_review_blocked_budget.py:Behavioral test suite; the scenario where a rate-limited PR-state read is followed by a PR closure during the wait and a successful run-status read on the same iteration is absent. | severity=MAJOR | confidence=[3]\n  PROBLEM: No test exercises a rate-limited PR-state read followed by a completed run-status read on the same iteration while the PR closes during the wait.\n  WHY: The test suite does not verify that the PR-closure guard is re-evaluated after a rate-limit wait.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/test-and-mark-stable.yml:Lines 2577-2579 (PR-state `rate_limited` branch) falling through to lines 2642-2664 (run-status read and `break`) | severity=MAJOR | confidence=[4]\n  PROBLEM: The PR-state rate-limit branch has no `continue`, so execution falls through to run-status polling, which clears the owed-read flag and can break on a completed run without rechecking PR state.\n  WHY: If the PR closes during the rate-limit wait while the adopted run completes, the step reports `success_after_retry` instead of `pr_closed_during_retry`; the existing tests do not cover this path.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "79d0c317e82ed75d59224309f530a10eb08297c4c9ad3e3695a56e2d719a81ce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5874,
+    "run_id": "36826388076",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36826388076",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001074023_282d7ff63d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5874,
+    "run_id": "36826388076"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T07:40:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

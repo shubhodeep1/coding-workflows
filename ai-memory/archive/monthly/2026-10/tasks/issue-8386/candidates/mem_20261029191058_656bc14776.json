@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) The clarify / plan / implement issue-to-PR pipeline (`ai-clarify`, plan and implement workflows and their prompts) (RECOMMENDED)\nB) The review and autofix pipeline (`review_autofix.yml`, reviewer, consolidator and editor prompts)\nC) The orchestrator (`orchestrate_poll.yml`, stall handling, integration-sync)\nD) Validation, the memory subsystem, or the consumer-repo updater and seeding\nE) Docs only (README, `docs/`, agents.md fragments)\nQ2: What kind of improvement do you want?\nChoices:\nA) Fix a specific bug or failure you have seen. Please give the run URL, issue or PR number, or the error text in your `/answer` (RECOMMENDED)\nB) Lower cost or runtime (tokens, API calls, workflow minutes)\nC) Make it more reliable (fewer stalls or retries, better failure recovery)\nD) Make it easier for operators to use (clearer messages, docs, notifications)\nE) Add a new feature. Please describe it in your `/answer`\nQ3: How large a change is acceptable?\nChoices:\nA) Surgical: one focused change in the area you chose, plus the contract tests and docs that go with it (RECOMMENDED)\nB) Moderate: a few related changes across that area's scripts, YAML and tests\nC) Broad: a refactor or redesign of the area across several workflows\nQ4: How will we know the work is done?\nChoices:\nA) A named failure or symptom no longer happens, and a regression or contract test proves it (RECOMMENDED)\nB) A metric you name improves by a target amount (for example, tokens per run or the stall rate)\nC) A described new behavior exists and is documented",
+  "fingerprint": "924403d336615719ffae057c758445cad7ed199cf7ca8fe4033243d95b2ebd7b",
+  "lineage": {
+    "issue_number": 8386,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40935668765",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40935668765",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029191058_656bc14776",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8386,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40935668765"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8386 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T19:10:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

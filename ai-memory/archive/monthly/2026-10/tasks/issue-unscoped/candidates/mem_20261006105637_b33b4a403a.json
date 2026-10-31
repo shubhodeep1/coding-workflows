@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:22-23, 771-776 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The poller still passes a full-repo-scope GH_PAT as GH_TOKEN, leaving trusted-code write paths with broad credentials despite the resource-scoped-write recommendation.\n  WHY: A future trusted-code write path would inherit the broad token; the reviewer says input validation is necessary but does not fully close this capability gap.\n- scripts/orchestrate_poll_process.sh:23996\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The cycle-level \u201cPRs to revert\u201d count includes rejected entries, so the operator-visible comment disagrees with what actually executed.\n  WHY: The warning skips unverified targets, but the upstream count still counts them.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Have trusted code validate its JSON and perform only resource-scoped API writes with a least-privilege token.\"\n  expected_change_site: `.github/workflows/orchestrate_poll.yml` token wiring for the poller\u2019s privileged API calls\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `scripts/orchestrate_poll_process.sh:23980-23990` adds validation guards, but `GH_PAT` is still passed as `GH_TOKEN` to \u201cProcess each tracking issue\u201d with `repo` scope and README.md:60 documents that scope; `orchestrate_poll.yml` still requires `GH_PAT` (`lines 21-23`) and exports it as `GH_TOKEN` to \u201cProcess each tracking issue\u201d (`lines 771-776`), with no separate least-privilege token or narrower permission configuration introduced.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/orchestrate_poll.yml, lines 22-23, 771-776\n  severity=NIT\n  confidence=[3]\n  PROBLEM: The poller still uses a full-`repo`-scope GH_PAT, so a future trusted-code write path would inherit the same broad GH_TOKEN.\n  WHY: The reviewer considers input validation necessary but insufficient to constrain future trusted-code writes.\n\n- TASK_GAP\n  Requirement: \"Have trusted code validate its JSON and perform only resource-scoped API writes with a least-privilege token.\" (linked issue #6449 recommendation, second sentence)\n  Expected change site: `.github/workflows/orchestrate_poll.yml` token wiring (a new job- or step-scoped token with narrowed scopes for the revert/finalize write surface) or a documented token-scoping plan in `agents.md`/`README.md`\n  Evidence of absence: The PR adds the JSON-validation, wave-membership, merged-status, implementation-PR-identity, and base-branch guards (`scripts/orchestrate_poll_process.sh:23980-23990`, LAST RUN DIFF), but `GH_PAT` is still passed as `GH_TOKEN` to \"Process each tracking issue\" with `repo` scope. README.md:60 documents that scope. No new repo-variable, secrets entry, or step-scoped token replacement exists in the PR diff or LAST RUN DIFF. The least-privilege portion of the recommendation is therefore not delivered.\n  severity=NIT\n  confidence=[4]\n\n- HARDENING_SUGGESTION\n  File: scripts/orchestrate_poll_process.sh\n  Location: 23996 (LAST RUN DIFF hunk, after the `continue` branch)\n  Issue: The `Skipping unverified judge revert target` warning goes to stderr but the cycle-level `PRs to revert: ${REVERT_COUNT}` line (still emitted upstream from this loop) counts rejected entries, so the operator-visible comment disagrees with what actually executed.\n  Suggested minimal fix: After the `while ... done`, append `JUDGE_REVERT_SKIPPED total=N` next to the existing `RECOVERY_BUDGET_ACCOUNTING` log line and include `Skipped reverts (out of wave / unverified): N` in the `## Judge Evaluation` body so operators can reconcile.\n  Estimated lines changed: \u22646\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cHave trusted code validate its JSON and perform only resource-scoped API writes with a least-privilege token.\u201d\n  Expected change site: `.github/workflows/orchestrate_poll.yml` token wiring for the poller\u2019s privileged API calls.\n  Evidence of absence: The PR does not change the workflow\u2019s token wiring. `orchestrate_poll.yml` still requires `GH_PAT` (`lines 21-23`) and exports it as `GH_TOKEN` to \u201cProcess each tracking issue\u201d (`lines 771-776`). No separate least-privilege token or narrower permission configuration is introduced.\n  severity=MAJOR\n  confidence=[4]\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "0b0f8ce05b3f8bd8592bbaf81570b11f140cd329d016c21f37efd8c8a93ef6f0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6460,
+    "run_id": "37449041846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37449041846",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006105637_b33b4a403a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6460,
+    "run_id": "37449041846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T10:56:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

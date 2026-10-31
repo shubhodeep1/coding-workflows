@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal_synced_security.py:340-342, 469-494 | severity=critical | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The release fixture `_Release.__call__` writes the retired path `.claude/commands/retired-helper.md` to `workflow-templates/retired_files.txt` but does not create the matching source file under `workflow-templates/`, so it is absent from the managed digests.\n  WHY: The intake script rejects the report as `unmanaged_path` before the retired-file grep runs, so the two retired-file tests would fail. The reviewer labelled this BLOCKER, which is mapped here to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_failure_heal_synced_security.py:340-342, 469-494 | severity=BLOCKER | confidence=5\n  PROBLEM: The release fixture `_Release.__call__` writes the retired path `.claude/commands/retired-helper.md` to `workflow-templates/retired_files.txt` but does not create the matching source file under `workflow-templates/`, so it is absent from the managed digests.\n  WHY: The intake script rejects the report as `unmanaged_path` before the retired-file grep runs, so `test_intake_skips_retired_file_findings_with_a_named_reason` and `test_intake_retired_skip_leaves_live_findings_in_the_same_report` would fail.\n- HARDENING_SUGGESTION: scripts/workflow_failure_heal.py:123-126 (_SYNCED_SECURITY_YEAR_RE) | HARDENING_RISK_SCORE=1\n  PROBLEM: The character class `[\\s:(\\[-]*` does not match separators such as `/`, `,` or an en-dash between the OWASP code and a non-2021 year. Categories like `A01/2017` would be accepted and published as `A01:2021-Broken Access Control`.\n  WHY: Suggested fix is to replace it with `[^0-9A-Za-z]*` (about 2 lines changed).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4ce18b011211c7dff07f25b84ece2d34d33cea520c53b6639e3d42708b90ed3d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7817,
+    "run_id": "39623612384",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39623612384",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021154544_2c82270ee7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7817,
+    "run_id": "39623612384"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-21T15:45:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

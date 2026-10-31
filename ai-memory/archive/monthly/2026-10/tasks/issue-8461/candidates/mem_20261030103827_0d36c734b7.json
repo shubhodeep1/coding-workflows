@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8461,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8461\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8464\",\"pr_number\":8464,\"branch\":\"ai/issue-8461\",\"run_id\":\"41039690017\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41039690017\",\"changed_files\":[\"agents.d/prepush-gate-tests-file.md\",\"changelog.d/prepush-gate-tests-file.md\",\"scripts/prepush_test_gate_run.sh\",\"tests/test_prepush_affected_tests.py\",\"workflow-templates/.claude/hooks/prepush_affected_tests.py\"]}",
+  "fingerprint": "6cb4c3869cbdea54ed5b73e1c8aafc3ce2dbb5a64bfc850b42d57413489cadf9",
+  "lineage": {
+    "issue_number": 8461,
+    "parent_ids": [],
+    "pr_number": 8464,
+    "run_id": "41039690017",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41039690017",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8464"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261030103827_0d36c734b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8461,
+    "level": "run",
+    "pr_number": 8464,
+    "run_id": "41039690017"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8461: https://github.com/shubhodeep1/coding-workflows/pull/8464",
+  "timestamps": {
+    "created_at": "2026-10-30T10:38:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:plan() function, operator_step verdict | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `placeholder` variable is not explicitly validated against security-sensitive flags already defined in the repository.\n  WHY: An operator could approve an `operator_step` verdict that gates a feature behind a sensitive flag, inadvertently granting AI capability expansion without a proper review-gate transition.\n- scripts/unblock_judge.sh:unblock_ask_model() function | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `UNBLOCK_JUDGE_TIMEOUT_SECS` is not validated as an integer before it is passed to `timeout`.\n  WHY: An invalid environment-variable value causes `timeout` to exit with an error, so the unblock judge fails and the blocked item remains blocked without a verdict rather than falling back to a safe default.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_actions.py:plan() function, operator_step verdict | confidence=2\n  PROBLEM: The logic for verifying operator steps is partially handled but lacks explicit validation that the `placeholder` variable (e.g., `_ENABLED`) is not a security-sensitive flag already defined in the repository.\n  WHY: An operator might inadvertently approve an `operator_step` verdict that gates a feature behind a sensitive flag (like `ALLOW_WORKFLOW_EDITS`), inadvertently granting AI capability expansion without a proper review-gate transition.\n- scripts/unblock_judge.sh:unblock_ask_model() function | confidence=4\n  PROBLEM: The `UNBLOCK_JUDGE_TIMEOUT_SECS` variable is used to set a timeout for the `claude` and `codex` command invocations, but the script does not validate the integer input before passing it to the `timeout` command.\n  WHY: If an invalid value (non-integer) is provided via an environment variable, the `timeout` command will exit with an error, causing the unblock judge to fail and the blocked item to remain blocked without a verdict, rather than falling back to a safe default.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7e27fc88e5e66808f42fba97170f23242384c92425bc2f381c4162aa10187e8b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37408755924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37408755924",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006041110_b244e7ae10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37408755924"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T04:11:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

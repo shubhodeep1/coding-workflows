@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nI chose **B**. The fix belongs to PR #7259's own review and autofix loop, so this issue should close without a code change.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: The pipeline reads the target branch only from the issue body, when `scripts/resolve_integration_ref.sh` resolves it (lines 24-49 and `get_issue_body`). This issue's body has no `Target branch:` or `Integration branch:` line. So under option A, planning and implementation would run on `main`, and an implementer adding the line to the issue later would be too late to change that. The two assertions can't be fixed on `main` either: `run_issue_7251_dependency_wait` does not exist in `main`'s `scripts/orchestrate_poll_process.sh` (zero matches). Requiring it there would break `main`'s CI. Option C would weaken a passing ordering contract on `main` to allow for code that only exists on an unmerged branch. That leaves B, which follows the documented rule that a PR-specific failure belongs to the PR's own review/autofix loop (agents.md, #7140 precedent).\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: none needed for B; these are notes for the planner and implementer\n  inputs:\n    - The issue body (no branch-routing line)\n    - `scripts/resolve_integration_ref.sh` `extract_integration_branch`\n    - GITHUB FACTS: PR #7259 is open and unmerged, head `ai/issue-7257` at 74f5e00f1bf8, CI run 38471678764 failed on that head\n  steps:\n    - Make no code change on the default branch. Do not edit `tests/test_unblock_scan.py` or `tests/test_orchestrate_poll_workflow_contract.py` on `main`.\n    - Plan this as a no-change resolution. The fix itself, changing the two assertions to require `run_issue_7251_dependency_wait || true` before `run_standalone_stall_recovery` and before the unblock scan while keeping the once-per-tick and sweep-only checks, belongs to PR #7259's review/autofix loop on `ai/issue-7257`. That loop sees the failing CI checks on its head.\n    - Do not remove the dependency-wait call to satisfy the old assertions.\n  replaces_acceptance_criterion: \"Update the assertions so CI passes\" becomes \"CI passes on PR #7259's head after its own review/autofix loop updates the assertions on `ai/issue-7257`\"\n  equivalence_argument: The failing check is CI on PR #7259's head, and the code it tests exists only on that branch. The PR's own loop is the only path that can turn that check green without breaking `main`.\n  reversibility: If a person wants this issue to carry the fix, they can add `Target branch: ai/issue-7257` to the issue body and post `/reclarify`. The resolver then plans and implements on that branch, and nothing done under B needs undoing.\n\n**Assumptions:**\n- PR #7259's review/autofix loop will pick up the failing CI on its head.\n- This repository has no `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` or `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` override turned on; both are off by default, and this issue's body carries no routing line.\n\n**Missing context:**\n- I did not read the tests or `orchestrate_poll_process.sh` on `ai/issue-7257`. The triage evidence is taken as given.",
+  "fingerprint": "8376937d68fa98226b1c06ee9132f9371ce902c1aa20cbd7d4ce159eec0b8afc",
+  "lineage": {
+    "issue_number": 7330,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38474461983",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38474461983",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7330"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261013220738_dbe9b77aa9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7330,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38474461983"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7330",
+  "timestamps": {
+    "created_at": "2026-10-13T22:07:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The finding no longer reproduces on `main`. In `workflow-templates/.claude/hooks/pr_merge_status_guard.py`, lines 544-546 set `config_override` for any `-c` / `--config-env` option. Lines 1557-1559 then turn every push with that flag into a confirmation prompt and `continue` before `_push_targets` runs. So `--repo=origin main` is never mistaken for a refspec, and the default-branch skip can't happen. Option A locks the exact exploit shape down with regression tests and leaves the documented \"ask\" behaviour alone. Option B would change confirmed behaviour that `agents.md` records (\"Pushes with `git -c`, `--config-env`... ask too\"), and option C would leave the exploit shape untested.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo (letter A; plan given so the planner has exact inputs)\n  inputs:\n    - tests/test_pr_merge_status_guard.py, `test_per_command_config_push_asks_without_using_origin_prs` (parametrize list at lines 1348-1356; test body at 1357-1365)\n    - workflow-templates/.claude/hooks/pr_merge_status_guard.py lines 544-546 and 1557-1559 (read only, no change)\n    - the `merged_branch_repo` fixture already used by that test (merged feature branch; origin is the repo's own remote)\n  steps:\n    - Add parametrize entries to `test_per_command_config_push_asks_without_using_origin_prs`, using the same non-secret placeholder URL as the other cases (`https://github.com/other/repo`):\n      - `\"git -c remote.main.url=https://github.com/other/repo -c push.default=current push --repo=origin main\"` (the exact exploit shape)\n      - `\"git -c push.default=current push --repo=origin main\"`\n      - `\"git -cremote.main.url=https://github.com/other/repo push --repo origin main\"`\n      - `\"git --config-env=remote.main.url=REMOTE_URL push --repo=origin main\"`\n    - If the fixture's default branch is not `main`, replace the literal `main` with that branch so the default-branch path is actually exercised. Check the fixture setup first; it is still a single literal.\n    - Keep the existing assertions: `permissionDecision == \"ask\"`, `query_pull_requests` is never called, and `other/repo` never appears in the output.\n    - Do not change either hook copy, `agents.md`, or any other test. The byte-identity test for the live and template hooks is unaffected.\n    - In the PR body, link the issue as a sub-issue fix and say the finding was verified fixed on `main` by PR #6286's guard changes. Link the tracker #3576 only with `Refs`.\n  replaces_acceptance_criterion: \"Resolve the positional remote and effective push refspec using the command's inline Git configuration; automatically deny the push if that mapping cannot be determined\"\n  equivalence_argument: The guard never trusts origin's PR history for any push that carries per-command configuration. It always asks, so the user confirms every such push and the merged-PR check can't be silently skipped. The new tests pin that exact invariant for the exploit command.\n  reversibility: Tests only. If a human later wants a hard deny (option B), only the asserted `permissionDecision` value in these cases changes.",
+  "fingerprint": "f997cd747a50ffe6d6937fffac9afd7d2adc95ea5aba68606dbd4811e43e3b0f",
+  "lineage": {
+    "issue_number": 6639,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618462684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618462684",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6639"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007121417_612181c40d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6639,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618462684"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6639",
+  "timestamps": {
+    "created_at": "2026-10-07T12:14:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

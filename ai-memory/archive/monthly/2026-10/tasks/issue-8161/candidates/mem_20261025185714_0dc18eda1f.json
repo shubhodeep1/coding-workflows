@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a data-file edit. The file already exists on `orchestrator/project-8159` (HEAD `684b1928`) with two lines, `status: ok` and `decompose-run: 25567947079`, and a single trailing newline. Line 1 already matches. Only line 2 changes, to `decompose-run: 40222261089`. Keep the single trailing newline and add no other lines.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 in place\n- Chosen: rewrite the file as exactly `status: ok\\ndecompose-run: 40222261089\\n`.\n- Alternatives considered: appending a new line, or leaving the old run line in place.\n- Why: the acceptance criteria require exactly these two lines and no other content.\n\n## Security considerations\nThis changes a plain-text test fixture. It touches no trust boundary, endpoint, credential or money state. There are no abuse cases.\n\n## Risks and edge cases\n- `tests/e2e_smoke_canary.txt` belongs to a sibling issue and must not be touched.\n- The file must end with exactly one newline and use LF line endings, not CRLF.\n- No conflict with the issue: the file exists, and line 1 is already correct.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary_b.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` prints `decompose-run: 40222261089`.\n- `wc -l` prints 2.\n- `git diff --stat` lists only this one file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: the issue fully specifies a single edit to one existing file. There is nothing to expand or reduce, and no helper or new code is needed.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "734747c57c9ca441e9ad906fa68648d7f4e1c0dc537b364bcd02b41336fb460b",
+  "lineage": {
+    "issue_number": 8161,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40222999206",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40222999206",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8161"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261025185714_0dc18eda1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8161,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40222999206"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8161",
+  "timestamps": {
+    "created_at": "2026-10-25T18:57:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15293-15321 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `_validation_harness_hold_end_park` returns the exit status of its final `tg_notify ... \"CRITICAL\"` call, not an explicit success, although both callers treat a non-zero status as \"cleared hold could not be persisted\".\n  WHY: A non-zero `tg_notify` status after a completed park would log `outcome=unknown reason=state_write_failed` and skip the bounce marker comment, so an explicit `return 0` is needed. The reviewers rated it NIT or hardening; the Sonnet reviewer found no current non-zero path.\n- scripts/orchestrate_poll_process.sh:15230-15338 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `_validation_harness_hold_compare` eagerly fetches the pin-commit date (`commits/<pin>`) on a truncated compare range, though `VHH_PIN_DATE` is used only in the `completed` heal-issue branch of step 4.\n  WHY: Each affected tick makes one REST read beyond the stated one-compare-and-one-issue budget; the cost is bounded, memoized and documented. Line ranges are as cited by each reviewer: 15230-15238 (minimax), 15330-15338 (openai).\n- scripts/orchestrate_poll_process.sh:15214-15263 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The repository slug `shubhodeep1/coding-workflows` is hardcoded in GitHub API calls (/compare/, /commits/, /issues/).\n  WHY: The reviewer says the calls would fail in forks or consumer environments. The reviewer rated it BLOCKER, which is mapped here to critical. anthropic_claude-sonnet-5_5 found that the slug is the harness repository itself and dropped the same claim, so the two reviewers disagree.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:~15293-15321 (`_validation_harness_hold_end_park`) | severity=NIT | confidence=2\n  PROBLEM: The function ends with `tg_notify ... \"CRITICAL\"`, so it returns whatever `tg_notify` returns. The callers `_validation_harness_hold_bounce` and the `not_planned` case in `validation_harness_hold_tick` treat any non-zero status as a persistence failure.\n  WHY: A non-zero `tg_notify` status would log `outcome=unknown reason=state_write_failed` and skip the bounce comment. The exhausted-bounce caller would return 0 instead of 10. No such path exists today, so the contract is fragile. An explicit `return 0` fixes it.\n- scripts/orchestrate_poll_process.sh:`_validation_harness_hold_compare` truncated-range branch | severity=NIT | confidence=3\n  PROBLEM: The pin-commit date is fetched eagerly on an `ahead` result with fewer commits listed than `total_commits`, but `VHH_PIN_DATE` is used only in the `completed` heal-issue branch.\n  WHY: Each affected tick makes one extra bounded, memoized, documented REST read. Fetching the date lazily would avoid it.\n- HARDENING_SUGGESTIONS: add `return 0` at the end of `_validation_harness_hold_end_park` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:15214, 15231, 15263 | severity=BLOCKER | confidence=5\n  PROBLEM: The repository slug shubhodeep1/coding-workflows is hardcoded for GitHub API calls (/compare/, /commits/, /issues/).\n  WHY: The script will fail to locate the repository in forked or consumer environments where the slug does not match, breaking the harness hold mechanism there.\n- HARDENING_SUGGESTIONS: in `_validation_harness_hold_end_park`, add an explicit `return 0` because the exit status is ambiguous (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:15230-15238 (`_validation_harness_hold_compare`, `vhc_listed< vhc_total` branch), consumed at 15597-15602 | severity=NIT | confidence=4\n  PROBLEM: The pin-commit read is taken eagerly inside the compare helper. `VHH_PIN_DATE` is read only in the `completed` branch of step 4, so the fetched date is discarded for every other outcome.\n  WHY: Every poll tick for a held project with a range over 250 commits issues an extra REST read beyond the stated budget. The suggested fix is a `want_date` flag.\n- HARDENING_SUGGESTIONS: `_validation_harness_hold_end_park` at line 15321 returns the `tg_notify` status. Its callers consume that status at lines 15358 and 15590. Today this is latent, because every documented `tg_notify` failure path returns 0. Suggested fix: add `return 0` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:15330-15338 (`_validation_harness_hold_compare()`), called before the heal-issue state check at 15567-15580 | severity=NIT | confidence=4\n  PROBLEM: On a truncated compare response the helper makes an extra GET for `commits/<pin>` before checking whether the linked heal issue is still open, so the date read may go unused.\n  WHY: Each poll tick can make this extra read for every held project whose pin is more than 250 commits ahead, beyond the one compare read and one heal-issue read the issue specifies.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:`_validation_harness_hold_end_park` final line (`tg_notify \"...\" \"CRITICAL\"`) | severity=NIT | confidence=4\n  PROBLEM: The function's exit status is that of `tg_notify`, not an explicit success. Both callers branch on `if ! _validation_harness_hold_end_park ...`.\n  WHY: A non-zero `tg_notify` status after a successful park would make the caller log `outcome=unknown reason=state_write_failed` and skip the bounce marker comment, and the next tick would see a cleared hold with no bounce record. Adding `return 0` fixes it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8ff8d9ff7113c2b31533866f313545078438262da980314bc0dca7280700e7e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7957,
+    "run_id": "39942176603",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39942176603",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023115231_29e5d74afe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7957,
+    "run_id": "39942176603"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T11:52:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

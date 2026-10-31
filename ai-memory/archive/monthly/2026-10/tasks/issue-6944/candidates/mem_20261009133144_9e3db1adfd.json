@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix target?\nChoices:\nA) PR #6627's head branch `ai/issue-6625`, since the failure was seen at its head `c6e2858`. Use this only while PR #6627 is still open. (RECOMMENDED)\nB) The default branch `main`. Use this if PR #6627 is already merged, or if the failure also reproduces on `main`.\nC) No fix. Close this issue as no-op if PR #6627 was closed without merging, or if a later CI run on a newer head passed.\nQ2: How should the implementer find the failure, given it cannot read the shard 1 log?\nChoices:\nA) Run all of `tests/test_orchestrate_poll_process.py` at the target head. Fix the named `FAIL` test with the smallest change, or fix `scripts/orchestrate_poll_process.sh` if the test shows a real poller defect. If every test passes, treat it as a transient shard failure and close without changing code. (RECOMMENDED)\nB) Same as A, but if nothing reproduces, label the issue `ai:blocked` so a human can attach the complete shard 1 log. Do not close it.\nC) Same as A, but if nothing reproduces, add a one-time retry for failed shards in `.github/workflows/ci.yml`. **Note:** this goes against the triage guidance not to change the aggregate gate, and it could hide real failures. It also edits an automation path, which needs a `files_touched` grant.\nAssumptions:\n- The cited lines in `.github/workflows/ci.yml` match the issue: shard exit codes are written at line 1405 and checked at lines 1429\u20131441, and a missing `.rc` file counts as a failure.\n- The working tree here is not PR #6627's head (there is no `changelog.d/*6625*` fragment), so I could not check the PR's own change.\nMissing context:\n- The complete log for \"Orchestrate poll process unit tests \u2192 shard 1\" from run 37933918124, job 113831107518.",
+  "fingerprint": "f1d92ca4475046b5678f78b7e20d85c747be39f03e4bf8e64ab0d2d31ac66c50",
+  "lineage": {
+    "issue_number": 6944,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37936777601",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37936777601",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009133144_9e3db1adfd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6944,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37936777601"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6944 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T13:31:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

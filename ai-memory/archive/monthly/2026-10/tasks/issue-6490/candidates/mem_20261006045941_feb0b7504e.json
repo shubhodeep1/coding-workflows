@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: The exposure is not limited to Claude. At `.github/workflows/orchestrate.yml:827`, the Codex fallback runs `codex exec --sandbox danger-full-access` on the same host, so it can read the Claude pool token files and any `OPENROUTER_API_KEY` or `GH_PAT` in its environment. Isolating only Claude (A or C) would leave the same disclosure path open whenever the engine falls back to Codex. `scripts/clarify_isolated_run.sh` already supports both engines: the Codex path uses `clarify_openrouter_broker.py`, the Claude path uses `claude_anthropic_relay.py` with a placeholder token, and Docker runs with `env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN`. That makes B the lowest-risk option that matches existing code.\nQ2: Clarify, the clarify-respond worker and the poller judges all fail closed and never fall back to the host. Falling back to host execution (B or C) would bring back the exact token exposure this finding reports. Counting a setup failure as a failed decomposer attempt keeps the existing retry loop, failure comment and Telegram alert unchanged.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/orchestrate.yml, lines 809-827 (the Claude call through `claude_run ORCHESTRATE` and the host Codex fallback with `danger-full-access`)\n    - scripts/clarify_isolated_run.sh (both engine branches; line 13 accepts only the roles `CLARIFY` and `CLARIFY_RESPOND`)\n    - scripts/clarify_sandbox/Dockerfile, scripts/clarify_openrouter_broker.py, scripts/claude_anthropic_relay.py, scripts/ai_engine.sh\n  steps:\n    - Send both decomposer engine paths through the existing isolated runner. Either let it accept the role `ORCHESTRATE`, or add a thin sibling helper that reuses its broker, relay and Docker code. Do not write a new isolation mechanism.\n    - Mount the checkout read-only. Write the decomposer's output only to the runner's designated output file.\n    - Keep the exit-75 `AI_ENGINE_FALLBACK` handling. When Claude is unavailable, retry with Codex in a fresh sandbox, never on the host.\n    - Remove the host `codex exec ... --sandbox danger-full-access` call from the decomposer path.\n    - Add contract tests confirming that the decomposer step makes no host `claude_run` or `codex exec` call, and that the token, API key and GH_PAT variables are stripped from the container environment.\n    - Stage any newly required helper files through the workflow's existing support-staging list.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Neither model process can read any credential, which fully covers the finding's recommendation for both engines.\n  reversibility: The engine choice (`AI_ENGINE_ORCHESTRATE`) is unchanged. Reverting the PR brings back host execution.\n\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/orchestrate.yml, the decomposer retry loop (around lines 940-960, which handles attempts and `last_status`)\n  steps:\n    - When sandbox setup fails (Docker missing, image build failure, or the relay or broker failing to start), record a nonzero `decomposer_rc` with a distinct `last_status`, such as `isolation_unavailable`, and continue the existing retry loop.\n    - Never call a host model process on this path. Once the retries are used up, the existing job failure comment and Telegram alert handle it.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Failing closed is the same policy the clarify and poller-judge isolation paths already use.\n  reversibility: If an operator wants a different setup-failure policy later, it can be added behind a new variable that defaults to fail-closed.",
+  "fingerprint": "580b71a09ec34b19ab27dd35ce811269be8798b1fb2ac2f909e8a58e5b3addfe",
+  "lineage": {
+    "issue_number": 6490,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37415613742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37415613742",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6490"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006045941_feb0b7504e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6490,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37415613742"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6490",
+  "timestamps": {
+    "created_at": "2026-10-06T04:59:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

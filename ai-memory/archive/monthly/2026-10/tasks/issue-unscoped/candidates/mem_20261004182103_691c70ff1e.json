@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:1-1474 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The root hook diverges from its canonical workflow-template copy, missing parser updates and other logic.\n  WHY: The mismatch causes five `tests/test_pr_merge_status_guard.py` failures and blocks the aggregate `lint` job.\n- .claude/hooks/pr_merge_status_guard.py:255-272, 411-475 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The root hook treats shell redirections as command arguments, so `git push origin 2>/dev/null` can be checked against branch `2` instead of the current branch.\n  WHY: On a merged branch, the guard can allow a push without checking the actual branch.\n- scripts/review_untrusted_workspace.py:40 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3]\n  PROBLEM: The review editor transfer allowlist omits `.claude/hooks/pr_merge_status_guard.py`.\n  WHY: The editor cannot transfer a fix for the root hook back to the host workspace, preventing automated resolution of the CI blocker.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A `workflow_dispatch` review of a PR whose head adds a file sees that file in the reviewer workspace.\" (issue #5824 acceptance criteria) and the implicit acceptance that the PR can merge into `main` (CI must be green).\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py` lines 1-1474\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `.claude/hooks/pr_merge_status_guard.py` is 1474 lines and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` is 1501 lines; the LAST RUN DIFF contains no hunk touching either file; CI run 37222035044 reports \"5 failed, 172 passed\" under `tests-hooks-and-orchestrator`, with `lint` aggregating the failure.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py | severity=BLOCKER | confidence=5\n  PROBLEM: The root hook and its workflow-template copy differ by 27 lines; the root hook lacks `_evaluate_mcp_push` and newer parser logic present in the template.\n  WHY: This causes `test_template_copies_are_identical` and four parser tests to fail, blocking the aggregate `lint` job.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/hooks/pr_merge_status_guard.py: lines 1-1474 (lines 249-281, 328-330, 351-360) | severity=BLOCKER | confidence=5\n  PROBLEM: The root hook has diverged from the canonical template and lacks redirect token stripping, `+=` variable assignment handling, and `cd ... || exit` operator handling.\n  WHY: Five parser and template-identity tests fail, causing `tests-hooks-and-orchestrator` and the aggregate `lint` job to fail in CI.\n- scripts/review_untrusted_workspace.py: line 40 | severity=BLOCKER | confidence=5\n  PROBLEM: `.claude/hooks/pr_merge_status_guard.py` is missing from the review editor transfer allowlist.\n  WHY: The editor strips modified files starting with `.` unless explicitly permitted, preventing it from transferring a fix for the CI blocker.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py: line 40 | severity=BLOCKER | confidence=5\n  PROBLEM: The review editor transfer allowlist intentionally omits `.claude/hooks/pr_merge_status_guard.py`.\n  WHY: The editor's changes to the root hook are silently dropped during workspace transfer, leaving the CI failures unresolved.\n- TASK_GAP\n  Requirement: \"A `workflow_dispatch` review of a PR whose head adds a file sees that file in the reviewer workspace.\" (issue #5824 acceptance criteria) and the implicit acceptance that the PR can merge into `main` (CI must be green).\n  Expected change site: `.claude/hooks/pr_merge_status_guard.py` lines 1-1474 must be byte-identical to `workflow-templates/.claude/hooks/pr_merge_status_guard.py` lines 1-1501 so that `tests/test_pr_merge_status_guard.py:998-1004` (`test_template_copies_are_identical`) passes. Equivalently, the allowlist at `scripts/review_untrusted_workspace.py:40` must admit the root hook so a future autofix editor can resolve the divergence through the normal review-edit cycle.\n  Evidence of absence: `wc -l .claude/hooks/pr_merge_status_guard.py` = 1474, `wc -l workflow-templates/.claude/hooks/pr_merge_status_guard.py` = 1501. The LAST RUN DIFF contains no hunk touching either file. CI run 37222035044 reports \"5 failed, 172 passed in 4.50s\" under the `tests-hooks-and-orchestrator` job with `lint` aggregating the failure; the failing test names (`test_template_copies_are_identical` plus four parser tests that depend on the template-only logic present at `workflow-templates/.claude/hooks/pr_merge_status_guard.py:249-272` and `:1353-1440` per z-ai_glm-5_2's pass-1 evidence) are exactly the contract the byte-identical mirror is supposed to enforce. The previous editor's PR-comment claim (id 5982639418) that the root hook was restored to byte equality is contradicted by the on-disk line counts and the live CI failure on the PR head SHA `180f02984b6d1312de42648affc3698ee025c6fe` \u2014 the restore either did not commit or was reverted by the merge cycle.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py, lines 255-272; _push_targets, lines 411-475 | severity=BLOCKER | confidence=5\n  PROBLEM: The root hook treats shell redirections as command arguments; for `git push origin 2>/dev/null`, it interprets `2` as the refspec instead of checking the current branch.\n  WHY: On a merged branch such as `feature/x`, the guard checks branch `2` and can allow the push to `feature/x` unchecked.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/pr_merge_status_guard.py:249-272 vs workflow-templates/.claude/hooks/pr_merge_status_guard.py:249-281 | severity=BLOCKER | confidence=5\n  PROBLEM: The root hook diverged from its canonical template twin and lacks redirect-target stripping logic in `_shell_segments_with_operators`.\n  WHY: The divergence causes the template-identity test and at least four parser tests to fail, blocking the aggregate `lint` job.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "763d6ecc7480576f75d0024544b0300602182ab4c2b4c8995579ffaf91d8500f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6135,
+    "run_id": "37218641532",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37218641532",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004182103_691c70ff1e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6135,
+    "run_id": "37218641532"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T18:21:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

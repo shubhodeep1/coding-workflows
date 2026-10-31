@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:824-847 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The orchestrate-poll (3) job exits non-zero although the reported test output shows 33 passed and 0 failed.\n  WHY: The reviewer suspects the new shell logic in the Resolve AI engine step may fail on unexpected JSON or a missing `jq` dependency, but does not verify the cause.\n- .github/workflows/ci.yml:1416-1442 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The PR head has a failed orchestrate-poll shard, but the supplied log tail does not include the failing shard\u2019s output.\n  WHY: The shard runner exits nonzero when any shard fails, causing the aggregate `lint` check to fail; the failing shard\u2019s cause remains unverified and needs investigation before CI can pass.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stage the required Claude relay in consumer jobs\" (to be available inside the container for Claude runs)\n  expected_change_site: scripts/codex_isolated_exec.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The relay was added to the staging list in .github/workflows/orchestrate.yml, but it is not added to the `required_support` list in scripts/codex_isolated_exec.sh. Without this, the file will not be included inside the isolated container, causing Claude runs to fail when they attempt to use the relay.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_poll.yml:824-847 | confidence=5\n  PROBLEM: The orchestrate-poll (3) job exits with a non-zero exit code (1), causing an aggregate CI failure, even though all tests (33 passed, 0 failed) appear to complete.\n  WHY: The new shell logic in the Resolve AI engine step (using `jq` and `gh` with `set -euo pipefail`) likely encounters an unexpected condition (e.g., empty or malformed JSON from `standalone_claude_issues` or `jq` failure) or the `jq` dependency is missing in the CI environment, triggering a workflow failure.\n- Requirement: \"Stage the required Claude relay in consumer jobs\" (to be available inside the container for Claude runs)\n  Expected change site: scripts/codex_isolated_exec.sh\n  Evidence of absence: The relay was added to the staging list in .github/workflows/orchestrate.yml, but it is not added to the `required_support` list in scripts/codex_isolated_exec.sh. Without this, the file will not be included inside the isolated container, causing Claude runs to fail when they attempt to use the relay.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:1416-1442 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR head has a failed orchestrate-poll shard, but the supplied log tail shows 33 passing tests and does not include the failing shard\u2019s output.\n  WHY: The shard runner records a nonzero result as a failure and exits nonzero when any shard fails, which makes the aggregate `lint` check fail. The failing shard\u2019s cause remains unverified and needs investigation before CI can pass.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "24b979113d34ed09c788715d40e959467fa65bccfca8ec3b8ed30587694fbe1d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6576,
+    "run_id": "37913256279",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37913256279",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009110859_b11ef9a282",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6576,
+    "run_id": "37913256279"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T11:08:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

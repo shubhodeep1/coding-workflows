@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_lib.py:Test suite failure | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI pre-push failure indicates that changes in scripts/orchestrate_lib.py caused regressions in existing orchestration tests, specifically test_unrouted_ignores_pipeline_bookkeeping_comments.\n  WHY: The test logic appears sensitive to the modifications made to _is_unrouted_non_human_body, suggesting the heuristic for distinguishing human replies from Claude Code notes may be over- or under-inclusive. The source severity was BLOCKER, mapped to critical. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) reported no findings and judged the CI failures unrelated to this diff.\n- tests/test_gh_api_write_guard.py:Test suite failure | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI pre-push failure indicates regressions in GH API write guard tests.\n  WHY: The modifications to workflow or script infrastructure are said to have broken existing test assertions about API write guard behavior. The source severity was BLOCKER, mapped to critical. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) judged this unrelated to the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Ensure the unblock judge properly handles docs-only operator steps and Claude Code status notes.\n  expected_change_site: All modified files.\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implementation is present, but the CI test failures caused by this change mean the fix is incomplete or incorrectly integrated, leaving the orchestration pipeline broken.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_lib.py:Test suite failure | severity=BLOCKER | confidence=4\n  PROBLEM: CI pre-push failure indicates that changes in scripts/orchestrate_lib.py caused regressions in existing orchestration tests, specifically test_unrouted_ignores_pipeline_bookkeeping_comments.\n  WHY: The test logic appears sensitive to the modifications made to _is_unrouted_non_human_body, suggesting the heuristic for distinguishing human replies from Claude Code notes may be over- or under-inclusive.\n- tests/test_gh_api_write_guard.py:Test suite failure | severity=BLOCKER | confidence=4\n  PROBLEM: CI pre-push failure indicates regressions in GH API write guard tests.\n  WHY: The modifications to workflow or script infrastructure have broken existing test assertions regarding API write guard behavior, indicating an incompatibility with the newly introduced logic or registry changes.\n- TASK_GAP | severity=BLOCKER | confidence=4\n  Requirement: Ensure the unblock judge properly handles docs-only operator steps and Claude Code status notes.\n  Expected change site: All modified files.\n  Evidence of absence: The implementation is present, but the regression in CI (test failures caused by this change) means the fix is incomplete or incorrectly integrated, leaving the orchestration pipeline broken and failing to meet the requirement for stable operation.\n- HARDENING: scripts/unblock_judge.sh (unblock_hold_resumed_since): Potential failure if item_comments.json is missing or inaccessible. Suggested fix: add `[ -f \"${RUNTIME_DIR}/item_comments.json\" ] || return 1` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "2eb2bcfc7bbb085c796568b8fa0bd1f226b2cb299d60316c892c946a2d2ee7de",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8315,
+    "run_id": "40830411411",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40830411411",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029083916_983b943456",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8315,
+    "run_id": "40830411411"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T08:39:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

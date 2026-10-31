@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The cited file is not present on `main`. Where should this fix go?\nChoices:\nA) Fix the intake's current log path in `scripts/workflow_failure_heal.py`. Strip `env:` values inside `##[group]Run` headers, run `redact_secrets` on the `filter_log` output, and add regression tests in `tests/test_workflow_failure_heal.py` for a `Basic` header and an env value. (RECOMMENDED)\nB) Option A, and also apply the same redaction and env stripping to `scripts/analyze_soft_errors.py` `fetch_run_logs`. That function reads release-gate logs for the soft-error analyser, which sends a summary to Telegram.\nC) Make no code change. Close the finding as not applicable to `main`: the cited file is absent and `redact_secrets` already covers `Basic`.\nD) Wait until #6457 lands `scripts/workflow_failure_heal_evidence.py`, then patch only that file.\n**Note:** Choosing D makes Q2 apply to the new file rather than `filter_log`.\nQ2: The recommendation says to \"fail closed when sensitive log fields cannot be safely reduced\". What should happen when a step header's `env:` block can't be reliably bounded, for example a `##[group]Run` with no closing `##[endgroup]` because the log was truncated?\nChoices:\nA) Drop everything from that unclosed header to the end of that job's log slice. Add a one-line `[env block omitted: unterminated step header]` marker. (RECOMMENDED)\nB) Drop that whole job log from the evidence and the prompt. Note the omission so the diagnosis still runs on the other jobs' logs.\nC) Keep the lines and rely on pattern redaction alone.\n**Note:** C does not satisfy the finding's fail-closed requirement.\nMissing context: this checkout has no trace of #6463 or #6457, and I can't confirm whether #6457 has merged. The dependency hold should stop this issue from running until #6457 is closed with `ai:merged`.",
+  "fingerprint": "66bf5ed5c9cfbcfdb0cc3cd9db5280b9dd52d9e5d5340294e2123abeb1469964",
+  "lineage": {
+    "issue_number": 6640,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618027316",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618027316",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007120619_46a1d1686f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6640,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618027316"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6640 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T12:06:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

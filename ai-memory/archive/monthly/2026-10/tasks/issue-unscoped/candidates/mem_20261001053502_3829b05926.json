@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:320 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The `find -type f` enumerations skip symlinked reviewed guards without a regular-file twin, so a consumer missing such a guard never receives it.\n  WHY: This conflicts with the documented behavior for reviewed guards without twins; severity was rated MAJOR by minimax_minimax-m3 and openai_gpt-6-luna, and NIT by qwen_qwen3_7-plus, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/update_workflows.yml | severity=MAJOR | confidence=3\n  PROBLEM: The `find -type f` enumerations skip symlinked reviewed guards without a regular-file twin, so a consumer missing such a guard never receives it.\n  WHY: The documented behavior says a guard in `.claude/` with no twin is installed when the consumer lacks it, but the reviewed-guard enumeration does not visit symlinks.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/update_workflows.yml: Line 320 | severity=MAJOR | confidence=4\n  PROBLEM: The reviewed-tree pass excludes symlinks, so a symlinked guard without a regular-file twin is not processed.\n  WHY: A consumer missing that guard never receives the reviewed copy, despite the documented behavior for reviewed guards without a regular-file twin.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/update_workflows.yml | second-pass enumeration `done < <(LC_ALL=C find \"${CLAUDE_REVIEWED_DIR}\" -type f | LC_ALL=C sort)` (around line 320 of the modified file) | severity=NIT | confidence=2\n  PROBLEM: The `find -type f` enumerations skip a symlinked reviewed guard without a regular-file twin.\n  WHY: A consumer missing that guard would not receive it, contrary to the documented installation rule; no warning is emitted, though no guard file in `.claude/` is currently a symlink.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7dbd897a77a23fef45477d108930f0b0d9be4ae89a154711c5f4e88380953673",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5654,
+    "run_id": "36817539918",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36817539918",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001053502_3829b05926",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5654,
+    "run_id": "36817539918"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T05:35:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

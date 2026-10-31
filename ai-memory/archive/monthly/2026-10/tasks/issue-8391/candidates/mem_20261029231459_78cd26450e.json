@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: #8376's port of `IMPL_RUN_ID_WORKING` and the gate-step limit is not on `stable` in this tree. How should the plan proceed?\nChoices:\nA) Wait for the port. Answer with A only after #8376's port PR has merged into `stable`. The plan will then add only D1 on top of that tree and include the full replay test from your direction: the working run is watched, and a 30\u201335 minute `Pre-push affected-test gate` step does not trip. (RECOMMENDED)\nB) Proceed now with D1 alone against the current `stable`, and narrow the replay test to D1's own guarantee. That guarantee is that `approved_at` equals the plan's auto-approval time and the working run is inside Phase 3b's window. The checks that Phase 3b watches the working run and that a 30\u201335 minute gate step does not stall are left to #8376.\n**Note:** B does not meet acceptance item 3 as written. The heal counterfactual stays UNVERIFIED, so auto-approval will be held again.\nC) Proceed now and also copy the minimal `IMPL_RUN_ID_WORKING` selection and the 35-minute gate-step limit into this PR, so the full replay test passes on the current `stable`.\n**Note:** C contradicts your direction to drop D2 and build on #8376. It will conflict with #8376 on the same Phase 3b lines.",
+  "fingerprint": "cc888a92be6c9933df2b532ba9acaec0e6d369c97b14d7b56483f951e35c2b69",
+  "lineage": {
+    "issue_number": 8391,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40971333697",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40971333697",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029231459_78cd26450e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8391,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40971333697"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8391 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T23:14:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

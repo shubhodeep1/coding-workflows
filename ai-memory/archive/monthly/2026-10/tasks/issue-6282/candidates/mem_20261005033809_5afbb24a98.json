@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6282,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6282\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6292\",\"pr_number\":6292,\"branch\":\"ai/issue-6282\",\"run_id\":\"37258099995\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37258099995\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/claude-engine-smoke.yml\",\".github/workflows/implement.yml\",\".github/workflows/orchestrate_poll.yml\",\"README.md\",\"agents.md\",\"changelog.d/6282-read-profile-claude-isolation.md\",\"scripts/ai_engine.sh\",\"scripts/claude_engine.py\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/test_ai_engine.py\",\"tests/test_auto_decisions.py\",\"tests/test_claude_engine.py\",\"tests/test_claude_read_isolation_wiring_contract.py\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_orchestrator_judges_claude_engine.py\"]}",
+  "fingerprint": "c6cc7231748c220eb52c4de527dd83e4de153e3f25d72394b274ecf6229de44c",
+  "lineage": {
+    "issue_number": 6282,
+    "parent_ids": [],
+    "pr_number": 6292,
+    "run_id": "37258099995",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37258099995",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6292"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005033809_5afbb24a98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6282,
+    "level": "run",
+    "pr_number": 6292,
+    "run_id": "37258099995"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6282: https://github.com/shubhodeep1/coding-workflows/pull/6292",
+  "timestamps": {
+    "created_at": "2026-10-05T03:38:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:5161-5207 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `/approved` posting shell loop may not re-arm correctly when labels are temporarily empty or unreadable, so `ALT_APPROVED_POSTED` could desynchronize from the actual label state.\n  WHY: If the `gh api` label read fails, `LABELS` is empty and the flag is not reset, so the loop could spam `/approved` or stop posting. The reviewer rated this NIT, which is mapped to low.\n- .github/workflows/test-and-mark-stable.yml:5184-5198 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: After a failed `/approved` post, the `else` block only echoes a warning and does not ensure consistent retry behaviour across later polls.\n  WHY: A transient, rapid API failure could cause retries more often than intended. The reviewer rated this NIT, which is mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:5161-5207 | severity=low (source: NIT) | confidence=2\n  PROBLEM: The `/approved` posting shell loop may not re-arm correctly when labels are temporarily empty or unreadable, so `ALT_APPROVED_POSTED` could desynchronize from the actual label state.\n  WHY: If the `gh api` label read fails, `LABELS` is empty and the flag is not reset, so the loop could spam `/approved` or stop posting.\n- .github/workflows/test-and-mark-stable.yml:5184-5198 | severity=low (source: NIT) | confidence=2\n  PROBLEM: After a failed `/approved` post, the `else` block only echoes a warning and does not ensure consistent retry behaviour across later polls.\n  WHY: A transient, rapid API failure could cause retries more often than intended.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0553977344a4f6fe009d741a035d8c5beca6f6b687377f007fa18c093775c4dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8359,
+    "run_id": "40926686051",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40926686051",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029182601_4a37736e4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8359,
+    "run_id": "40926686051"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T18:26:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

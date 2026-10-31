@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:orchestrate-poll (3) CI job | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The orchestrate-poll (3) CI job is failing with exit code 1.\n  WHY: The CI failure prevents the implementation from being verified before landing the fix on main.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Land a verified fix on main, then rerun PR #6538 review; do not merge past failing required checks.\"\n  expected_change_site: Main-branch landing and subsequent review run for PR #6538\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The supplied check-run context reports `orchestrate-poll (3)` failure and `tests-hooks-and-orchestrator` cancellation; OpenAI also reports `lint` failed and says there is no evidence the fix landed on main or PR #6538\u2019s review was rerun. DeepSeek and Qwen say landing and rerunning are post-merge operational steps, report the failing jobs are unrelated to changed files, and note `tests-promote-stall-and-review` passed; Gemini says verification is blocked until CI regressions are resolved.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\nRequirement: \"Land a verified fix on main, then rerun PR #6538 review; do not merge past failing required checks.\"\nExpected change site: N/A (operational step, not a code-level deliverable)\nEvidence of absence: The PR contains the code fix (resolver paired-live-hook support, path-rejection diagnostics, and corresponding tests). Landing on main and re-running PR #6538's review are CI/CD operations the pipeline executes automatically after merge. The CI failures on this PR (orchestrate-poll shard 3 reports failure despite all 33 tests passing; tests-hooks-and-orchestrator cancelled as cascade) are in test modules unrelated to the changed files. The tests-promote-stall-and-review job (which runs the test files this PR touches) passed.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:orchestrate-poll (3) CI job | confidence=5\n  PROBLEM: The orchestrate-poll (3) CI job is failing with exit code 1.\n  WHY: The CI failure prevents the implementation from being verified, which is a required step before landing the fix on main as requested in the issue specification. The failure is likely caused by the changes introduced in the recent autofix run.\n\nRequirement: \"Land a verified fix on main, then rerun PR #6538 review; do not merge past failing required checks.\"\nExpected change site: CI pipeline infrastructure and the review process for PR #6538.\nEvidence of absence: The current PR is not verified because the `orchestrate-poll (3)` and `tests-hooks-and-orchestrator` CI jobs are failing (as reported in the latest check-run context). The task intent to land a verified fix on main is blocked until these CI regressions are resolved.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cLand a verified fix on main, then rerun PR #6538 review; do not merge past failing required checks.\u201d\nExpected change site: Main-branch landing and the subsequent review run for PR #6538.\nEvidence of absence: The PR diff contains implementation and regression tests, but no evidence that the fix landed on main or that PR #6538\u2019s review was rerun. The supplied check-run context reports failures: `lint` failed, `tests-hooks-and-orchestrator` was cancelled, and `orchestrate-poll (3)` failed. The fix is not verified on main; it must not be merged while required checks are failing.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_sandbox_claude_roles.py: test_prepare_manifest_preprocessing_leaves_only_paired_hooks, line containing `RESOLVER_ALLOWLIST_FILE=\"$/tmp/codex-pr-37908871354-1-12989/resolver_unmerged_allowlist.txt\"` | severity=NIT | confidence=4\n  PROBLEM: The test hardcodes a leaked review-sandbox path (`/tmp/codex-pr-37908871354-1-12989/`) as the initial value of `RESOLVER_ALLOWLIST_FILE`.\n  WHY: The `$` before `/tmp` is not a valid bash parameter expansion, so bash treats it as a literal `$` character in the path. The prepare block from `review_conflict_prepare.sh` overrides this variable internally (writing to `${RUNTIME_DIR}/resolver_unmerged_allowlist.txt`), so the initial assignment is dead code. The test passes only because the prepare block discards the bogus value. The leaked path is confusing, ties the test to a specific review-environment directory name, and would become a real defect if the prepare block ever stopped overriding `RESOLVER_ALLOWLIST_FILE` (for example if a future refactor removed that internal assignment). The assertion on `(runtime / \"resolver_unmerged_allowlist.txt\").read_text()` already validates the correct path.\n\nRequirement: \"Land a verified fix on main, then rerun PR #6538 review; do not merge past failing required checks.\"\nExpected change site: Post-merge operational step (landing on main and rerunning PR #6538 review).\nEvidence of absence: This is an operational step that occurs after the PR merges, not a code deliverable within the PR itself. The PR contains the fix (paired live-copy resolution, rejection diagnostics, and tests). The editor summary explicitly notes \"Landing on main and rerunning #6538 happen outside this editor run.\" The issue's instruction to \"not merge past failing required checks\" is a merge-gate constraint, not a code change. The current CI failures (`orchestrate-poll (3)` and cancelled `tests-hooks-and-orchestrator`) are in test modules unrelated to this PR's changes; `tests-promote-stall-and-review`, which runs the modified test files, succeeded.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "81e016688ee977e30b14d1ae3ac4e683c5a724f1f9389cfdf731efa3570a638e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6597,
+    "run_id": "37908871354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37908871354",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009101719_1cb39d8741",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6597,
+    "run_id": "37908871354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T10:17:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

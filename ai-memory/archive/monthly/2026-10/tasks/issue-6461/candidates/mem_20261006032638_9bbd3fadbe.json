@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6461,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6461\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6473\",\"pr_number\":6473,\"branch\":\"ai/issue-6461\",\"run_id\":\"37407274325\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37407274325\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"README.md\",\"agents.md\",\"changelog.d/6461-consolidator-opencode-sandbox.md\",\"scripts/review_consolidate.sh\",\"scripts/review_untrusted_sandbox.sh\",\"tests/test_review_autofix_claude_fixer_mode.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_judge_interim_round_trip.py\",\"tests/test_review_pipeline_integration.py\",\"tests/test_review_rereview_and_approval_rubric.py\",\"tests/test_review_surface_prompt_hardening.py\"]}",
+  "fingerprint": "147eca4bee15ed3d62c0baeefa55a621e355c2dd8fba90a5b8b2c221d69be0f4",
+  "lineage": {
+    "issue_number": 6461,
+    "parent_ids": [],
+    "pr_number": 6473,
+    "run_id": "37407274325",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37407274325",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6473"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006032638_9bbd3fadbe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6461,
+    "level": "run",
+    "pr_number": 6473,
+    "run_id": "37407274325"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6461: https://github.com/shubhodeep1/coding-workflows/pull/6473",
+  "timestamps": {
+    "created_at": "2026-10-06T03:26:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

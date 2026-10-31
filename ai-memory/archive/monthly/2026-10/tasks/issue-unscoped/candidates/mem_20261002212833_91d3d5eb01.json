@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/permission_prompts.py:163 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: `_ISSUE_EXAMPLE_HEADING` is defined but never referenced; the heading text is duplicated in regexes and generated output.\n  WHY: There is no runtime failure, but updating only the unused constant would leave the parsing patterns and generated heading unchanged, creating a maintenance trap.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: workflow-templates/.claude/scripts/permission_prompts.py (and twin `.claude/scripts/permission_prompts.py`)\n  Line or code reference: line 163 in the PR diff additions \u2014 `_ISSUE_EXAMPLE_HEADING = \"**Latest example**\"`\n  Problem: The constant `_ISSUE_EXAMPLE_HEADING` is defined but never referenced anywhere in the file or the test suite. Every site that uses the heading text (`_ISSUE_EXAMPLE_RE`, `_ISSUE_EXAMPLE_START_RE`, `_occurrence_block`) inlines the literal string `\"**Latest example**\"` instead.\n  Why it fails at runtime: It does not fail at runtime. This is dead code \u2014 a future change to the heading text that updates only the constant would silently leave the regex patterns and the generated heading out of date, creating a maintenance trap.\n  SEVERITY: NIT\n  ISSUE_CNFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: workflow-templates/.claude/scripts/permission_prompts.py\n  Line or code reference: line 163, `_ISSUE_EXAMPLE_HEADING = \"**Latest example**\"`\n  Problem: The constant `_ISSUE_EXAMPLE_HEADING` is defined but never referenced. The heading text is duplicated as escaped regex literals in `_ISSUE_EXAMPLE_RE` and `_ISSUE_EXAMPLE_START_RE`, and as a plain string in `_occurrence_block`. A future heading change updated in only one location would silently desynchronize the constant from the patterns that actually govern parsing.\n  Why it fails at runtime: No runtime failure \u2014 the constant is dead code. The risk is a maintenance trap: a contributor could update the constant believing it feeds the regexes, leaving the actual match patterns unchanged.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "63a7e1ee239c3e58e957fe8b5686b846c1e19446a9fc4cd30e1cd07429c0c992",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5697,
+    "run_id": "37064271457",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37064271457",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002212833_91d3d5eb01",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5697,
+    "run_id": "37064271457"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T21:28:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

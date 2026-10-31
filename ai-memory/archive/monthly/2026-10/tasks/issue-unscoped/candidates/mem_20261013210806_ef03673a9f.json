@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:18547-18555 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The unblock-scan label filter and helper-input transformation assume labels are strings, so tracking issues with object-shaped labels may pass through the filter and be handled incorrectly.\n  WHY: The reviewers disagree on the label shape in `search.json`; severity also differs (BLOCKER vs MAJOR), so the highest severity is used.\n- scripts/orchestrate_poll_process.sh: the new echo \"UNBLOCK_SCAN candidates=${count} outcome=skip reason=pr_dependency_filter_failed\" line added by the LAST RUN DIFF inside the `run_unblock_scan` pre-selection block (the line directly above `return 0` in the new filter-write-failure branch) | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The filter-write-failure branch references `${count}` without defining it.\n  WHY: Under `set -u`, this error-reporting branch can itself fail with `count: unbound variable` and abort the tick instead of safely skipping it.\n- scripts/orchestrate_poll_process.sh:18523-18530 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The comment explaining the helper call omits its data-fetching constraints.\n  WHY: It does not explain that the GraphQL batch cannot provide a declared prerequisite PR's merge state and that the `contents` read is deferred until the PR has merged.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:18547 | severity=critical | confidence=5\n  PROBLEM: The label filter compares label objects to a string literal.\n  WHY: The reviewer says the orchestrator constructs label objects, making the comparison always false and allowing tracking issues into the unblock scan.\n- scripts/orchestrate_poll_process.sh:18523-18530 | severity=high | confidence=4\n  PROBLEM: The comment explaining the new helper call does not detail its data-fetching constraints.\n  WHY: The comment omits that the GraphQL batch cannot provide a declared prerequisite PR's merge state and that the `contents` read is deferred until the PR has merged.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: the new echo \"UNBLOCK_SCAN candidates=${count} outcome=skip reason=pr_dependency_filter_failed\" line added by the LAST RUN DIFF inside the `run_unblock_scan` pre-selection block (the line directly above `return 0` in the new filter-write-failure branch) | severity=high | confidence=5\n  PROBLEM: `${count}` is referenced but never defined in the new filter-write-failure branch.\n  WHY: Under `set -euo pipefail`, that branch can fail with `count: unbound variable` instead of skipping the tick.\n- scripts/orchestrate_poll_process.sh: the `select(any((.labels // [])[]?; . == \"ai:orchestrator-tracking\") | not)` clause in the new pre-selection jq query (added by the LAST RUN DIFF inside `run_unblock_scan`)\n  PROBLEM: The label comparison assumes `search.json` labels are plain strings, and the helper-input transformation `map({name: .})` has the same assumption.\n  WHY: If the search results contain label objects, the filter may not match tracking labels and the transformation may not round-trip correctly; the reviewer suggests `(.name // .)` to handle either shape.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:18555 | severity=high | confidence=5\n  PROBLEM: The jq pre-filter compares label objects to a string literal.\n  WHY: The reviewer says the GitHub search API returns label objects, so tracking issues can pass through the filter and be incorrectly held or released; the test fixture uses string labels and does not cover the API shape.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7244a1aafaf137382c268887a796600d18164e2345feae6d4f4d31241608b81e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7249,
+    "run_id": "38460362353",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38460362353",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013210806_ef03673a9f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7249,
+    "run_id": "38460362353"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T21:08:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

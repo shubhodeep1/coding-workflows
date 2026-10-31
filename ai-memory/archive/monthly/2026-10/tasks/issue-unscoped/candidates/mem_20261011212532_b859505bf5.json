@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1893-1928 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Three existing shard-log greps lack `-a`, so NUL bytes can make GNU grep emit a binary-file message instead of failing-test names in the older shard annotations.\n  WHY: The affected diagnostics can be incomplete or misleading for logs containing NUL bytes, although the new lookup still names the test and shard failure gating is unchanged.\n- tests/test_ci_poll_test_sharding.py:675-919 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The original `ShardFailureSummaryTest` name was reused for unrelated tests after the #6946 class was renamed, so existing pytest filters or node IDs can select the wrong tests.\n  WHY: No current in-file reference breaks, but the rename creates a latent test-selection risk and a cross-class dependency.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml: lines 1893-1894 and line 1922 | severity=low | confidence=4\n  PROBLEM: These two greps still lack `-a`; if a shard log contains a NUL byte, GNU grep prints \"Binary file ... matches\" instead of the test names, so the older `failed tests:` annotation shows no failing test.\n  WHY: Only the older annotation is affected; the new per-test lines name the test with `-a`, and failure counting uses `shard_rc`, so gating is unchanged.\n- tests/test_ci_poll_test_sharding.py: `class ShardFailureSummaryTest` (new, around line 675) and `class CiFailedShardLogSummaryTest` (renamed from `ShardFailureSummaryTest`, around line 839) | severity=low | confidence=2\n  PROBLEM: The existing #6946 test class was renamed, and its old name now belongs to the new #6888 tests.\n  WHY: Nothing breaks inside this file, but a `-k` filter or node id written for the old name would now select the #6888 tests.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml: Line: 1895 and 1922 (approximate; lookups for shard_failed_names and failed_test_names) | severity=low | confidence=4\n  PROBLEM: These existing grep lookups still lack the -a flag used in the newly added lookups.\n  WHY: If a shard log contains a NUL byte, GNU grep without -a treats the file as binary and emits \"Binary file ... matches\" instead of the failing test names, leading to incomplete or misleading failure diagnostic annotations.\n- tests/test_ci_poll_test_sharding.py: Line: Class renaming and reuse of ShardFailureSummaryTest | severity=low | confidence=2\n  PROBLEM: The test class was renamed to CiFailedShardLogSummaryTest, and the original name ShardFailureSummaryTest was reused for an unrelated class.\n  WHY: Tools or filters relying on the class name might now select the wrong subset of tests.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py: line 675 (new `class ShardFailureSummaryTest` for #6888) and line 839 (renamed `class CiFailedShardLogSummaryTest`, formerly `ShardFailureSummaryTest`, for #6946); the cross-class reference `ShardFailureSummaryTest.FAILING` at line 919 sits inside the renamed #6946 class | severity=low | confidence=3\n  PROBLEM: The original `ShardFailureSummaryTest` class for #6946 was renamed to `CiFailedShardLogSummaryTest`, and the freed-up name `ShardFailureSummaryTest` was reused for the unrelated #6888 class.\n  WHY: Any pytest node id, `-k` filter, or external note that referenced `ShardFailureSummaryTest` for #6946 will silently select the #6888 tests instead, and the cross-class reference at line 919 is fragile if either class is moved or renamed again.\n- .github/workflows/ci.yml: line 1893, line 1922, and line 1928 | severity=low | confidence=2\n  PROBLEM: The three sibling greps in the `ci.yml` judgment loop still lack `-a` and read the same shard log file as the new lookups.\n  WHY: A NUL byte can make these greps emit a binary-file line instead of failing-test names; CI gating is unaffected because `shard_rc` drives the exit.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml: 1893-1894 and 1922-1928 | severity=low | confidence=4\n  PROBLEM: These existing shard-log greps lack `-a`; with a NUL byte in a failed shard log, GNU grep reports `Binary file ... matches` instead of the `FAIL` lines.\n  WHY: The older shard summary and annotation can then report the binary-file message as test output, even though the new `-a` lookup correctly identifies the failing test.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml: lines 1893-1894, and the #6946 summary greps at lines 1922 and 1928 | severity=low | confidence=4\n  PROBLEM: The sibling greps reading the same shard log still lack `-a`, so with a NUL byte GNU grep prints a binary-file line instead of matched lines.\n  WHY: The older #6889/#6946 annotations can name no test, although the new `::error::orchestrate-poll failing test:` annotation still names it; this is a degraded sibling diagnostic, not a defeated deliverable.\n\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "81c52da52b56b61c91a72dfdc73ef439596038e239a2f61b514a34c911ea1f20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6898,
+    "run_id": "38174702286",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38174702286",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011212532_b859505bf5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6898,
+    "run_id": "38174702286"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T21:25:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

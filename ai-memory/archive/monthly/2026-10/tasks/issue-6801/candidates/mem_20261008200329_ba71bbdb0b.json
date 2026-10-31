@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: `scripts/resolve_integration_ref.sh` (line 15) only gets the branch from a standalone `Integration branch:` line in the issue body. Here the branch only appears in the middle of the Specification sentence, so it isn't picked up. An `/answer` comment can't add it either, which means A needs a person to edit the issue. That is a human-provision step, and the data-provision and placeholder rules say to pass over it when an automated path exists. C breaks the issue's own \"do not proceed on `main`\" rule. The target test `test_security_audit_engine_ignores_ci_event_labels` isn't in this checkout at all (grep of `tests/` finds nothing), so a run on `main` would do nothing or fail. GITHUB FACTS show PR #6786 is open, its head `ai/issue-6782` exists at 64251aea3161, and the failing test lives on that head. PR #6786's own review/autofix loop already writes to that branch, and it feeds failed CI check-runs to the editor at top fix priority (`CHECK_RUNS_AUTOFIX_ENABLED`, default `true`). So the fix gets there with no human and no stacked PR.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - scripts/resolve_integration_ref.sh (body-only branch resolution; this issue's body has no matching standalone line)\n    - PR #6786 (open, head `ai/issue-6782` @ 64251aea3161, base `main`)\n    - tests/test_security_audit_workflow_contract.py on `ai/issue-6782` (the failing test exists only on that branch)\n  steps:\n    - Do not implement anything in this issue's checkout of `main`. The plan for this issue lists no files to change and no branch or PR to create.\n    - Send the fix to PR #6786 on head `ai/issue-6782`. Its review/autofix editor makes `test_security_audit_engine_ignores_ci_event_labels` callable without pytest fixtures: a `tempfile.TemporaryDirectory()` plus a scoped patch of `GITHUB_EVENT_PATH`. The direct-run harness and the CI command stay as they are. Verify with `python3 tests/test_security_audit_workflow_contract.py`, and CI must pass before #6786 merges.\n    - The failed CI check-run on #6786's current head is already collected into the editor's context. The next review run on that PR (sweep, poller stall recovery, or a dispatch) applies the fix there.\n    - Close this issue as superseded by PR #6786, with a comment saying the fix lands on `ai/issue-6782` through #6786's review loop. It links #6786 and triage issue #6789 and uses no auto-close keywords.\n  replaces_acceptance_criterion: \"verify ... the resolved checkout and PR base are both `ai/issue-6782`\" (a separate stacked PR from this issue)\n  equivalence_argument: The same test change lands on the same branch (`ai/issue-6782`) and is gated by the same CI before #6786 merges. Only the delivery vehicle changes: #6786's own editor instead of a stacked PR. The rule against working on `main` still holds.\n  reversibility: If a maintainer would rather have the stacked-PR route, they add a standalone `- Integration branch: \\`ai/issue-6782\\`` line to this issue's body (or to a reissue) and post `/reclarify`. Nothing has been committed to `main`, so nothing needs undoing.",
+  "fingerprint": "ce0caaa4fae2492557553107a0e6ee824d3aa56b599c58af2e6a210e986dee6e",
+  "lineage": {
+    "issue_number": 6801,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37835763268",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37835763268",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6801"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008200329_ba71bbdb0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6801,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37835763268"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6801",
+  "timestamps": {
+    "created_at": "2026-10-08T20:03:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

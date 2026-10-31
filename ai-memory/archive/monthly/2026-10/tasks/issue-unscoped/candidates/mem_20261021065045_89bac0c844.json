@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Each loop now names the engine that is actually running.\"\n  expected_change_site: .github/workflows/orchestrate.yml line 924 (embedded Python JSON-extraction error diagnostic)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: Line 924 still prints `ERROR: Could not extract valid JSON from Codex output`, so invalid Claude JSON is reported as Codex output, while surrounding messages were updated to `${orchestrate_engine_name}` (severity NIT; cosmetic, stderr-only)\n- requirement: When Claude falls back to Codex mid-attempt (HEAL_ROUTE), the remaining lines for that attempt and later attempts say \"Codex.\"\n  expected_change_site: .github/workflows/implement.yml (HEAL_ROUTE branch) and scripts/heal_isolated_implement.sh\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/implement.yml:3550-3552 runs heal_isolated_implement.sh, which switches to Codex at scripts/heal_isolated_implement.sh:78-82 but does not write the `claude-implement.unavailable` marker read by implement_engine_display_name() at .github/workflows/implement.yml:3390-3394, so the attempt is still labeled Claude (severity NIT; acknowledged as \"Known gap\" in the PR description)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP\nRequirement: \"Each loop now names the engine that is actually running.\"\nExpected change site: `.github/workflows/orchestrate.yml`, the embedded Python diagnostic at line 924.\nEvidence of absence: Line 924 still prints `ERROR: Could not extract valid JSON from Codex output`; the surrounding warning on line 978 was updated to `${orchestrate_engine_name}`. Cosmetic and stderr-only.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\nTASK_GAP\nRequirement: When Claude falls back to Codex mid-attempt, the remaining lines for that attempt say \"Codex.\"\nExpected change site: the heal route of `implement.yml` and `scripts/heal_isolated_implement.sh`.\nEvidence of absence: The heal route does not write the `claude-implement.unavailable` marker that `implement_engine_display_name()` reads. Listed in the PR description's \"Known gap\" section.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP\nRequirement: When Claude falls back to Codex mid-attempt on the HEAL_ROUTE, the remaining lines for that attempt and later attempts should say \"Codex.\"\nExpected change site: .github/workflows/implement.yml (the HEAL_ROUTE branch) and scripts/heal_isolated_implement.sh.\nEvidence of absence: The HEAL_ROUTE invokes scripts/heal_isolated_implement.sh instead of scripts/codex_thread_reuse.sh (which writes the claude-implement.unavailable marker); the heal script switches heal_engine to codex but does not write the marker, so the workflow keeps labeling the attempt \"Claude\".\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\nRequirement: \"Each loop now names the engine that is actually running.\"\nExpected change site: `.github/workflows/orchestrate.yml`, the embedded Python JSON-extraction error diagnostic.\nEvidence of absence: At line 924, the diagnostic still says `Could not extract valid JSON from Codex output`.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\nTASK_GAP\nRequirement: When Claude falls back to Codex mid-attempt, the remaining lines for that attempt and later attempts say \"Codex.\"\nExpected change site: `.github/workflows/implement.yml` HEAL_ROUTE and `scripts/heal_isolated_implement.sh`.\nEvidence of absence: `.github/workflows/implement.yml:3550-3552` runs `heal_isolated_implement.sh`, which switches to Codex at `scripts/heal_isolated_implement.sh:78-82` without writing the `claude-implement.unavailable` marker checked at `.github/workflows/implement.yml:3390-3394`.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP\nRequirement: \"Each loop now names the engine that is actually running.\"\nExpected change site: `.github/workflows/orchestrate.yml` line 924, the embedded Python JSON-extraction error diagnostic\nEvidence of absence: Line 924 still prints `ERROR: Could not extract valid JSON from Codex output` when Claude's response is invalid JSON; surrounding messages (lines 975-981 in the diff) use `orchestrate_engine_name`.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n(Note: heal-route fallback naming gap is acknowledged in the PR description under \"Known gap\" and effectively deferred.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cb828d6ceeec1ccc2196100381a3a1a5f32cc3cb575652c3563ba0d27dd30dd6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7776,
+    "run_id": "39552700015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39552700015",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021065045_89bac0c844",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7776,
+    "run_id": "39552700015"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T06:50:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

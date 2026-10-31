@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the fix land?\nChoices:\nA) On PR #7249's head branch `ai/issue-7228`. Add a `Target branch: ai/issue-7228` line to this issue so plan and implement check out that branch, and fix all three failures there. (RECOMMENDED)\nB) Close this issue as not planned and leave the fix to PR #7249's own review/autofix loop, which owns failures specific to that PR.\nC) On the default branch. **Note:** this can't work, because `scripts/pr_dependency.py`, its tests and the related `agents.md` text are not on the default branch.\nQ2: How should `test_standalone_pr_dependency_fails_closed_without_identity_or_trust` be fixed? The poller's identity guard stays fail-closed in every option.\nChoices:\nA) Read the full shard traceback first. If the test fails because a tracking issue in the fixture makes the poller stop at the tracking-state identity check, change the fixture to a run with no tracking issue (or with only standalone recovery) so the test reaches the issue-specific path it means to cover. (RECOMMENDED)\nB) Keep the fixture and change the assertion to expect the earlier fail-closed message from the tracking-state guard.\nC) Do both: keep the current case with the earlier-guard assertion, and add a second case without a tracking issue for the issue-specific diagnostic.",
+  "fingerprint": "17449b83f4f9455bb53fef5b54ee4b7edcac68e78611611ea68505c8138520e6",
+  "lineage": {
+    "issue_number": 7324,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38454247642",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38454247642",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013192753_d0d05114ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7324,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38454247642"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7324 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T19:27:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

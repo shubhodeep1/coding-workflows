@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7715,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7715\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7722\",\"pr_number\":7722,\"branch\":\"ai/issue-7715\",\"run_id\":\"39358483145\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39358483145\",\"changed_files\":[\"changelog.d/wfopt-0922-codex-usage-anchored.md\",\"scripts/collect_workflow_logs.py\",\"scripts/cost_audit.py\",\"tests/test_collect_workflow_logs.py\",\"tests/test_cost_audit_semble_metrics.py\"]}",
+  "fingerprint": "c69b9694fe6678f90c120b798707c72050b1469601707b262fa3b886e9a8edb1",
+  "lineage": {
+    "issue_number": 7715,
+    "parent_ids": [],
+    "pr_number": 7722,
+    "run_id": "39358483145",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39358483145",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7722"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261020024431_9f1a4579c7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7715,
+    "level": "run",
+    "pr_number": 7722,
+    "run_id": "39358483145"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7715: https://github.com/shubhodeep1/coding-workflows/pull/7722",
+  "timestamps": {
+    "created_at": "2026-10-20T02:44:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

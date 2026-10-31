@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15957-15964 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: In `validation_harness_judge_hold_request`, a judge hold request that reaches a resume cap only logs `outcome=capped` and returns 0, with no CRITICAL alert and no park. This contradicts the README \"Harness hold\" Alerts bullet (\"CRITICAL when a cap is reached\").\n  WHY: Operators expect a page that never arrives, and the failed project stays eligible for the unblock scan because it is not added to `VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE`. Severity disagreement: reviewers rated this MAJOR (gemini, luna) and NIT (sonnet, minimax, qwen, glm). Highest severity used. MAJOR is mapped to high and NIT to low.\n- scripts/orchestrate_poll_process.sh:validation_harness_judge_hold_request (jq failure / state file handling) | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If the jq request lookup fails or the state file or tracking comment write fails, the function logs a warning and returns 0, and it does not explicitly handle a corrupted or inaccessible state file.\n  WHY: The project may be left unclear on whether the request was consumed. Severity is MAJOR in the source.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Log `VALIDATION_HARNESS_HOLD ... outcome=capped ...` (if P2a did not already log it).\"\n  expected_change_site: scripts/orchestrate_poll_process.sh, validation_harness_judge_hold_request\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/orchestrate_poll_process.sh `validation_harness_judge_hold_request` capping logic path, which the reviewer says does not log the required line. The reviewer's own text also says the function emits the `outcome=capped` log at the end.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:`validation_harness_judge_hold_request` `capped)` branch; README.md \"Harness hold\" Alerts bullet | severity=NIT | confidence=2\n  PROBLEM: README says \"CRITICAL when a cap is reached\", but a capped judge hold request only logs `outcome=capped`, sends no alert and posts no park comment. The request id is consumed.\n  WHY: An operator expects a CRITICAL page that never comes, so the README overstates the alerting.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:validation_harness_judge_hold_request | severity=MAJOR | confidence=4\n  PROBLEM: The capping logic logs `outcome=capped` and returns 0 but sends no CRITICAL alert, although the plan and README say it should.\n  WHY: The operator gets no notification when the resume caps are hit, so the failure is silent.\n- scripts/orchestrate_poll_process.sh:validation_harness_judge_hold_request | severity=MAJOR | confidence=3\n  PROBLEM: If jq fails, the function warns and returns 0. It does not explicitly handle a corrupted or inaccessible state file.\n  WHY: If the state file update or comment write fails, it rolls back but the project may be left unclear on whether the request was consumed.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"Log `VALIDATION_HARNESS_HOLD ... outcome=capped ...` (if P2a did not already log it).\"\n  Expected change site: scripts/orchestrate_poll_process.sh, validation_harness_judge_hold_request\n  Evidence of absence: The capping logic path does not log `VALIDATION_HARNESS_HOLD` with `outcome=capped`. It only emits the echo at the end.\n- HARDENING: scripts/orchestrate_poll_process.sh validation_harness_hold_tick time-limit check: validate `VALIDATION_HARNESS_HOLD_MAX_DAYS` against `^[1-9][0-9]*$` before arithmetic and fall back to 14. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:validation_harness_judge_hold_request \"capped\" branch (~line 15963); README.md \"Harness hold\" Alerts bullet (~line 3746-3747) | severity=NIT | confidence=4\n  PROBLEM: README claims \"CRITICAL when a cap is reached\", but the judge-request capped branch only emits `outcome=capped` and returns 0 with no Telegram alert. The existing `validation_harness_hold_tick` cap path is also log-only.\n  WHY: An operator waits for a CRITICAL page that never arrives, and the project sits `failed` with the hold active.\n- HARDENING: scripts/orchestrate_poll_process.sh validation_harness_hold_tick time-limit branch (~line 15743): validate `VALIDATION_HARNESS_HOLD_MAX_DAYS` with `^[1-9][0-9]*$` and the 1-365 range, and warn and fall back to 14. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:15957-15964 (caller at 26177-26181) | severity=MAJOR | confidence=4\n  PROBLEM: A judge hold request that reaches a resume cap is consumed and logged `outcome=capped`, then the handler returns 0 without parking the project or adding it to `VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE`.\n  WHY: The failed project stays in the unblock scan (24672-24673; exclusion filter at 21500-21510), so it can be offered to the judge again instead of reaching a person.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- README.md:\"Harness hold\" subsection, \"Alerts\" bullet | severity=NIT | confidence=3\n  PROBLEM: README says \"CRITICAL when a cap is reached\", but a capped judge hold request only logs `outcome=capped` and sends no CRITICAL alert.\n  WHY: The operator expects a page that does not come. The request is consumed and the only signal is the log line.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:3746 vs scripts/orchestrate_poll_process.sh:15962-15964 | severity=NIT | confidence=3\n  PROBLEM: README says \"CRITICAL when a cap is reached\", but the judge-request capped path only logs `outcome=capped` and sends no alert. The validation-failure cap path (scripts/orchestrate_poll_process.sh:16063-16071) pages through the standard park path.\n  WHY: An operator relying on the README alert contract gets no notification when a judge hold request is refused at the caps.\n- HARDENING: scripts/orchestrate_poll_process.sh validation_harness_hold_tick time-limit block (lines 15735-15743): no change needed, because `_validation_harness_int_config VALIDATION_HARNESS_HOLD_MAX_DAYS 14 1 365` (lines 2475-2490) already validates it. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b72218998611eb6689cd81cc4a581e791490a9209d713de0d8659a451834f057",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8042,
+    "run_id": "40057303940",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40057303940",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024034259_2318f4ccb2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8042,
+    "run_id": "40057303940"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T03:42:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

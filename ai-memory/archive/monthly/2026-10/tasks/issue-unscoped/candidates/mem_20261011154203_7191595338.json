@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/6871-heal-intake-scope-guard.md:lines 6-7 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The documentation incorrectly names `ai:orchestrator-managed` as a SELF_REPO label ensured when the scope guard is off; the ensured label is `ai:workflow-heal-escalated`.\n  WHY: The gate behavior is correct, but the assembled documentation would mislead operators about which labels are ensured.\n- scripts/workflow_failure_heal_intake.sh:lines 1435-1436 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The gate function comment incorrectly names `ai:orchestrator-managed` as a SELF_REPO label ensured when the scope guard is off; the ensured label is `ai:workflow-heal-escalated`.\n  WHY: The label-ensure behavior is correct, but the source comment misleads readers about which labels are ensured.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/6871-heal-intake-scope-guard.md:lines 6-7 | severity=NIT | confidence=4\n  PROBLEM: The fragment names `ai:orchestrator-managed` as one of the SELF_REPO labels that are still ensured when the scope guard is off. The actually-ensured SELF_REPO labels are `ai:workflow-heal` (HEAL_LABEL) and `ai:workflow-heal-escalated` (ESCALATED_LABEL), per the script's label-initialization calls at lines 913-914 (confirmed by the second editor's prior summary) and per the `README.md` row, which the last autofix run corrected to mention `ai:workflow-heal-escalated`.\n  WHY: Documentation accuracy issue. The actual label-ensure behavior is correct; an operator reading the assembled `agents.md` would expect `ai:orchestrator-managed` to be one of the SELF_REPO labels the heal intake keeps ensuring while the guard is off, but it is not.\n- scripts/workflow_failure_heal_intake.sh:lines 1435-1436 | severity=NIT | confidence=4\n  PROBLEM: The gate function's source comment names `ai:orchestrator-managed` instead of `ai:workflow-heal-escalated`. The last autofix run corrected the script's header doc (lines 109-110) to the generic \"SELF_REPO heal labels\" but left this gate function comment unchanged from the original wording. The actual `ensure_label_exists \"${ESCALATED_LABEL}\" \"${SELF_REPO}\"` call ensures `ai:workflow-heal-escalated`, not `ai:orchestrator-managed`.\n  WHY: Documentation accuracy issue. The actual label-ensure behavior is correct; an operator reading the source comment would be misled about which labels are kept by the intake while the guard is off.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8452ee29e1f2985651a9c049ec8fe41e2d74e451fdb350f1569960fb596a06f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6874,
+    "run_id": "38150056039",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38150056039",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011154203_7191595338",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6874,
+    "run_id": "38150056039"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T15:42:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

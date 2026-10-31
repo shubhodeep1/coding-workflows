@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7746,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7746\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7749\",\"pr_number\":7749,\"branch\":\"ai/issue-7746\",\"run_id\":\"39518887691\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39518887691\",\"changed_files\":[\".github/workflows/cancel_on_pr_close.yml\",\".github/workflows/check_failure_triage.yml\",\".github/workflows/clarify.yml\",\".github/workflows/implement.yml\",\".github/workflows/issue_pr_status.yml\",\".github/workflows/memory_maintenance.yml\",\".github/workflows/orchestrate.yml\",\".github/workflows/orchestrate_clarify_respond.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/plan.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/validate.yml\",\".github/workflows/workflow_failure_heal.yml\",\"changelog.d/promote-candidate-support-ref.md\",\"tests/test_workflow_support_ref_follows_pin.py\"]}",
+  "fingerprint": "e6bf5bcba49e23736e8202c974c0fe91e1e64dcf478af02d45043480aabdb6a3",
+  "lineage": {
+    "issue_number": 7746,
+    "parent_ids": [],
+    "pr_number": 7749,
+    "run_id": "39518887691",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39518887691",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7749"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261021002319_779bfa6b1c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7746,
+    "level": "run",
+    "pr_number": 7749,
+    "run_id": "39518887691"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7746: https://github.com/shubhodeep1/coding-workflows/pull/7749",
+  "timestamps": {
+    "created_at": "2026-10-21T00:23:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:RECLARIFY_FENCE_OPEN_RE | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The fence opener pattern accepts a backtick fence whose info string contains another backtick, causing the scanner to treat an invalid Markdown opener as an open fence and ignore a later `/reclarify`.\n  WHY: The flagged scenario can skip a human command; minimax_minimax-m3, qwen_qwen3_7-plus, and z-ai_glm-5_2 assess this as intentional or acceptable fail-closed behavior rather than a defect.\n- .github/workflows/review_autofix.yml:4402 and 4412 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `Run reviewer models` step propagates the reviewer script\u2019s nonzero status, leaving the `review / codex-agent` check failed and the PR\u2019s review gate incomplete.\n  WHY: The supplied log tail does not establish a code-related cause; qwen_qwen3_7-plus and z-ai_glm-5_2 report that the failure was caused by exhausted OpenRouter credits and was unrelated to the PR\u2019s code.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml:RECLARIFY_FENCE_OPEN_RE | severity=low | confidence=4\n  PROBLEM: The opener pattern accepts a backtick fence whose info string contains another backtick, so the scanner treats an invalid Markdown opener as a fence and ignores a later-line `/reclarify`.\n  WHY: On a blocked issue, this can cause the human command to be skipped.\n- .github/workflows/review_autofix.yml:4402 and 4412 | severity=high | confidence=5\n  PROBLEM: The `Run reviewer models` step propagates `reviewers_rc`, leaving the `review / codex-agent` check failed and the PR review gate incomplete.\n  WHY: The provided log tail does not show the cause or tie it to changed code; the failure needs investigation.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a4630b57892c99273732a053a1e9f1c25677b6c1da2ea7436eb4688cfa8b5292",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5324,
+    "run_id": "36794171862",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36794171862",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001004621_8c5b3d14ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5324,
+    "run_id": "36794171862"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T00:46:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

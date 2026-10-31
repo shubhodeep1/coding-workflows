@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/settings.json:\"ask\" patterns for main/master | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: Force-prefixed `+main` and `+master` refspecs bypass the ask rules and can force-push to the default branch without a permission prompt.\n  WHY: The ask patterns do not match these refspecs, while the allow rule can match them.\n- workflow-templates/.claude/settings.json:\"ask\" patterns for main/master | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: Force-prefixed `+main` and `+master` refspecs bypass the ask rules and can force-push to the default branch without a permission prompt.\n  WHY: The ask patterns do not match these refspecs, while the allow rule can match them.\n- changelog.d/7204-force-with-lease-push-rules.md:Line 2 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The changelog claims pushes naming `main` or `master` as a destination always ask, but force-prefixed refspecs can match the allow rule without matching an ask rule.\n  WHY: A command using `+main` or `+master` can force-push the local default branch without a prompt; severity disagreement: minimax_minimax-m3 reported MAJOR and qwen_qwen3_7-plus reported NIT.\n- .claude/settings.json and workflow-templates/.claude/settings.json:the two new allow rules for `--force-with-lease` | severity=low | confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The trailing `*` in the force-with-lease allow rules also permits a `src:dst` refspec targeting a non-default shared branch without a prompt.\n  WHY: This is documented as an accepted residual in CLAUDE.md \u00a721.E and the changelog, and the reviewer reports it only for completeness.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/settings.json and workflow-templates/.claude/settings.json (the two copies are identical): `permissions.ask` entries `Bash(git push * main)`, `Bash(git push * main *)`, `Bash(git push * master)`, `Bash(git push * master *)`, together with the allow rules `Bash(git push --force-with-lease origin claude/*)` and `Bash(git push origin claude/*)`. | severity=low | confidence=4\n  PROBLEM: Force-prefixed `+main` and `+master` refspecs do not match the ask rules but can match the allow rule.\n  WHY: Git can force-push the local default branch without confirmation when its remote-tracking ref is current; the new test does not cover a `+`-prefixed refspec.\n- .claude/settings.json and workflow-templates/.claude/settings.json: the two new allow rules for `--force-with-lease`, which end in a trailing `*`. | severity=low | confidence=2\n  PROBLEM: The trailing `*` also matches a force-with-lease push using a `src:dst` refspec to a non-default shared branch.\n  WHY: The reviewer says this is already documented as an accepted residual and is not an actionable finding.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/settings.json:\"ask\" patterns for main/master\n  PROBLEM: The ask rules do not cover force-prefixed refspecs like `+main` or `+master`.\n  WHY: `git push origin +main` can force-push to `main` without a permission prompt.\n- workflow-templates/.claude/settings.json:\"ask\" patterns for main/master\n  PROBLEM: The ask rules do not cover force-prefixed refspecs like `+main` or `+master`.\n  WHY: `git push origin +main` can force-push to `main` without a permission prompt.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/7204-force-with-lease-push-rules.md:Line 2 \u2014 the headline ends \"...or name `main`/`master` as a destination, now always ask\" | severity=high | confidence=4\n  PROBLEM: The headline claims pushes naming `main` or `master` as a destination always ask, but force-prefixed refspecs can match the allow rule and no ask rule.\n  WHY: `git push --force-with-lease origin claude/x +main` can force-push the local `main` ref without a prompt; the changelog headline overstates coverage.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/7204-force-with-lease-push-rules.md:line 2 (headline) and lines 3-4 (body) | severity=low | confidence=4\n  PROBLEM: The headline says pushes naming `main` or `master` as a destination always ask, while the body omits force-prefixed refspecs.\n  WHY: A `+main` destination bypasses the ask rules and can rewind `origin/main` without a prompt, making the headline and body overstate the enforced behavior.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "b84659c9633aa7358aafcc4cc01896098e2f4bdc5a3e57aab91d7a7ae55dc81a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7204,
+    "run_id": "38204569645",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38204569645",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012051201_bee61c8a79",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7204,
+    "run_id": "38204569645"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T05:12:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

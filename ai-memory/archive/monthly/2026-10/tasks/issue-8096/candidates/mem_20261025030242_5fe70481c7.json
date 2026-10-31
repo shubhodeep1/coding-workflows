@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8096,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8096\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8102\",\"pr_number\":8102,\"branch\":\"ai/issue-8096\",\"run_id\":\"40155442811\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40155442811\",\"changed_files\":[\"changelog.d/8096-merge-probe-unknown-siblings.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_merge_probe.py\"]}",
+  "fingerprint": "76cbb589807c043d5ac4ca6bbf78b883d044b545531356c8b24c0e7905ff9c24",
+  "lineage": {
+    "issue_number": 8096,
+    "parent_ids": [],
+    "pr_number": 8102,
+    "run_id": "40155442811",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40155442811",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8102"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261025030242_5fe70481c7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8096,
+    "level": "run",
+    "pr_number": 8102,
+    "run_id": "40155442811"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8096: https://github.com/shubhodeep1/coding-workflows/pull/8102",
+  "timestamps": {
+    "created_at": "2026-10-25T03:02:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

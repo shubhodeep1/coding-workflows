@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix land on?\nChoices:\nA) PR #7135's head branch `ai/issue-7128`, so the test updates sit next to the consumer-sync gate path that adds the third skip marker and the second `/files` call. CI on PR #7135 then goes green. (RECOMMENDED)\nB) The default branch `main`. This fails CI on `main`: the tests would expect 3 skip markers and two `/files` calls, while the `main` workflow has 2 and 1.\nC) No separate fix. Close this issue as PR-specific (agents.md: \"a base-branch fix cannot repair a PR-specific failure, which the PR's autofix loop owns\") and let PR #7135's own review/autofix loop update the two tests.\nQ2: How strict should the updated `/files` assertion in `test_agents_md_materiality_classifier_and_workflow_wiring` be?\nChoices:\nA) Assert exactly one `gh api --paginate \".../pulls/${PR_NUMBER}/files\"` call inside each named gate branch (the consumer-sync branch and the deterministic-skip branch). Keep the runtime checks at lines 5006/5038 that ordinary PRs fetch files once. (RECOMMENDED)\nB) Only change the total count from 1 to 2 for the whole gate script.\n**Note:** with Q1:C this question does not matter, because the PR's own autofix loop picks the shape.",
+  "fingerprint": "8cb45585952ece0ebab88c3fb91c357bb065eee117148b4d6af8bfbaed52a821",
+  "lineage": {
+    "issue_number": 7140,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38109874273",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38109874273",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011035921_6d93a59452",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7140,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38109874273"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7140 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T03:59:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

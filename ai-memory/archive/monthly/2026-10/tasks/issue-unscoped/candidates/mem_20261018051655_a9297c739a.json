@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:96-130 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The keyword/error-line filter (`diagnostic_line` regex at lines 96-100 and the `diagnostic_lines_only` check at lines 129-130) drops the detail and continuation lines of multi-line renderer errors, such as the `- unknown_in_template:` and `- forbidden_present:` lines from ContractViolationError.\n  WHY: Prompt-render failures stay undiagnosable because the offending placeholder or line is never logged. Severity is MAJOR in all three reviewers, so there is no disagreement. The suggested fix is to skip the filter for the `prompt-render` label or keep every line from the first `ERROR:` line onward.\n- tests/test_security_audit_workflow_contract.py:1048-1057 | severity=high | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: `MOCK_RENDER_STDERR` only feeds single-line `ERROR:` messages, so the new filter at scripts/security_audit.sh:129-130 is untested against multi-line renderer errors.\n  WHY: The multi-line detail-dropping behavior can regress or go unnoticed because no test covers it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/security_audit.sh:96-100,129-130 | severity=MAJOR | confidence=4\n  PROBLEM: The line-by-line keyword filter in `security_audit_emit_codex_stderr_tail` drops the detail lines of multi-line renderer errors. `validate_contract` raises `ContractViolationError` with `- unknown_in_template:` and `- forbidden_present:` lines that match no keyword. `validate_supported_template_syntax` entries (\"unmatched placeholder delimiter\") also fail to match.\n  WHY: Unknown or forbidden placeholders and bad delimiters log only the generic `ERROR:` header. This leaves the same undiagnosable `phase=prompt-render` symptom the PR set out to fix, and the new test cannot catch it.\n- HARDENING: scripts/security_audit.sh lines 96-100 and 129-130. Skip the filter for the `prompt-render` label, or keep every line from the first `ERROR:` line onward (3-5 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/security_audit.sh:96-100,126-130 | severity=MAJOR | confidence=4\n  PROBLEM: The error-line filter drops continuation lines of multi-line renderer errors.\n  WHY: The regex keeps only lines that contain specific keywords, so detail lines in multi-line errors or tracebacks are discarded, which defeats the PR's diagnostic purpose.\n- HARDENING: scripts/security_audit.sh lines 96-130. Retain subsequent lines after an error is detected, or use a multi-line-aware filter (5-10 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:96-100,129-130 | severity=MAJOR | confidence=4\n  PROBLEM: The filter drops the detail lines of multi-line ContractViolationError output (`- forbidden_present: ...`, `- unknown_in_template: ...`). Only the exception class line matches.\n  WHY: A contract violation would log the header without naming the placeholders to fix, so the failure is only partly diagnosable.\n- tests/test_security_audit_workflow_contract.py:1048-1057 | severity=MAJOR | confidence=4\n  PROBLEM: The test feeds only single-line `ERROR:` messages and no multi-line traceback or ContractViolationError output.\n  WHY: The filter's behavior on real multi-line errors is unverified and can regress silently.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b11076a2692f481225320e269c723c9c7d7bf993ff72e918ef5dc1b1dcebf1ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7608,
+    "run_id": "39098331656",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39098331656",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018051655_a9297c739a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7608,
+    "run_id": "39098331656"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T05:16:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

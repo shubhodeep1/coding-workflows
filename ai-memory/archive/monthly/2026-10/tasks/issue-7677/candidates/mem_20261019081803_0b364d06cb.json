@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The facts read from GitHub only say that run 39216253741 ended in success. They don't include per-step timings, and the isolated planner can't fetch the job log. Option B would wait on data nobody has been asked for, which is the circular dead-end the data-provision guard rules out. Option C would move steps without regard to their cost. The repository is enough to estimate cost. In `.github/workflows/ci.yml`, `tests-promote-stall-and-review` (line 1168, `timeout-minutes: 20`) has 52 steps. The heavy ones start subprocesses or sandboxes: the conflict-resolve sandbox, Codex/watchdog shell, OpenCode plumbing, review-blocked judge, and the `pr_checks_lib` and stall shell harnesses. Moving the heaviest of them, about 40% of the estimated cost, should bring 16m06s down to about 9-10 minutes, below the 15-minute (0.75 \u00d7 20) warning line with margin.\nQ2: The two receiving jobs have the same 20-minute budget. Neither tripped the 15-minute warning in this run, so both have at least 5 minutes of headroom. Splitting the load keeps either from moving up to the threshold. `static-checks` has only a 15-minute budget and runs before Python setup. `tests-hooks-and-orchestrator` already carries the live-copy preparation, the Docker/isolation steps and the Node/vitest steps. `tests/test_ci_job_split_contract.py` only checks that `lint` needs every job, the budgets, that no step runs in two jobs, and that each job sets itself up first. It doesn't pin a step to a job, so moving steps whole is allowed.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml, job `tests-promote-stall-and-review` (steps at lines 1188-1473)\n    - the test files each step runs (count the tests, and mark subprocess/bash-harness/sandbox use with `grep -c \"def test_\"` and `grep -l \"subprocess\\|bash\"`)\n    - tests/test_ci_job_split_contract.py, tests/test_ci_wires_every_test_file.py\n  steps:\n    - Give each step in the job a cost estimate from its test count, weighted \u00d75 for tests that start a bash/poller subprocess or a sandbox and \u00d71 for pure-Python parsing tests.\n    - Pick the heaviest steps until the picked total is at least 40% of the job's estimated cost. Likely candidates are \"Review conflict-resolve sandbox-only tests\", \"Codex/watchdog helper shell tests\", \"OpenCode plumbing contract tests\", \"Shared PR check-runs merge gate (pr_checks_lib) tests\", \"Merge-base freshness gate (pr_checks_lib) tests\", \"Stall-loop and churn fixes unit tests\" and \"Promote cycle and blocked-verdict unit tests\". Confirm each one with the count before moving it.\n    - Move each picked step unchanged: same name, `run:`, `env:` and `if:`. The receiving job (Q2) already runs Checkout, Setup Python and Install Python CI dependencies first. If a moved step needs extra setup (for example a tool install step), move that with it, or confirm the receiving job already has it.\n    - Don't change any `timeout-minutes`, and don't add or rename any job.\n    - Run `tests/test_ci_job_split_contract.py`, `tests/test_ci_wires_every_test_file.py` and `actionlint` on `ci.yml`. Grep `tests/` for any test that looks a moved step up under its old job name (`tests-promote-stall-and-review`) and update the job key there.\n  replaces_acceptance_criterion: \"Move its slowest steps (see the run's step timings)\" becomes \"move the steps with the highest estimated cost, together about 40% of the job's estimated cost\"\n  equivalence_argument: Step cost tracks test count and subprocess/sandbox use, so the estimated heaviest steps are, with high likelihood, the measured slowest ones. Moving 40% of the cost leaves margin under the 15-minute warning even if the estimate is off. `budget-watch` will flag the job again if it isn't enough.\n  reversibility: The moved steps are byte-identical blocks, so a later PR can move them back or swap one for the step that turns out to be slowest. No job names or timeouts change.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml jobs `tests-release-and-log-analysis` (line 1479) and `tests-heal-plan-and-validation` (line 852)\n  steps:\n    - Use the same weighted count as in Q1 to estimate each receiving job's current load.\n    - Give the moved steps to the two jobs so that their estimated totals after the move are as close as possible, and neither ends up above the remaining load of `tests-promote-stall-and-review`.\n    - Don't move anything into `static-checks`, `tests-hooks-and-orchestrator`, the `orchestrate-poll` matrix, `budget-watch` or `lint`.\n  replaces_acceptance_criterion: \"into the CI job with the most headroom\" becomes \"into the two worker jobs with the most estimated headroom, balanced\"\n  equivalence_argument: The goal is that no job is close to its timeout. Splitting the load across two jobs with headroom meets that better than putting it all in one, and stays within the issue's limits: no new required job names and no timeout increase.\n  reversibility: A follow-up can move steps between the receiving jobs without touching job names or the `lint` aggregate.",
+  "fingerprint": "fcb2ece7d604c65a9d6368e1fd8fa981eab8a5d819d68ff0d461936d6f812f7f",
+  "lineage": {
+    "issue_number": 7677,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39220512221",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39220512221",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7677"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261019081803_0b364d06cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7677,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39220512221"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7677",
+  "timestamps": {
+    "created_at": "2026-10-19T08:18:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

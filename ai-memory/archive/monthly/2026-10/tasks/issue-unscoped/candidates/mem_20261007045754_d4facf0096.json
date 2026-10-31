@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_security_audit_workflow_contract.py:2471-2475 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The crash fallback test expects `crashed_rc_1` although these reviewers report that the fallback logs `crashed_rc_3` when the mock Claude CLI exits with code 3.\n  WHY: The reviewers say the assertion therefore fails; the severity is critical, reflecting the BLOCKER ratings from Minimax and Qwen.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_security_audit_workflow_contract.py:2471-2475 | severity not stated | confidence=5\n  PROBLEM: The test test_security_audit_claude_fallback_crash incorrectly expects the fallback reason to be \"crashed_rc_1\" when the mock Claude CLI exits with code 3.\n  WHY: The script logs \"crashed_rc_${claude_rc}\", so it logs \"crashed_rc_3\". The assertion in the test fails.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_security_audit_workflow_contract.py: `_install_mock_claude` mock claude script: `if mode == \"crash\": print(\"boom\", file=sys.stderr); sys.exit(3)` (around line 152 of the diff) and `test_security_audit_claude_fallback_crash` (around line 2653 of the diff) which calls `_assert_codex_fallback(proc, state, payload, \"crashed_rc_1\", claude_called=True)`. | severity=BLOCKER | confidence=5\n  PROBLEM: The mock Claude CLI exits with code 3 in crash mode, but the test asserts the fallback reason is `crashed_rc_1`.\n  WHY: The reviewer says `claude_run` propagates rc=3 to the security_audit script, which logs `crashed_rc_3`; therefore the expected substring is absent and the assertion fails.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_security_audit_workflow_contract.py: test_security_audit_claude_fallback_crash (line ~2574 in the diff context) | severity=BLOCKER | confidence=5\n  PROBLEM: The mock Claude CLI exits with code 3 in crash mode (`sys.exit(3)`), but the test asserts the fallback reason is \"crashed_rc_1\".\n  WHY: The reviewer says the script logs `crashed_rc_${claude_rc}` with the actual exit code, so it will log \"crashed_rc_3\" and the assertion fails.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "6a96018711e5f87bb0dbcb1064312d62d06755dc57c16601121d4e40a800b306",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6610,
+    "run_id": "37569261692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37569261692",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007045754_d4facf0096",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6610,
+    "run_id": "37569261692"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T04:57:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

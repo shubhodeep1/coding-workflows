@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py:18 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: `CONFIG_LIST` does not recognize value-returning `git config --get*` variants such as `--get`, `--get-all`, `--get-urlmatch`, and `--get-color`.\n  WHY: A future workflow could use one of these commands to print credential-bearing configuration without the regression test detecting it; severity differs, with Gemini rating the combined issue BLOCKER and DeepSeek and OpenAI rating it MAJOR.\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py:18 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The scanner can miss `git config` commands inside a double-quoted `bash -c` wrapper.\n  WHY: A future workflow could use such a wrapper to print configuration values without the regression test detecting it; severity differs, with Gemini rating the combined issue BLOCKER and DeepSeek and OpenAI rating it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py\n  Line or code reference: line 18, CONFIG_LIST regex\n  Problem: The regex matches only `--get-regexp` among value-returning `git config --get*` sub-commands. The original PR regex (`get(?:-[a-z-]+)?`) matched ALL `--get-*` variants including `--get-all`, `--get`, `--get-urlmatch`, and `--get-color`. The LAST RUN DIFF narrowed this to `get-regexp` only, removing coverage for every other value-dumping `--get*` sub-command.\n  Why it fails at runtime: A future diagnostic added to any workflow that runs `git config --get-all http.https.github.com/.extraheader` would dump the PAT authorization header to Actions logs but CONFIG_LIST would not match it, so `_config_dumps_values` would never be called and `test_no_workflow_dumps_git_config_values` would accept the command. The same bypass applies to `--get`, `--get-urlmatch`, and `--get-color`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py\n  Line or code reference: line 18, the `(?<=-c ')` lookbehind alternative in CONFIG_LIST\n  Problem: The lookbehind requires a single-quote character after `-c `. A double-quoted wrapper like `bash -c \"git config --list --show-origin\"` does not match either the lookbehind or the main `git config` alternative (the negative lookbehind `(?<![\\w\\\"'\\\\(])` rejects `git` preceded by `\"`).\n  Why it fails at runtime: A workflow step using double-quoted `bash -c \"git config --list\"` would not be detected by the scanner. The credential-dumping command inside the double-quoted string would pass `test_no_workflow_dumps_git_config_values`. While current workflow files use single quotes or bare commands, the scanner is a regression guard and must catch this bypass.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py\n  Line or code reference: 18 (CONFIG_LIST regex definition)\n  Problem: The scanner regex `CONFIG_LIST` is incomplete as it only accounts for `--list` and `--get-regexp` options. It fails to match other value-returning `git config` options such as `--get`, `--get-all`, `--get-urlmatch`, and `--get-color`. Additionally, the `_config_dumps_values` function's handling of shell wrappers may not consistently catch all quoting styles (e.g., double quotes or complex expansions).\n  Why it fails at runtime: A regression could be introduced in a future PR where a developer uses `git config --get` or a double-quoted `bash -c` wrapper to dump a credential to logs, and this CI regression test would incorrectly pass, allowing the security vulnerability to be introduced.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py\n  Line or code reference: Line 18, CONFIG_LIST\n  Problem: The scanner does not recognize value-returning `git config --get-all` commands, and its command-boundary pattern misses `git config` inside a double-quoted `bash -c` command.\n  Why it fails at runtime: `test_no_workflow_dumps_git_config_values` relies on this scanner. A workflow diagnostic using either form to retrieve configuration values would pass the regression check without detecting the disclosure.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "cb15416fb38bfb162087d803fff67909aafde4330c2e2c7061d1230343b31781",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6537,
+    "run_id": "37764054749",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37764054749",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008104629_cb72964335",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6537,
+    "run_id": "37764054749"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T10:46:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

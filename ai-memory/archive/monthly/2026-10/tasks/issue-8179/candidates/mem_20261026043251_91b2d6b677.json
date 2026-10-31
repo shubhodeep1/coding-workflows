@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8179,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8179\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8184\",\"pr_number\":8184,\"branch\":\"ai/issue-8179\",\"run_id\":\"40267922236\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40267922236\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/8179-hooks-job-steps-to-promote-stall.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "b280cdd06365101fe4cfd61eb4847c64635304ce9dae90f9b703568293572705",
+  "lineage": {
+    "issue_number": 8179,
+    "parent_ids": [],
+    "pr_number": 8184,
+    "run_id": "40267922236",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40267922236",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8184"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261026043251_91b2d6b677",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8179,
+    "level": "run",
+    "pr_number": 8184,
+    "run_id": "40267922236"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8179: https://github.com/shubhodeep1/coding-workflows/pull/8184",
+  "timestamps": {
+    "created_at": "2026-10-26T04:32:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cFix it once, in `gh_retry`\u201d and \u201cEvery caller is fixed at once, with no call-site changes\u201d; the linked issue also identifies the `$(gh_retry gh api \u2026)` output-corruption pattern.\n  expected_change_site: `.github/workflows/review_autofix.yml`, especially the inline retry wrapper at line 1828 and its call at line 1867\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR diff contains zero hunks under `.github/workflows/review_autofix.yml`; lines 1828-1837 still define an inline `gh_retry()` that runs `\"$@\"` directly, and line 1867 still captures its output via `$(gh_retry gh api \"repos/${REPOSITORY}/pulls/${PR_NUMBER}\" --jq '.head.sha // \"\"' 2>/dev/null)`; both inline wrappers execute `\"$@\"` directly on each attempt, and in the deterministic-skip path, the extra response data makes the comparison at lines 1871-1873 fail, withholding merge-authorization labels despite the successful retry.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Fix it once, in `gh_retry`\" and \"Every caller is fixed at once, with no call-site changes. \u2026 Also check `gh_retry_to_file` and any other wrapper in `scripts/gh_helpers.sh` for the same pattern.\" The linked issue also lists `review_autofix.yml:2138` as a site the fix must cover; the same file's two inline `gh_retry` definitions at lines 1612 and 1828 are the only remaining `gh_retry`-like wrappers in `.github/workflows/` that run `\"$@\"` directly without per-attempt stdout buffering.\n  Expected change site: `.github/workflows/review_autofix.yml` \u2014 either replace the inline `gh_retry()` at line 1828 with the fixed function (sourcing `gh_helpers.sh` or duplicating the buffer logic) or, since the deterministic-skip-merge step is the only one that needs it, replace its body with a sourced call. The line 1612 inline copy is already guarded by `if ! type gh_retry >/dev/null 2>&1`, so it is reached only when the source fails; the same guard pattern can be applied at line 1828.\n  Evidence of absence: The PR diff contains zero hunks under `.github/workflows/review_autofix.yml`. The file's lines 1828-1837 still define an inline `gh_retry()` that runs `\"$@\"` directly, and line 1867 still captures its output via `$(gh_retry gh api \"repos/${REPOSITORY}/pulls/${PR_NUMBER}\" --jq '.head.sha // \"\"' 2>/dev/null)` \u2014 the exact `$(gh_retry gh api \u2026)` capture the linked issue identifies as the corruption site. The plan records this as AD-3 (\"record them as a follow-up candidate\") and the progress log repeats the deferral in its `## Notes`, but the linked issue does not defer the inline copies and its \"every caller\" wording does not narrow to canonical `gh_retry` callers only. The `review_autofix.yml:2138` call site the issue lists IS fixed by this PR (it sources the canonical function); the inline copies are the unfixed remainder.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cThe same flaw hits every `gh_retry gh api \u2026 > file` and every `$(gh_retry gh api \u2026)` capture\u201d; the PR description says the fix makes \u201cevery caller\u201d safe.\n  Expected change site: `.github/workflows/review_autofix.yml`, inline retry wrappers at lines 1612-1621 and 1828-1836, and their command-substitution calls at lines 1639, 1657, and 1867.\n  Evidence of absence: The workflow is unchanged. Both inline wrappers execute `\"$@\"` directly on each attempt, so a failed attempt\u2019s stdout is combined with a later successful response. In the deterministic-skip path, line 1867 captures that output as the current head SHA; the extra response data makes the comparison at lines 1871-1873 fail, withholding merge-authorization labels despite the successful retry. The plan records these wrappers as a follow-up candidate, but the linked issue does not defer them.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "beb0b07528e6a89dd334fd216f8601df2b0bc2dcf1ca8b147247e3804164fd95",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5509,
+    "run_id": "36837852334",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36837852334",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001092528_44e54516ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5509,
+    "run_id": "36837852334"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T09:25:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

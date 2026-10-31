@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:`_run_poller_subprocess`, the wait loop after `os.killpg(proc.pid, signal.SIGKILL)` | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The bounded reap loop raises a theoretical PID-reuse concern while probing the process group after SIGKILL.\n  WHY: The process-group ID reuse scenario is reported as unreachable; at worst, the wait adds a bounded 1-second delay, and `ignore_errors=True` prevents a wrong test result.\n- workflow-templates/.claude/settings.json:140-149 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The template registers `prepush_affected_tests.py`, but the live `.claude/settings.json` does not, and the live hook file is absent, causing template-parity tests to fail.\n  WHY: The parity failures break `tests-hooks-and-orchestrator` and `tests-release-and-log-analysis`, causing the aggregate `lint` check to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR title and description: apply the verified subset of workflow-optimization-2026-09-16.\n  expected_change_site: `.claude/settings.json` and `.claude/hooks/prepush_affected_tests.py`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: Neither live file is in this checkout, and no hunk in the PR diff or LAST RUN DIFF touches them; the PR's four deliverables are all present in the diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py | severity=NIT | confidence=1\n  PROBLEM: This is the pass-1 PID-reuse concern from minimax. The loop probes `os.killpg(proc.pid, 0)`. The poller is started with `start_new_session=True` (not re-read this pass; carried from earlier editor summaries), so `proc.pid` is its process-group ID. A process group persists while any member is alive, and the kernel does not reuse a PID that is still in use as a group ID. The loop exits on `ProcessLookupError` when the group is empty and is capped at 1 second. The reuse scenario is not reachable, and the worst case is a bounded 1-second delay.\n  WHY: it does not. No wrong test result is possible, because the later `rmtree` uses `ignore_errors=True`.\n- .claude/settings.json (absent from this checkout) versus workflow-templates/.claude/settings.json, lines 140-149 | severity=BLOCKER | confidence=5\n  PROBLEM: The merge of `main` into this branch (b1f0eb0) added the pre-push hook to the template, so the template and the live copy differ. In CI, `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical` fails at line 2451 (the CI log shows the template's extra Bash hook block as the diff). `tests/test_session_start_extract_repo_slug.py` fails with \"workflow-templates/.claude/settings.json must be byte-identical to .claude/settings.json\". `CLAUDE_PARITY_PR_BASE_SHA` is empty in the run, so the drift is not skipped. The aggregate `lint` job then fails with the message \"CI jobs that did not succeed: tests-hooks-and-orchestrator, tests-release-and-log-analysis\".\n  WHY: I checked this pass. `.claude/` in this checkout holds only `commands/*.md` and `hooks/gh_api_write_guard.py`. `prepush_affected_tests.py` exists only under `workflow-templates/.claude/hooks/`. This is not a defect in the PR's own files; it came in with the sync merge.\n- TASK_GAP\n  Requirement: PR title and description: apply the verified subset of workflow-optimization-2026-09-16. This covers the shared checks gate with Gate D, the single-read poller fixes, `gh_retry` in the guard-block handler, and the `implement.yml` `env:` conversion with the 18,000-character guard test. No linked issue exists. The standing repo rule is that live `.claude/` copies stay in step with their templates, and the branch must leave CI green.\n  Expected change site: `.claude/settings.json` (register `prepush_affected_tests.py`, as in the template at lines 140-149) and `.claude/hooks/prepush_affected_tests.py` (a byte-for-byte copy of the template hook).\n  Evidence of absence: neither live file is in this checkout, and no hunk in the PR diff or LAST RUN DIFF touches them. The PR's four deliverables are all present in the diff.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:N/A | severity=BLOCKER | confidence=5\n  PROBLEM: CI failures due to configuration parity errors between the live settings and the template.\n  WHY: The tests `tests/test_pr_merge_status_guard.py::test_template_copies_are_identical` and `tests/test_session_start_extract_repo_slug.py` fail because `.claude/settings.json` and the live hook file `.claude/hooks/prepush_affected_tests.py` are not in sync with `workflow-templates/`. The pipeline is currently failing open, but CI cannot pass.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/settings.json, lines 141-149; the live `.claude/settings.json` ends its hook list at line 139. The parity assertion is `tests/test_pr_merge_status_guard.py:2443-2451`. | severity=BLOCKER | confidence=5\n  PROBLEM: The template registers `prepush_affected_tests.py`, but the live settings do not, so the files are not byte-identical. The live `.claude/hooks/prepush_affected_tests.py` is also absent.\n  WHY: On the reviewed head, the parity test fails in `tests-hooks-and-orchestrator`; `tests/test_session_start_extract_repo_slug.py` also fails on the settings mismatch in `tests-release-and-log-analysis`. Both failures cause the aggregate `lint` check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- No task was provided \u2014 the message contains only the unattended-instructions header and an unfilled `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder. It asks for the issue/plan and filled severity-classification reference, or notes that the interactive session loads `CLAUDE.md`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "062df18db165891b295c98a586f4137abea115ace4b871ad7ca57974ab6c7b1f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38408679817",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38408679817",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013143318_9785efb086",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38408679817"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T14:33:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

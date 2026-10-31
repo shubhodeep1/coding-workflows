@@ -1,0 +1,40 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/7121-ci-orchestrator-integration-branches.md: line 1 | severity=low | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The fragment places CI-trigger and live-copy parity documentation under the \"Interactive slash-command model selection\" section instead of a relevant workflow section.\n  WHY: This is not a runtime failure, but it makes the documentation harder to locate and degrades the section's topic focus.\n- .github/workflows/ci.yml: lines ~419-427 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: If the merge-base fallback fails, the warning implies a fallback was applied even though the empty `--before` causes drift recovery to be skipped.\n  WHY: The warning can mislead operators into thinking parity drift recovery ran; another reviewer considered the \"(unavailable)\" wording not misleading.\n- .github/workflows/ci.yml: lines 433-438 | severity=low | confidence=[4]\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: If the merge-base fallback fails, the warning implies a fallback was applied even though the empty `--before` causes drift recovery to be skipped.\n  WHY: The step exits successfully without running preparation, so the operator-facing warning misstates what happened.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/7121-ci-orchestrator-integration-branches.md: line 1 | severity=NIT | confidence=2\n  PROBLEM: The fragment documents CI triggers, but it is attached to a section about slash-command model selection and `.claude/` live copies. The fragment does touch the live-copy parity step, so it is only loosely related, not unrelated.\n  WHY IT FAILS AT RUNTIME: It does not fail at runtime. The only effect is that the assembled `agents.md` places the CI note under a heading that may not be where readers look.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/7121-ci-orchestrator-integration-branches.md: Line: 1\n  PROBLEM: The fragment incorrectly appends documentation about CI triggers and live-copy parity preparation to the \"Interactive slash-command model selection\" section of `agents.md`.\n  WHY IT FAILS AT RUNTIME: This is not a runtime failure, but it violates the structural integrity of the `agents.md` documentation, making it difficult for maintainers to locate information regarding CI/Workflow triggers and architecture.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml: lines ~419-427 (the \"Prepare template-only PR live copies for parity tests\" step, `run:` block)\n  PROBLEM: When the initial `before` is empty / all-zeros / unreachable AND `git merge-base HEAD origin/main` also fails, the warning message printed before reassignment says `using merge-base with main (unavailable)`, but the script is then invoked with `--before \"\"` (the empty `${fallback}`). The \"using merge-base with main\" prefix reads as if the fallback was successfully applied even though no SHA was found and `before` was reset to empty.\n  WHY IT FAILS AT RUNTIME: Operator-facing log message contradicts the actual invocation; someone reviewing the warning will think parity drift recovery was attempted, when it was not. This is a documentation discrepancy rather than a runtime crash because `sync_claude_live_copies.py` is documented to skip drift recovery on empty `--before` \u2014 but the warning text is misleading.\n  severity=NIT | confidence=3\n- .github/workflows/ci.yml: lines ~419-427 (the \"Prepare template-only PR live copies for parity tests\" step, `run:` block, in conjunction with `agents.d/7121-ci-orchestrator-integration-branches.md`)\n  PROBLEM: When the initial `before` is invalid AND `git merge-base HEAD origin/main` also returns empty, the step falls through to `python3 scripts/sync_claude_live_copies.py sync --dry-run --before \"\" --after HEAD ...`. The fragment and inline comment claim \"the step uses the merge-base of `HEAD` with `origin/main`\", but in the all-fail case nothing is used. The PR description's testing section explicitly enumerates empty / all-zero / unreachable / valid `before` values and asserts only that \"the valid one is kept\" \u2014 it does not pin behaviour or message wording for the case where merge-base itself fails.\n  WHY IT FAILS AT RUNTIME: The implementation handles the failure silently with a misleading message; it does not crash. The risk is operator confusion, not data corruption.\n  severity=NIT | confidence=3\n- agents.d/7121-ci-orchestrator-integration-branches.md: line 1 (the `<!-- agents: section=\"...\" -->` marker)\n  PROBLEM: The fragment's marker targets `Interactive slash-command model selection`, a section that (per its body) covers `.claude/commands/*.md` model pins, `/implement-plan-claude` and `/implement-issue-claude` hand-offs, and Live `.claude/` copy sync. The fragment's content is about CI trigger patterns, the parity-preparation step's `before` fallback, the workflow-failure heal intake, and `budget-watch`. None of those topics belong under the slash-command-model-selection heading; they belong in the `Workflow architecture` section (which already enumerates every pipeline phase including `ci.yml` checks) or in a new dedicated CI-triggers block.\n  WHY IT FAILS AT RUNTIME: Assembled `agents.md` readers looking for CI trigger / parity prep behaviour will not find it under `Workflow architecture`, and the `Interactive slash-command model selection` section's contract as a model-selection reference is degraded by hosting topic-mismatched paragraphs. No runtime failure.\n  severity=NIT | confidence=3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml: lines 433-438 (\"Prepare template-only PR live copies for parity tests\" step, fallback branch)\n  PROBLEM: When `before` is empty/all-zeros/unreachable AND `git merge-base HEAD origin/main` also fails, `fallback` is empty and `before=\"${fallback}\"` reassigns an empty string; the warning printed on line 435 then reads \"using merge-base with main (unavailable)\", which implies a fallback was applied, while the subsequent `python3 scripts/sync_claude_live_copies.py sync --dry-run --before \"\" ...` invocation (line 438) makes `changed_files()` log `skip reason=no_before_commit before=empty` (scripts/sync_claude_live_copies.py:133-136) and `plan()` return `[]` (scripts/sync_claude_live_copies.py:147-150), so the step does nothing.\n  WHY IT FAILS AT RUNTIME: The step still exits 0 and downstream parity tests report drift as designed (fail-closed on drift), so there is no functional break, but the operator-facing warning misstates what happened: no merge-base was used and no preparation ran.\n  severity=NIT | confidence=4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f9c9cbabb908102dcce241f0038f070d5164b885e13d5a1b10debc0a6fd2d9c0",
+  "injection_suspected": true,
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7121,
+    "run_id": "38104047981",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38104047981",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011022612_4271aa63fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7121,
+    "run_id": "38104047981"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T02:26:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/operations/master-session.md:37-131 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: Q3: A incorrectly attributes the no-human merge of hook and settings changes to #4785, although those guard-path sync PRs remain owner-only until the later retire-master phase 3 classifier.\n  WHY: A master following Q3: A could expect an owner-only sync PR to merge without approval; the line 54 and line 55 priority rows also conflict about script approvals.\n- docs/operations/master-session.md:54 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The GPT judge priority row says it replaces the operator\u2019s yes for script PRs, while the adjacent #4785 row says script sync PRs remain owner-only.\n  WHY: A master using the priority table could treat script-sync approval as automated, contrary to the owner-only rule.\n- .github/workflows/review_autofix.yml:345 | severity=low | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: An HTTP 403 rate limit on the protected-main lookup can terminate the review gate before review proceeds.\n  WHY: The lookup can fail before the protected-main response is evaluated; deepseek_deepseek-v4-pro and z-ai_glm-5_2 describe this as a pre-existing operational issue unrelated to the PR changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/operations/master-session.md:37 | severity=high | confidence=5\n  PROBLEM: Q3: A still states that #4785's Actions sync PR merges hook and settings changes with no human, although guard-path sync PRs are owner-only.\n  WHY: A master following Q3: A could expect an owner-only sync PR to merge without approval; the no-human path belongs to retire-master phase 3, not #4785.\n- docs/operations/master-session.md:54 | severity=high | confidence=5\n  PROBLEM: The GPT judge priority row implies it covers script sync approvals, while the adjacent #4785 priority row says script sync PRs remain owner-only.\n  WHY: A master acting on the GPT judge row could skip the owner-merge step, leaving conflicting guidance in the priority table.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/operations/master-session.md: Q3: A, line 37 | severity=high | confidence=5\n  PROBLEM: The added note excludes scripts from Q3: A but leaves the claim that #4785\u2019s sync PR merges hook and settings changes \u201cwith no human.\u201d\n  WHY: A master following this decision can expect #4785 alone to merge hook or settings syncs without owner approval, although the sync PR waits for the owner.\n- docs/operations/master-session.md: GPT judge priority row, line 54 | severity=high | confidence=4\n  PROBLEM: The row says the GPT judge replaces the operator\u2019s yes for hook, script, and settings PRs, although script syncs remain owner-only.\n  WHY: A master relying on this priority summary can treat a script-sync approval as automated, contrary to the owner-only rule.\n- .github/workflows/review_autofix.yml: 345, `gh api repos/shubhodeep1/coding-workflows/branches/main` | severity=low | confidence=5\n  PROBLEM: The failed `review / gate` run shows this request returned HTTP 403 for API rate limiting.\n  WHY: When GitHub rate-limits this lookup, the review gate fails even though the protected-main response could not be evaluated.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/operations/master-session.md: 37 (Q3: A row) | severity=high | confidence=5\n  PROBLEM: Line 37 still says that #4785's Actions sync PR merges hook and settings changes with no human, while line 55 says those sync PRs merge only by the owner.\n  WHY: A master reading Q3: A in isolation could expect #4785 alone to auto-merge guard changes without owner approval.\n- docs/operations/master-session.md: 54 (GPT judge priority row) | severity=high | confidence=5\n  PROBLEM: Line 54 says the GPT judge replaces the operator's yes for script PRs, while line 55 says script changes never merge with no human.\n  WHY: A master reading the GPT judge row could treat script-sync approval as automated despite the owner-only rule.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- docs/operations/master-session.md: line 37 (Q3: A) vs line 55 (#4785 priority row), both edited by this PR | severity=high | confidence=4\n  PROBLEM: Q3: A attributes the no-human merge of hook and settings changes to #4785, while the #4785 priority row and duty table attribute that path to the later retire-master phase 3 classifier.\n  WHY: A master reading Q3: A expects #4785 alone to auto-merge guard changes, but `claude_twin_sync.py` returns \"owner only\" for every needs_owner plan.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "f6c3818a837df4da645da5f0deb0e450486a2ed7e216420d885a0a0e069ba71e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5699,
+    "run_id": "36816147923",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36816147923",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001050049_efcf0e7e08",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5699,
+    "run_id": "36816147923"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T05:00:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which area of the repository should this issue improve?\nChoices:\nA) The issue \u2192 PR pipeline workflows (clarify, plan, implement, review/autofix) (RECOMMENDED)\nB) The orchestrator (orchestrate / orchestrate_poll, integration-sync, stall recovery)\nC) The validation harness (the validate workflow, Docker smoke validation)\nD) The AI memory subsystem (`scripts/ai_memory.py`, `scripts/memory_helpers.sh`)\nE) Documentation only (README.md, docs/, agents.d fragments)\nF) Something else (please name the file, workflow or script)\nQ2: What kind of improvement is wanted?\nChoices:\nA) Fix a specific bug or failure (please give a run ID, log excerpt, or the steps to reproduce it) (RECOMMENDED)\nB) Cut cost or runtime (fewer tokens, fewer GitHub API calls, faster jobs)\nC) Make it more reliable (fewer stalls, retries or flaky failures)\nD) Add a new feature or behavior (please describe it)\nE) Make it clearer for operators (logs, Telegram alerts, docs)\nQ3: How will we know the change is done?\nChoices:\nA) A specific observable outcome you describe, such as a failing run that now passes or a metric reaching a threshold (RECOMMENDED)\nB) New or updated contract tests in `tests/` that pin the improved behavior\nC) A+B",
+  "fingerprint": "ec12b6cfafc07a160ad3e772f353d6d14aa32f7c972114a34298625504991324",
+  "lineage": {
+    "issue_number": 8336,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40835108424",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40835108424",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029073604_4ed227074d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8336,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40835108424"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8336 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T07:36:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

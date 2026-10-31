@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should the sync do with a template change that does not pass the authorization check?\nChoices:\nA. Skip that path. Log a `CLAUDE_LIVE_SYNC refused path=... reason=...` line and open no PR for it. The parity test keeps failing PRs until a human updates the live copy by hand.\nB. Keep opening the sync PR for every path, but keep it out of auto-merge (for example with a hold label that `review_autofix.yml` respects), so a human always merges it.\nC. Split by provenance. Authorized changes keep today's behaviour (sync PR, normal review, auto-merge allowed). Unauthorized changes still get a sync PR, but it is held from auto-merge for a human to merge, and a Telegram WARNING names the source commit. (RECOMMENDED)\nQ2: Which automated signal counts as authorization for promoting a template change to the live `.claude/` copy?\nChoices:\nA. Branch provenance. Every commit in `before..after` that touches the template must have arrived through a merged PR whose head branch is not a pipeline branch (`ai/*`, `orchestrator/*`, `auto/*`). Commits whose subject starts with a pipeline marker (`[ai-autofix]`, `[judge-fix]`, `[ai-merge-resolve]`, `[claude-*]`) also fail. A commit whose PR cannot be found fails closed. Cost: one REST call per relevant commit. (RECOMMENDED)\nB. Identity allowlist. The GitHub author or committer login of each template-touching commit must be in a new repo variable listing approved human logins; bots fail. **Note:** this is weak, because anything pushed with `GH_PAT` is attributed to the PAT owner.\nC. Explicit human approval. The PR that merged the template change must carry an APPROVE review from an OWNER/MEMBER/COLLABORATOR. **Note:** this is weak for the same reason, because the review pipeline can post reviews with `GH_PAT`.\nQ3: Should this fix also replace `GH_PAT` in `sync-claude-live-copies.yml` with a narrower write credential?\nChoices:\nA. Yes: use the job's `GITHUB_TOKEN` with `contents: write` and `pull-requests: write`. **Note:** GitHub does not trigger `pull_request` workflows for pushes or PRs made with `GITHUB_TOKEN`, so CI and review would not run on sync PRs. A human would have to merge every sync PR, which makes the auto-merge branch of Q1:C moot.\nB. Yes: use a GitHub App installation token scoped to this repo's contents and pull requests. This needs a new App ID and private-key secret that does not exist yet. The issue would be blocked until an operator provisions it.\nC. No: keep `GH_PAT` and close the finding with the authorization gate from Q1/Q2. The plan records the broad credential as a known, documented limitation. (RECOMMENDED)",
+  "fingerprint": "8b207c5124dc2238995694144c7526c0c48d042de3f2ef813a531b6f2beaed23",
+  "lineage": {
+    "issue_number": 6375,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37323365070",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37323365070",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005142459_d3ce9262cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6375,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37323365070"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6375 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T14:24:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

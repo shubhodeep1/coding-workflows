@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2111, 5416, 5592 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The workflow expression replaces an explicitly empty `AUTO_MERGE_WAIT_WORKFLOWS` value with `CI`, so operators cannot disable the queued-workflow wait with an empty value as documented.\n  WHY: The helper treats an empty value as disabled, but the workflow passes `CI` instead; reviewers disagreed on severity, and the highest reported severity was MAJOR.\n- scripts/pr_checks_lib.sh:362-374 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The helper lowercases `names_csv` only for disable detection, then compares the original-cased names against workflow names case-sensitively, so a value such as `ci` does not match `CI`.\n  WHY: The queued-CI wait silently fails to engage for a differently-cased configured workflow name; reviewers disagreed on severity, and the highest reported severity was MAJOR.\n- tests/test_pr_base_freshness_gate.py:419-423, 431-435 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The wiring tests do not assert that `AUTO_MERGE_WAIT_WORKFLOWS` is passed through the relevant workflow environment blocks.\n  WHY: Removing the variable from a production env block would not be caught by these wiring tests, while helper tests that set it directly would still pass.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/pr_checks_lib.sh:362-374 | severity=MAJOR | confidence=[4]\n  PROBLEM: The early-out check lowercases `names_csv`, but the jq filter receives the original-cased value and compares it case-sensitively against workflow names.\n  WHY: Setting `AUTO_MERGE_WAIT_WORKFLOWS=ci` while GitHub returns `CI` makes the queued-CI wait silently fail to engage.\n- .github/workflows/review_autofix.yml:2111, 5416, 5592 | severity=MAJOR | confidence=[4]\n  PROBLEM: The workflow expression substitutes `CI` for an explicitly empty `AUTO_MERGE_WAIT_WORKFLOWS` value.\n  WHY: The helper never receives the empty value that its disable check accepts, so the queued-CI wait remains active.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh:363-374 | confidence=[3]\n  PROBLEM: `names_csv` is lowercased only for the early-out check, not for the jq workflow-name matching.\n  WHY: Setting `AUTO_MERGE_WAIT_WORKFLOWS=ci` does not match the workflow name `CI`, so the queued-CI wait does not engage.\n- .github/workflows/review_autofix.yml:2111, 5416, 5592 | confidence=[4]\n  PROBLEM: The workflow-level fallback `|| 'CI'` overrides an empty repository variable.\n  WHY: The workflow forces the queued-workflow wait back on even when the operator wants the empty value to disable it.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:2111, 5416, 5592 | severity=MAJOR | confidence=[5]\n  PROBLEM: The workflow-level `|| 'CI'` defaulting passes `CI` to the helper when the repository variable is empty, contrary to the documented empty-value disable behavior.\n  WHY: The queued-CI wait stays on and can time out with `reason=ci_run_pending` even when the operator intended to disable it.\n- scripts/pr_checks_lib.sh:362-365 (early-out comparison), 369-374 (jq filter) | severity=NIT | confidence=[3]\n  PROBLEM: The early-out check lowercases `names_csv`, but the jq filter compares the original-cased value against workflow names.\n  WHY: Setting `AUTO_MERGE_WAIT_WORKFLOWS=ci` does not match the workflow name `CI`, so the wait silently fails to engage.\n- tests/test_pr_base_freshness_gate.py:419-423, 431-435 | severity=NIT | confidence=[4]\n  PROBLEM: The wiring tests check the existing `AUTO_MERGE_CHECKS_*` variables but do not assert that `AUTO_MERGE_WAIT_WORKFLOWS` is present in the relevant env blocks.\n  WHY: Removing the new variable from a workflow env block would not be caught by these tests, and helper tests that pass it directly would still pass.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:2111, 5416, and 5592 | severity=NIT | confidence=[4]\n  PROBLEM: An explicitly empty `AUTO_MERGE_WAIT_WORKFLOWS` value is replaced with `CI`, although an empty value is specified to disable the wait.\n  WHY: Each caller passes `CI` to the helper, which continues waiting for queued or running CI workflows instead of disabling the wait.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/pr_checks_lib.sh:363-374 | severity=NIT | confidence=[3]\n  PROBLEM: Disable detection lowercases the value, but the jq filter compares the original-case `names_csv` against the workflow name returned by the GitHub API.\n  WHY: Setting `AUTO_MERGE_WAIT_WORKFLOWS=ci` does not match `CI`, resulting in `PR_CHECKS_RUNS_PENDING=0` when it should be greater than zero.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "fb08c303e37e84c1124a7cd207b73894c99bb554b9c31df63113fbf16001693b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7012,
+    "run_id": "38050288364",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38050288364",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010122847_c4d28b2f8f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7012,
+    "run_id": "38050288364"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T12:28:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

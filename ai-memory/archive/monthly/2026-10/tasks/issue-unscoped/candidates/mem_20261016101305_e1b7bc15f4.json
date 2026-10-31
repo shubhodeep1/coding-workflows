@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ledger_emit_substate.sh:550-554 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The circuit-breaker sentinel is created in a `noclobber` subshell after a `mkdir -p` that hides its errors, so if either step fails the sentinel is never written and the circuit does not open.\n  WHY: Later calls in the job keep paying the full timeout cost, which defeats the breaker's purpose. The source labeled this SEVERITY: MAJOR, mapped here to high. Sonnet-5.5 reviewed the same code and judged the fail-open behavior correct (the circuit stays closed if `mkdir` or the sentinel create fails), so the reviewers disagree on whether this is a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Store the sentinel as a file in the existing per-job marker directory, <seen file>.d\" (job-scoped circuit breaker)\n  expected_change_site: scripts/ledger_emit_substate.sh (sentinel creation near lines 550-554)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Sentinel creation does not guarantee that `${marker_dir}` exists, because `mkdir -p` errors are suppressed with `2>/dev/null`. The source labeled this SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ledger_emit_substate.sh:550-554 | severity=MAJOR | confidence=4\n  PROBLEM: The circuit-breaker sentinel is created in a `noclobber` subshell after a `mkdir -p` that hides its errors, so if either step fails the sentinel is never written and the circuit does not open.\n  WHY: Later calls in the job keep paying the full timeout cost instead of skipping.\n- TASK_GAP:\n  Requirement: \"Add a job-scoped circuit breaker ... Store the sentinel as a file ... Check that the sentinel name is new.\"\n  Expected change site: scripts/ledger_emit_substate.sh\n  Evidence of absence: Sentinel creation does not ensure `${marker_dir}` exists, because `mkdir -p` errors are suppressed with `2>/dev/null`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "291e9c07b7d8ea0d58aaa617394e5841ee7ee798af76006420e611753a9c12ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7498,
+    "run_id": "38881801503",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38881801503",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016101305_e1b7bc15f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7498,
+    "run_id": "38881801503"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-16T10:13:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

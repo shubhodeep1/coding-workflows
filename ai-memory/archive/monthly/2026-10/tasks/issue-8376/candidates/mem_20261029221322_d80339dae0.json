@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The `stable` checkout has PR #8379's diagnostics but not the fixes from #8243 or #8259. In `.github/workflows/test-and-mark-stable.yml`, the Phase 3b step still uses one shared 30-minute timer for the whole Implement phase (lines 1356-1358 and 1710). It also picks the run to follow with `matches[0].id` (line 1423), so it can follow a queued run instead of the one doing the work. The run evidence shows two separate causes: the step followed queued run 40882150007 while run 40882033359 did the work, and the pre-push gate step alone took 30.5 minutes. Only fixing both (A) makes this incident pass without weakening the 30-minute guard for any other step. Option B leaves every `stable` release gate exposed until the next promotion. Option C would still have timed out in this incident.\nQ2: Copying the logic from `main` keeps the identifiers and the `PREPUSH_GATE_STEP_STALL_MINUTES` default the same on both branches. That avoids conflicts at the next `main` \u2192 `stable` promotion and follows the rule against renaming identifiers. The GitHub facts line \"Branch `origin/main` ... does not exist\" is most likely a lookup of a branch literally named `origin/main`. Two facts point to `main` existing: PRs #8243 and #8259 were merged into `main`, and the intake run 40892296256 ran on `main` @ 9a124c8ce787. So the implementer should fetch `main` from the `origin` remote rather than rely on a pre-existing `origin/main` ref. Option C would have me paste SHAs I don't have, which loops back into clarification. Option B risks drift. The BLOCKED fallback in A is the safe stop if `main` really can't be read.\n\nEXECUTION PLAN (required for any non-letter decision):\nNot required: both decisions are lettered. Binding notes for the planner:\n- **Scope limit.** Only touch `.github/workflows/test-and-mark-stable.yml`, `tests/**` and one new `changelog.d/<issue>-*.md`.\n- **Getting the code.** At implementation time, run `git fetch origin main`, or use the existing full-history checkout. Take the run-selection change (#8243, merged 2026-10-28T06:09:37Z, head `ai/issue-8241`) and the pre-push gate stall budget (#8259, merged 2026-10-28T13:39:31Z, head `ai/issue-8244`) from `main`'s copy of the workflow and their tests. Find them with `git log origin/main` on that file.\n- **What must stay.**\n  - The default 30-minute inactivity guard for every step other than the pre-push gate.\n  - The `::error::Implement phase stalled` message and the `status=timeout` / `status=implement_failed` outputs.\n  - The `log_implement_stall_diagnostics` / `stall-diag` lines from PR #8379.\n- **Conflict handling.** Where `main`'s hunks conflict with #8379's diagnostics on `stable`, merge them so both behaviours survive. Never drop the diagnostics.\n- **Checks after porting.**\n  - Run `wc -c` on the workflow file (480,000-byte guard).\n  - Port the matching contract tests from `main`. If `main`'s versions don't apply cleanly to `stable`'s test layout, add new ones in `tests/test_test_and_mark_stable_plan_polling_guard.py`.\n  - Run the existing `tests/test_test_and_mark_stable_*.py` suite.\n- **When to emit BLOCKED.** If `main` can't be fetched, or the port needs files outside the scope above, emit `BLOCKED: cannot port #8243/#8259 from main within heal scope`. Do not redesign the logic.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone.",
+  "fingerprint": "bac420109888e10bb352c97fd5bc394b04a75f9368296ff40022c5e181f9c828",
+  "lineage": {
+    "issue_number": 8376,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40963150571",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40963150571",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8376"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029221322_d80339dae0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8376,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40963150571"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8376",
+  "timestamps": {
+    "created_at": "2026-10-29T22:13:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

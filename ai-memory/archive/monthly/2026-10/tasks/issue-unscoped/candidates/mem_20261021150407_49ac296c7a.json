@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:4663 | severity=MAJOR | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The year guard in `normalize_synced_security_category` (`_SYNCED_SECURITY_YEAR_RE.findall(raw)`, regex at line 124) scans the whole category string for any 4-digit year other than 2021, so \"A08:2021-Software and Data Integrity Failures (CVE-2020-1234)\" raises ValueError.\n  WHY: `security_audit_upstream_report.sh` counts the ValueError under `dropped=` and the finding is never dispatched, so it is lost. Severity disagreement: sonnet-5_5 said NIT, qwen said MAJOR; the highest is used.\n- scripts/workflow_failure_heal_intake.sh:750-752 | severity=NIT | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The retired-file list is read from the consumer's pinned release (`${WRAPPER_SHA}`) but `scope_unresolved` is decided against HEAD, so a file retired after the pin is not skipped.\n  WHY: A consumer pinned to an older release still ends at `skip reason=scope_unresolved` with a Telegram WARNING until its daily sync moves the pin.\n- agents.d/7604-synced-security-finding-intake.md:2-4 | severity=NIT | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The fragment says it refines the paragraph \"above\", but `assemble_agents.py` appends fragment text to the end of the section, and the base paragraph still says \"anything else is rejected\".\n  WHY: A reader may conclude from the base paragraph that `A01: Broken Access Control` is still rejected. This is documentation only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal.py:124 and about 4663 (`normalize_synced_security_category`, `_SYNCED_SECURITY_YEAR_RE.findall(raw)`) | severity=NIT | confidence=3\n  PROBLEM: The guard scans the whole category string for any 4-digit year in 1900-2099 that is not 2021, so \"A08:2021-Software and Data Integrity Failures (CVE-2020-1234)\" raises ValueError.\n  WHY: `security_audit_upstream_report.sh` counts the ValueError under `dropped=` and the finding is never dispatched. Limiting the check to the text right after the code would keep the `A01 (2017)` rejection.\n- scripts/workflow_failure_heal_intake.sh:751-752 | severity=NIT | confidence=3\n  PROBLEM: The retired list comes only from the consumer's pinned release (`git show \"${WRAPPER_SHA}:workflow-templates/retired_files.txt\"`), while the `scope_unresolved` decision is made against HEAD.\n  WHY: A consumer pinned to an older release reports a finding on a file retired since then, and it ends at `skip reason=scope_unresolved` with a Telegram WARNING. The window is short and the PR does not claim to cover it.\n- agents.d/7604-synced-security-finding-intake.md:2-4 | severity=NIT | confidence=3\n  PROBLEM: The \"This refines the ... paragraph above\" wording points at text that may not sit near the fragment after the fold, and the base paragraph still says \"anything else is rejected\".\n  WHY: Nothing breaks at runtime. A reader may conclude that `A01: Broken Access Control` is rejected. Documentation only.\n- HARDENING_SUGGESTIONS: scripts/workflow_failure_heal_intake.sh line 781 (`ss_group_file=\"$(jq -r '.file' ...)\"`)\n  PROBLEM: If the `jq` read fails or returns empty, the retired check is skipped with no log.\n  WHY: This is safe but the cause is invisible. Suggested fix: add `[ -n \"${ss_group_file}\" ] || log \"warn empty_group_file fp=${FP}\"` after the read (about 1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py:4663 (regex lines 122 and 124) | severity=MAJOR | confidence=3\n  PROBLEM: The year guard scans the entire category string for any 4-digit year, so a canonical `A0x:2021-<name>` that mentions a different year (for example `(CVE-2020-1234)`) raises ValueError.\n  WHY: On `main` the same string was accepted. Now `security_audit_upstream_report.sh` (lines 230-236) counts it in `dropped=` and dispatches nothing, so a high/critical finding is silently lost. The tests do not cover this shape.\n- scripts/workflow_failure_heal_intake.sh:750-752 (vs. line 836 `heal-scope render ... --ref HEAD`) | severity=NIT | confidence=3\n  PROBLEM: The retired-file skip reads the list from `${WRAPPER_SHA}`, but scope resolution runs against `HEAD`.\n  WHY: A file retired after the consumer's pin is not skipped, and the report ends at `skip reason=scope_unresolved` with `ss_attention=1` and a Telegram WARNING. Suggested fix: read the list from `HEAD`, or from both.\n- agents.d/7604-synced-security-finding-intake.md:2-4 | severity=NIT | confidence=4\n  PROBLEM: The lead-in says it refines the paragraph \"above\", but `scripts/assemble_agents.py` appends fragment text to the end of the section. The base paragraph in `agents.md` still says \"anything else is rejected\".\n  WHY: A reader may conclude that `A01: Broken Access Control` is still rejected and re-add the strictness. The fragment should say \"in this section\" so it does not depend on placement.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d5c6ab71c0d6cba4e0d9a9854ad89ebb105b3459339544235b4dd2046c4266ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7817,
+    "run_id": "39616808010",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39616808010",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021150407_49ac296c7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7817,
+    "run_id": "39616808010"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T15:04:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: A high or critical finding on a consumer's `.claude/hooks/<name>` (the #7555 guard-file case). What should the intake file?\nChoices:\n- A: File the heal issue with its scope set to the template twin only (`workflow-templates/.claude/hooks/<name>`, plus `tests/**` and `changelog.d/*.md`). The live copy follows after merge through `sync-claude-live-copies.yml`. That workflow holds pipeline-authored template changes in its draft PR for human review, which matches Q248's \"protected paths still go through approvals\". PR CI tolerates template-only drift (`pending_template_paths`), and the stable release gate stays blocked until both copies match. (RECOMMENDED)\n- B: File the heal issue with `ai:needs-human` and no editable scope, for an interactive operator to fix both copies.\n- C: Skip it with a named reason, log only, as the earlier plan's D3 did. The finding stays only in the consumer tracker. **Note:** this drops the #7555 case that motivated the plan.\nQ2: A high or critical finding on a consumer's root `CLAUDE.md`. The source is this repository's root `CLAUDE.md`, which the isolated editor hides and cannot write. What should the intake do?\nChoices:\n- A: File the heal issue through the normal flow with scope `CLAUDE.md` (Q248). Implementation then cannot change the file, so the issue ends blocked, and the unblock judge hands it to an operator step. (RECOMMENDED)\n- B: Skip it with a named reason (for example `skip reason=synced_security_finding_operator_only`) and file nothing.\n- C: File an issue with `ai:needs-human` directly and skip the plan and implement phases.",
+  "fingerprint": "fd0e8d4c43a69f6be0169a43598d78dd38259411d249afc2d64075cd949a8093",
+  "lineage": {
+    "issue_number": 7605,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39098365924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39098365924",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261018045835_a72b29eb74",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7605,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39098365924"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7605 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-18T04:58:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

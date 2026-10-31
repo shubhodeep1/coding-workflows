@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_log_prefix_regressions.sh:53-55 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The test requires an inline `AUTOFIX_DISPATCH_SKIPPED` echo callsite in `.github/workflows/review_autofix.yml`, but the workflow has none.\n  WHY: `assert_review_autofix_dispatch_mirrors` exits nonzero when it finds no callsites, failing `tests-hooks-and-orchestrator` on this PR head; the issue is unrelated to the sandbox changes.\n- docs/INVENTORY.md:249; tests/inventory_parity.py:264-269 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The inventory documents `scripts/smoke_review_dispatch.sh`, but that script is absent from the repository.\n  WHY: Inventory parity reports the entry as unexpected and exits nonzero, failing `tests-release-and-log-analysis` on this PR head; the issue is unrelated to the sandbox changes.\n- tests/test_phase_skip_gate_telemetry_contract.py:96-108; `.github/workflows/clarify.yml:479` | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The test subprocess does not set `AI_ISSUE_IMPLEMENTER`, which the workflow step expands while running with `set -u`.\n  WHY: The subprocess exits nonzero when the variable is unset, failing `tests-promote-stall-and-review` on this PR head; the issue is unrelated to the sandbox changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py, Location: host_git_env, lines 34\u201343 | HARDENING_SUGGESTION\n  PROBLEM: When `GIT_DIR` is set to a relative path (e.g. `.git`), `os.path.abspath(git_dir)` resolves it against `os.getcwd()` of the Python process, not against the caller-known `host`. The function silently accepts whatever path that produces.\n  WHY: In production the workflow always emits an absolute path, so this is theoretical \u2014 but the test asserts the env round-trips correctly and would benefit from a contract.\n  Suggested minimal fix: anchor the abspath to a stable base (e.g. `os.path.abspath(git_dir, start=str(host))` is invalid syntax; instead normalize `git_dir` to absolute against the host's parent or reject relative paths explicitly with a small `os.path.isabs(git_dir)` check that falls back to `git_env`).\n  HARDENING_RISK_SCORE: 1\n- scripts/review_untrusted_sandbox.sh, Location: line 12 (`workspace=\"$(git rev-parse --show-toplevel 2>/dev/null || true)\"`) | HARDENING_SUGGESTION\n  PROBLEM: The silent swallow of `git rev-parse` errors hides genuine misconfiguration (missing git binary, unset HOME, broken work tree) behind the `GITHUB_WORKSPACE` fallback.\n  WHY: If the runner's PATH strips git in some image variant, the script silently reverts to the original buggy behaviour.\n  Suggested minimal fix: emit one `::warning::Review sandbox falling back to GITHUB_WORKSPACE (git rev-parse --show-toplevel failed: <err>)` line when `workspace` is empty after the `git` call. `2>/dev/null` becomes `2>&1`; capture stderr in a variable; emit only on the fallback path.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_log_prefix_regressions.sh:53-55 | severity=MAJOR | confidence=[5]\n  PROBLEM: The test requires an inline `AUTOFIX_DISPATCH_SKIPPED` echo callsite in `.github/workflows/review_autofix.yml`; the current workflow has none.\n  WHY: `assert_review_autofix_dispatch_mirrors` exits nonzero when it finds no callsites. CI confirms this fails `tests-hooks-and-orchestrator` on this PR head; it is unrelated to the sandbox changes.\n- docs/INVENTORY.md:249; tests/inventory_parity.py:264-269 | severity=MAJOR | confidence=[5]\n  PROBLEM: The inventory documents `scripts/smoke_review_dispatch.sh`, but that script is absent from the repository.\n  WHY: Inventory parity reports the entry as unexpected and exits nonzero, failing `tests-release-and-log-analysis` on this PR head; it is unrelated to the sandbox changes.\n- tests/test_phase_skip_gate_telemetry_contract.py:96-108; `.github/workflows/clarify.yml:479` | severity=MAJOR | confidence=[5]\n  PROBLEM: The test subprocess inherits the environment but does not set `AI_ISSUE_IMPLEMENTER`. The workflow step expands it while running with `set -u`.\n  WHY: The subprocess exits nonzero when the variable is unset, failing `tests-promote-stall-and-review` on this PR head; it is unrelated to the sandbox changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "f9c60c84a74f2dfe5d8f9e7fd9f10ea10635ee5bf0f6c5c7247e0e91b96b56ef",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6173,
+    "run_id": "37173077388",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37173077388",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004032434_21f4ba0663",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6173,
+    "run_id": "37173077388"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-04T03:24:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

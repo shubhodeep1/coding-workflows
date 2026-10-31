@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/escalation-judge.md:54 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The close-path PR ownership allowlist omits `activation-fix-<k>` from the legacy-mode branch kinds, so a legacy-mode activation-fix PR is rejected as not belonging to the project.\n  WHY: If the judge chooses `close` for a legacy-mode project with an open activation-fix PR, the PR remains open and mergeable after the project is recorded as closed.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The close branch must correctly close every open PR the chain opened across all three modes; the legacy-mode branch-kind allowlist must cover `activation-fix-<k>` so verify-activation PRs are closed.\n  expected_change_site: .claude/commands/escalation-judge.md line 54, rule (c) legacy-mode branch-kind list\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The legacy-mode list in rule (cc) omits `activation-fix-<k>`; step 12 of implement-plan-claude.md (line 88) creates activation-fix PRs in both project and legacy mode with head `claude/implement-plan-<slug>-activation-fix-<k>` from the default branch.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/escalation-judge.md:54 | severity=high | confidence=5\n  PROBLEM: In legacy mode, rule (c) omits `activation-fix-<k>` from its branch-kind allowlist, so the judge rejects the project's activation-fix PR when closing the project.\n  WHY: The PR remains open and mergeable after the project is recorded as closed.\n- TASK_GAP\n  Requirement: The close branch must correctly close every open PR the chain opened across all three modes (issue mode, project mode, legacy mode). The branch-kind allowlist in rule (c) for legacy mode must cover `activation-fixx-<k>` so verify-activation PRs are closed.\n  Expected change site: .claude/commands/escalation-judge.md line 54, rule (c) legacy-mode branch-kind list\n  Evidence of absence: The legacy-mode list in rule (cc) reads \"one of `phase-<n>`, `complette`, `conformance-fixx-<k>`, `conformance-fixx-budget-<n>`, `validation-fixx-<cycle>`, `descope-<n>`\". `activation-fix-<k>` is not present. Step 12 of implement-plan-claude.md (line 88) creates activation-fix PRs in both project and legacy mode with head `claude/implement-plan-<slug>-activation-fix-<k>` from the default branch. This branch kind cannot be closed by the judge in legacy mode.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/commands/escalation-judge.md:54 | severity=high | confidence=5\n  PROBLEM: Rule (c) restricts `activation-fix-<k>` to project mode, excluding legacy-mode activation-fix PRs from the ownership allowlist.\n  WHY: The judge skips closing the open PR when closing the legacy-mode project, leaving it open and mergeable.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/escalation-judge.md (and twin at workflow-templates/.claude/commands/escalation-judge.md) | severity=high | confidence=4\n  PROBLEM: The legacy-mode kind list in clause (c) omits `activation-fix-<k>`, so the close path does not recognize a legacy-mode activation-fix PR as belonging to the project.\n  WHY: The PR is skipped during close and remains open, allowing it to merge after the project log records the project as closed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/escalation-judge.md:54 | severity=high | confidence=5\n  PROBLEM: The close-path allowlist excludes activation-fix PRs in legacy mode.\n  WHY: After a legacy-mode `verify-activation-cap`, the judge rejects the open activation-fix PR as not belonging to the project, leaving it open and mergeable after the project is recorded as closed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/commands/escalation-judge.md | severity=high | confidence=5\n  PROBLEM: `activation-fix-<k>` is listed only for project mode, not in the legacy-mode close allowlist.\n  WHY: The judge rejects and does not close the legacy-mode activation-fix PR, leaving it open and mergeable after the project log records it as closed.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/escalation-judge.md | severity=high | confidence=5\n  PROBLEM: The close-choice PR ownership allowlist omits `activation-fix-<k>` from the legacy-mode kind list.\n  WHY: The ownership check fails to close the open activation-fix PR, leaving it mergeable after the project is recorded as closed.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "68b57d075c11fddc1471615f7a8888a409deaaf95a004e7752ac621afef1a534",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36964296478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36964296478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002044542_ec87ca41af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36964296478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T04:45:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

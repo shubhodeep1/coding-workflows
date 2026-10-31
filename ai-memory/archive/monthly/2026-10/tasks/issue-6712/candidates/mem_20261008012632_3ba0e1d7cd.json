@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6712,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6712\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6722\",\"pr_number\":6722,\"branch\":\"ai/issue-6712\",\"run_id\":\"37711319946\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37711319946\",\"changed_files\":[\".claude/commands/seed-repo.md\",\"README.md\",\"agents.md\",\"changelog.d/6712-propagate-consumer-secrets-schedule.md\",\"docs/scripts-pending-removal.md\",\"scripts/propagate_consumer_secrets.sh\",\"tests/test_propagate_consumer_secrets.py\",\"workflow-templates/.claude/commands/seed-repo.md\"]}",
+  "fingerprint": "6459af815c8eb1edf093414b8c65673f26da5816c5e573de76f30c4dc2fed1c7",
+  "lineage": {
+    "issue_number": 6712,
+    "parent_ids": [],
+    "pr_number": 6722,
+    "run_id": "37711319946",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37711319946",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6722"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261008012632_3ba0e1d7cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6712,
+    "level": "run",
+    "pr_number": 6722,
+    "run_id": "37711319946"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6712: https://github.com/shubhodeep1/coding-workflows/pull/6722",
+  "timestamps": {
+    "created_at": "2026-10-08T01:26:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

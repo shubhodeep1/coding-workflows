@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:567-575 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The check-paths command validates its arguments and handles OS/Unicode errors by printing \"unsupported path\" and exiting 1.\n  WHY: Without this handling, the resolver would receive exit code 2 and incorrectly report \"sandbox_path_unsupported\" for legitimate paths.\n- scripts/review_untrusted_workspace.py:477-480 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The duplicate later lookup of the sandbox path was removed after resolving both paths in one try block.\n  WHY: The reviewer reports no runtime failure; this prevents potential race conditions from multiple path resolutions and improves code clarity.\n- scripts/review_untrusted_workspace.py:482-484 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Symlinks in either path are reported as `reason=symlink_in_path` instead of `reason=unknown`.\n  WHY: The reviewer reports no runtime failure; this improves debugging accuracy.\n- tests/test_review_autofix_review_pipeline_contract.py:9332-9344 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test assertions were corrected because the test expected text that the helper did not contain.\n  WHY: The reviewer reports no runtime failure; the tests now correctly validate the actual helper implementation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_untrusted_workspace.py:567-575 | severity=high | confidence=5\n  PROBLEM: The check-paths command properly validates its arguments and handles OS/Unicode errors by printing \"unsupported path\" and exiting 1.\n  WHY: Without this fix, the resolver would receive exit code 2 from check-paths, causing it to report \"sandbox_path_unsupported\" for legitimate paths that should be allowed.\n- scripts/review_untrusted_workspace.py:477-480 | severity=low | confidence=5\n  PROBLEM: The duplicate later lookup of the sandbox path was removed.\n  WHY: No runtime failure - this prevents potential race conditions from multiple path resolutions and improves code clarity.\n- scripts/review_untrusted_workspace.py:482-484 | severity=low | confidence=5\n  PROBLEM: Symlinks in either path are now reported as `reason=symlink_in_path` instead of `reason=unknown`.\n  WHY: No runtime failure - improves debugging accuracy.\n- tests/test_review_autofix_review_pipeline_contract.py:9332-9344 | severity=low | confidence=5\n  PROBLEM: The test assertions were corrected because the test expected text that the helper did not contain.\n  WHY: No runtime failure - the tests now correctly validate the actual helper implementation.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "463f9a101baf6ea9e0606c8118b8d7128cba3684d92a24eb6d928955a94c41c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6704,
+    "run_id": "37694455120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37694455120",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007222910_19c00e211c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6704,
+    "run_id": "37694455120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T22:29:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

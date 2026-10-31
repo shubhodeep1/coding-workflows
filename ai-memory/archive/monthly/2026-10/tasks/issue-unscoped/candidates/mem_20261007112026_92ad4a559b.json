@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:tests-hooks-and-orchestrator | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The tests-hooks-and-orchestrator CI job failed with 8 test failures out of 454, and the aggregate lint check fails, preventing merge eligibility.\n  WHY: The failed test suite indicates regressions; the reviewers associate failures with the guard-hook parity drift.\n- .claude/hooks/pr_merge_status_guard.py:Parity drift between live and template copies. | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The live merged-PR guard and its consumer-template copy differ, violating the repository's parity contract.\n  WHY: The parity test fails on this mismatch; openai_gpt-6-luna classified it as BLOCKER, while google_gemini-3_1-flash-lite did not state a severity.\n- scripts/security_audit.sh:1411 (regex) | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fenced extraction regex is overly strict and can reject fenced results with formatting variations.\n  WHY: Such results fall back to codex unnecessarily, increasing API cost and latency.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CI must pass on the PR head for merge eligibility.\n  expected_change_site: the current merge head `95a2633ffc`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: `tests-hooks-and-orchestrator` reports 8 failed tests out of 454; the aggregated `lint` check also fails; parity drift between `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` breaks `test_claude_template_live_parity.py`.\n- requirement: \"Consumer repos / Get Claude by default from the role default; AI_ENGINE_SECURITY_AUDIT=codex opts a repo out.\" The consumer wrapper must forward or expose AI_ENGINE_SECURITY_AUDIT for the opt-out to work on consumer repos.\n  expected_change_site: workflow-templates/ai-security-audit.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The consumer wrapper template `workflow-templates/ai-security-audit.yml` was not modified in the PR; it does not appear to pass `AI_ENGINE_SECURITY_AUDIT` as an input to the reusable workflow call.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: CI must pass on the PR head for merge eligibility.\n  Expected change site: the current merge head `95a2633ffc`\n  Evidence of absence: `tests-hooks-and-orchestrator` reports 8 failed tests out of 454; the aggregated `lint` check also fails. The 7-line parity drift between `.claude/hooks/pr_merge_status_guard.py` (1813 lines) and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` (1820 lines) breaks `test_claude_template_live_parity.py`. This drift was introduced by the merge of `main` (the `last_commit_stat` shows both files changed in the merge commit); the merge resolution did not unify the divergent copies. The PR's own changes are correct, but the head cannot be merged with failing CI.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml (CI Job result) | confidence=5\n  PROBLEM: CI job tests-hooks-and-orchestrator failed with 8 test failures out of 454.\n  WHY: The failing test suite indicates functional regressions, likely linked to the parity drift detected in protected guard hooks (`pr_merge_status_guard.py`). The CI aggregate job `lint` also fails due to this, preventing merge eligibility.\n- .claude/hooks/pr_merge_status_guard.py (Parity drift between live and template copies.) | confidence=5\n  PROBLEM: Parity drift detected between the live `.claude/hooks/pr_merge_status_guard.py` and the template `workflow-templates/.claude/hooks/pr_merge_status_guard.py`.\n  WHY: The automated parity check (`test_claude_template_live_parity.py`) fails, which is a required check-run for release gates. The drift indicates that an update intended for the template was not propagated, or vice-versa, breaking the contract.\n- scripts/security_audit.sh:1411 (regex) | confidence=4\n  PROBLEM: The fenced extraction regex `re.fullmatch(r\"```json[ \\t]*\\n(.*)\\n```\", text, re.S)` is overly strict, failing on fenced results without a newline after the language tag or with unexpected whitespace.\n  WHY: If Claude returns a slightly different format (e.g., just ` ```json ` followed by the content), it will fall back to codex unnecessarily. While functionally safe (codex is the fallback), it increases API cost and latency.\n- TASK_GAP\n  Requirement: \"Consumer repos / Get Claude by default from the role default; AI_ENGINE_SECURITY_AUDIT=codex opts a repo out.\" The consumer wrapper must forward or expose AI_ENGINE_SECURITY_AUDIT for the opt-out to work on consumer repos.\n  Expected change site: workflow-templates/ai-security-audit.yml\n  Evidence of absence: The consumer wrapper template `workflow-templates/ai-security-audit.yml` was not modified in the PR. It does not appear to pass `AI_ENGINE_SECURITY_AUDIT` as an input to the reusable workflow call, meaning consumers cannot successfully exercise the opt-out mechanism via repository variables as documented.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py and workflow-templates/.claude/hooks/pr_merge_status_guard.py | confidence=5\n  PROBLEM: The live and consumer-template copies of the merged-PR guard differ, violating the repository\u2019s parity contract.\n  WHY: test_template_copies_are_identical fails on this mismatch. The supplied CI run also reports failures in the tests-hooks-and-orchestrator job, which runs this test suite.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "66dc652213d150aa78d4e812c780659f169ef674bff56498cc6c12671ffc7122",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6610,
+    "run_id": "37610270734",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37610270734",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007112026_92ad4a559b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6610,
+    "run_id": "37610270734"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T11:20:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

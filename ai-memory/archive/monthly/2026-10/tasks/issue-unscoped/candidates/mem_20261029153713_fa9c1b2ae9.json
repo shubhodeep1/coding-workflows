@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:22535-22537 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The failure-signature breaker (`_failure_fingerprint_breaker_check` and its calls in the recovery logic) only evaluates comments that contain `AI_FAILURE_FINGERPRINT_V1`, but no workflow emits that marker. The current plan and clarify failure handlers post comments without it (.github/workflows/plan.yml:3413-3414; .github/workflows/clarify.yml:2224-2225).\n  WHY: Real plan and clarify failures never reach the evaluator, so the breaker cannot trip or stop repeated failures, and retries continue until another recovery limit is reached. Both reviewers stated severity MAJOR, mapped here to high. gemini cited only the symbol, with no line range; the range comes from gpt-6-luna. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash explicitly declined to report this, because the linked issue assigns the marker producer to sibling phase P3a (#8291): \"The breaker cannot trip until sibling phase P3a starts emitting the failure markers\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement the failure-signature breaker (P3b), which requires both detecting (consumed in this PR) and emitting (producer) the failure markers.\n  expected_change_site: .github/workflows/clarify.yml and .github/workflows/plan.yml\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff contains no changes to workflow files that emit `AI_FAILURE_FINGERPRINT_V1` markers upon failure, which is required for the breaker logic implemented in `scripts/orchestrate_poll_process.sh` to function. (anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash explicitly treat this as out of scope: sibling phase P3a.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:`_failure_fingerprint_breaker_check` and calls in recovery logic | severity=MAJOR | confidence=5\n  PROBLEM: The implemented failure-signature breaker relies on `AI_FAILURE_FINGERPRINT_V1` markers, but there is no corresponding implementation in the plan or clarify workflows to emit these markers.\n  WHY: The failure-signature breaker will never trip because the required markers are never generated, rendering the new logic non-functional.\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: Implement the failure-signature breaker (P3b), which requires both detecting (consumed in this PR) and emitting (producer) the failure markers.\n  Expected change site: .github/workflows/clarify.yml and .github/workflows/plan.yml\n  Evidence of absence: The PR diff contains no changes to workflow files that emit `AI_FAILURE_FINGERPRINT_V1` markers upon failure, which is required for the breaker logic implemented in `scripts/orchestrate_poll_process.sh` to function.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:22535-22537; .github/workflows/plan.yml:3413-3414; .github/workflows/clarify.yml:2224-2225 | severity=MAJOR | confidence=5\n  PROBLEM: The breaker only evaluates comments containing `AI_FAILURE_FINGERPRINT_V1`, but the current plan and clarify failure handlers post comments without that marker. No workflow emits the marker.\n  WHY: Real plan and clarify failures never reach the evaluator, so the failure-signature breaker cannot stop repeated failures. Retries continue until another recovery limit is reached.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b3d25217448d0d78a5443ad7cf1cec78552eef7712f81652097d08fbed73c61e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8350,
+    "run_id": "40894525989",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40894525989",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029153713_fa9c1b2ae9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8350,
+    "run_id": "40894525989"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T15:37:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

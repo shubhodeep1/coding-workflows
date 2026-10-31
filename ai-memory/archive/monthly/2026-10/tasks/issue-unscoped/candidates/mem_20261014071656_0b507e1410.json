@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:1271-1305 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The `met)` arm (line 1271) and the `expired` path (line 1305) in `unblock_main` swallow a failed hold-marker PATCH with `|| true` and write no structured log. The `unmet)` and `unknown)` arms already log `reason=hold_refresh_failed`.\n  WHY: A failed PATCH leaves the hold open. The next run can re-post the resume or re-judge the item, and nothing in the log explains it. Severity disagreement: MAJOR (gemini, minimax) vs NIT (sonnet, openai, qwen, glm). The highest is kept, and \"high\" is the closest mapping for MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_judge.sh:1271,1305 | severity=NIT | confidence=4\n  PROBLEM: The `met)` arm (line 1271) and the `expired` path (line 1305) swallow a failed hold-marker update with `|| true`. The `unmet)` and `unknown)` arms log `hold_refresh_failed`.\n  WHY: A failed update leaves the hold open, so the next run can re-post the resume or re-expire the hold. `unblock_patch_comment` (line 348) writes no log, so the failure leaves no trace. The suggested fix replaces `|| true` with `|| unblock_log \"... reason=hold_refresh_failed\"`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:unblock_main (met and expired hold arms) | severity=MAJOR | confidence=4\n  PROBLEM: Failures of `unblock_patch_comment` are swallowed by `|| true`.\n  WHY: If the status comment fails to update, the tracking issue stays inconsistent with the judge's state. The judge may repeat the met action or miss an expired hold.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:~1271 (met arm), ~1305 (expired arm) | severity=MAJOR | confidence=4\n  PROBLEM: The `met)` and `expired)` arms swallow a failed hold-marker PATCH with `|| true`. The `unmet)` and `unknown)` arms log `hold_refresh_failed`.\n  WHY: In the `met)` arm, the marker stays `open`, so the next scan posts the resume again. In the `expired)` arm, the marker stays `open`, so the judge may post a duplicate resume or start a new hold past `MAX_HOLDS_PER_ITEM`.\n- scripts/unblock_judge.sh:~1271 (met arm), ~1305 (expired arm) | severity=MAJOR | confidence=4\n  PROBLEM: This is the same issue seen as an error path. `unblock_patch_comment ... || true` hides every PATCH failure with no structured log, and the arms should mirror the `unmet)` and `unknown)` pattern.\n  WHY: A swallowed failure on the `met)` path repeats the `/answer` resume. On the `expired)` path it erodes the `MAX_HOLDS_PER_ITEM=3` budget. The structured log is the only debugging signal.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:1271,1305 (`unblock_main`) | severity=NIT | confidence=4\n  PROBLEM: The `met` branch (line 1271) and the hold-expiration branch (line 1305) swallow a failed hold-marker PATCH with `|| true`.\n  WHY: In the `met` branch the resume has already succeeded, so a failed PATCH makes the next run post the resume again. `unblock_run_ops` does not deduplicate. In the expiration branch the hold stays open and keeps counting toward `MAX_HOLDS_PER_ITEM`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh:1271,1305 | severity=NIT | confidence=4\n  PROBLEM: The `met` arm (line 1271) and the `expired` arm (line 1305) swallow a failed hold-marker PATCH with `|| true`. The `unmet` and `unknown` arms now log `reason=hold_refresh_failed`.\n  WHY: In the `met` arm, a failed PATCH can make the next scan post a duplicate resume `/answer` comment. In the `expired` arm, it can cost an extra judged round. Neither arm logs the failure.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_judge.sh:1271,1303-1305 | severity=NIT | confidence=4\n  PROBLEM: The `met` arm's `done`-marker PATCH (line 1271) and the hold-expiry PATCH (lines 1303-1305) are still `|| true`. The `unmet` arm (lines 1293-1294) and `unknown` arm (lines 1283-1284) now log `hold_refresh_failed`.\n  WHY: A failed PATCH leaves the hold `open`, so the next scan can repost the `/answer` or cost an extra judged round. Neither path logs, and the duplicate `/answer` is guarded by processed-command idempotency.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1767abaa0db0de62ebef60ee8e944e20e6d19d83cb53d9404a6f366afebe1344",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7361,
+    "run_id": "38523542988",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38523542988",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014071656_0b507e1410",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7361,
+    "run_id": "38523542988"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T07:16:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

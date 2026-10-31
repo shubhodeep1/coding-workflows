@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6222,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6222\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6227\",\"pr_number\":6227,\"branch\":\"ai/issue-6222\",\"run_id\":\"37233603783\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37233603783\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".claude/commands/audit-plans.md\"]}",
+  "fingerprint": "a478892b32383832a49b137706e728643b91e53465bddbfc61ac3c7ac89e412d",
+  "lineage": {
+    "issue_number": 6222,
+    "parent_ids": [],
+    "pr_number": 6227,
+    "run_id": "37233603783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37233603783",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6227"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261004210449_978f9281aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6222,
+    "level": "run",
+    "pr_number": 6227,
+    "run_id": "37233603783"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6222: https://github.com/shubhodeep1/coding-workflows/pull/6227",
+  "timestamps": {
+    "created_at": "2026-10-04T21:04:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

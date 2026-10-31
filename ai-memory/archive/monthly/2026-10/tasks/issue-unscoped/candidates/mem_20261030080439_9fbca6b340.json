@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_engine_fallback_report.sh:358-360 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The condition `[[ \"${pool_reason}\" =~ ^[a-z0-9_]{1,60}$ ]]` relies on `pool_reason` having been set and does not explicitly handle an empty or uninitialized value if the token source changes.\n  WHY: It is not a failure today because the variable is initialised, but it is fragile if the `report_pool_reason_token` implementation changes. The reviewer rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ai_engine_fallback_report.sh:358-360 | severity=low | confidence=2\n  PROBLEM: The condition `[[ \"${pool_reason}\" =~ ^[a-z0-9_]{1,60}$ ]]` relies on `pool_reason` having been set and does not explicitly handle an empty or uninitialized value if the token source changes.\n  WHY: It is not a failure today because the variable is initialised, but it is fragile if the `report_pool_reason_token` implementation changes. The reviewer rated it NIT, mapped here to low.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f719304bdf033e48fe1868cb9ff6d2dd88e98481be4fef89317394ffbd1863f6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8438,
+    "run_id": "41019867065",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41019867065",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030080439_9fbca6b340",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8438,
+    "run_id": "41019867065"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-30T08:04:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

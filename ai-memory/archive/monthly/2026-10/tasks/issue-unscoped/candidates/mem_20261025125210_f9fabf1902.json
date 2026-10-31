@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:_POLLER_CURL_SHIM (exit 7) | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The curl shim forces an exit code of 7 for all invocations.\n  WHY: It may not simulate other curl failure modes if the tests are refined later, though it currently satisfies fail-fast without live network access. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add the curl shim to make poller tests fail fast without network access.\"\n  expected_change_site: tests/test_orchestrate_poll_promote_cycle.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The shim is implemented in tests/test_orchestrate_poll_process.py but, per the reviewer, has not been applied to tests/test_orchestrate_poll_promote_cycle.py, which hits the same 180s timeout via the cleanup logic. Reviewer severity: BLOCKER.\n- requirement: \"Add a `tests/test_gh_helpers_curl_timeout.py` regression test that wires into an existing CI step.\"\n  expected_change_site: tests/test_gh_helpers_curl_timeout.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No new regression test file tests/test_gh_helpers_curl_timeout.py exists in the PR. Reviewer severity: MAJOR.\n- requirement: \"Bound `curl_gh_api` ... `--connect-timeout` / `--max-time`\" and \"a new test for the `curl_gh_api` timeout\"\n  expected_change_site: scripts/gh_helpers.sh (`curl_gh_api`)\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The PR diff touches only tests and a changelog fragment. The reviewer judged this a deliberate deferral (AD-1 option A, frozen heal scope excludes scripts/gh_helpers.sh), not a defect. Reviewer severity: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Bound `curl_gh_api` ... `--connect-timeout` / `--max-time`\" and \"a new test for the `curl_gh_api` timeout\".\n  Expected change site: scripts/gh_helpers.sh (`curl_gh_api`)\n  Evidence of absence: The PR diff touches only tests and a changelog fragment. The issue's frozen heal scope (`.github/workflows/ci.yml`, `tests/**`, `changelog.d/*.md`) excludes `scripts/gh_helpers.sh`. AD-1 chose option A for that reason, and the changelog fragment states the fix is tracked separately. It is a deliberate deferral, not a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:_POLLER_CURL_SHIM, exit 7 | severity=NIT | confidence=2\n  PROBLEM: The curl shim forces an exit code of 7 for all invocations.\n  WHY: The tests for `tg_cleanup_msgs` may expect different behavior depending on the result of the cleanup. The shim might not accurately simulate other curl failure modes if the tests are refined in the future, although it currently satisfies the requirement of failing fast and preventing live network access.\n\nTASK_GAP:\n- Requirement: \"Add the curl shim to make poller tests fail fast without network access.\"\n  Expected change site: `tests/test_orchestrate_poll_process.py`\n  Evidence of absence: The current fix implements the shim in `tests/test_orchestrate_poll_process.py`, but it has not been applied to `tests/test_orchestrate_poll_promote_cycle.py` despite that test also hitting the 180s timeout due to the same cleanup logic.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Add a `tests/test_gh_helpers_curl_timeout.py` regression test that wires into an existing CI step.\"\n  Expected change site: `tests/`\n  Evidence of absence: No new regression test file `tests/test_gh_helpers_curl_timeout.py` exists in the PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n\nHARDENING_SUGGESTIONS:\n- tests/test_orchestrate_poll_process.py _POLLER_CURL_SHIM: the shim relies on the `curl_shim_args` array and `[*]` expansion, which can be fragile with spaces in arguments. Suggested fix: use `printf '%s\\n' \"${curl_shim_args[@]}\"` when logging to the capture file. HARDENING_RISK_SCORE: 1\n- tests/test_orchestrate_poll_process.py _POLLER_CURL_SHIM: the shim does not enforce a timeout on its own execution. No change required if 7 is the desired exit code. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2408f282f8f804ca84e3eccba64baa9d7a79f5f866e23d30f5a421de9a28bab7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8131,
+    "run_id": "40193123583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40193123583",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025125210_f9fabf1902",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8131,
+    "run_id": "40193123583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T12:52:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

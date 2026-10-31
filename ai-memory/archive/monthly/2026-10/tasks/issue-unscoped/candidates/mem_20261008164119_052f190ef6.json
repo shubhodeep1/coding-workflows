@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/_templates/mode-judge-unblock.txt:12 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The template omits the new restriction against `accept_with_followup` for `ai:security` issues that is present in the legacy prompt.\n  WHY: `tests/test_assemble_prompt.py:78` reports a byte-for-byte parity failure, and assembled prompts retain stale instructions; severity differed across reviewers (BLOCKER and MAJOR), so the higher severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cIf work must be split, create a security-labelled successor bound to the original finding.\u201d\n  expected_change_site: `scripts/unblock_actions.py`\u2019s `reissue` handling for tracked `ai:security` issues, and the corresponding issue creation in `scripts/orchestrate_poll_process.sh`\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: For tracked issues, `unblock_actions.py` records a generic fix-up request without the finding marker or security label. The poller creates the successor with only `ai:clarification` and `ai:orchestrator-managed` labels. The finding marker and `ai:security` label are added only on the standalone reissue path.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- prompts/_templates/mode-judge-unblock.txt:12 | severity=critical | confidence=5\n  PROBLEM: The template omits the new `ai:security` issue restriction that `prompts/mode-judge-unblock.txt:19` carries.\n  WHY: The parity test at `tests/test_assemble_prompt.py:78` fails because the template retains stale instructions, and the judge may still emit `accept_with_followup` for a security finding.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- prompts/_templates/mode-judge-unblock.txt:12 | severity=high | confidence=5\n  PROBLEM: The template omits the new prohibition for `ai:security` issues that is present in `prompts/mode-judge-unblock.txt:19`.\n  WHY: `test_assembled_templates_match_legacy_prompt_bytes` compares assembled prompts with the active prompt and fails on this mismatch; assembly also gives the judge the stale restriction.\n- Requirement: \u201cIf work must be split, create a security-labelled successor bound to the original finding.\u201d\n  Expected change site: `scripts/unblock_actions.py`\u2019s `reissue` handling for tracked `ai:security` issues, and the corresponding issue creation in `scripts/orchestrate_poll_process.sh`.\n  Evidence of absence: For tracked issues, `unblock_actions.py` records a generic fix-up request without the finding marker or security label. The poller creates the successor with only `ai:clarification` and `ai:orchestrator-managed` labels. The finding marker and `ai:security` label are added only on the standalone reissue path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- prompts/_templates/mode-judge-unblock.txt:12 | severity=critical | confidence=5\n  PROBLEM: The template was not updated to match the legacy prompt, which now prohibits `accept_with_followup` for an `ai:security` issue and directs security findings to `reissue`.\n  WHY: `tests/test_assemble_prompt.py:78` compares assembled output byte-for-byte against the legacy prompt, so the mismatch breaks CI and assembled prompts retain stale instructions.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "6667d7ff4c41b22995478ca70b03d63fab16cb3b7cc2068f843c3c6ca6dc0155",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6550,
+    "run_id": "37807703037",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37807703037",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008164119_052f190ef6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6550,
+    "run_id": "37807703037"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T16:41:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_update_workflows_guardrails.py:292-302 (and main() at 419-436) | severity=high | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The new test `test_wrapper_template_third_party_actions_are_sha_pinned` is not listed in the module's explicit `main()` runner, so it never runs when CI invokes the file directly with `python3`.\n  WHY: CI runs the file directly (ci.yml:1578, mark-stable.yml:560, test-and-mark-stable.yml:3933), so the guard is dead code and an unpinned third-party `uses:` would still pass. Source severity was MAJOR, mapped to high.\n- changelog.d/pin-ai-review-template-checkout.md:3-4 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The phrase \"the commit both the `v5` and `v5.1.0` tags point to today\" is a snapshot claim written in the present tense.\n  WHY: The wording will age badly if the tags move. This is a documentation-precision nit with no runtime impact. Source severity was NIT.\n- tests/test_update_workflows_guardrails.py:288 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_TEMPLATE_USES_LINE_RE` would not match a `uses:` on its own line after a standalone `-`.\n  WHY: A future template using that multi-line form would let an unpinned `uses:` pass the test silently. This is a hardening nit. Source severity was NIT.\n- workflow-templates/ai-review.yml:83, 121, 161 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The reviewer could not verify that `fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09` is the commit both `v5` and `v5.1.0` resolve to.\n  WHY: If the SHA is wrong, the pinned action would fail at runtime, and the guard test only checks the 40-hex shape. Flagged for visibility only. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/pin-ai-review-template-checkout.md:3-4 | severity=NIT | confidence=2\n  PROBLEM: The phrase \"the commit both the `v5` and `v5.1.0` tags point to today\" is a snapshot claim. A durable phrasing would be \"pointed to at the time of this PR\".\n  WHY: Documentation precision only, with no runtime impact.\n- tests/test_update_workflows_guardrails.py:288 | severity=NIT | confidence=2\n  PROBLEM: `_TEMPLATE_USES_LINE_RE` tolerates `- uses:` but would not match a dash-on-its-own-line YAML form (`-\\n  uses: \u2026`).\n  WHY: A future template using the multi-line form would silently allow an unpinned `uses:`. This is a hardening nit rather than a runtime defect.\n- workflow-templates/ai-review.yml:83, 121, 161 | severity=NIT | confidence=1\n  PROBLEM: The reviewer could not independently verify that `fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09` is the commit both `v5` and `v5.1.0` resolved to.\n  WHY: The guard test only checks the 40-hex shape. If the SHA is wrong, the pinned action would fail at runtime. Flagged for visibility only.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_update_workflows_guardrails.py:292-302 (`test_wrapper_template_third_party_actions_are_sha_pinned`; `main()` at 419-436) | severity=MAJOR | confidence=5\n  PROBLEM: The new supply-chain guard test is never executed in CI. All three CI callers run the module directly (ci.yml:1578, mark-stable.yml:560, test-and-mark-stable.yml:3933), and that goes through `main()`, which enumerates each test by name and omits the new one.\n  WHY: An unpinned third-party action added to `workflow-templates/*.yml` would still pass CI, the release gates and the sync pipeline with exit 0.\n- HARDENING_SUGGESTIONS: tests/test_update_workflows_guardrails.py `main()` (lines 419-436) duplicates the test list by hand, which is how the new test was dropped. Suggested fix: add `test_wrapper_template_third_party_actions_are_sha_pinned()` to the list (1 line), or iterate a name-filtered `globals()` list (about 3 lines). Estimated lines changed: 1-4. HARDENING_RISK_SCORE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fc125476473043bdd9586ef15c95e02a273ace941629a296755a16f028c8b10d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8176,
+    "run_id": "40264920254",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40264920254",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026035628_1192545190",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8176,
+    "run_id": "40264920254"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T03:56:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

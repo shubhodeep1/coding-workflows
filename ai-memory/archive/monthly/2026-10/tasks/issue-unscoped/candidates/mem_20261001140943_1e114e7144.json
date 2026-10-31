@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:181-303 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The intake ignores the validated `failure_fingerprint` for `identical_failure_cap` reports, so distinct underlying failures can receive the same heal fingerprint.\n  WHY: Cap evidence falls back to `no-error-lines` after header stripping, causing unrelated reports to share a heal lineage and potentially suppress or misdirect healing.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description claims \"unrelated review/autofix failures no longer share one fingerprint\" as the dedup goal.\n  expected_change_site: `scripts/workflow_failure_heal_intake.sh` around lines 280-293 (the `autofix_failure` signature branch), conditioned on `FAILURE_REASON == identical_failure_cap`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR's diff to `scripts/workflow_failure_heal_intake.sh:283-293` only adds the `--strip-autofix-header` flag. No hunk reads `.failure_fingerprint` from the payload, no `if [ \"${FAILURE_REASON}\" = \"identical_failure_cap\" ]` branch exists, and the new regression test `test_intake_autofix_fingerprint_ignores_reporter_header_lines` (`tests/test_workflow_failure_heal.py:1661-1687`) only models a non-cap `editor_empty_noop` payload \u2014 there is no cap-report regression test exercising two distinct cap `failure_fingerprint` values producing distinct heal fingerprints.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal_intake.sh:280-303 and 165-188 | severity=MAJOR | confidence=5\n  PROBLEM: The intake never extracts `failure_fingerprint` from the validated payload, and for `identical_failure_cap` reports the evidence after header stripping can yield `no-error-lines`.\n  WHY: Two distinct cap-level failures share one heal lineage, so one can escalate past the lineage cap and block healing for the other, same as the header-collision bug fixed by this PR.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR description claims \"unrelated review/autofix failures no longer share one fingerprint\" as the dedup goal. The cap report class (`identical_failure_cap`) continues to collapse unrelated failures onto one heal fingerprint after this PR: after the four-line header is stripped, cap evidence (e.g. `identical_failure_cap: 3 identical review/autofix failures`, `repeated failure_reason=...`, `failure_fingerprint=...`) matches none of `error_signature`'s `_SOFT_LOG_PATTERNS` / `_SIGNATURE_PATTERNS` alternation (lines 218-222, 197-201 in `scripts/workflow_failure_heal.py`), so every cap report yields the same `no-error-lines` signature, and `fingerprint(\"review_autofix\", \"autofix:identical_failure_cap\", \"no-error-lines\")` is identical across cap reports regardless of the underlying failure. The intake extracts the payload's `failure_fingerprint` nowhere (`scripts/workflow_failure_heal_intake.sh:165-188` reads every other payload field but not `failure_fingerprint`); the reporter already emits and validates it (`scripts/workflow_failure_heal_autofix_report.sh:61`, `scripts/workflow_failure_heal.py:590-592, 830-831`), and Copilot's inline review (comment id 4155958713 on `scripts/workflow_failure_heal_intake.sh:290`) explicitly recommends preferring that field for cap reports.\n  Expected change site: `scripts/workflow_failure_heal_intake.sh` around lines 280-293 (the `autofix_failure` signature branch), conditioned on `FAILURE_REASON == identical_failure_cap` \u2014 prefer `$(jq -r '.failure_fingerprint // empty' \"${PAYLOAD_FILE}\")` (validated as 64 hex by `validate_payload`) as the signature material, falling back to the current `error-signature --strip-autofix-header` output when absent.\n  Evidence of absence: The PR's diff to `scripts/workflow_failure_heal_intake.sh:283-293` only adds the `--strip-autofix-header` flag. No hunk reads `.failure_fingerprint` from the payload, no `if [ \"${FAILURE_REASON}\" = \"identical_failure_cap\" ]` branch exists, and the new regression test `test_intake_autofix_fingerprint_ignores_reporter_header_lines` (`tests/test_workflow_failure_heal.py:1661-1687`) only models a non-cap `editor_empty_noop` payload \u2014 there is no cap-report regression test exercising two distinct cap `failure_fingerprint` values producing distinct heal fingerprints. The cross-pollination summary records the same gap from four pass-1 reviewers (deepseek, minimax, openai_gpt-6-luna, qwen). The PR is scoped to the header issue per its title and \"## Changes\" section, but the dedup intent is not fully closed for cap reports.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh: lines 181-187, 280-303; scripts/workflow_failure_heal.py lines 1486-1499 | severity=MAJOR | confidence=5\n  PROBLEM: The intake ignores the validated `failure_fingerprint` when fingerprinting `identical_failure_cap` reports. It derives the signature only from evidence after stripping the reporter header.\n  WHY: Distinct cap failures therefore receive the same heal fingerprint; `budget_decision` can match an unrelated open issue or continue an unrelated closed issue\u2019s lineage, suppressing a new heal attempt or escalating it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_intake.sh: 289-290 (the `autofix_failure` signature branch) | severity=MAJOR | confidence=4\n  PROBLEM: `identical_failure_cap` reports with different underlying failure fingerprints still produce the same heal fingerprint.\n  WHY: Two unrelated cap reports from different PRs (different underlying failures, different `failure_fingerprint` values) produce the same heal fingerprint. The second report is filed as an occurrence on the first report's heal issue instead of opening its own, and the lineage is incorrect.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a930af7fda4bac7e68712e93a1e0fe2fce8977641ff583116af7c38c8b3b8d05",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5975,
+    "run_id": "36869383897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36869383897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001140943_1e114e7144",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5975,
+    "run_id": "36869383897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T14:09:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

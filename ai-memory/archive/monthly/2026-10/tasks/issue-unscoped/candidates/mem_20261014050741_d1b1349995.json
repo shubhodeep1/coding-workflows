@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_sweep_merge_queued_skip.py:53-59 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The updated extract_step_script silently breaks on a non-blank line indented less than 10 spaces instead of asserting, so a malformed run body could be silently truncated.\n  WHY: The old code asserted that non-indented lines were blank. The new silent break only has the \"gh workflow run\" assertion to catch truncation, so earlier script lines could go missing unnoticed. Severity is from gemini. minimax listed this as a hardening suggestion with risk score 2, and z-ai_glm-5_3-flash explicitly rejected it as correct YAML block-scalar termination.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_sweep_merge_queued_skip.py:53-59 | confidence=4\n  PROBLEM: The updated extract_step_script function silently truncates the run body extraction when it meets a non-blank line with unexpected indentation (less than 10 spaces), rather than asserting that the body is correctly structured.\n  WHY: The previous implementation asserted that non-indented lines must be empty (assert line.strip() == \"\"). The new silent break could return an incomplete run body if the indentation is malformed. The final \"gh workflow run\" assertion would not catch missing earlier lines.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_sweep_merge_queued_skip.py:58-59 | hardening suggestion (HARDENING_RISK_SCORE: 2)\n  PROBLEM: extract_step_script() else branch (lines 58\u201359) now silently breaks where the pre-fix version raised AssertionError on a line that was neither blank nor 10-space-indented. A malformed run body, such as an accidental column-0 line, would be silently truncated.\n  WHY: Only the new `assert \"gh workflow run\" in \"\\n\".join(lines)` guard catches loss of the dispatch line. Suggested fix: keep the break for the sibling-step path, but add a secondary guard that every line between `run: |` and the break is blank or starts with RUN_INDENT (about 3 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3e1044678700bbcfce8f69006ea19a312d7320dac7e286968ab5085ae534fdde",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7344,
+    "run_id": "38510527992",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38510527992",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014050741_d1b1349995",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7344,
+    "run_id": "38510527992"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T05:07:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6455,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6455\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6465\",\"pr_number\":6465,\"branch\":\"ai/issue-6455\",\"run_id\":\"37405157084\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37405157084\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/6455-rb-fix-sandbox-workspace.md\",\"scripts/review_rb_judge.sh\",\"tests/test_codex_agent_isolation_contract.py\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "83691327c6ff805a6de40c6704f561d1723ab753533cd382325b9a0209145b19",
+  "lineage": {
+    "issue_number": 6455,
+    "parent_ids": [],
+    "pr_number": 6465,
+    "run_id": "37405157084",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37405157084",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6465"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006025638_a4cc881598",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6455,
+    "level": "run",
+    "pr_number": 6465,
+    "run_id": "37405157084"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6455: https://github.com/shubhodeep1/coding-workflows/pull/6465",
+  "timestamps": {
+    "created_at": "2026-10-06T02:56:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

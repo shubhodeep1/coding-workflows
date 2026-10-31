@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a data-only edit to one file: change the `decompose-run:` value from `25567947079` to `40005654539`.\n\n## Data structures affected\nThe plain-text marker file `tests/e2e_smoke_canary_b.txt`. When the edit is done it holds exactly:\n```\nstatus: ok\ndecompose-run: 40005654539\n```\nwith one newline at the end and nothing else.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: write the complete two-line content, ending in one newline, instead of editing only line 2.\n- Alternatives considered: replace just the run number in place with `sed`.\n- Why: writing the whole file meets the \"exactly two lines, nothing else\" requirement even if the current file has stray whitespace, a CRLF line ending or a missing final newline.\n\n## Security considerations\nNo trust boundary, endpoint, credential or money state is involved. This is a fixture file inside `tests/`. The only input is the literal content stated in the issue. Nothing about it can be abused.\n\n## Potential risks or edge cases\n- The current file was described in the issue, not read on this ref. The implementer should check that the file exists on `orchestrator/project-8014`. If it is missing, create it with the required content.\n- Only this one file may change. The diff must show 1 file changed.\n- The file must use LF line endings with one final newline: no blank last line and no CRLF.\n\n## Testing considerations\n- `printf 'status: ok\\ndecompose-run: 40005654539\\n' | cmp - tests/e2e_smoke_canary_b.txt` must succeed.\n- `git diff --stat` must list only `tests/e2e_smoke_canary_b.txt`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for one exact fixture edit with fixed acceptance criteria and forbids touching any other file. No helper, pattern or new code is involved, so expanding or reducing the scope would not make sense. The plan keeps to that single edit.\n\nPre-execution self-check: the planning ref is `orchestrator/project-8014` at `0b0ce2327e29e87b8b9538fe64a3263a5e76217a` and there is no branch mismatch. The single file in the plan is the issue's whole `files_touched` list, and it contains no automation paths.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "3ee41d9625f6a0aa560d2c7554646c7f7c723b3a073bbbbbd44e6031a7e7db99",
+  "lineage": {
+    "issue_number": 8019,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40011385395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40011385395",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8019"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261023194005_2ba51d3927",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8019,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40011385395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8019",
+  "timestamps": {
+    "created_at": "2026-10-23T19:40:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

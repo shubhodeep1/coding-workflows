@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_deploy_activate_command.py:8-13, 40 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The module declares two names for the same tuple, creating a minor readability wart.\n  WHY: Both forms resolve to identical Path objects and the existing fixture resolves via the alias, so this does not fail at runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cusing a token scoped to the target Worker.\u201d\n  expected_change_site: `.claude/commands/deploy-activate.md` Cloudflare deployment credential requirements and `CLAUDE.md` \u00a724.C shared deploy rule\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `CLAUDE.md:1419-1421`, `.claude/commands/deploy-activate.md:97`, `.claude/commands/deploy-activate.md:97`, `CLAUDE.md:1417-1423`, `.claude/commands/deploy-activate.md:97`, `CLAUDE.md:1422` state that deployment can use the account-scoped credential and narrower-token provisioning is left to an operator; no code or documentation requires a Worker-scoped token before deployment.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_deploy_activate_command.py:lines 8-13 (COMMANDS tuple) and line 40 (COMMAND_PATHS = COMMANDS alias) | severity=NIT | confidence=3\n  PROBLEM: The module now declares two names for the same tuple (COMMANDS and COMMAND_PATHS), and the new tuple uses spaced Path joins while the alias carries forward that style. The existing fixture resolves correctly via the alias, so this works at runtime, but the dual naming is a readability wart.\n  WHY: It does not fail at runtime; both forms resolve to identical Path objects and the existing fixture resolves via the alias. It is a minor style observation, not a runtime defect.\n- TASK_GAP\n  Requirement: \"using a token scoped to the target Worker.\" (third component of the recommendation in issue #6469)\n  Expected change site: `.claude/commands/deploy-activate.md` Cloudflare deployment credential requirements; shared rule in `CLAUDE.md` \u00a724.C\n  Evidence of absence: The command permits deployment with the matching site's credential and explicitly notes that the available token is account-scoped: \"These account-owned credentials are not Worker-scoped; provisioning a narrower token is an operator task, not a reason to expose additional credentials during deployment.\" (`CLAUDE.md:1419-1421`, also reflected at `.claude/commands/deploy-activate.md:97`). The deployment path does not require a Worker-scoped token; it accepts the matching account credential.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n  Notes on the TASK_GAP: The previous editor explicitly deferred this as `TASK_GAP_DEFERRED` on the grounds that the supplied credentials are account-owned and the command cannot safely create or verify a narrower token. That reasoning is sound from an automation standpoint, but the issue's recommendation was explicit about Worker-scoped tokens. The implementation provides strong compensating controls (verified default-branch commit via DEPLOY_SHA, credential isolation with env stripping, sandboxed pre-flight checks), so the residual risk is meaningfully reduced, but the third recommendation bullet is not implemented in code \u2014 it is documented as operator-side responsibility. This finding exists so the operator/team is aware that one of the three explicit recommendation components is delegated externally rather than enforced by the command.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cusing a token scoped to the target Worker.\u201d\n  Expected change site: `.claude/commands/deploy-activate.md` and `CLAUDE.md` \u00a724.C, Cloudflare deployment credential requirements.\n  Evidence of absence: `.claude/commands/deploy-activate.md:97` permits deployment with the matching site\u2019s account-scoped credential and leaves narrower-token provisioning to an operator. `CLAUDE.md:1417-1423` likewise acknowledges that the credentials are not Worker-scoped but does not require a Worker-scoped token or prevent deployment when one is unavailable.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Permit credential-bearing deployment only from a verified, immutable commit on the protected default branch, using a token scoped to the target Worker.\"\n  Expected change site: `.claude/commands/deploy-activate.md` Cloudflare deployment section and `CLAUDE.md` \u00a724.C shared deploy rule\n  Evidence of absence: The PR implements the verified-commit requirement but explicitly defers the token-scoping requirement. Both `.claude/commands/deploy-activate.md:97` and `CLAUDE.md:1422` state \"provisioning a narrower token is an operator task\" and permit deployment with the account-scoped credential. No code or documentation requires a Worker-scoped token before deployment.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "4f15630876b6cc6fc44fb3beea028e5b754c995bc2d41b7fc7b4a1f61c96089d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6476,
+    "run_id": "37413378436",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37413378436",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006043715_06bc4ca6d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6476,
+    "run_id": "37413378436"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T04:37:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDecision: **A**. The audit still runs and posts its findings, but it does not move the audited-commit marker while any text file was left unread because of a size cap.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The problem is in two places. In `scripts/codex_isolated_workspace.py:373-377`, a full-scan text file over the per-file or total cap is listed as skipped (`over_file_cap` / `over_total_cap`) and the audit carries on. Then `scripts/security_audit.sh:2060-2075` moves the audited-commit marker whenever `HEAD_SHA` is set, so the next run skips that commit or only looks at later changes. Option A fixes this with the finding's own second recommendation (\"fail closed without recording the commit as audited\"), in one place, and still posts all findings. It also keeps the operator's two cap settings meaningful. Option B would block the weekly audit until a person acts, which goes against keeping the pipeline unattended. Option C ignores the operator's per-file cap and could hand the model up to 256 MiB of chunks per run, so it widens the scope beyond the minimal fix; that is also why A+C is rejected.\n\nEXECUTION PLAN (guidance for the planner; the decision itself is a letter):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/codex_isolated_workspace.py (around lines 371-382 and 423-429: skipped files with reasons `over_file_cap`, `over_total_cap` and `binary`, plus `unscoped_oversized_count`. The written list stops at 50 entries, but the count does not.)\n    - scripts/security_audit.sh (around line 1275: `manifest[\"unscoped_oversized_count\"]`; lines 1760-1765: the `coverage` payload; lines 2056-2076: where the marker is written)\n  steps:\n    - Count the skipped text files: entries whose reason is `over_file_cap` or `over_total_cap`. Binary and `outside_scope` entries are not counted. The written entry list stops at 50 while the count is complete, so the manifest needs a total count of text skips (a new field name; check it does not clash with an existing one) so that a run with more than 50 skips can't miss any.\n    - If that count is above zero on a default-branch run (no `SECURITY_AUDIT_TARGET_REF`), skip the marker update at lines 2060-2075. Log `security-audit: coverage=partial skipped_text=<n>; leaving the last-audited-commit marker unchanged`.\n    - Add a coverage note to the tracker comment that says the run covered only part of the repository and names the skipped files (up to the 50 listed) with their size and reason. Send a Telegram warning through the existing helper. Both must fail open.\n    - Leave findings, follow-up issues, binary skips, incremental `outside_scope` handling and findings-json mode (which never writes the marker) as they are.\n    - Add a contract test with two cases: (a) a full scan with an over-cap text file posts its findings and leaves the tracker body without a new `ai:security-audit-last-sha` marker; (b) a full scan whose only skip is a binary file still moves the marker.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: A commit is only recorded as audited when every non-binary tracked file in a full scan was inspected. That is exactly what the finding says is broken.\n  reversibility: An operator can raise `SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES` / `SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES` so the file fits, after which the marker moves again. Chunking (option C) can be added later without undoing this change.",
+  "fingerprint": "68c8ebaf8566f3857ef0e2ed68f839a094b1ddb525bb335e305657ab31697ed1",
+  "lineage": {
+    "issue_number": 6472,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37408407886",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37408407886",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6472"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006032614_1698b378f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6472,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37408407886"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6472",
+  "timestamps": {
+    "created_at": "2026-10-06T03:26:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

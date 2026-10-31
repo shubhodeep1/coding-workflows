@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:440 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: An attacker-controlled issue body containing shell metacharacters could cause unintended shell execution when processed by grep command substitution.\n  WHY: The reported grep handling could allow shell metacharacters in an issue body to cause unintended execution.\n- scripts/unblock_actions.py:186-258 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The upsert function's temporary-file handling does not safely handle stale temporary files from previous crashed runs.\n  WHY: A stale temporary file could be overwritten or lead to corrupted operator step entries.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Register the new wrapper workflows in .github/ai/consumer_repos.json (CLAUDE.md \u00a714) when they copy new templates.\n  expected_change_site: .github/ai/consumer_repos.json\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR adds new wrapper workflows (unblock_judge_dispatch.yml) to workflow-templates/ but does not update .github/ai/consumer_repos.json to ensure they are synchronized to consumer repositories.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:440 | severity=high | confidence=[4]\n  PROBLEM: Potential shell metacharacter injection into grep command.\n  WHY: An attacker-controlled issue body containing shell metacharacters could cause unintended shell execution when processed by grep command substitution.\n- scripts/unblock_actions.py:186-258 | severity=high | confidence=[3]\n  PROBLEM: The upsert function's temporary-file handling does not safely handle stale temporary files from previous crashed runs.\n  WHY: A stale temporary file from a crashed run could be overwritten or lead to corrupted operator step entries.\n- TASK_GAP\n  Requirement: Register the new wrapper workflows in .github/ai/consumer_repos.json (CLAUDE.md \u00a714) when they copy new templates.\n  Expected change site: .github/ai/consumer_repos.json\n  Evidence of absence: The PR adds new wrapper workflows (unblock_judge_dispatch.yml) to workflow-templates/ but does not update .github/ai/consumer_repos.json to ensure they are synchronized to consumer repositories.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b8ea92fe61f8d2d90c9441dd14e3922b1bb3cf41efa0818d293e7318483be9e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37445713870",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37445713870",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006104338_5d586146c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37445713870"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T10:43:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cIf the log is unavailable, automatically run the fallback reproduction rather than waiting for a manual command.\u201d\n  expected_change_site: `.github/workflows/check-failure-triage-historical.yml`, the historical log probe and reproduction-job condition\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The guard sets `log_available=false` only for HTTP 404/410; every other probe error exits before setting `should_run=true` (lines 119-139). Since the reproduction job requires `should_run == 'true'` (line 144), an unavailable log caused by another API error never triggers reproduction.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cIf the log is unavailable, automatically run the fallback reproduction rather than waiting for a manual command.\u201d\n  Expected change site: `.github/workflows/check-failure-triage-historical.yml`, the historical log probe and reproduction-job condition.\n  Evidence of absence: The guard sets `log_available=false` only for HTTP 404/410; every other probe error exits before setting `should_run=true` (lines 119-139). Since the reproduction job requires `should_run == 'true'` (line 144), an unavailable log caused by another API error never triggers reproduction.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bb75e64ae2ed2586a81e263553440ece3e68799132474f33bd62dce5393065e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7096,
+    "run_id": "38331184073",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38331184073",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013015454_adfa46f0dd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7096,
+    "run_id": "38331184073"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T01:54:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

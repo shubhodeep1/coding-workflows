@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-log-analysis.yml:1079 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: When `gh_retry` is not defined, `_wla_label_retry` runs the raw command, so a failed first `gh label create` that is not \"already exists\" is repeated once and two raw calls are made (also in the deep-audit and API-redundancy steps, around lines 1878 and 2478).\n  WHY: This happens only when `scripts/gh_helpers.sh` failed to load. The cost is one extra API call on a failure path, and both calls end in `|| true`. Both reviewers rated it NIT. minimax_minimax-m3 mentioned the same concern in prose and called it an intentional fallback.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/workflow-log-analysis.yml:1079 (also around lines 1878 and 2478) | severity=NIT | confidence=4\n  PROBLEM: When `gh_retry` is not defined, `_wla_label_retry` runs the raw command. A failed first `gh label create` that is not \"already exists\" is then repeated once, so two raw calls are made instead of one.\n  WHY: This happens only when `scripts/gh_helpers.sh` failed to load and the first create failed with something other than \"already exists\". The cost is one extra API call on a failure path. The result is the same either way, since both calls end in `|| true`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/workflow-log-analysis.yml:1079 | severity=NIT | confidence=4\n  PROBLEM: When `gh_retry` is unavailable, `_wla_label_retry` falls back to another raw call, so a failed label creation is attempted twice.\n  WHY: The workflow explicitly allows `gh_helpers.sh` to fail to load. In that case, any first failure other than \"already exists\" triggers a duplicate request instead of the single raw fallback specified by the issue.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3c5a886c55deb6723ac262256f73bf9a5404042aaf3ab348ab20ff7a7a511967",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7472,
+    "run_id": "38845804312",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38845804312",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016034755_a0e41ac880",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7472,
+    "run_id": "38845804312"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T03:47:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:1037-1041 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The claimed regression cases for separate-value `--repo` and `--rep` options without a positional remote are absent from the current test file.\n  WHY: The intended security-critical push-guard confirmation paths are not regression-tested on the PR head.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add regression coverage for `git push --repo upstream` and `git push --rep upstream` when the separate-value option has no positional remote.\n  expected_change_site: tests/test_pr_merge_status_guard.py, in the parametrized push-command test cases\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: Neither exact command appears in the current file; the existing `--repo=upstream` and `--repo upstream origin` cases do not cover the separate-value form without a positional remote; the claimed function `test_appended_git_directory_push_asks_without_origin_lookup` is absent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_pr_merge_status_guard.py:1037-1041 | severity=MAJOR | confidence=5\n  PROBLEM: The LAST RUN DIFF claims to add `\"git push --repo upstream\"` and `\"git push --rep upstream\"` test strings, but neither those strings nor the claimed enclosing function exist in the current file.\n  WHY: The intended regression coverage for separate-value `--repo` and `--rep` options without a positional remote never lands on the PR head.\n- TASK_GAP\n  Requirement: The previous autofix editor summary (entry[32] in pr_all_comments_context) states it \"Edited tests/test_pr_merge_status_guard.py:1040-1041 to cover `git push --repo upstream` and `git push --rep upstream` without a positional remote.\"\n  Expected change site: tests/test_pr_merge_status_guard.py \u2014 within a parametrized push-parser test list (the natural home is the existing `test_push_parser_guards_real_destination` list at lines 901-913, or a sibling function in the same file)\n  Evidence of absence: Neither `\"git push --repo upstream\"` nor `\"git push --rep upstream\"` appears anywhere in the 1502-line file. The closest existing coverage (line 907, `\"git push --repo=upstream origin\"`) exercises the combined `--repo=upstream` plus positional-remote form, not the standalone separate-value `--repo upstream` form the editor claimed to add. The commit stat reports two insertions but the inserted lines cannot be located in the file at any line. The function the editor referenced, `test_appended_git_directory_push_asks_without_origin_lookup`, is not present.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Add regression coverage for `git push --repo upstream` and `git push --rep upstream` when the separate-value option has no positional remote, as stated in the last-run diff.\n  Expected change site: `tests/test_pr_merge_status_guard.py`, in the parametrized push-command test cases.\n  Evidence of absence: The current `test_push_parser_guards_real_destination` cases at lines 901-914 do not include either command. Neither exact command appears elsewhere in the checkout, despite the supplied last-run diff showing both additions.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The last autofix run (editor summary entry[32]) states it \"edited tests/test_pr_merge_status_guard.py:1040-1041 to cover `git push --repo upstream` and `git push --rep upstream` without a positional remote.\" The LAST RUN DIFF shows two insertions adding these exact strings to a parametrized test list.\n  Expected change site: tests/test_pr_merge_status_guard.py \u2014 the two test strings should appear in a parametrized push-command test list, within or near a function named `test_appended_git_directory_push_asks_without_origin_lookup`.\n  Evidence of absence: The exact strings `\"git push --repo upstream\"` and `\"git push --rep upstream\"` do not appear anywhere in the current 1502-line file (grep returned zero matches). The function `test_appended_git_directory_push_asks_without_origin_lookup` does not exist in the file. The only `--repo=upstream` references are at lines 907 and 910, which are combined forms like `git push --repo=upstream origin` (with a positional remote), not the separate-value form the editor claims to have added. The commit stat reports two insertions but those lines are not present in the working tree. This indicates the changes either landed on a different file version that was subsequently overwritten, or the isolated container's write-back did not deliver them.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The most recent AI autofix run (editor summary entry[32], commit d6b2005d89d6fe8f1d29816a3624a4f2f81c881f) states it \"edited tests/test_pr_merge_status_guard.py:1040-1041 to cover `git push --repo upstream` and `git push --rep upstream` without a positional remote.\" The LAST COMMIT STAT confirms \"tests/test_pr_merge_status_guard.py | 2 insertions(+)\". The reviewer-cross-pollination consensus (qwen_qwen3_7-plus, deepseek_deepseek-v4-pro at confidence 5) independently flagged this same absence.\n  Expected change site: tests/test_pr_merge_status_guard.py \u2014 within a parametrized push-command test list (the LAST RUN DIFF places it inside `test_appended_git_directory_push_asks_without_origin_lookup`).\n  Evidence of absence: `grep` for `test_appended_git_directory_push_asks_without_origin_lookup` returns zero matches in the 1242+ line file. `grep` for `--repo upstream` and `--rep upstream` (separate-value form without a positional remote) returns zero matches. The diff hunk's context lines (`\"git push --rep https://github.com/other/repo HEAD:feature/x\"`, `\"git push https://github.com/other/repo HEAD:feature/x\"`) also return zero matches, confirming the LAST RUN DIFF was generated against a different file version that was overwritten before (or instead of) being committed. The closest parametrized list (`test_push_parser_guards_real_destination`, lines 901-914) contains only `--repo=upstream` (equals form) and `--repo upstream origin` / `--repo=upstream origin` (separate-value WITH a positional remote), never the standalone separate-value form the commit claims to have added.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "18697168a11ae9915e4ee2ff51d3a0cd59061e3e20991253527cb798b0ecbdc2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6187,
+    "run_id": "37288136073",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37288136073",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005093741_67a25820dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6187,
+    "run_id": "37288136073"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T09:37:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

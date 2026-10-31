@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/operator_step_issue.py:222, 428-433 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `find_issues` can raise an uncaught `ValueError` while sorting an issue with a non-numeric `number`, before `tick` reaches its validation guard.\n  WHY: The CLI catches `UsageError` and `ApiError`, not `ValueError`, so malformed data produces a traceback and exit code 1 instead of the controlled API-error response; reviewers note this is unlikely with normal GitHub API responses.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Fetch the reviewed commits from PRs #6209 and #6615, port only the required hunks, and list every reused commit SHA in the PR description.\n  expected_change_site: PR description\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The PR description contains only \u201cAutomated implementation,\u201d the issue-closing reference, and \u201cRefs #6664\u201d; it lists no reused commit SHAs or port provenance from PRs #6209 and #6615, nor does it state that nothing was ported.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/operator_step_issue.py:222 | severity=low | confidence=[4]\n  PROBLEM: `find_issues` sorting raises `ValueError` for a non-numeric issue number before the tick guard runs.\n  WHY: `main` catches `UsageError` and `ApiError`, not `ValueError`, so the command emits a traceback and exits with code 1; reviewers note this is unlikely in practice and the promote-cycle caller continues.\n- TASK_GAP: Requirement: \"Fetch the reviewed commits from PRs #6209 and #6615, port only the required hunks, and list every reused commit SHA in the PR description.\" Expected change site: PR description. Evidence of absence: The PR description contains only \"Automated implementation,\" the issue-closing reference, and \"Refs #6664\"; it lists no reused commit SHAs or port provenance. The linked issue explicitly requires \"list every reused commit SHA in the PR description\" as part of the implementer discipline section. Severity: NIT. Confidence: 3.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \u201cFetch\u201d the reviewed commits from PRs #6209 and #6615, port only the required hunks, and \u201clist every reused commit SHA in the PR description.\u201d Expected change site: PR description. Evidence of absence: The PR description contains only \u201cAutomated implementation,\u201d the issue-closing reference, and \u201cRefs #6664\u201d; it lists no reused commit SHAs or port provenance from PRs #6209 and #6615. Severity: MAJOR. Confidence: 5.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/operator_step_issue.py: line 222 (inside `find_issues`, called from `tick` at line 428); LAST RUN DIFF guard at lines 431-433 | severity=low | confidence=[4]\n  PROBLEM: `find_issues()` sorts with `int(issue.get(\"number\") or 0)`, so a non-numeric number raises `ValueError` before the LAST RUN DIFF's `ApiError` guard can run.\n  WHY: `main()` only catches `UsageError` and `ApiError`, so the CLI exits with a traceback and code 1; the promote-cycle caller warns and continues, but the new validation does not cover this malformed-number case.\n- TASK_GAP: Requirement: \"Fetch\" the reviewed commits from PRs #6209 and #6615, port only the required hunks, and \"list every reused commit SHA in the PR description.\" (Linked issue #6754, \"Shared context\" section) Expected change site: PR description of this PR. Evidence of absence: The provided PR description contains only \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6754\" and \"Refs #6664\" \u2014 no list of reused commit SHAs from PRs #6209 / #6615 or any other port provenance. The orchestrator metadata block (tracking issue, integration branch, local ID, priority, managed-by) is present but the reused-commit-SHA list explicitly required by the issue is not. Severity: NIT. Confidence: 3.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/operator_step_issue.py: `tick` at lines 428\u2013433 calls `find_issues` before validating the candidate number; `find_issues` sorts with `int(issue.get(\"number\") or 0)` at line 222. | severity=low | confidence=[4]\n  PROBLEM: A trusted, marker-matching issue with a nonnumeric `number` raises `ValueError` during sorting, before the new validation can raise the controlled `ApiError`.\n  WHY: The CLI catches `UsageError` and `ApiError`, but not `ValueError`; the tick exits with a traceback instead of its controlled API-error response. The promote-cycle caller warns and continues, but the validation added in this pass does not cover this malformed-number case.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/operator_step_issue.py: 222, 429-431 | severity=low | confidence=[3]\n  PROBLEM: `find_issues` calls `int(issue.get(\"number\") or 0)` during sorting, before the last-run guard validates the tracker issue number.\n  WHY: A non-numeric number raises an uncaught `ValueError`, producing a traceback and exit code 1 rather than the controlled `ApiError` response and code 2 the guard intended; the reviewer notes GitHub normally returns integer issue numbers.\n- TASK_GAP: Requirement: \"Fetch with `git fetch origin refs/pull/6209/head refs/pull/6615/head`, port only the hunks this item needs onto current `main`, and list every reused commit SHA in the PR description. Do not re-apply the whole PR.\" Expected change site: PR description. Evidence of absence: The PR description contains only \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6754 Refs #6664\". It lists no reused commit SHAs from PRs #6209 or #6615, nor does it state that nothing was ported. The issue explicitly requires listing every reused commit SHA in the PR description. Severity: NIT. Confidence: 3.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "b9a93db1af7e0d1fe30e382a8f860a57203eceeae2827110e074b3ee687fe0ce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6758,
+    "run_id": "37766414698",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37766414698",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008111631_ab89c18ad5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6758,
+    "run_id": "37766414698"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T11:16:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

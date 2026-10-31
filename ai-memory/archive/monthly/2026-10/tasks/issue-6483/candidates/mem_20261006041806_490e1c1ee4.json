@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: When the latest marker for the current head is `findings`, `single_pass_gate` in `scripts/review_single_issue_security_pass.sh` (lines 325-331) returns `awaiting_followups` without checking whether any follow-up issue still exists. The case statement at `.github/workflows/review_autofix.yml:6643` then mutes the judge alert. That is the monitoring failure this issue reports. A new reason that is left out of the mute list makes the gate page whenever no follow-up is left to change the head. Reopening issues (B) or re-filing findings (C) would override what may be a deliberate waiver by a collaborator. The CRITICAL alert sends that decision to a human, the same way other non-self-clearing holds such as `markers_unverifiable` are handled.\nQ2: A follow-up that is still open has to go through clarify, plan, implement and review before it moves the head. The existing 6-hour `SECURITY_PASS_PENDING_STALE_HOURS` measures how long one audit run is pending, which is a much shorter process. A separate 24-hour limit gives the follow-up enough time and still stops a stalled head from being muted forever.\n\nEXECUTION PLAN (required for any non-letter decision):\nImplementation notes for the planner (both decisions are lettered picks):\nQ1 (A):\n  inputs:\n    - scripts/review_single_issue_security_pass.sh `single_pass_gate`, the `findings` branch at lines 325-331\n    - .github/workflows/review_autofix.yml:6640-6646 (mute case list; stays unchanged)\n  steps:\n    - In the `findings` branch, before it returns `awaiting_followups`, list the open `ai:security` issues with one paginated REST call: `gh api --paginate --slurp \"repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100\"`. Drop pull requests. Count the issues whose body has a line exactly equal to `- Integration branch: ${head_ref}` (security-audit.yml writes `Integration branch: <ref>`; match that line with or without the `- ` prefix).\n    - If the count is 0: log `SINGLE_ISSUE_SECURITY_PASS mode=gate ... outcome=hold reason=followups_missing`, set state `findings`, and output hold with reason `followups_missing`. Do not reopen or create any issue.\n    - If the listing fails or returns malformed data, fail closed: hold with reason `followups_unverifiable`. This reason is also left out of the mute list, so it pages, like `markers_unverifiable`.\n    - Leave the mute list at review_autofix.yml:6643 as it is. The new reasons reach the judge as `security_hold_followups_missing` / `security_hold_followups_unverifiable`, so the existing CRITICAL path covers them.\n    - Add the new hold reasons to the hold-reason lists in README.md (`SINGLE_ISSUE_SECURITY_PASS_ENABLED` row) and agents.md (`RB_JUDGE_SECURITY_PASS` / `SINGLE_ISSUE_SECURITY_PASS` bullets). Add contract tests for the missing, present and unverifiable cases, and pin the \"one API call, only on the findings branch\" cost in the function's header comment, as \u00a714 requires.\n  reversibility: If a human wants closed follow-ups reopened automatically (option B), that can be added later on top of the same reason without changing its name.\nQ2 (A):\n  inputs:\n    - scripts/review_single_issue_security_pass.sh: `latest_created` (line 303) and the age calculation at line 316\n  steps:\n    - Read `SECURITY_PASS_FOLLOWUP_STALE_HOURS` with a default of `24` set inside the helper (\u00a78), and validate it with `^[1-9][0-9]*$`, falling back to 24.\n    - When follow-ups exist, work out the age in hours of the current head's `findings` marker from its `created_at`, reusing the line-316 calculation. If the age is at or above the limit, hold with reason `followups_stalled` (not muted, so it pages CRITICAL). Otherwise keep `awaiting_followups`, which stays muted.\n    - An unparseable timestamp counts as stale (fail closed, so the gate pages rather than mutes).\n    - Document the variable in README.md's variables table and agents.md's env table, and add tests just below and just above the limit.\n  reversibility: Setting a very large value restores the effectively unlimited muting of today's behavior.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "45d7de3d4caf43adb2a2e79756440ddc906ba1b9d1b7bb545e8f2dba8984af1f",
+  "lineage": {
+    "issue_number": 6483,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37412324869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37412324869",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6483"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006041806_490e1c1ee4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6483,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37412324869"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6483",
+  "timestamps": {
+    "created_at": "2026-10-06T04:18:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

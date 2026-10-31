@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:1518-1624 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: An unresolved command directory only produces a warning, so evaluation continues using the session checkout and queries its PR state instead of requesting confirmation.\n  WHY: The test expects `permissionDecision: ask` when `env -C /does-not-exist git commit -m x` is encountered; the finding is rated BLOCKER by two reviewers, while one reviewer did not state a severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/pr_merge_status_guard.py:1566 | confidence=5\n  PROBLEM: When an `env` command specifies an unresolved or non-existent working directory (e.g., `env -C /does-not-exist git commit -m x`), the guard correctly identifies the uncertainty with a warning but fails to request confirmation, instead proceeding to query pull requests using the session checkout's context.\n  WHY: As indicated by the failing CI test `test_env_unresolved_commit_directory_asks_instead_of_checking_checkout`, the guard should call `_request_confirmation` when it encounters an ambiguous execution environment, rather than calling `query_pull_requests` on an potentially incorrect checkout.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:Lines 1518\u20131519 and 1563\u20131566 | severity=BLOCKER | confidence=5\n  PROBLEM: An unresolved command directory only produces a warning; evaluation continues using the session checkout and queries its PR state.\n  WHY: The current PR head\u2019s `tests-hooks-and-orchestrator` check fails for `env -C /does-not-exist git commit -m x`: the guard queries the wrong checkout instead of returning the expected confirmation decision. The test asserts this behavior at `tests/test_pr_merge_status_guard.py:1420\u20131432`; the failure also causes the aggregate `lint` check to fail. This guard change is outside the PR file diff but is present on the reviewed head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/pr_merge_status_guard.py:1518-1519 (`if target.warning: _warn(target.warning)  # Unresolved directory: the session checkout is checked.`) and 1603-1624 (`confirmation_reasons` list) | severity=BLOCKER | confidence=5\n  PROBLEM: The guard only warns for an unresolved commit directory (`env -C /does-not-exist`) but does not add a confirmation reason, so it falls through to `query_pull_requests` at line 1566 instead of emitting `permissionDecision: ask`.\n  WHY: The test monkeypatches `query_pull_requests` to `pytest.fail(\"must not check the wrong checkout\")` and expects `permissionDecision: ask`. The `[ai-merge-resolve]` merge commit 87cd3e3 brought in changes to `.claude/hooks/pr_merge_status_guard.py` (313 lines) and `tests/test_pr_merge_status_guard.py` (569 lines) from the base branch. The merged guard code warns-and-continues for `env -C /does-not-exist git commit`, but the test expects `ask`. This file is NOT in the PR changed files \u2014 the PR's own changes (reviewer panel, OpenRouter access) do not touch it. The editor's workspace admits `.claude/hooks/pr_merge_status_guard.py` only for Claude engine fixes; this PR is not one, so the editor likely cannot fix it. The same code exists in `workflow-templates/.claude/hooks/pr_merge_status_guard.py:1518-1519`.\n=== END FINDINGS FROM z-ai_glm-5_2",
+  "fingerprint": "a031a117d8139cb96cc8949ab701c7fcdc6b82ec30edfb51558065ab15f74d0c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6438,
+    "run_id": "37412579977",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37412579977",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006053501_fcb2d36f02",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6438,
+    "run_id": "37412579977"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T05:35:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

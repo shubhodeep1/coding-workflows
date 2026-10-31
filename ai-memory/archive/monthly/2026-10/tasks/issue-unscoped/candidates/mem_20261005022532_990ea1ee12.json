@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: The byte-for-byte template parity assertion fails because `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md` differ in their hand-off descriptions.\n  WHY: The failure leaves `tests-hooks-and-orchestrator` red and causes its dependent lint check to fail.\n- .claude/commands/audit-plans.md:1 | severity=critical | confidence=5\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The root `.claude/commands/audit-plans.md` and its template twin have diverged, so the byte-equality assertion in `tests/test_audit_plans_command.py:29-30` fails.\n  WHY: The required `tests-hooks-and-orchestrator` check is red, and the dependent `lint` aggregate check fails.\n- tests/test_unblock_judge.py:911-933 | severity=critical | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The fake `gh` script does not implement `FAKE_GH_FAIL_LABEL` in the POST `/labels` handler, so the test's simulated label write succeeds.\n  WHY: The expected CRITICAL alert is never sent, causing the assertion `assert \"could not mark project #7 for closure\" in alerts.read_text(encoding=\"utf-8\")` to fail.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Required CI must pass: tests-hooks-and-orchestrator (which runs tests/test_audit_plans_command.py) and the dependent lint aggregate check in .github/workflows/ci.yml must succeed for this PR to merge.\"\n  expected_change_site: Either `.claude/commands/audit-plans.md` (bring it in sync with `workflow-templates/.claude/commands/audit-plans.md`) or `workflow-templates/.claude/commands/audit-plans.md` (collapse the divergence to match the root).\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The LAST RUN CHANGED FILES are README.md, changelog.d/6118-phase-7-unblock-judge.md, scripts/unblock_judge.sh, and tests/test_unblock_judge.py. Neither `.claude/commands/audit-plans.md` nor `workflow-templates/.claude/commands/audit-plans.md` is touched; the two files continue to differ, so the byte-level `TEMPLATE_COMMAND.read_text() == COMMAND.read_text()` assertion at tests/test_audit_plans_command.py:30 cannot pass.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_audit_plans_command.py:29-30 | severity=BLOCKER | confidence=5\n  PROBLEM: The template parity assertion fails because `.claude/commands/audit-plans.md` does not match `workflow-templates/.claude/commands/audit-plans.md`.\n  WHY: Executing pytest tests/test_audit_plans_command.py raises an AssertionError in test_template_parity, which causes the required tests-hooks-and-orchestrator check run and the dependent lint aggregate check in .github/workflows/ci.yml to fail in CI.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Required CI must pass: tests-hooks-and-orchestrator (which runs tests/test_audit_plans_command.py) and the dependent lint aggregate check in .github/workflows/ci.yml must succeed for this PR to merge.\"\n  Expected change site: Either .claude/commands/audit-plans.md (bring it in sync with workflow-templates/.claude/commands/audit-plans.md) or workflow-templates/.claude/commands/audit-plans.md (collapse the divergence to match the root).\n  Evidence of absence: The LAST RUN CHANGED FILES are README.md, changelog.d/6118-phase-7-unblock-judge.md, scripts/unblock_judge.sh, and tests/test_unblock_judge.py. None of these touch the root .claude/commands/audit-plans.md or the workflow-templates twin. The two files continue to differ: the workflow-templates copy has \"...new `/implement-plan-claude` invocations dispatch the orchestrator rather than creating in-session projects\" and the step-6 gate enumerates both runners as \"the AI orchestrator (`/implement-plan-ai` or the new `/implement-plan-claude`; ...) and legacy `/implement-plan-claude` projects ...\", while the root copy retains the earlier \"in-session\" / single-runner wording. The byte-level `TEMPLATE_COMMAND.read_text() == COMMAND.read_text()` assertion at tests/test_audit_plans_command.py:30 therefore cannot pass on the current PR head SHA b7c675dbb0afc480dd0dc93069153a54add133ef, which is exactly the failure captured in the CI log tail. The same file-mismatch has been logged as TASK_GAP_DEFERRED / BLOCKED across the prior five review passes (entries 8-17 in the PR discussion), each citing the editor snapshot's transfer policy excluding `.claude/commands/`; the fix has not been delivered because the trusted review workspace lacks root `.claude/commands/`. This is a gate-to-merge requirement, not a polish item: the required check is red, so reviewers cannot move the PR forward.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_audit_plans_command.py:29-30 | severity=BLOCKER | confidence=5\n  PROBLEM: The CI run fails because `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md` differ in their hand-off descriptions.\n  WHY: The byte-for-byte assertion fails, leaving `tests-hooks-and-orchestrator` red and its dependent lint check failing.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_unblock_judge.py:911-933 | severity=BLOCKER | confidence=5\n  PROBLEM: The test sets `FAKE_GH_FAIL_LABEL=\"1\"` to simulate a label write failure, but the fake `gh` script does not implement this environment variable.\n  WHY: The POST to `/labels` succeeds instead of failing, so the expected CRITICAL alert is never sent. The assertion `assert \"could not mark project #7 for closure\" in alerts.read_text(encoding=\"utf-8\")` fails because no alert was written.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/audit-plans.md:1 | severity=BLOCKER | confidence=5\n  PROBLEM: The root `.claude/commands/audit-plans.md` and its template twin `workflow-templates/.claude/commands/audit-plans.md` have diverged.\n  WHY: The required `tests-hooks-and-orchestrator` check is red (confirmed in the CI check-run failure log and reproduced by reading both files), and the dependent `lint` aggregate check fails as a result. The PR cannot merge with a red required check.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "59b3727dfc66a5e94c933c0a053d0b5058601496c56a9e5c8e1314b4974c5c73",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37251556783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37251556783",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005022532_990ea1ee12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37251556783"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T02:25:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

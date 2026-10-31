@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The heal scope only allows `.github/workflows/validate.yml`, `tests/**` and `changelog.d/*.md`, but the fix lives in the harness templates and `scripts/validation_harness_sandbox.sh`. How should the scope be resolved?\nChoices:\nA) A trusted maintainer re-files this as an ordinary (non-heal) issue. That issue gets a `files_touched:` list covering the four `node-hardhat-solidity` template files (three changed, one new), `scripts/validation_harness_sandbox.sh`, `tests/**` and `changelog.d/*`. This heal issue is closed as superseded. (RECOMMENDED)\nB) Keep this heal issue and fit the fix inside the frozen scope. Only a `validate.yml` step before \"Run validation process\" would be changed: it fails early with a clear `harness_error` when the repository's root `.dockerignore` would exclude `package.json`. Tests would cover it. The template and sandbox changes are deferred.\nC) Close this issue as not actionable until the consumer's `.dockerignore` is confirmed as the cause.\nQ2: Which parts of the suggested fix should be implemented? (Assumes Q1:A. With Q1:B only a `validate.yml` precheck fits, and this question does not apply.)\nChoices:\nA) Fail-fast only. `Dockerfile.app.j2` exits non-zero with a `harness_error` message when `package.json` is missing. `30_hardhat_test.sh.j2` checks for `/workspace/package.json` before running Hardhat. Regression tests cover both.\nB) A plus the `staged=<n>` count line in `scripts/validation_harness_sandbox.sh` and the split `GIT_DIR`/`GIT_WORK_TREE` staging regression test.\nC) B plus a rendered `validation/Dockerfile.app.dockerignore`, so the harness build context ignores the consumer's root `.dockerignore`. It would exclude only `node_modules`, `.git` and `validation/logs`. (RECOMMENDED)\nQ3: If the Dockerfile-specific ignore file is added (Q2:C), the harness image would contain files that the consumer's root `.dockerignore` currently keeps out of it. Credential files (`.env*`, keys) are already removed earlier by sandbox staging. Is that acceptable?\nChoices:\nA) Yes. The harness image is a disposable test image built from the screened sandbox copy, so the consumer's `.dockerignore` should not apply to it. (RECOMMENDED)\nB) No. Keep honouring the consumer's root `.dockerignore`, and rely only on the fail-fast checks to report the problem clearly.",
+  "fingerprint": "4b0f4fcf3c9ebfff75ad6aa13c3d1ca221919e51ed4cce734fc3f71b1a3dc6d9",
+  "lineage": {
+    "issue_number": 8182,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40267193592",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40267193592",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261026041123_ee273939e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8182,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40267193592"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8182 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-26T04:11:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

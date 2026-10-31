@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cHEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\u201d\n  expected_change_site: `scripts/workflow_failure_heal.py`, `HEAL_SCOPE_GUARD_TEST_SUBJECTS`\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The map contains only `tests/test_ci_job_split_contract.py`; `tests/test_ci_poll_test_sharding.py` checks `.github/workflows/ci.yml`, is run directly by `ci.yml`, `mark-stable.yml`, and `test-and-mark-stable.yml`, and has no guard-subject mapping; its filename does not map to `ci.yml` through the generic test-subject resolver, so a failure in a release workflow can produce a frozen heal scope that omits `ci.yml`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"HEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\" (from PR description item 11: guard tests that map to other files go in HEAL_SCOPE_GUARD_TEST_SUBJECTS)\n  Expected change site: `scripts/workflow_failure_heal.py`, `HEAL_SCOPE_GUARD_TEST_SUBJECTS` dict at line 2158\n  Evidence of absence: The dict at line 2158-2160 contains only `tests/test_ci_job_split_contract.py`. `tests/test_ci_poll_test_sharding.py` also checks `.github/workflows/ci.yml` (line 41 reads the workflow YAML, the entire test validates its sharding configuration) and is run directly by `mark-stable.yml` (line 329) and `test-and-mark-stable.yml` (line 4797). Its filename maps to no subject through the generic stem resolver (`ci_poll_test_sharding` has no `scripts/` or `.github/workflows/` match), so when it fails in a release workflow, the frozen scope omits `ci.yml`, preventing the heal from editing the workflow the test covers.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \u201cHEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\u201d\n  Expected change site: scripts/workflow_failure_heal.py, HEAL_SCOPE_GUARD_TEST_SUBJECTS\n  Evidence of absence: The map contains only tests/test_ci_job_split_contract.py. tests/test_ci_poll_test_sharding.py also checks .github/workflows/ci.yml and is run directly by both mark-stable.yml and test-and-mark-stable.yml. It has no guard-subject mapping, and its filename does not map to ci.yml through the generic test-subject resolver. When that test fails in either release workflow, the frozen scope can omit ci.yml, preventing the heal from editing the workflow the test covers.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"`HEAL_SCOPE_GUARD_TEST_SUBJECTS` maps the CI contract guards to `ci.yml`.\" (PR description, item 11: \"Heal scopes for guard tests include the files the fix edits ... `HEAL_SCOPE_GUARD_TEST_SUBJECTS` maps the CI contract guards to `ci.yml`.\")\n  Expected change site: `scripts/workflow_failure_heal.py`, `HEAL_SCOPE_GUARD_TEST_SUBJECTS` dict (line 2158-2160).\n  Evidence of absence: The map in `scripts/workflow_failure_heal.py:2158-2160` contains only `tests/test_ci_job_split_contract.py`. `tests/test_ci_poll_test_sharding.py` (478 lines, exists on HEAD) is a guard test that reads `.github/workflows/ci.yml` (`CI_WF = REPO_ROOT / \".github\" / \"workflows\" / \"ci.yml\"`, `tests/test_ci_poll_test_sharding.py:41`), `mark-stable.yml`, and `test-and-mark-stable.yml` (`RELEASE_WORKFLOWS = {\"mark-stable\": ..., \"test-and-mark-stable\": ...}`, `tests/test_ci_poll_test_sharding.py:49-52`). It is run as a script by all three workflows (`ci.yml:1591`, `mark-stable.yml:329`, `test-and-mark-stable.yml:4797`, each via `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_poll_test_sharding.py`). The generic test-subject resolver in `heal_scope_test_subjects` (`scripts/workflow_failure_heal.py:2143-2146`) maps the stem `ci_poll_test_sharding` to `scripts/ci_poll_test_sharding.sh`, `scripts/ci_poll_test_sharding.py`, `.github/workflows/ci_poll_test_sharding.yml`, and `.github/workflows/ci-poll-test-sharding.yml` \u2014 none of which exist \u2014 so a failing `test_ci_poll_test_sharding` in `mark-stable.yml` or `test-and-mark-stable.yml` produces a frozen heal scope with no entry for the workflow the test covers, leaving only `tests/**` and `changelog.d/*.md`, where the guard cannot be fixed. The LAST RUN DIFF removed `tests/test_ci_wires_every_test_file.py` from the map because no such file existed, but did not add the real, missing entry.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cHEAL_SCOPE_GUARD_TEST_SUBJECTS maps the CI contract guards to ci.yml.\u201d\n  Expected change site: `scripts/workflow_failure_heal.py`, `HEAL_SCOPE_GUARD_TEST_SUBJECTS`.\n  Evidence of absence: The map contains only `tests/test_ci_job_split_contract.py`. `tests/test_ci_poll_test_sharding.py` also tests the `ci.yml` contract and is run directly by both release workflows. It has no map entry, and the generic test-subject resolver derives candidates from its filename that do not include `.github/workflows/ci.yml`. When this test fails in a release workflow, the frozen scope can omit `ci.yml`, preventing the heal from editing the CI workflow it tests.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "bb5a9512c793fde24e009976b4adff19747687a8950302782f0fe1d7a89592e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7016,
+    "run_id": "38028766735",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38028766735",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010064020_4f63161d5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7016,
+    "run_id": "38028766735"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T06:40:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

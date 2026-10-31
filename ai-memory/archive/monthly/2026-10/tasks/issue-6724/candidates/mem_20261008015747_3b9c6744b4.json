@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix for this triage issue target?\nChoices:\nA. PR #6722's head branch `ai/issue-6712`, recorded as an `Integration branch: ai/issue-6712` line, so the fix lands where the mismatched test and workflow actually are (RECOMMENDED)\nB. Make no code change: close this issue as redundant and let PR #6722's own review/autofix loop fix the failing check, since it already reads failed check-runs\nC. The default branch `main`: add the weekly schedule and `PROPAGATE_ONLY_MISSING` there (this pulls part of PR #6722's unmerged feature into `main` and will likely conflict with it)\n**Note:** Q2 applies only if Q1 is A or C.\nQ2: What should the fix cover?\nChoices:\nA. Only the confirmed mismatch: add the weekly `schedule` trigger and set `PROPAGATE_ONLY_MISSING` from `github.event_name == 'schedule'` in the workflow, keeping overwrite behaviour for push and dispatch. Change the test's `DISPATCH_TARGETS` assertion to check the existing `INPUT_TARGETS` binding, and keep the working input name (RECOMMENDED)\nB. Option A, plus change `scripts/propagate_consumer_secrets.sh` if that branch's script does not yet honour `PROPAGATE_ONLY_MISSING`\nC. Rename the workflow's `INPUT_TARGETS` to `DISPATCH_TARGETS` to match the test (renames an existing env identifier; not recommended under \u00a710)",
+  "fingerprint": "1fabb2917fa7804f0e2e4083a9e29399ec5ca3fe8405413bf6b502a4f5e9ea0e",
+  "lineage": {
+    "issue_number": 6724,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37715055914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37715055914",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008015747_3b9c6744b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6724,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37715055914"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6724 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T01:57:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

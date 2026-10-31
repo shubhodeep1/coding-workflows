@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:168-175\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The `grep -q 'HTTP 404'` check depends on case-sensitive matching of exact `gh` stderr wording, so a wording, casing, or localization change can treat an already-absent label as a real failure and block the resume command.\n  WHY: All three reviewers identify the exact-string match as fragile; minimax_minimax-m3 additionally notes that changed error wording could cause incorrect 404 detection.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_judge.sh, line 175, the `grep -q 'HTTP 404'` pattern in the remove_label handler\n  PROBLEM: The HTTP 404 detection is case-sensitive and matches only the exact substring \"HTTP 404\" as rendered by today's `gh` CLI error messages. A future `gh` version that changes error wording or localization would silently treat every concurrent label removal as a real failure, blocking the resume command.\n  WHY: The suggested minimal fix is a broader, case-insensitive match for common `gh` error wordings.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/unblock_judge.sh\n- Location: unblock_run_ops remove_label case, the `grep -q 'HTTP 404'` branch (LAST RUN DIFF hunk at lines ~168-175)\n  PROBLEM: The 404-detection is a literal substring match on the `gh` stderr text \"HTTP 404\" (e.g. `gh: Not Found (HTTP 404)`). The check is case-sensitive and assumes `gh` keeps that exact format. If a future `gh` release changes the wording (different casing, omits the \"HTTP \" prefix, splits the words, or localizes the message), real failures (HTTP 500, network errors, auth failures) would still match a substring of \"404\" if any happens to appear, while real 404s would stop matching and the next op (and the resume command) would be silently blocked \u2014 re-introducing the bug the diff is fixing.\n  WHY: The test fixture writes the exact format the grep expects, so this fragility is invisible to CI. The reviewer describes this as advisory hardening rather than a runtime failure in the current code.\n  HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: scripts/unblock_judge.sh\n- Location: remove_label case, the `grep -q 'HTTP 404'` check\n  PROBLEM: The HTTP-404 detection is case-sensitive and depends on `gh` preserving the exact wording `HTTP 404`. A future `gh` release that changes the error wording or emits a localized message would silently re-introduce the original bug: every concurrent label removal would be treated as a real failure and the resume command would be skipped.\n  WHY: The suggested minimal fix is to broaden the match slightly with a case-insensitive pattern.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0384abe5a99a1e973b00237443659e8ab00949ffc304dd667a2cac77a810efde",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37280736711",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37280736711",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005083648_0ef15dcfe3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37280736711"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T08:36:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

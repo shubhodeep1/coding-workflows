@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1403-1437 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The orchestrate-poll aggregate CI check is red because a shard exited nonzero, but the supplied logs do not establish the underlying cause; reviewers disagree about which shard failed.\n  WHY: The nonzero shard result fails the aggregate check and blocks validation; reviewers who stated severity classified it as BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml (via orchestrate-poll failure): CI check-run orchestrate-poll | confidence=4\n  PROBLEM: The PR head has a failing orchestrate-poll job.\n  WHY: The orchestrate-poll job exited with code 1 despite all tests passing. The log shows \"1 orchestrate-poll shard(s) failed.\" This failure blocks the aggregate lint check and needs investigation to determine if it is a transient issue or related to the changes.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:1403-1405, 1429-1437 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR head\u2019s `orchestrate-poll (3)` shard failed. The supplied log tail reports 33 passing tests but shows only the generic non-zero shard result, not the failing assertion or traceback.\n  WHY: The shard runner\u2019s non-zero exit is counted as a failure, leaving the aggregate CI check red. The available evidence does not identify a cause in this PR\u2019s changed code; the shard failure needs investigation before the PR can be validated.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/ci.yml: orchestrate-poll shard aggregate (shard 3 log shows 33 passed, 0 failed, but aggregate reports 1 shard failed) | severity=BLOCKER | confidence=5\n  PROBLEM: The CI aggregate check is failing because one of the orchestrate-poll shards (0, 1, or 2) exited nonzero, but the supplied logs only show shard 3 passing all tests. The underlying cause is not present in the supplied logs.\n  WHY: The workflow counts any nonzero shard exit as a failure and fails the aggregate CI check. This blocks merging even though the code changes in this PR are correct and the tests in shard 3 pass.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7d848a85894b7540d1f1b3be6e69dc9f9f9e674f0ff25dba23eacfd7f2b828e2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6581,
+    "run_id": "37906823122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37906823122",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009093035_8d772b62f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6581,
+    "run_id": "37906823122"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T09:30:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

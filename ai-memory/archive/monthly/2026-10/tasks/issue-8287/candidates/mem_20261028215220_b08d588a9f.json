@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: This issue's scope marker allows only `.github/workflows/test-and-mark-stable.yml`, `tests/**` and `changelog.d/*.md`. The root cause is in `scripts/ai_memory_lib.py` and `.github/workflows/memory_maintenance.yml`, so the fix cannot land under the current scope. Option B weakens the failing gate, which the issue's own fix constraints forbid. Option C needs a human even though the repository already holds everything needed to decide. A re-issue with the correct scope keeps the pipeline unattended and changes no guard.\nQ2: The repository confirms the cause. `_clone_for_memory_branch` (`scripts/ai_memory_lib.py:3208-3224`) runs a full `git clone --no-tags --quiet <origin>` on every write and only then fetches `ai-memory`. The only job in `.github/workflows/memory_maintenance.yml` has `timeout-minutes: 20` (line 14). The extraction step (lines 65-66) is `continue-on-error: true` but has no step timeout, so a slow extraction takes up the whole 20 minutes and the job is cancelled. The step timeout alone gives only a thin margin, which shrinks as the repository grows. The single-branch clone removes the cause itself. Doing both, each with its own regression test, fixes the cause and makes the fail-open step actually fail open.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - This issue's scope marker: `<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md runs=shubhodeep1/coding-workflows:40746491161 -->`\n    - scripts/ai_memory_lib.py:3208-3224 (`_clone_for_memory_branch`)\n    - .github/workflows/memory_maintenance.yml:14, :65-66, :198\n  steps:\n    - Re-issue the heal as a new issue whose scope lists exactly `scripts/ai_memory_lib.py`, `.github/workflows/memory_maintenance.yml`, `tests/**` and `changelog.d/*.md`.\n    - Keep `Target branch: stable` on the re-issue, and carry over the evidence, root cause and suggested fix from this issue.\n    - Close this issue as superseded and link it to the replacement.\n    - Do not edit `.github/workflows/test-and-mark-stable.yml`. The gate's handling of a `cancelled` run stays exactly as it is.\n  replaces_acceptance_criterion: none (only the edit scope changes; the acceptance criterion that the release gate's `orphan-workflows-test` passes is unchanged)\n  equivalence_argument: The failing check stays strict. Only the set of files the implementer may edit grows, to the files that hold the root cause.\n  reversibility: If a person disagrees, they close the re-issue and reopen this issue; no code has changed at that point.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None. No placeholders are used.",
+  "fingerprint": "b8ea73e14b936b5fc9bfd6767266b09f40ebfb84f4c3d6169f9cc91d5334f880",
+  "lineage": {
+    "issue_number": 8287,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40774017162",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40774017162",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8287"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261028215220_b08d588a9f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8287,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40774017162"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8287",
+  "timestamps": {
+    "created_at": "2026-10-28T21:52:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

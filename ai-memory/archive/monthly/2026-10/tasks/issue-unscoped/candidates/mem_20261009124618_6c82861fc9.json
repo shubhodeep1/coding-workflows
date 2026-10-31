@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- ai-memory/schemas/release_manifest.v1.json:47-64 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The regular-file branch accepts `workflow-templates/CLAUDE.md` as a regular file, allowing a manifest to pass schema validation even though this path must be a symlink.\n  WHY: Schema-based consumers can accept an incorrect manifest that does not enforce the required symlink shape; severity is high because three reviewers rated it MAJOR and one rated it NIT.\n- scripts/release_manifest.py:File indentation | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script uses 4-space indentation instead of tabs, violating CLAUDE.md \u00a79.\n  WHY: This is a style violation, not a functional runtime failure, but it breaches the repository's strict indentation convention.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  expected_change_site: PR description/body\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `scripts/release_manifest.py` lines 27-32 records the assumption in a code comment, but the provided PR description contains only the automated-implementation statement and issue references; the PR-body requirement is absent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- ai-memory/schemas/release_manifest.v1.json:properties.files.items definition | severity=high | confidence=5\n  PROBLEM: The regular file branch of the oneOf schema allows workflow-templates/CLAUDE.md to be defined as a regular file (mode 100644/100755), bypassing the strict symlink requirements of the symlink branch.\n  WHY: A manifest claiming workflow-templates/CLAUDE.md is a regular file will pass validation, rendering the specific symlink requirements of the second schema branch ineffective for that file.\n- scripts/release_manifest.py:File indentation | severity=low | confidence=5\n  PROBLEM: The script uses 4 spaces for indentation instead of tabs, which violates CLAUDE.md \u00a79.\n  WHY: This is a style violation, not a functional runtime failure, but it breaches the strict indentation convention defined for the repository.\n- TASK_GAP: Requirement: \"If the authoritative plan cannot be read, record that assumption in a code comment and the PR body.\"\n  Expected change site: PR description/body.\n  Evidence of absence: scripts/release_manifest.py lines 27-32 record that the plan could not be read, but the PR description provided here contains only the automated-implementation statement and issue references; it does not record the assumption.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1_flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- ai-memory/schemas/release_manifest.v1.json:Lines 48-64 | severity=high | confidence=4\n  PROBLEM: The regular-file item branch accepts `workflow-templates/CLAUDE.md` as a regular-file path; the tightened symlink branch has no symmetric exclusion on the regular-file branch.\n  WHY: A schema-only verifier accepts a manifest that misclaims the actual symlink as a regular file, although the builder correctly rejects this shape.\n- TASK_GAP: Requirement: From the linked issue #6903 \u2014 \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  Expected change site: PR description / PR body for this pull request.\n  Evidence of absence: The PR description is \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6903. Refs #6902\". It does not record the plan-unreadable assumption. The code comment at scripts/release_manifest.py lines 27-32 records it (`Assumption: the authoritative plan ... could not be read from the isolated implementation sandbox`), and the editor's own summary acknowledged this deliverable as an \"ignored suggestion\" because the editor cannot rewrite the PR body. The deliverable explicitly requires both the code comment AND the PR body; only one of the two is present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- ai-memory/schemas/release_manifest.v1.json:Lines 47-63 | severity=high | confidence=5\n  PROBLEM: The regular-file schema branch accepts `workflow-templates/CLAUDE.md` as a regular file, even though that path is required to be a symlink with mode `120000` and link target `../CLAUDE.md`.\n  WHY: A manifest that misrepresents this path as a regular file passes schema validation, so consumers relying on the schema do not enforce the required symlink shape.\n- TASK_GAP: Requirement: If the authoritative plan cannot be read, \u201crecord that assumption in a code comment and the PR body.\u201d\n  Expected change site: PR description/body.\n  Evidence of absence: `scripts/release_manifest.py` records the assumption in a comment, but the provided PR description does not include it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- ai-memory/schemas/release_manifest.v1.json:Lines 48-64 | severity=low | confidence=4\n  PROBLEM: The regular-file item branch accepts `workflow-templates/CLAUDE.md` as a regular file; the tightened symlink branch has no corresponding exclusion on the regular-file branch.\n  WHY: Schema-based validation can accept an incorrect manifest describing the known symlink as a regular file, although the builder itself enforces the correct symlink mode.\n- TASK_GAP: Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  Expected change site: PR description/body (not editable by the editor) and `scripts/release_manifest.py` (code comment).\n  Evidence of absence: `scripts/release_manifest.py` lines 27-32 records the assumption in a code comment. However, the PR description (visible in the UNTRUSTED PR INTENT CONTEXT) contains only \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6903 / Refs #6902\" and does not record the assumption. The editor summary explicitly notes \"the editor cannot change the PR description\", so this gap cannot be fixed by the editor pass. The code comment satisfies the code-half of the requirement; the PR-body half requires operator or pipeline action outside the editor's scope.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "4e246b7636416f5a6ed36f71e383b7197df980b6321cba0388370cc09a87ade5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6913,
+    "run_id": "37926015746",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37926015746",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009124618_6c82861fc9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6913,
+    "run_id": "37926015746"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T12:46:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: The step timings were not readable, so the changelog and PR description use a fallback list chosen by estimated cost. Nothing confirms that the moved steps are the slowest. (Severity disagreement: gemini rated it MAJOR, qwen rated it NIT.)\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml and tests/test_ci_poll_test_sharding.py\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: Sonnet raised this only to reject it, as a NIT: it did not endorse the earlier gemini gap. Five steps moved, and names and bodies are unchanged. No timeout-minutes or job names changed. The choice by estimated cost is stated openly. Whether the source job is now comfortably under 20 minutes cannot be settled from the repository.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP (the reviewer did not endorse it):\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml and tests/test_ci_poll_test_sharding.py\n  Evidence of absence: Not a gap. The diff moves five steps out of `tests-hooks-and-orchestrator`, and all five keep their names and bodies. No `timeout-minutes` or job names changed. The ci.yml comments and the changelog fragment say the step timings were unreadable, so the choice was made by estimated cost. Whether the five steps bring the source job comfortably under 20 minutes cannot be settled from the repository.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The issue required using run step timings to identify the slowest steps. The PR says in the changelog and PR description that the timings were not readable and a fallback list based on estimated cost was used. Nothing confirms that the moved steps were the slowest, so the optimization goal is unverified.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The linked issue requires moving the slowest steps based on the step timings of run 39575950300. changelog.d/7798-ci-hooks-job-step-move.md lines 11-12 and the inline comments in .github/workflows/ci.yml at lines 2037-2040 and 2403-2408 say the timings were not readable and the sandbox could not measure all candidates, so the steps came from the plan's fallback list, chosen by estimated cost. The auto-decision AD-1 in the PR description approves this deviation. It is still a gap between the literal requirement and the implementation. The next budget-watch run on main will verify whether the chosen steps were the slowest.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0b8a404d02114beff59c18c19d07b28cb54c68b563a3350efc16330a5fdaa304",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7799,
+    "run_id": "39583325606",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39583325606",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021103318_fb195ba2f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7799,
+    "run_id": "39583325606"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T10:33:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

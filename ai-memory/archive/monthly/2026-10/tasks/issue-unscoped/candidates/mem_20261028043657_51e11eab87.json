@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1364-1568 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The wait-implement step (\"Phase 3b: Wait for PR creation (implement phase)\") `run:` body is 19,278 characters and still contains a `${{ }}` expression at line 1402, exceeding the 18,000-character RUN_EXPRESSION_GUARD_CHARS in tests/test_workflow_file_size_limit.py.\n  WHY: `test_interpolated_run_bodies_below_expression_guard` fails and CI is red, blocking merge. GitHub rejects such a body at 21,000 characters, so growth would break every run at startup. All four reviewers labelled it BLOCKER; the ledger severity scale has no \"blocker\", so it is mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:1364-1568 (step \"Phase 3b: Wait for PR creation (implement phase)\"; `${{ }}` at line 1402; cross-page lookup at lines 1543-1567) | severity=BLOCKER | confidence=5\n  PROBLEM: The `run:` body is 19,278 characters and still contains a `${{ }}` expression at line 1402. That is over the 18,000-character `RUN_EXPRESSION_GUARD_CHARS` in tests/test_workflow_file_size_limit.py (line 32). `test_interpolated_run_bodies_below_expression_guard` (lines 66-98) fails on this step.\n  WHY: CI stays red, which blocks merge. GitHub rejects a `run:` body containing `${{ }}` at 21,000 characters, and only about 1,700 characters of headroom remain. The reviewer suggested moving the expression into `env:` as `IMPL_CREATED_AFTER_INPUT` and updating `_run_phase_step` in tests/test_test_and_mark_stable_plan_polling_guard.py (lines 444-455).\n(All other checklist sections: NONE. TASK COMPLETENESS: NONE. HARDENING_RISK_SCORE: 1.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:1364 (wait-implement step) | severity=BLOCKER | confidence=5\n  PROBLEM: The run body for the wait-implement step exceeds the 18,000-character guard for steps containing ${{ }} expressions (current length is 19,278 characters).\n  WHY: The CI check tests-promote-stall-and-review fails with an AssertionError, preventing workflow execution and blocking the stable release gate.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:1364-1568 (new cross-page scan at lines 1543-1567; GitHub expression at line 1402) | severity=BLOCKER | confidence=5\n  PROBLEM: The interpolated `run:` body is 19,278 characters, exceeding the 18,000-character guard.\n  WHY: `tests/test_workflow_file_size_limit.py::test_interpolated_run_bodies_below_expression_guard` fails when an interpolated body reaches 18,000 characters. The CI run confirms `tests-promote-stall-and-review` fails on this assertion.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:1356 (step start; `${{ }}` expression at line 1402; cross-page lookup at lines 1543-1567) | severity=BLOCKER | confidence=5\n  PROBLEM: The step's `run:` body is 19,278 characters and still contains a `${{ }}` expression, exceeding the 18,000-character `RUN_EXPRESSION_GUARD_CHARS` guard in tests/test_workflow_file_size_limit.py:32 (test at :66-98). The failing check-run `tests-promote-stall-and-review` on head 833eb15bd07fe6182581af86b88e8c2f8f8f394e shows length=19,278.\n  WHY: CI is red now on the PR head. If the body grows further, every run of the release gate fails at startup. The reviewer suggested moving the line-1402 expression into the step's `env:` block (lines 1358-1363) as `IMPL_CREATED_AFTER_INPUT` and passing the new env value in `_run_phase_step` in tests/test_test_and_mark_stable_plan_polling_guard.py.\n(All other checklist sections: NONE. TASK COMPLETENESS: NONE. The orchestrate.yml deliverable is deferred scope and not a gap.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "645b73936e587814b7308f42749dc89e29e2fd0af6108e5c7bec3545bf26007f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8243,
+    "run_id": "40631191474",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40631191474",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028043657_51e11eab87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8243,
+    "run_id": "40631191474"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T04:36:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

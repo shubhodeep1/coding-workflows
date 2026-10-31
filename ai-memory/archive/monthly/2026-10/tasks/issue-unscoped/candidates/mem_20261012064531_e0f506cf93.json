@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5908-5921 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: When the labelled issue set is unresolved or unavailable, the marker step can fall back to deriving candidate issues and post outage markers for issues this run did not label.\n  WHY: The recovery sweep trusts these markers when removing `ai:review-blocked`; severity is high based on the MAJOR ratings from Gemini and Minimax, while Sonnet rated the related crash-before-output case NIT.\n- workflow-templates/ai-review.yml:68-73 | severity=high | confidence=[4]\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: If `provider-outage-resume` is skipped, the `!cancelled()` condition can skip `security-hold-sweep` instead of failing open as claimed.\n  WHY: With the documented kill switch disabling the probe job, the dependent sweep is treated as cancelled and stops dispatching security-hold re-checks, regressing the prior behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml: lines 5914-5921 | severity=NIT | confidence=2\n  PROBLEM: If the label step dies before writing its outputs, the marker step can re-derive items from linked-issue data and `PR_NUMBER`, and mark an item the label step did not label.\n  WHY: This is reachable if the label step crashes before output; the marker step runs when the judge failed and the provider is unavailable. The fallback preserves previous behavior, is fail-open, and the worst outcome is a stray marker rather than a missed removal.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml: Lines 5908-5914 | severity=MAJOR | confidence=4\n  PROBLEM: If the label step completes but the successfully labelled issue set is not definitively resolved, the marker step falls back to deriving candidate issues from a broad list instead of skipping markers.\n  WHY: The recovery sweep may remove `ai:review-blocked` from an issue that was never blocked by the outage, including a label added by a human or a prior run.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml: marker step \"Mark outage-caused review-blocked labels (autofix exhaustion)\" \u2014 the `if [ \"${REVIEW_BLOCKED_LABELLED_RESOLVED:-}\" = \"true\" ] ... else ... fi` block at lines 5914-5921 (post-change) | severity=MAJOR | confidence=4\n  PROBLEM: When `REVIEW_BLOCKED_LABELLED_RESOLVED` is not `\"true\"`, the marker step falls back to deriving items from linked-issue data, fallback numbers, or `PR_NUMBER`, and can post markers for items this run did not label.\n  WHY: The recovery sweep trusts these markers and can remove `ai:review-blocked` labels added by other runs or manual processes.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- workflow-templates/ai-review.yml: lines 68-73 | severity=MAJOR | confidence=4\n  PROBLEM: The `!cancelled()` condition does not fail open when the `provider-outage-resume` dependency is skipped, so `security-hold-sweep` is skipped too.\n  WHY: When `vars.PROVIDER_OUTAGE_RESUME_ENABLED == 'false'`, the probe job is skipped and the dependent sweep's `cancelled()` condition evaluates true; the sweep then stops dispatching security-hold re-checks despite the claimed fail-open behavior.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "85c0670f4b7784b1a7d58786f99011d18a99d79d34600d319522f6abc2a28bfa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7101,
+    "run_id": "38212075630",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38212075630",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012064531_e0f506cf93",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7101,
+    "run_id": "38212075630"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T06:45:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

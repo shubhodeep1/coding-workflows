@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue change in `main`?\nChoices:\nA) Stop the repeat. When the current head already has a trusted non-retryable `conflict_resolver_sandbox_path_*` failure marker, a `force_rb_judge` dispatch does not rerun the conflict resolver. It routes the PR straight to the human gate (`ai:needs-human` / review-blocked comment naming the host-only paths). Also add a regression test that reproduces the rerun on the reported head shape. (RECOMMENDED)\nB) Same as A. In addition, the heal reporter/intake treats `conflict_resolver_sandbox_path_host_only` as a PR-specific manual-merge need and posts a diagnosis comment on the PR instead of filing a `workflow-defect`/`inconclusive` heal issue.\nC) Resolve automatically: when every host-only conflicted path is a `.claude/` live copy whose `workflow-templates/.claude/` twin also conflicted, the trusted host copies the model-resolved template over the live copy.\n**Note:** C weakens the guarantee that the model never controls host-executed safety-hook content. Agents.md excludes the merged-PR guard hook from sandbox snapshot and transfer for that reason. C is not recommended.\nD) No code change in `main`. Treat this issue as tracking-only and leave PR #6526's conflict for a person to merge.\nQ2: Should this issue's PR also fix PR #6526's actual hook conflict (branch `ai/issue-6517`)?\nChoices:\nA) No. This issue changes only the workflow behaviour chosen in Q1. PR #6526's conflict on `.claude/hooks/pr_merge_status_guard.py` and its template twin stays a manual merge on that PR's own branch. (RECOMMENDED)\nB) Yes. Also merge `main` into `ai/issue-6517` and reconcile both copies of the hook in this pipeline run.\n**Note:** B conflicts with this issue's target branch (`main`), and the pipeline editors cannot write `.claude/**`. Choosing B will require re-clarification.\n---\n- **Done:** read the resolver's host-only fail-closed path, the non-retryable reason list, and how `force_rb_judge` skips the fingerprint cap.\n- **Assumptions:** the 2 consecutive failures were one normal review run that tripped the cap, then a poller `force_rb_judge` dispatch that skipped it. This is inferred from \"Review-Blocked Judge Dispatch\" being the failed workflow and the cap code; I have not seen the run logs.\n- **Missing context:** the merge stages of PR #6526 for the hook and the failed run logs (the evidence was `scope_unverified`).",
+  "fingerprint": "807aa8f2f78c6a7f1527adff290bdf363580241aa40e4ce2fb19da2a70a16a54",
+  "lineage": {
+    "issue_number": 6733,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37735204641",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37735204641",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008060454_8209721308",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6733,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37735204641"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6733 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T06:04:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

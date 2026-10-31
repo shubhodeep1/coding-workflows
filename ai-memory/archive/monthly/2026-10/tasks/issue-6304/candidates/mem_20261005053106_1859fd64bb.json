@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6304,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6304\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6310\",\"pr_number\":6310,\"branch\":\"ai/issue-6304\",\"run_id\":\"37267082185\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37267082185\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".claude/hooks/pr_merge_status_guard.py\",\"changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md\",\"tests/test_pr_merge_status_guard.py\",\"workflow-templates/.claude/hooks/pr_merge_status_guard.py\"]}",
+  "fingerprint": "828f97f5fffed14b17dab3b014eab5174fac2c1e6aefa43e57a1769f99256534",
+  "lineage": {
+    "issue_number": 6304,
+    "parent_ids": [],
+    "pr_number": 6310,
+    "run_id": "37267082185",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37267082185",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6310"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005053106_1859fd64bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6304,
+    "level": "run",
+    "pr_number": 6310,
+    "run_id": "37267082185"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6304: https://github.com/shubhodeep1/coding-workflows/pull/6310",
+  "timestamps": {
+    "created_at": "2026-10-05T05:31:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

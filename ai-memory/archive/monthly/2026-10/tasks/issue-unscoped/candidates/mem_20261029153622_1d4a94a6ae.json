@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2574 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The added test path in .github/workflows/ci.yml is outside the heal-scope marker (ai:workflow-heal-scope:v1 paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md).\n  WHY: The implement commit gate (scripts/implement_commit_changes.sh:594-605) uses --strict-allowlist and would refuse the commit, which stalls the pipeline. Severity is BLOCKER from three reviewers. Two reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) disputed that any stall occurs, because the edit came from review autofix, which that gate does not cover.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Give the cancel-on-close job in cancel_on_pr_close.yml (job 'cancel-active-runs') a per-trigger concurrency group, update the tests/test_review_merge_train.py concurrency pin, add an agents fragment, and add a changelog fragment (PR description \"Deferred scope\"). The reviewer noted these are explicitly deferred via AD-1 and are not a defect.\n  expected_change_site: .github/workflows/cancel_on_pr_close.yml (job cancel-active-runs concurrency.group), tests/test_review_merge_train.py (around line 1860), agents.d/<n>-cancel-on-close-per-trigger-group.md, changelog.d/<n>-cancel-on-pr-close-per-trigger-concurrency.md\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR DIFF and LAST RUN DIFF contain no edits to cancel_on_pr_close.yml or tests/test_review_merge_train.py, and no agents.d or changelog.d fragment for the concurrency change. The PR description defers these via AD-1.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2574 | severity=BLOCKER | confidence=5\n  PROBLEM: Modification of .github/workflows/ci.yml is outside the heal-scope marker declared in the linked issue (ai:workflow-heal-scope:v1 paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md).\n  WHY: The implement commit gate (scripts/implement_commit_changes.sh) enforces the allowlist with --strict-allowlist, so the pipeline stalls and refuses the commit, even though tests/test_ci_wires_every_test_file.py requires the test wire-up.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:2574 | severity=BLOCKER | confidence=5\n  PROBLEM: The LAST RUN DIFF adds tests/test_test_and_mark_stable_phase7_timeout_status.py to the ci.yml pytest list, but ci.yml is not in the heal-scope marker. The implement gate runs with --strict-allowlist (scripts/implement_commit_changes.sh:594-595) and returns exit 20 with a \"Refusing to commit\" block (scripts/implement_commit_changes.sh:629-639).\n  WHY: The next implement pass on this branch would reject the ci.yml hunk and stall with \"::error::Refusing to commit: \u2026 staged path(s) fall outside the issue's files_touched allowlist\".\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: Give the cancel-on-close job in cancel_on_pr_close.yml (job 'cancel-active-runs') a per-trigger concurrency group, update the tests/test_review_merge_train.py concurrency pin, add an agents fragment, and add a changelog fragment (PR description \"Deferred scope\" bullets 1-3).\n  Expected change site: .github/workflows/cancel_on_pr_close.yml (job cancel-active-runs concurrency.group), tests/test_review_merge_train.py (around line 1860), agents.d/<n>-cancel-on-close-per-trigger-group.md, changelog.d/<n>-cancel-on-pr-close-per-trigger-concurrency.md\n  Evidence of absence: PR DIFF and LAST RUN DIFF contain no edits to those files or fragments. The PR description defers them via AD-1 (not a TASK_GAP defect, recorded so the summary reflects the deferred work).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2574; scripts/implement_commit_changes.sh:594-605 | severity=BLOCKER | confidence=5\n  PROBLEM: The added CI wiring changes .github/workflows/ci.yml, which is outside issue #8327's heal-scope marker (.github/workflows/test-and-mark-stable.yml, tests/**, changelog.d/*.md). The implement commit gate passes --strict-allowlist for heal-route changes.\n  WHY: If this change is staged during heal implementation, the scope guard refuses the commit. The reviewer suggests keeping the regression test within an already-wired test file.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5905833465b9d2a4f864eb915183bf72ba641c33639f5c91e327c84e1c91e94f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8361,
+    "run_id": "40889326806",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40889326806",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029153622_1d4a94a6ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8361,
+    "run_id": "40889326806"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T15:36:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

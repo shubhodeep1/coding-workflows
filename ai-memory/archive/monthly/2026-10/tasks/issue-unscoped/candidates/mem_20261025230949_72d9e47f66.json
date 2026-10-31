@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The sentence \"every other exit-3 refusal still fails the job\" is inaccurate because `reason=pr_not_open` is handled before the generic exit-3 failure branch (`.github/workflows/plan.yml:337-343`). It sets `pr_not_open=true` and hands off to the superseded-PR check without failing the job.\n  WHY: A reader diagnosing a `pr_not_open` run could expect a failed step, but the run continues. The behaviour is unaffected, so this is a documentation inaccuracy only. Reviewers rated it NIT; the ledger shows it as low. qwen_qwen3_7-plus disagreed and judged the wording consistent with the code comment at `.github/workflows/plan.yml:301`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The agents.md fragment must accurately describe plan.yml's behavior for every exit-3 refusal from the integration-ref resolver.\n  expected_change_site: `agents.d/8151-plan-label-missing-hold.md:2`\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `agents.d/8151-plan-label-missing-hold.md:2` says \"every other exit 3 still fails the job\", but `plan.yml:337-343` handles `reason=pr_not_open` non-fatally, and the `label_missing` hold (lines 344-432) is a second non-fatal exit-3 branch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=NIT | confidence=5\n  PROBLEM: The sentence \"every other exit-3 refusal still fails the job\" is inaccurate. `reason=pr_not_open` is handled before the generic exit-3 failure branch (`.github/workflows/plan.yml` lines 290-292, 307, 337-342). It sets `pr_not_open=true` and `resolver_status=failed` and hands off to the superseded-PR classification.\n  WHY: This is a documentation inaccuracy only. The behaviour predates this PR and is unaffected.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The agents.md fragment must accurately describe plan.yml's behavior for every exit-3 refusal from the integration-ref resolver.\n  Expected change site: `agents.d/8151-plan-label-missing-hold.md:2` (the fragment prose added in the last autofix run)\n  Evidence of absence: The fragment states \"every other exit 3 still fails the job,\" but `plan.yml:337-343` shows that `resolver_rc=3` with `reason=pr_not_open` is handled non-fatally: the step writes `ref=`, `resolver_status=failed`, `pr_not_open=true`, `pr_not_open_pr=${not_open_pr}` to `$GITHUB_OUTPUT` and exits 0, then hands off to the \"Close superseded CI-repair issue (merged PR)\" step. The `reason=label_missing` hold is itself the second non-fatal exit-3 branch (lines 344-432), so only exit-3 reasons other than `pr_not_open` and `label_missing` fail the job.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=NIT | confidence=5\n  PROBLEM: This incorrectly says all other exit-3 refusals fail the job. The `pr_not_open` refusal is handled separately.\n  WHY: The workflow records `pr_not_open=true` and continues to the superseded-PR check, which may close the issue, reroute planning, or skip planning without failing the job (`.github/workflows/plan.yml:337-343, 1052-1117`).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=NIT | confidence=5\n  PROBLEM: The claim \"every other exit-3 refusal still fails the job\" is inaccurate for `reason=pr_not_open`. In `.github/workflows/plan.yml` lines 337-343 that refusal writes `ref=`, `resolver_status=failed`, `pr_not_open=true` and `pr_not_open_pr=<n>`, logs a `::notice::`, and lets the run continue to the superseded-PR check. `clarify.yml` (lines 242+) has the same exception.\n  WHY: No runtime failure; this is documentation drift. A reader could conclude a `pr_not_open` refusal fails the plan job. Suggested wording: \"every other exit-3 refusal except `reason=pr_not_open` (handled by the superseded-PR check) still fails the job.\"\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b63903f002c945052305b899f60bf467a0a070145dcf1fd33db484be12a8984b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8170,
+    "run_id": "40240113080",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40240113080",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025230949_72d9e47f66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8170,
+    "run_id": "40240113080"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T23:09:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

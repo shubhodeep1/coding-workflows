@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How strongly should the Codex diagnosis be isolated from the PR checkout and credentials?\nChoices:\nA) Targeted hardening inside the existing job (RECOMMENDED):\n   - Set `persist-credentials: false` on every checkout in `check_failure_triage.yml`.\n   - Always overwrite `unattended_system_instructions.md` and the triage prompts with the trusted support-ref copies. Consumer or PR-head copies will no longer override them.\n   - Run Codex with `--sandbox read-only` instead of `danger-full-access`.\n   - Leave issue creation in the host step after Codex, where it already is.\n   - Add a contract test that pins all of the above.\nB) Full container isolation using the same pattern as clarify: a read-only, network-isolated container plus the host-side model broker, built on `scripts/clarify_isolated_run.sh`. It would include an isolation failure that is never retried on host Codex, plus everything in A. This is a much larger change, and it needs the helper and Dockerfile staged from the support ref.\nC) A only, keeping `danger-full-access`. This removes the persisted PAT and the PR-controlled prompts, but Codex keeps write and network access on the runner.",
+  "fingerprint": "b553590e402fb71847cee9f3452a2963d83dd147fd891927d3951a5cb79f262c",
+  "lineage": {
+    "issue_number": 6296,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37261836026",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37261836026",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005041012_e9641c75b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6296,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37261836026"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6296 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T04:10:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:1913-1922 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script hardcodes `run_id:` as the key name in the canary file template.\n  WHY: Issue #7400 mandates `decompose-run:`, so a restore using `run_id:` would fail downstream e2e validation; severity is BLOCKER per the source. Other reviewers (minimax_minimax-m3, z-ai_glm-5_3-flash, anthropic_claude-sonnet-5_5) judged this pre-existing and out of scope for the PR.\n- scripts/review_conflict_prepare.sh:1411 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The conflict resolver script hardcodes `run_id:` in its prompt generation/seeding logic.\n  WHY: The resolver writes the canary file with the wrong key, so downstream smoke gates abort; severity is BLOCKER per the source. Other reviewers judged this out of scope for the PR.\n- scripts/review_conflict_resolve.sh:1119 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A log message misleadingly references the old `run_id:` key.\n  WHY: It could mislead operators debugging the resolution logic, although the awk resolver correctly preserves existing lines; severity is NIT per the source.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_apply_fixes.sh:1913, 1922 | severity=BLOCKER | confidence=5\n  PROBLEM: The script hardcodes `run_id:` as the key name in the canary file template.\n  WHY: Issue #7400 mandates `decompose-run:`; downstream e2e validation expects `decompose-run:`, so a restore using `run_id:` will fail the validation check.\n- scripts/review_conflict_prepare.sh:1411 | severity=BLOCKER | confidence=5\n  PROBLEM: The conflict resolver script hardcodes `run_id:` in the prompt generation/seeding logic.\n  WHY: The resolver writes the canary file with the wrong key `run_id:`, so downstream smoke gates abort because the file does not match the required spec (`decompose-run:`).\n- scripts/review_conflict_resolve.sh:1119 | severity=NIT | confidence=3\n  PROBLEM: Misleading log message referencing the old `run_id:` key.\n  WHY: The log entry misleads operators debugging the resolution logic, although the awk resolver correctly preserves existing lines.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "446eccf4bedab63607323723c8a2c723aaab3ca3fcdea327bbe6de4cb2fb55e4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7404,
+    "run_id": "38672300737",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38672300737",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261015031042_9bbbd80ce3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7404,
+    "run_id": "38672300737"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-15T03:10:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

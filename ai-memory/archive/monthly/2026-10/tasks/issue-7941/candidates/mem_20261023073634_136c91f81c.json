@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for issue: set the smoke canary file content\n\nPlanning ref: `main` @ `bfac0a47105575767fb1b49680499547b2d7795c`. The integration branch metadata is empty, so this plan targets the default branch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies one file and its exact final content, and says no other file may change. Nothing in it needs a helper or pattern search, and the complete option is the minimal one. Following the \u00a76 order (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the right choice is to replace the file's content exactly and touch nothing else.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a content edit to one data file.\n\n## Data structures affected\n`tests/e2e_smoke_canary.txt` is overwritten so its whole content is exactly these three lines:\n```\nstatus: ok\nrun_id: alt-39914231938\nupdated-by: ai-pipeline\n```\n- No other lines, and no leading or trailing blank lines.\n- One trailing newline after the last line, which is the POSIX text-file norm. The release smoke gate compares lines, so a final newline is safe.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the whole file rather than patch lines\n- Chosen: overwrite the whole file with the three specified lines.\n- Alternatives considered: edit only the lines that differ from the existing content.\n- Why: the issue asks for \"exactly\" these three lines. Replacing the whole file guarantees no stale lines are left behind, whatever the file holds now.\n\n## Security considerations\n- No trust boundary, endpoint, credential or money state is involved.\n- The issue text is untrusted, but the content is three fixed plain-text lines with no shell or template expansion.\n- Abuse cases: none apply.\n\n## Risks and edge cases\n- If the file has CRLF line endings or extra content, the full overwrite normalises it to LF and removes the extra lines.\n- Do not edit `CHANGELOG.md` or add a `changelog.d` fragment. The issue forbids changes to other files, and this is a smoke canary.\n- Conflict check: the file exists according to the issue. If it is missing on the ref, creating it with the same content satisfies the task.\n\n## Testing considerations\n- `git diff --stat` must show only `tests/e2e_smoke_canary.txt`.\n- `cat tests/e2e_smoke_canary.txt` must print exactly the three lines.\n- No test suite needs to run.\n\n## Pre-execution self-check\n- The plan has a single file in scope and exact content.\n- No clarification is needed.\n- The plan does not depend on any external input.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "48906a214cfac2dd015630af92113caf2237dba6ee00da21416053ea73359d96",
+  "lineage": {
+    "issue_number": 7941,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39916765830",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39916765830",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7941"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261023073634_136c91f81c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7941,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39916765830"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7941",
+  "timestamps": {
+    "created_at": "2026-10-23T07:36:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

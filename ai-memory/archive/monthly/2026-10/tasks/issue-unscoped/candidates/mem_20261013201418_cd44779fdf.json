@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:tests/test_clarify_sandbox_base_image_preseed.py wiring in CI steps | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The CI wiring guard reports that `tests/test_clarify_sandbox_base_image_preseed.py` is not correctly wired into the CI workflow.\n  WHY: The wiring guard raises an AssertionError when the test is not included in an expected workflow step, causing the CI job to fail.\n- ...\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CI failure resolution for PR #7101 (tests/test_clarify_sandbox_base_image_preseed.py wiring)\n  expected_change_site: .github/workflows/ci.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The CI wiring guard tests/test_ci_wires_every_test_file.py continues to report tests/test_clarify_sandbox_base_image_preseed.py as unwired, and the CI run failed with this assertion error. The requirement to fix the CI failure remains unmet.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:tests/test_clarify_sandbox_base_image_preseed.py wiring in CI steps | severity=BLOCKER | confidence=5\n  PROBLEM: The test wiring guard tests/test_ci_wires_every_test_file.py is failing, indicating that tests/test_clarify_sandbox_base_image_preseed.py is not correctly wired into the CI workflow.\n  WHY: The CI workflow runner executes the wiring guard tests/test_ci_wires_every_test_file.py, which validates that all test files in the tests/ directory are actively exercised by a step within the CI workflow. Because this test is not properly included in the expected workflow step, the assertion raises an AssertionError, causing the CI job to fail.\n- Requirement: CI failure resolution for PR #7101 (tests/test_clarify_sandbox_base_image_preseed.py wiring)\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The CI wiring guard tests/test_ci_wires_every_test_file.py continues to report tests/test_clarify_sandbox_base_image_preseed.py as unwired, and the CI run failed with this assertion error. The requirement to fix the CI failure remains unmet.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0d822d9657461fc0faf94bafe67becef8448981c383cc709832b713b5bf4feeb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7241,
+    "run_id": "38449960755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38449960755",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013201418_cd44779fdf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7241,
+    "run_id": "38449960755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-13T20:14:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:574-577 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: A `workflow_dispatch` review run with a non-PR-named title can be treated as attributed because its nonempty default-branch `head_branch` becomes a key, so the queued PR is released and a duplicate review is dispatched while the run is active.\n  WHY: The default-branch key does not match the queued PR's `pr:<N>` or head-branch key, and severity disagreement is resolved using the highest rating: DeepSeek and Gemini rated this BLOCKER, while OpenAI, Qwen, and GLM rated it MAJOR.\n- tests/test_review_merge_train.py:856-878 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The pagination test reuses the first-page fixture for its follow-up query, so it does not simulate advancing keyset pagination and cannot reach the expected active run.\n  WHY: The follow-up query returns the same 100 runs, causing the production code to mark the listing incomplete before the run at position 150 is read.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_merge_train.sh: lines 574-577 (key construction) and lines 604-606 (dispatch fallback) | severity=critical | confidence=5\n  PROBLEM: A workflow_dispatch review run with a non-PR-named title can be treated as attributed because its nonempty default-branch head_branch becomes a key that does not match queued PR keys, allowing a duplicate concurrent review dispatch.\n  WHY: When the fallback run is active on the default branch, the release path does not match its `main` key against the queued PR's `pr:4077` or `ai/issue-4064` key and dispatches another review.\n- tests/test_review_merge_train.py: test_release_reads_every_page_before_deciding (lines 856-878) and the fake gh actions/runs pagination (lines 99-112) | severity=high | confidence=5\n  PROBLEM: The test reuses the first-page fixture for its follow-up query instead of simulating GitHub's advancing keyset pagination.\n  WHY: The follow-up query returns the same 100 runs, so the test sees an incomplete listing before it can read the review run at position 150.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/review_merge_train.sh: lines 574-577 | severity=critical | confidence=5\n  PROBLEM: A workflow_dispatch review run with a non-PR-named title can be treated as attributed because its nonempty default-branch head_branch becomes a key that does not match queued PR keys, allowing a duplicate concurrent review dispatch.\n  WHY: The queued PR's `pr:<N>` and head-branch keys do not match `main`, so the release path can dispatch a duplicate review while the default-branch run is active.\n- tests/test_review_merge_train.py: test_release_leaves_pr_queued_when_a_review_run_has_no_key (lines 782-788)\n  PROBLEM: The test parameter matrix does not cover a workflow_dispatch run with head_branch \"main\" and an unparseable title.\n  WHY: The suggested test case is `{\"head_branch\": \"main\", \"event\": \"workflow_dispatch\", \"display_title\": \"Codex PR Self-Healing Semantic Agent\"}`.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after reaching the slot retryable-failure limit (3).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_merge_train.sh: 574-576, with the result matched at line 654 | severity=high | confidence=5\n  PROBLEM: A review-workflow workflow_dispatch run with a nonempty head_branch but no PR-named title is considered attributed, allowing the queued PR to be released and a duplicate review to be dispatched.\n  WHY: The default-branch key matches neither the queued PR's `pr:<N>` key nor its `ai/issue-*` head branch while the fallback review is active.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_merge_train.sh: lines 574-577, the key-array construction `[.[]? | select(...) | [(.head_branch | select(type == \"string\" and length > 0)), (if (.event // \"\") == \"workflow_dispatch\" then ... else empty end)]]` and the `all(.[]; length > 0)` check | severity=high | confidence=4\n  PROBLEM: A default-branch workflow_dispatch review run with a non-PR-named title produces a nonempty key array that passes the unattributed_run check, although its key does not match any queued PR.\n  WHY: The queued PR is released and a duplicate review is dispatched beside the still-active run.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_merge_train.sh: lines 574-577 (the `__mt_runs_keyed` key construction and `all(.[]; length > 0)` check in `_mt_inflight_review_branches`), interacting with line 654 (`grep -Fxq -e \"pr:${num}\" ${head:+-e \"${head}\"}`) and line 604 (`_mt_dispatch_review` fallback chain) | severity=high | confidence=5\n  PROBLEM: A workflow_dispatch review run with a nonempty default-branch head_branch and no PR-named title passes the unattributed_run check, but its key does not match queued PR keys, allowing a duplicate review dispatch.\n  WHY: The fallback review_autofix.yml run is invisible to the dedup guard while active on the default branch.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dacf97d1bf81086d6c3e4c5e907db820c62e9cf12e53d15584c47b4381e150ab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5451,
+    "run_id": "36844173558",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36844173558",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001102430_8d33a9eb3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5451,
+    "run_id": "36844173558"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T10:24:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

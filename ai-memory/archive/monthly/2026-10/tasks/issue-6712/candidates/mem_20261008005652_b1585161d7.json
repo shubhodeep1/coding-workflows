@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Pick A. A weekly scheduled run that overwrites every consumer's secrets would quietly replace any value a consumer set on purpose, and nothing would report it. Filling only the missing secrets backfills the 13 registered consumers and leaves existing values alone, which is the safer choice. The manual dispatch keeps its current overwrite behaviour, so a rotated library secret can still be pushed out deliberately. The listing call is cheap: `scripts/propagate_consumer_secrets.sh` (around line 156) already lists each target's secret names with `gh_retry gh secret list ... --json name` to verify its writes, so the same call can run before the writes.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/propagate_consumer_secrets.sh (the `PROPAGATE_TARGETS` default at line 47, `set_consumer_secret` at line 83, the per-target loop at lines 95-170, the existing `gh secret list` call at line 156, the `status=` log contract at line 33)\n    - .github/workflows/propagate-consumer-secrets.yml (to be restored)\n    - tests/test_propagate_consumer_secrets.py\n  steps:\n    - Add an env var to the script with a default that keeps today's behaviour, for example `PROPAGATE_ONLY_MISSING=\"${PROPAGATE_ONLY_MISSING:-false}\"`. Check first that the name is not already used in the script.\n    - When it is `true`, read each target's secret names once with the same `gh_retry gh secret list --repo <target> --json name --jq '.[].name'` call before writing anything. Skip each secret that already exists and log `status=skipped_present`, adding it to the skipped count.\n    - If that listing fails in only-missing mode, mark the target failed (`status=failed`) and write nothing. Never fall back to overwriting.\n    - Keep the existing post-write verification for the secrets that were set.\n    - In the restored workflow, add `schedule: - cron: '<a weekly slot, e.g. 0 6 * * 1>'`. On scheduled runs, set `PROPAGATE_TARGETS` to empty and `PROPAGATE_ONLY_MISSING` to `true` (for example `PROPAGATE_ONLY_MISSING: ${{ github.event_name == 'schedule' }}`).\n    - Push runs (newly registered consumers) and `workflow_dispatch` keep the overwrite behaviour.\n    - Keep the check that refuses any target not in the registry.\n    - Extend `tests/test_propagate_consumer_secrets.py` to cover: the schedule trigger exists; scheduled runs set only-missing mode; present secrets are skipped; a failed listing writes nothing; the default mode still overwrites.\n    - Document the new variable and the weekly schedule in the README and the agents.md consumer secrets propagation entry.\n  replaces_acceptance_criterion: none (this narrows the \"Backfill existing consumers automatically\" fix to filling in missing secrets on scheduled runs)\n  equivalence_argument: Every registered consumer ends up with all four secrets without anyone dispatching a run, which is what the activation gap asks for. Existing consumer values are left untouched, and rotation still works through the existing manual dispatch with empty targets.\n  reversibility: If a human prefers B, flip the scheduled run's `PROPAGATE_ONLY_MISSING` to `false`; no other code changes. Moving to C or D only needs a cron edit or a per-secret allowlist.\n\nAssumptions: the weekly cron slot is a free choice, since the issue does not name one. The new variable defaults to `false` in the script, as \u00a78 requires, so pushes and dispatches behave exactly as they do now.\n\nMissing context: I only searched the propagation script. I did not read the deleted workflow or the full test file.",
+  "fingerprint": "cd01548404fe0e962cbf16d267c3bcd7df259425edf065fb21db2c138f634704",
+  "lineage": {
+    "issue_number": 6712,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37709868952",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37709868952",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6712"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008005652_b1585161d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6712,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37709868952"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6712",
+  "timestamps": {
+    "created_at": "2026-10-08T00:56:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

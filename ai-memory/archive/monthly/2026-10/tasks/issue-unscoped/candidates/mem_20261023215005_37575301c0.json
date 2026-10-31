@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"rewrite tests/e2e_smoke_canary.txt so that it contains exactly these two lines and nothing else (keep a trailing newline): status: ok\\ndecompose-run: 40005654539\"\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer rated this a NIT and said the diff appears to satisfy the requirement. It noted that leading or trailing whitespace beyond the required newline should be ruled out, and that the file should not be empty or malformed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: \"rewrite tests/e2e_smoke_canary.txt so that it contains exactly these two lines and nothing else (keep a trailing newline): status: ok\\ndecompose-run: 40005654539\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The diff shows the file now contains `status: ok` and `decompose-run: 40005654539`. The reviewer notes that leading or trailing whitespace beyond the required newline, and an empty or malformed file, should be ruled out, but says the implementation appears to satisfy the requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f925427e58fec1a1d7c5d7da157a7c99b6aafd7ae2ebe26ee081fdaa752b4c6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8023,
+    "run_id": "40027774906",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40027774906",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023215005_37575301c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8023,
+    "run_id": "40027774906"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T21:50:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml:504 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `managed_integration_merge` lookup may fail to match an issue number if `MANAGED_INTEGRATION_BRANCHES` contains unexpected formatting or `n` is not formatted as expected.\n  WHY: Empty lines or whitespace deviations in the `printf`/`awk` pipeline could prevent the `awk` lookup from finding the issue number.\n- .github/workflows/issue_pr_status.yml:Lines 493, 501-502 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: When a managed child has no parsed `Integration branch:` value, the fallback treats any `orchestrator/project-*` base as that child's integration branch.\n  WHY: A PR merged into another project's integration branch can then cause the issue to be marked `ai:merged`, closed, and included in lineage finalization even though its own project branch did not receive the merge.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Tests. Cover the following in the existing issue_pr_status test module...: an orchestrator-managed child merged into its integration branch still gets ai:merged and is closed\"\n  expected_change_site: tests/test_issue_pr_status_payload_fallback_contract.py\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The added test `test_managed_child_integration_merge_still_labels_closes_and_finalizes` relies on the prefix fallback rule (`elif [[ \"${PR_BASE_REF}\" == orchestrator/project-* ]]`) because the issue node body does not explicitly define an integration branch. It does not test the \"declared in body\" branch matching rule, which is the primary requirement for a managed child to complete.\n- requirement: \"Add a changelog.d/ fragment\"\n  expected_change_site: changelog.d/6632-status-sync-non-default-merge.md\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The changelog fragment exists but only describes the integration branch logic and the prefix fallback. It fails to explicitly mention the change in behavior for managed child issues that do not specify an integration branch in their body (they now only complete if merged into an orchestrator/project-* branch, which is a logic change for that specific case).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/issue_pr_status.yml:504 | confidence=2\n  PROBLEM: The logic for `managed_integration_merge` inside the loop iterates over a variable `MANAGED_INTEGRATION_BRANCHES` which is populated using `awk 'NF'` on a multi-line string.\n  WHY: While the logic appears robust for simple cases, if `MANAGED_INTEGRATION_BRANCHES` contains empty lines or unexpected formatting due to the `printf` and `awk` pipeline earlier in the workflow, the `awk` lookup `$1 == n { print $2; exit }` might fail to match the issue number if `n` is not formatted correctly or if whitespace handling within `MANAGED_INTEGRATION_BRANCHES` deviates from expectations.\n- TASK_GAP\n  Requirement: \"Tests. Cover the following in the existing issue_pr_status test module...: an orchestrator-managed child merged into its integration branch still gets ai:merged and is closed\"\n  Expected change site: tests/test_issue_pr_status_payload_fallback_contract.py\n  Evidence of absence: The added test `test_managed_child_integration_merge_still_labels_closes_and_finalizes` relies on the prefix fallback rule (`elif [[ \"${PR_BASE_REF}\" == orchestrator/project-* ]]`) because the issue node body does not explicitly define an integration branch. It does not test the \"declared in body\" branch matching rule, which is the primary requirement for a managed child to complete.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- TASK_GAP\n  Requirement: \"Add a changelog.d/ fragment\"\n  Expected change site: changelog.d/6632-status-sync-non-default-merge.md\n  Evidence of absence: The changelog fragment exists but only describes the integration branch logic and the prefix fallback. It fails to explicitly mention the change in behavior for managed child issues that do not specify an integration branch in their body (they now only complete if merged into an orchestrator/project-* branch, which is a logic change for that specific case).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/issue_pr_status.yml:Lines 493, 501-502 | severity=MAJOR | confidence=4\n  PROBLEM: When a managed child has no parsed `Integration branch:` value, the fallback treats any `orchestrator/project-*` base as that child's integration branch.\n  WHY: A managed issue without that body metadata can be linked to a PR merged into another project\u2019s integration branch. This condition then marks the issue `ai:merged`, closes it, and includes it in lineage finalization, even though its own project branch did not receive the merge.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "509e83eb11745c02088401e7b9ef5673cbd1d3b2761b534793d429e83d3b79bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6645,
+    "run_id": "37985130956",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37985130956",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009204436_a0c31a76f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6645,
+    "run_id": "37985130956"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T20:44:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

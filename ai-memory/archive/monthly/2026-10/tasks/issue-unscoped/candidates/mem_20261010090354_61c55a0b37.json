@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5260-5325 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Pool-wide account failures are treated as model-specific failures, so the runner retries Haiku and ultimately classifies the slot as failed instead of skipped_pool.\n  WHY: Both models use the same exhausted account pool, and the failed status prevents the sole-reviewer GPT rescue path from triggering.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When every account rejects its token, the Haiku attempt also fails and the slot is marked skipped_pool, not failed.\"\n  expected_change_site: scripts/review_run_reviewers.sh within run_pool_reviewer()\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The logic in scripts/review_run_reviewers.sh (lines 5260-5263) explicitly skips setting pool_skip_reason for all_accounts_failed, and the finalization block (lines 5320-5325) forces a failed classification if pool_skip_reason is empty.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_run_reviewers.sh:5299-5303 | severity=high | confidence=4\n  PROBLEM: The pool reviewer treats all_accounts_failed as a per-model failure that warrants a Haiku retry, although auth_failed on every account is a pool-wide outage.\n  WHY: When all accounts have auth failures, the slot ends as failed instead of skipped_pool, so the sole-reviewer GPT rescue does not fire and the pass gets zero successful reviewers.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh: 5260-5263 (inside the case \"${pool_attempt_rc}\" block) and 5320-5325 (in the finalization case \"${pool_outcome}\" block). | severity=high | confidence=4\n  PROBLEM: When both the primary (Sonnet) and fallback (Haiku) models encounter pool-wide authentication failures (`all_accounts_failed` or `all_usage_limit`), `pool_skip_reason` remains unset and the attempt is classified as `failed` instead of `skipped_pool`.\n  WHY: The circuit breaker registers a retryable failure for a pool-wide outage instead of a skip, which can prevent the sole-reviewer GPT rescue path from triggering when it should.\n- Requirement: \"When every account rejects its token, the Haiku attempt also fails and the slot is marked skipped_pool, not failed.\"\n  Expected change site: scripts/review_run_reviewers.sh within run_pool_reviewer()\n  Evidence of absence: The logic in scripts/review_run_reviewers.sh (lines 5260-5263) explicitly skips setting pool_skip_reason for all_accounts_failed, and the finalization block (lines 5320-5325) forces a failed classification if pool_skip_reason is empty.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_run_reviewers.sh: lines 5299-5304 (the `case \"${pool_last_reason}\" in all_accounts_failed|all_usage_limit) ;;` arm inside the `75|76` rc branch of `run_pool_reviewer`'s attempt loop) | severity=high | confidence=4\n  PROBLEM: The pool slot treats all_accounts_failed as a per-model capacity signal that can still succeed on Haiku, leaving `pool_skip_reason` unset and continuing the loop.\n  WHY: When every account hits a usage limit or fails auth, Haiku repeats the same failure and the slot ends as failed, so the sole-reviewer rescue path does not run.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_run_reviewers.sh: 5297-5303; sole-reviewer rescue at 5481-5484 | severity=high | confidence=5\n  PROBLEM: `all_accounts_failed` is treated as a model-specific failure, so the pool runner retries the fallback model instead of marking the slot `skipped_pool`.\n  WHY: When all accounts reject their credentials, retrying Haiku repeats the authentication failure; the slot ends as `failed`, which does not meet the sole-reviewer rescue condition, leaving the pass with no successful reviewer.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_run_reviewers.sh: 5299-5307 (the case statement handling pool_last_reason) | severity=high | confidence=5\n  PROBLEM: Account-wide authentication failures (all_accounts_failed, all_usage_limit) are incorrectly treated as model-specific failures, causing an unnecessary Haiku retry that will also fail.\n  WHY: Both models use the same Claude account pool, so the slot ends as failed instead of skipped_pool, preventing the sole-reviewer GPT rescue from running.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a12a898efba6f0a780b811ae77ab00fd445d1d2c917d06b2972bb58b1d9bf4a4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7024,
+    "run_id": "38036710404",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38036710404",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010090354_61c55a0b37",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7024,
+    "run_id": "38036710404"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T09:03:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

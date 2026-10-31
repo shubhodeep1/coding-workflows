@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:1461-1462 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The last-run diff\u2019s assertion expected \"could not resolve env-wrapped git commit directory\", but that string was only produced by the branch removed in the same diff.\n  WHY: The assertion would fail and leave the env-wrapped GIT_DIR regression untested; the current PR state has corrected it to assert \"could not resolve git commit directory\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Sites 1\u20133 dispatch from the default branch and pass only a validated PR number... Where a site can't do that safely, it says why in a comment.\"\n  expected_change_site: `.github/workflows/forward-merge-stable-to-main.yml`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR diff does not touch `forward-merge-stable-to-main.yml`; the required change is already present at `.github/workflows/forward-merge-stable-to-main.yml:417-439`.\n- requirement: \"Lookups 4\u20135 also find active `internal-review.yml` `workflow_dispatch` runs titled `Internal: AI Review & Autofix [pr:<N>]`.\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh` (stall-judge run list, retrigger failed-autofix lookup, empty-commit push guard)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Both lookups are present in the PR diff at `scripts/orchestrate_poll_process.sh:14888-14901`, `scripts/orchestrate_poll_process.sh:14430-14446`, and `scripts/orchestrate_poll_process.sh:17587-17611`; the static contract test is at `tests/test_conflict_dispatch_active_run_visibility.py:171-180`.\n- requirement: \"Tests cover each site. There is a `changelog.d/` fragment with the `security` section.\"\n  expected_change_site: `tests/test_review_merge_train.py`, `tests/test_orchestrate_poll_process.py`, `tests/test_conflict_dispatch_active_run_visibility.py`, `changelog.d/4701-review-dispatch-default-branch.md`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: All three test files are present in the PR diff with relevant additions; `changelog.d/4701-review-dispatch-default-branch.md` exists, opens with `<!-- changelog: security -->`, and is updated rather than added.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_pr_merge_status_guard.py:1461-1462 | severity=low | confidence=4\n  PROBLEM: The LAST RUN DIFF added the new \"env GIT_DIR=/does-not-exist git commit -m x\" parametrize case together with an assertion that the message contains \"could not resolve env-wrapped git commit directory\". At the moment the LAST RUN landed, that exact string was only produced by the very block the LAST RUN removed at `.claude/hooks/pr_merge_status_guard.py:1529-1531`, so the test would have failed against the just-removed code.\n  WHY: The committed test would not exercise the env-wrapped GIT_DIR case the issue cared about; it would error on a substring mismatch and skip the regression guarantee.\n- Requirement: \"Sites 1\u20133 dispatch from the default branch and pass only a validated PR number... Where a site can't do that safely, it says why in a comment.\"\n  Expected change site: `.github/workflows/forward-merge-stable-to-main.yml`\n  Evidence of absence: The PR diff does not touch `forward-merge-stable-to-main.yml`. The required change is already present in the on-disk file at `.github/workflows/forward-merge-stable-to-main.yml:417-439` (it validates `^[1-9][0-9]*$`, then runs `gh workflow run internal-review.yml -f pr_number=\u2026 -f allow_workflow_edits=\u2026` without `--ref`, and carries the explanatory comment about issue #4701 and the issue #4618 fix), so this is a no-op TASK_GAP. Recording it so reviewers can confirm site 3 of the linked issue is already satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Lookups 4\u20135 also find active `internal-review.yml` `workflow_dispatch` runs titled `Internal: AI Review & Autofix [pr:<N>]`.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh` (stall-judge run list, retrigger failed-autofix lookup, empty-commit push guard)\n  Evidence of absence: Both lookups are present in the PR diff. The stall-judge `invoke_stall_judge` block at `scripts/orchestrate_poll_process.sh:14888-14901` matches `workflow_dispatch` runs with `display_title == \"Internal: AI Review & Autofix [pr:\" + $pr + \"]\"` and `path` matching `internal-review\\\\.yml(@.*)?$`. The retrigger/PR-named lookup and in-flight guard at `scripts/orchestrate_poll_process.sh:14430-14446` and `17587-17611` match the same PR-named title plus the consumer `AI Review [pr:<N>]` title. The static contract test `tests/test_conflict_dispatch_active_run_visibility.py:171-180` pins the stall-judge filter. Site is covered.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Tests cover each site. There is a `changelog.d/` fragment with the `security` section.\"\n  Expected change site: `tests/test_review_merge_train.py`, `tests/test_orchestrate_poll_process.py`, `tests/test_conflict_dispatch_active_run_visibility.py`, `changelog.d/4701-review-dispatch-default-branch.md`\n  Evidence of absence: All three test files are present in the PR diff with the relevant additions (fork-head skip, forged-marker rejection, dispatch ref check, PR-named pending run, tied-timestamp redispatch). The changelog fragment `changelog.d/4701-review-dispatch-default-branch.md` exists, opens with `<!-- changelog: security -->`, and is updated rather than added. Site is covered.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "9e9adfae1abb4623b13e03d011dd16bc057f7e3113fd1db319c4813d394faf7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6136,
+    "run_id": "37475880466",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37475880466",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006144647_d4e352fc6b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6136,
+    "run_id": "37475880466"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T14:46:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

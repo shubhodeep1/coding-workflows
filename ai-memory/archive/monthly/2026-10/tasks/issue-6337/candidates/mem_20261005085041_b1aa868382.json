@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which review-blocked judge paths that currently reach host `codex --sandbox danger-full-access` should the fix close?\nChoices:\nA) Only the two sandbox-failure returns (`sandbox_unavailable`, `sandbox_prepare_failed`). These defer the judge to the next poll tick. Return code 75 from codex-engine selection and from Claude credential failures still runs host codex.\nB) Every route to host codex for RB_JUDGE. When Claude is not selected or not usable, run the judge with the codex engine inside the same credential-free `review_untrusted_sandbox.sh` (read access for a verdict, write access with validated transfer in combined mode). If the sandbox cannot be staged or prepared, defer to the next poll tick. Host codex is never used for RB_JUDGE. `agents.md` is updated to replace \"missing isolation falls back to Codex\". (RECOMMENDED)\nC) Same as B, but without sandboxed codex. Any case that cannot use the Claude sandbox simply defers.\n**Note:** C means repos with `CLAUDE_FIXER_ENABLED=false`, or the `ai:codex` label, never get a poller review-blocked verdict.\nQ2: When isolation keeps failing and the judge keeps deferring (for example, a PR file over the 2 MiB snapshot limit), what should happen to the review-blocked issue?\nChoices:\nA) Keep deferring every tick. Reuse the existing \"Will retry next poll cycle\" warning and Telegram alert, and change nothing else.\nB) Defer, then after a bounded number of consecutive isolation failures on the same PR head, label the issue `ai:needs-human`, post one comment naming the sandbox failure reason, and stop retrying until the head changes. The bound is a new env var with a default. (RECOMMENDED)\nC) Defer, and also make snapshot preparation skip or truncate oversized files so the sandbox no longer fails on them. Escalation stays as in A.\nSummary:\n- **What I did:** I read the RB_JUDGE fallback in `poller_claude_judge` (lines 78-147), the judge call site (lines 21185-21254) and the engine handling in `scripts/review_untrusted_sandbox.sh`, and wrote two clarification questions.\n- **Assumptions:** The target branch is `claude/replace-claude-sessions-phase-5c`, as the issue states. The read in this run was against the local checkout, which may not match that branch.\n- **Missing context:** I did not check whether `review_autofix.yml`'s RB_JUDGE fallback to OpenCode (on the host, with an isolated config) is in scope. The finding cites only the poller.",
+  "fingerprint": "917cac493127cad8e0b11b52b9c7d3b58af8d50c605fa937a03bfdd25c9b71f5",
+  "lineage": {
+    "issue_number": 6337,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37285098855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37285098855",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005085041_b1aa868382",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6337,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37285098855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6337 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T08:50:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

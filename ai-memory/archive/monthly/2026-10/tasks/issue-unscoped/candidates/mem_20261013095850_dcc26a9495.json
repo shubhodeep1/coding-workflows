@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:2525-2530 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `heal_scope_recovery_check` uses `matches[-1]` instead of the verified anchored match from `fullmatch()` when determining the replaced_by issue and repo.\n  WHY: Gemini says multiple markers could make the selected replacement differ from the marker on the last line; Anthropic and Minimax report that this code was already replaced with `fullmatch()` on the last line, so the finding is contested.\n- tests/test_workflow_failure_heal.py:6878-6887 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The test fixture does not deterministically reach the second-budget duplicate branch because the verified issue #32 is selected before the markerless issue #31, and the assertion accepts either outcome.\n  WHY: A regression in second-budget handling could pass unnoticed; Gemini marked this MAJOR, while Anthropic and Qwen marked it NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal.py:test_heal_scope_recovery_second_budget_must_open | severity=NIT | confidence=3\n  PROBLEM: The markerless issue is #31 and the verified issue is #32. I did not run the budget logic, but the reviewer reports that `budget_decision` prefers the higher-numbered open duplicate. If so, the first budget already matches #32, so recovery skips with `reason=scope_verified issue=32`. The assertion's `or` clause accepts that outcome, so the `budget_duplicate` skip branch in `_heal_scope_recovery_evaluate` may never run.\n  WHY: Nothing fails in production. A later regression in the second-budget `--issues-json` substitution or in the re-check of its action could pass this test unnoticed. Giving the markerless issue the higher number (for example #33 against a verified #32) and asserting `reason=budget_duplicate issue=33` would exercise the branch.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:2525-2530 | severity=MAJOR | confidence=5\n  PROBLEM: The function uses matches[-1] from findall() instead of the verified anchored match from fullmatch() when determining the replaced_by issue and repo.\n  WHY: If multiple markers exist in a comment body, the function trusts the last marker found anywhere in the body, which may differ from the marker on the last line that the function ostensibly validated. This leads to incorrect replacement logic and potentially corrupts the replacement lineage.\n- tests/test_workflow_failure_heal.py:6878-6887 | severity=MAJOR | confidence=4\n  PROBLEM: The test fixture fails to reach the intended duplicate-branch logic because the internal budget function prefers higher-numbered issues and the verified issue (32) outranks the markerless issue (31).\n  WHY: The recovery path for the second-budget case is effectively untested. A regression in duplicate detection logic would pass unnoticed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_failure_heal.py:test_heal_scope_recovery_second_budget_must_open | severity=NIT | confidence=4\n  PROBLEM: The test does not exercise the second-budget duplicate branch that the code comment promises (\"every cap \u2026 still applies\"). The markerless issue is #31 (default creation time) and the verified issue is #32 (created 2026-08-01). The budget logic prefers the older open issue, so the first budget already matches #32 and recovery skips with reason=scope_verified issue=32. The assertion accepts either branch with an or clause, masking the fact that budget_duplicate is never hit.\n  WHY: A regression in the second-budget handling (wrong --issues-json substitution, or the decision not being re-checked) would pass this test unnoticed. The fix is to give the markerless issue the higher number or older creation time so the first budget matches it, then assert reason=budget_duplicate.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b5818e450975aa2a91e5e53e9e8c033239785af8cee517aded2a172a5b476b20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7194,
+    "run_id": "38374528120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38374528120",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013095850_dcc26a9495",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7194,
+    "run_id": "38374528120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T09:58:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

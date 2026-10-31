@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Implementation plan for issue: Update `tests/e2e_smoke_canary.txt`**\n\nPlanning ref: `main` @ `ec4d60e4a9b365a949415a98d799ab7229383aad`. The issue has no integration branch metadata, so the branch check does not apply.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one file and its exact final contents. It also says no other file may change. There are no helpers or patterns to reuse, and nothing more complete is worth adding, so the plan is a single overwrite of an existing file.\n\n**1. Files likely to change**\n- `tests/e2e_smoke_canary.txt`: replace its contents. It is the only file in scope; the issue says it already exists.\n\n**2. Functions or modules to implement**\n- None.\n\n**3. Data structures affected**\n- None.\n\n**4. API or interface changes**\n- None.\n\n## Decisions\n\n### D1 \u2014 Overwrite the whole file\n- Chosen: Replace the whole file with exactly these three lines, with one trailing newline at the end:\n  ```\n  status: ok\n  run_id: alt-37513567927\n  updated-by: ai-pipeline\n  ```\n- Alternatives considered: Edit the existing lines one at a time; add extra metadata lines.\n- Why: The issue requires the file to be exactly these three lines. Overwriting the whole file guarantees that, whatever is in it now.\n\n## Security considerations\n- Trust boundaries: none touched. This is a static text fixture in `tests/`.\n- Authorization: there is no new endpoint or surface.\n- External input: the only values are the literal strings from the issue. Nothing is interpolated.\n- Abuse cases: none. No secrets, credentials or money state are involved.\n\n**5. Risks and edge cases**\n- Trailing newline: one final newline is the standard text-file convention. A check that compares bytes exactly may still accept it, because a 3-line file normally ends in a newline.\n- No stray whitespace and no carriage returns (CRLF); use plain LF line endings.\n- If the file turns out to be missing on the ref, create it with the same contents. This does not conflict with the issue.\n- Changing any other file would break the constraint. The implementer must not touch a changelog fragment or anything else for this release-gate fixture.\n\n**6. Testing considerations**\n- Run `git diff --stat`. It should list only `tests/e2e_smoke_canary.txt`.\n- Run `cat -A tests/e2e_smoke_canary.txt`. It should show exactly three lines, each ending in `$`, with no `^M`.\n- No pytest run is needed.\n\n**7. Pre-execution self-check**\n- The scope, path and contents are fully specified.\n- There are no conflicts between the issue and the codebase that would block the work.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ef08bfdbf400609110edd08943905f90a9b1549bf5b594f95800383244a4fcd1",
+  "lineage": {
+    "issue_number": 6585,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37515536687",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37515536687",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6585"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261006190641_4cdf58f141",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6585,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37515536687"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6585",
+  "timestamps": {
+    "created_at": "2026-10-06T19:06:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

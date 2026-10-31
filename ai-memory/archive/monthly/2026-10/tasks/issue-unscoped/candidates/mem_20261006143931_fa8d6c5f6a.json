@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:786-786 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The dependency-install step uses `always()` without a cancellation guard, so it can start package installation after workflow cancellation.\n  WHY: When cancellation occurs after the preceding success conditions are met, the step may consume runner time and network resources until interrupted or finished.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/validate.yml: line 786 | severity=NIT | confidence=4\n  PROBLEM: The dependency-install step runs with an always() condition that lacks a cancellation guard.\n  WHY: If the workflow is explicitly cancelled, this step will still execute, unnecessarily consuming runner time and network resources for package installation after the workflow was requested to stop.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/validate.yml: 786; dependency installation runs at line 808 | severity=NIT | confidence=4\n  PROBLEM: The step uses `always()` without a cancellation guard.\n  WHY: If the workflow is cancelled after the runtime, support staging, and after-create hook succeed, this condition still permits the step to start. It can begin installing packages after cancellation was requested, consuming runner time until the step is interrupted or finishes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "823dd7e452893149271a61d20402e3ebc21c02f82a3c347706121b8e91651078",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6567,
+    "run_id": "37471181206",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37471181206",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006143931_fa8d6c5f6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6567,
+    "run_id": "37471181206"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T14:39:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

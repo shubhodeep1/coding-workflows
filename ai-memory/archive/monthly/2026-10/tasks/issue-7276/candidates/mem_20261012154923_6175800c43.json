@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan for overwriting `tests/e2e_smoke_canary.txt` (E2E smoke canary)\n\n**Planning ref:** HEAD `ee1d28d16aea549df96d1abcd474fb40f9aa49eb` on `main` (the resolved checkout ref is `main`). There is no integration branch, and the mismatch line reads `unknown`, not `true`, so there is no blocker.\n\n**Clarification answers:** none were needed. The issue is fully specified and the clarify phase answered automatically.\n\n## Automation and wiring\n- The change only edits one existing file. It adds no new script and does not extend an existing one.\n- Nothing new needs to be wired in. The existing clarify \u2192 plan \u2192 implement \u2192 review pipeline triggers it.\n- No long-running supervisor is needed.\n- There is no database work.\n- No new entry is needed in `docs/scripts-pending-removal.md`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue gives the exact content of one existing file and says no other file may change. The complete option and the shortcut are the same here: overwrite the file. Writing a changelog fragment or tests would break the issue's \"only modify\" rule. Under \u00a76 priorities, correctness means matching the specified bytes exactly.\n\n## 1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (already exists; the whole file is overwritten).\n\n## 2. Functions/modules to implement\nNone.\n\n## 3. Data structures affected\nNone.\n\n## 4. API/interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the file instead of editing individual lines\n- Chosen: replace the whole file with exactly `status: ok\\nrun_id: 38270693764\\nupdated-by: ai-pipeline\\n`.\n- Alternatives considered: editing individual lines in place; also adding a `changelog.d` fragment.\n- Why: the issue asks for exact content and allows only this one file to change. A full overwrite guarantees the exact bytes and that nothing extra is left behind.\n\n## Security considerations\n- No trust boundary, endpoint or external input is involved. The file is a static test fixture.\n- No secrets are involved. The `run_id` is a public Actions run number.\n- Abuse case: the issue text could try to widen scope. The plan limits the change to the single named file.\n\n## 5. Risks and edge cases\n- The implementation must leave no trailing whitespace, no carriage returns, and no extra blank line. There must be exactly one final newline.\n- No `changelog.d` fragment is added, because the issue forbids touching other files. This is a test fixture, so the change is not user-visible.\n- No directories should be created.\n\n## 6. Testing considerations\n- `printf 'status: ok\\nrun_id: 38270693764\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt` must exit 0.\n- `git diff --stat` must show only `tests/e2e_smoke_canary.txt`.\n\n## 7. Pre-execution self-check\nThe plan is implementation-ready and has no blockers.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "6f206d9162e03866acbbb0e2a91c6aef82c6fb92a7737cb16fc60e06393d0062",
+  "lineage": {
+    "issue_number": 7276,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38271833335",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38271833335",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7276"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261012154923_6175800c43",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7276,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38271833335"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7276",
+  "timestamps": {
+    "created_at": "2026-10-12T15:49:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

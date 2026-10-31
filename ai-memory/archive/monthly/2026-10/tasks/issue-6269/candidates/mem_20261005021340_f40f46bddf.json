@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should a replacement for an untrusted PR be handled? \"Untrusted\" means a fork head (`head.repo.full_name` is not this repository) or a PR author that is not OWNER, MEMBER or COLLABORATOR, the pipeline login, or `github-actions[bot]`. Both values come from the `pulls/<n>` response `unblock_judge.sh` already fetches, so no new API call is needed.\nChoices:\nA) Fail closed at the source. `unblock_judge.sh` passes a `pr_trusted` flag (plus the PR author and head SHA) into the context. For an untrusted PR, `unblock_actions.py` creates no replacement issue: it closes the PR, posts a comment explaining why, and sends a Telegram WARNING. Replacements for trusted PRs get a provenance marker (source PR, author, head repo, head SHA) for audit. `clarify.yml` and the consumer templates do not change. (RECOMMENDED)\nB) Still create the replacement issue for an untrusted PR, but give it a hold label (e.g. `ai:needs-human`) and a provenance marker, so the pipeline starts only after a trusted human posts `/reclarify`. This needs the issue-open gate to honour that label at creation time.\nC) Persist provenance markers on every replacement issue, and make the issue-open gate in `clarify.yml` (plus `internal-clarify.yml` and `workflow-templates/ai-clarify.yml`) check the marker's source PR and author against GitHub, not just the issue creator. This is wider in scope and touches the consumer-synced gate.\nQ2: Should the fix cover every unblock verdict that creates an issue from a PR item, or only `reissue`?\nChoices:\nA) Every PR-item path that creates an issue from model-derived content: `reissue`, the standalone `descope` and `operator_step` fix-ups (`_fixup_ops`), and `accept_with_followup`. It is the same class of defect. (RECOMMENDED)\nB) Only the `reissue` branch named in the finding (`scripts/unblock_actions.py:268`).",
+  "fingerprint": "2dc5fa88e55adbdb28fd516669ed042b2885c55b7949e22227ea83a39083998f",
+  "lineage": {
+    "issue_number": 6269,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37253946263",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37253946263",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005021340_f40f46bddf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6269,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37253946263"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6269 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T02:13:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

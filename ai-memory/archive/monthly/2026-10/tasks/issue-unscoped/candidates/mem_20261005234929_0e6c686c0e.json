@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cmerge or merge_with_followup, with open findings of any severity. The findings stay open as issues.\u201d\n  expected_change_site: `scripts/review_rb_judge_security_pass.sh::rb_security_severity_block` and the security-exhaustion merge handling in `scripts/review_rb_judge.sh`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  EVIDENCE: `rb_security_severity_block` treats every severity other than `low` or `medium` as blocking; high, critical, and unrated findings convert merge verdicts to fixes while retries remain and hold the PR at the final retry; the PR description's any-severity merge claim conflicts with the documented blocking behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"**`merge` or `merge_with_followup`**, with open findings of any severity. The findings stay open as issues. `implement.yml` resolves their `Integration branch:` through `retarget_merged_base.sh`, so they are fixed against the default branch once this PR merges.\"\n  Expected change site: `scripts/review_rb_judge_security_pass.sh:rb_security_severity_block` (the case statement that maps `merge`/`merge_with_followup` actions) and the corresponding call site in `scripts/review_rb_judge.sh` that consumes the verdict.\n  Evidence of absence: `rb_security_severity_block` (`scripts/review_rb_judge_security_pass.sh`) treats every severity other than `low` or `medium` as blocking. When `RB_SECURITY_BLOCKING_COUNT > 0` it emits `convert_fix` for `merge`/`merge_with_followup` (re-routes the verdict to a `fix` action while retries remain) and `hold` at the final retry. There is no code path that lets the judge return a `merge` or `merge_with_followup` verdict when high/critical/unrated findings are present. The changelog fragment `changelog.d/6400-rb-judge-security-severity-block.md` and the editor's `Already satisfied` notes acknowledge the deviation from the PR description, and explicitly state \"Allowing merges with high, critical, or unrated findings was rejected because the existing severity block is intentional. The changelog now matches it.\" The PR description bullet therefore remains unfilled: the documented \"any severity\" merge is not available, regardless of the chosen design trade-off.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The PR description says the judge may \u201cmerge or merge_with_followup, with open findings of any severity.\u201d\n  Expected change site: `scripts/review_rb_judge_security_pass.sh::rb_security_severity_block` and the security-exhaustion merge handling in `scripts/review_rb_judge.sh`.\n  Evidence of absence: The PR diff treats every severity other than `low` or `medium` as blocking. It converts merge decisions to fixes while retries remain and holds the PR at the final retry, so high, critical, and unrated findings cannot remain open on a merged PR. The description also states later that these severities block merges, leaving its promised behavior contradictory.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: \"merge or merge_with_followup, with open findings of any severity. The findings stay open as issues.\" (PR Description, Section 2)\n  Expected change site: `scripts/review_rb_judge_security_pass.sh::rb_security_severity_block` and the security-exhaustion merge handling in `scripts/review_rb_judge.sh`; PR description body\n  Evidence of absence: The implementation in `rb_security_severity_block` treats every severity other than `low` or `medium` as blocking \u2014 high, critical, and unrated findings convert merge verdicts to fixes while retries remain, and hold the PR at the final retry. The changelog fragment `6400-rb-judge-security-severity-block.md` documents this blocking behavior as intentional, contradicting the PR description's \"any severity\" claim. The PR description was never updated to reflect the more restrictive implementation. Editor summary `entry[10]` explicitly acknowledged this: \"TASK_GAP_DEFERRED: The PR description still says findings of any severity may remain open on merge.\" The code is self-consistent with the changelog and README/agents.md documentation; only the PR description is stale.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1b5ad87056fda1ce843279755457f9a0998240ed3b06227cee941329051f26f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6377,
+    "run_id": "37385925695",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37385925695",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005234929_0e6c686c0e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6377,
+    "run_id": "37385925695"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T23:49:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

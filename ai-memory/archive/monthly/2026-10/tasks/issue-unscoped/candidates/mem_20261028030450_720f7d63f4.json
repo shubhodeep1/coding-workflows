@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16462-16466 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The latest change removes the fallback lookup for the integration SHA in mark_validation_complete when VALIDATION_HISTORY_LAST_APPEND_SHA is empty.\n  WHY: The state validation_last_passed_sha may stay unset after a successful validation, so the external-finalize notice falsely reports \"none recorded\" (source severity MAJOR; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash judged the removal sound and the effect display-only, and reported no finding).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When the merged final-PR head SHA has no successful runtime validation in the project's validation history, the completion comment and the Telegram message say so\" (and name the merged SHA and the last validated SHA, if any)\n  expected_change_site: scripts/orchestrate_poll_process.sh, external_finalize_validation_notice and its external-finalize caller\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: With ENABLE_VALIDATION not \"true\", external_finalize_validation_notice sets outcome=skipped at lines 6409-6412, the caller at lines ~25817-25844 builds a notice only for the unvalidated and unknown outcomes, tests/test_orchestrate_poll_process.py:9297-9304 and test_external_finalize_validation_disabled_adds_no_notice assert the omission. Severity disagreement: minimax NIT (confidence 2), luna MAJOR (confidence 5). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash judged the skip deliberate and documented.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:16462-16466 | severity=MAJOR | confidence=4\n  PROBLEM: The latest change removes the fallback lookup for the integration SHA in mark_validation_complete when VALIDATION_HISTORY_LAST_APPEND_SHA is empty.\n  WHY: VALIDATION_HISTORY_LAST_APPEND_SHA is frequently unset during integration cycles, so validation_last_passed_sha often remains unset after a successful validation. The external-finalize notice then falsely reports \"none recorded\".\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP | severity=NIT | confidence=2\n  Requirement: When the merged final-PR head SHA has no successful runtime validation in the project's validation history, the completion comment and the Telegram message must say so and name the merged SHA and the last validated SHA, if any.\n  Expected change site: scripts/orchestrate_poll_process.sh, external_finalize_validation_notice and its external-finalize caller.\n  Evidence of absence: When ENABLE_VALIDATION is not \"true\", external_finalize_validation_notice sets outcome=skipped at lines 6409-12 (script line ~6409-6412). The caller in the external-finalize block (script lines ~25823-25844) only builds _orch_extfin_validation_line for the unvalidated and unknown outcomes, so a skipped outcome adds nothing to either the completion comment or the Telegram message. tests/test_orchestrate_poll_process.py:9297-9304 explicitly asserts that an externally merged, unvalidated head gets no notice when validation is disabled. The issue's acceptance criteria text does not carve out the ENABLE_VALIDATION=false case. The carve-out is documented in the changelog and agents.d fragment but is an interpretation, not an explicit issue allowance.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"When the merged final-PR head SHA has no successful runtime validation in the project's validation history, the completion comment and the Telegram message say so.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `external_finalize_validation_notice` and its external-finalize caller.\n  Evidence of absence: With `ENABLE_VALIDATION` disabled, `external_finalize_validation_notice` sets the outcome to `skipped` at lines 6409\u20136412. The caller at lines 25817\u201325830 adds notices only for `unvalidated` and `unknown`, so an externally merged, unvalidated head receives no notice. `tests/test_orchestrate_poll_process.py:test_external_finalize_validation_disabled_adds_no_notice` explicitly asserts this omission.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b667f79136719ee3c2387e1b58b40ec4bc438b0d4fcbebf4bf97adecf3e8c0dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8236,
+    "run_id": "40621859433",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40621859433",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028030450_720f7d63f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8236,
+    "run_id": "40621859433"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T03:04:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

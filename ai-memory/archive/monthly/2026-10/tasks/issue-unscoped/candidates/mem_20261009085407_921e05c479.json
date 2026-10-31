@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6800-host-only-hook-conflict-pinned.md:1-2 | severity=low | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The fragment classifies unchanged resolver behavior as a change.\n  WHY: Release assembly publishes the fragment under \u201cChanged,\u201d presenting existing fail-closed behavior as newly changed; the changelog policy excludes test-only changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/6800-host-only-hook-conflict-pinned.md:1-2 | severity=NIT | confidence=5\n  PROBLEM: The fragment classifies unchanged resolver behavior as a change. It says \u201cResolver behaviour is unchanged,\u201d and the PR diff adds a regression test without changing resolver behavior.\n  WHY: Release assembly publishes the fragment under \u201cChanged,\u201d presenting existing fail-closed behavior as newly changed. The changelog policy in CLAUDE.md:675-676 excludes test-only changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "f66eed6b502a779a50cb9a3029de5a006f61fee183556fecc0dba1a45d80525c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6803,
+    "run_id": "37906146538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37906146538",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009085407_921e05c479",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6803,
+    "run_id": "37906146538"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T08:54:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

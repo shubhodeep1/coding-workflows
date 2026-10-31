@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:247-251 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `REPORT_MAX_AGE=$((REPORT_MAX_AGE + QUEUE_WAITED_SECONDS))` reads a leading-zero value as octal, because `_positive_or_default` passes digit strings through unchanged. A value such as `0900` or `08` causes an arithmetic error.\n  WHY: With `set -euo pipefail`, the arithmetic error aborts the intake before any report is read. The queue script's `_seconds_or_default` already guards against this with `10#`. Severity is NIT in the sources, and the Gemini reviewer gave it only as a hardening suggestion.\n- README.md:454-455 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The README prose list of labels the clarify job excludes omits `ai:heal-intake-queue`. The predicate code blocks and the three workflow files already include it.\n  WHY: The prose contradicts the predicate it describes. A consumer who builds a wrapper from the prose alone would let the queue issue into the clarify pipeline. Severity is NIT in all sources.\n- scripts/workflow_failure_heal_queue.sh:129-134 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The release DELETE's output is discarded, so a 404 after `ticket_lost` is logged as `outcome=release_failed`, the same as a real delete failure.\n  WHY: This is a hardening suggestion (HARDENING_RISK_SCORE 1) that makes the `WORKFLOW_HEAL_QUEUE` output ambiguous. The source gave no confidence for it.\n- scripts/workflow_failure_heal_queue.sh:128 | severity=low | confidence=1\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The DELETE call has no comment explaining why it is safe without `GH_RETRY_IDEMPOTENT=true`.\n  WHY: This is a hardening suggestion (HARDENING_RISK_SCORE 1). A comment would help future maintainers. The source gave no confidence for it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Clarify ignores the `ai:heal-intake-queue` issue, so the queue never becomes a work item (PR description)\n  expected_change_site: README.md lines 454-455 (prose list of excluded labels)\n  confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The code blocks at README.md:517 and README.md:1484 and the files .github/workflows/clarify.yml:25, .github/workflows/internal-clarify.yml:18 and workflow-templates/ai-clarify.yml:18 carry the exclusion, but the README prose list at README.md:454-455 does not mention `ai:heal-intake-queue`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh:232-239,251 | severity=NIT | confidence=3\n  PROBLEM: `_positive_or_default` returns digit strings unchanged, so a leading-zero value such as `0900` or `08` is read as octal by the new `REPORT_MAX_AGE` arithmetic.\n  WHY: The arithmetic error aborts the intake script. The queue script's `_seconds_or_default` already uses `10#`. Suggested fix: `$((10#${REPORT_MAX_AGE} + 10#${QUEUE_WAITED_SECONDS}))`.\n- README.md:455 | severity=NIT | confidence=5\n  PROBLEM: The prose list of excluded labels was not updated after `ai:heal-intake-queue` was added to the clarify predicate.\n  WHY: Nothing breaks at runtime, but the prose contradicts the predicate it describes.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:251 | hardening suggestion\n  PROBLEM: The arithmetic does not use an explicit `10#` base specifier, which leaves leading-zero values ambiguous.\n  WHY: Suggested fix: `REPORT_MAX_AGE=$((10#${REPORT_MAX_AGE} + 10#${QUEUE_WAITED_SECONDS}))`. HARDENING_RISK_SCORE 1.\n- scripts/workflow_failure_heal_queue.sh:128 | hardening suggestion\n  PROBLEM: The DELETE call has no comment explaining why it is safe without `GH_RETRY_IDEMPOTENT=true`.\n  WHY: Suggested fix: add the comment \"# DELETE operations are natively idempotent; retry without marker.\" HARDENING_RISK_SCORE 1.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:454-455 | severity=NIT | confidence=5\n  PROBLEM: The prose list of excluded labels omits `ai:heal-intake-queue`, which both predicate code blocks (README.md:517 and README.md:1484) now include.\n  WHY: The README contradicts itself. A consumer who reproduces the prose list would route the queue issue into clarify.\n- scripts/workflow_failure_heal_intake.sh:251 | hardening suggestion\n  PROBLEM: `_positive_or_default` (:232-239) passes any all-digit value through unchanged, so `REPORT_MAX_AGE=$((REPORT_MAX_AGE + QUEUE_WAITED_SECONDS))` reads `0900` or `08` as octal. `03600` silently yields 1888.\n  WHY: With `set -euo pipefail` (:161), the arithmetic error aborts the intake. Suggested fix: use `10#` on both operands. HARDENING_RISK_SCORE 1.\n- scripts/workflow_failure_heal_queue.sh:129-134 | hardening suggestion\n  PROBLEM: The DELETE's output is discarded, so a 404 after `ticket_lost` is logged as `outcome=release_failed`, the same as a real delete failure.\n  WHY: Suggested fix: capture stderr and log `outcome=already_absent` on `HTTP 404`. HARDENING_RISK_SCORE 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh:247-251 | severity=NIT | confidence=4\n  PROBLEM: `_positive_or_default` accepts digit-only values with leading zeros, but Bash arithmetic treats them as octal.\n  WHY: A value such as `0900` makes the new arithmetic expansion fail, and with `set -e` the intake exits before processing the report.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: Clarify predicates exclude the `ai:heal-intake-queue` label so the queue issue never becomes a work item (PR description: \"Clarify ignores the `ai:heal-intake-queue` issue, so the queue never becomes a work item\").\n  Expected change site: README.md line 454-455, the prose list of labels the clarify job skips.\n  Evidence of absence: The code blocks in README.md (lines 517, 1484) and the three workflow files (`.github/workflows/clarify.yml:25`, `.github/workflows/internal-clarify.yml:18`, `workflow-templates/ai-clarify.yml:18`) all carry the exclusion, but the prose list at README.md:454-455 does not mention `ai:heal-intake-queue`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9591a49ea84ccfe29c6da1923635610a81604c0fa91de42647b7762d6e9dcc3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7924,
+    "run_id": "39901534646",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39901534646",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023054008_cf9335338d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7924,
+    "run_id": "39901534646"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T05:40:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

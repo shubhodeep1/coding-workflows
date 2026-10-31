@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6634,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6634\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6654\",\"pr_number\":6654,\"branch\":\"ai/issue-6634\",\"run_id\":\"37621495660\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37621495660\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/ci.yml\",\".github/workflows/clarify.yml\",\".github/workflows/implement.yml\",\".github/workflows/issue_pr_status.yml\",\".github/workflows/orchestrate_clarify_respond.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/review_autofix_sweep.yml\",\".github/workflows/security-audit.yml\",\".github/workflows/validate.yml\",\"README.md\",\"agents.md\",\"changelog.d/6634-gh-api-retry-helper.md\",\"docs/INVENTORY.md\",\"docs/plans/unattended-claude-pipeline-completion-plan.md\",\"scripts/gh_api_retry.py\",\"scripts/gh_helpers.sh\",\"scripts/label_helpers.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/resolve_integration_ref.sh\",\"scripts/review_merge_train.sh\",\"scripts/review_rb_judge.sh\",\"tests/fixtures/gh_api_retry/classify_cases.json\",\"tests/test_changelog_fragment_contract.py\",\"tests/test_gh_api_retry.py\",\"tests/test_gh_api_retry_py.py\",\"tests/test_review_autofix_terminal_same_head_gate.py\",\"tests/test_workflow_gh_retry_fallback_contract.py\"]}",
+  "fingerprint": "2646df05619dfe207220686a27b1d13b756812e0d40be431ed3cbd6fe264aca7",
+  "lineage": {
+    "issue_number": 6634,
+    "parent_ids": [],
+    "pr_number": 6654,
+    "run_id": "37621495660",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37621495660",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6654"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261007125905_1539151c73",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6634,
+    "level": "run",
+    "pr_number": 6654,
+    "run_id": "37621495660"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6634: https://github.com/shubhodeep1/coding-workflows/pull/6654",
+  "timestamps": {
+    "created_at": "2026-10-07T12:59:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

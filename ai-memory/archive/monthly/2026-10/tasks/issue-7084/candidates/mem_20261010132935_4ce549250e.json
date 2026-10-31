@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nI've answered both questions: **Q1 is A** and **Q2 is A**. I checked both defects in the source before deciding.\n\n- **Defect (1), real.** In `scripts/review_rb_judge.sh`, the `merge` branch writes `judge_handled=true` even when nothing merges (line 2061). That covers a PR with conflicts (`mergeable=false`, lines 2046-2048) and a PR whose mergeability is still unknown (lines 2049-2051). The retries-exhausted `fix` branch does the same when `gh pr merge` fails (lines 2086-2088, then 2104). The `merge_with_followup` branch already reports these cases with `merge_conflict`, `mergeability_pending` and `sync_merge_failed` (lines 2593-2606).\n- **Defect (2), real.** In `.github/workflows/review_autofix.yml`, the review-blocked comment step has its own text for each transient reason (lines 6494-6509). `llm_failed*`, `json_parse_failed*` and `merged_pr_unsafe_action` fall through to the default text (lines 6514-6516): \"AI review/autofix blocked \u2014 needs human intervention \u2026 reached the maximum number of autofix iterations\". Those same reasons then get `ai:needs-human` (lines 6545-6551). That is exactly what PR #6654 shows: a judge comment saying \"merge\", then the generic needs-human comment and label. So the comment hid the real cause, a judge failure.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Both defects are confirmed above. Defect (2) best explains the needs-human comment and label on PR #6654, so fixing only defect (1) (option B) would leave the misleading text in place. Option C (no code change) is not justified, because both defects can be proven from the source without the run's log.\nQ2: Option A matches what `merge_with_followup` already does. The existing fallback step then posts the specific comment and `ai:review-blocked` label it already has for these reasons, so stall recovery retries instead of the run silently claiming the PR was handled. `ai:needs-human` stays off for these transient gates (lines 6545-6546), and no safety gate is weakened.\n\nEXECUTION PLAN (required for any non-letter decision):\n(Both decisions are lettered; these are the concrete steps for the planner.)\nQ1/Q2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/review_rb_judge.sh lines 2046-2063 (`merge` branch) and 2075-2105 (retries-exhausted `fix` branch)\n    - scripts/review_rb_judge.sh lines 2593-2606 (the `merge_with_followup` reasons to copy)\n    - .github/workflows/review_autofix.yml lines 6494-6517 (comment headings) and 6545-6551 (hand-over label)\n    - .github/workflows/review_autofix.yml line ~5689 (the `judge_handled` check that suppresses the fallback)\n  steps:\n    - In the `merge` branch:\n      - Conflicts (`mergeable=false`): emit `judge_action=skip` and `judge_skip_reason=merge_conflict`, and do not write `judge_handled=true`.\n      - Mergeability not yet known, or PR not open: emit `judge_skip_reason=mergeability_pending`, with no `judge_handled=true`.\n      - Merge actually requested, or PR already merged: keep `judge_handled=true` and `judge_action=merge`, as today.\n    - In the retries-exhausted `fix` branch, when `gh pr merge` fails: emit `judge_skip_reason=sync_merge_failed` and skip `judge_handled=true`. The success path and the auto-merge-disabled path stay as they are.\n    - In the review-blocked comment step, add case arms before `*)`:\n      - `llm_failed*|json_parse_failed*`: heading \"AI review/autofix \u2014 review-blocked judge produced no usable verdict\".\n      - `merged_pr_unsafe_action`: heading \"AI review/autofix \u2014 judge chose an action not allowed on a merged PR\".\n      - Each arm's text names the reason and says the unblock judge will pick the PR up through `ai:needs-human`.\n      - Leave the hand-over label list and every other existing heading unchanged.\n    - Add contract tests:\n      - in `tests/test_review_rb_judge_label_propagation.py`, or a similar existing judge test, run the `merge` branch with `mergeable=false` and with `mergeable=null`. Check that `GITHUB_OUTPUT` has the skip reason and no `judge_handled=true`.\n      - Read the step text through `expanded_review_autofix_text()` and check the new case arms exist and come before `*)`.\n    - Add a changelog fragment under `changelog.d/`.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: The safety checks are untouched (head-bound merge, freshness, required checks). Only the outcome reporting changes, and it reuses the reason names and fallback comments that `merge_with_followup` already relies on.\n  reversibility: Each change is local to one case arm, so a single revert restores today's behaviour. No identifiers, labels or log prefixes are renamed.\n\nSETUP REQUIRED:\n(none)",
+  "fingerprint": "2d2cfa3fff0f37c409963f473f5b09597d5fe91221dc143fb85cd2e47846b5de",
+  "lineage": {
+    "issue_number": 7084,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38055360037",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38055360037",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7084"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010132935_4ce549250e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7084,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38055360037"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7084",
+  "timestamps": {
+    "created_at": "2026-10-10T13:29:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

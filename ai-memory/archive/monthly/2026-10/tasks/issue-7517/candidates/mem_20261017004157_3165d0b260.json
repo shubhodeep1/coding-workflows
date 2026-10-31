@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) A specific workflow or pipeline phase (clarify, plan, implement, review/autofix, orchestrate, validate, heal). Name the workflow file or phase in your answer. (RECOMMENDED)\nB) A specific script, prompt or helper under `scripts/` or `prompts/`. Name the file.\nC) Documentation only (README, docs/, or an agents.d fragment). Name the document and section.\nD) This issue was filed by mistake or as a test and should be closed with no change.\nQ2: What does \"better\" mean for the area you chose in Q1?\nChoices:\nA) Fix a specific bug or failure. Link the failing run, PR or issue and describe the expected behavior. (RECOMMENDED)\nB) Add a specific new capability. Describe the desired behavior and how to tell it works.\nC) Improve a measurable property (runtime, API-call count, cost, alert noise). Name the metric and the target value.\nD) Not decided yet: close this issue and file a new one once the goal is defined.",
+  "fingerprint": "0fed908acc15116365c492cf7cab5752be082e13a1129411ea92cb94c16344c4",
+  "lineage": {
+    "issue_number": 7517,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38987119590",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38987119590",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261017004157_3165d0b260",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7517,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38987119590"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7517 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-17T00:41:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1543 (with 1559-1560) | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The window-run diagnostic read fetches only the newest 100 runs (`per_page=100`, no pagination), so an unfinished Implement run beyond the first page can produce a misleading `stall-diag window-run: none`.\n  WHY: The diagnostic can silently miss its subject in a noisy window, but the step's result is unaffected. Both reviewers rated it NIT. Z-ai also says the truncation count is computed from the page-1 filtered array.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nNote: the reviewer checked the pass-1 window-run 100-run finding (`.github/workflows/test-and-mark-stable.yml`, around lines 1559-1560) and chose not to report it as a defect. It is log-only, and more than 100 runs in one issue's 30-minute window is not evidenced.\nHARDENING_SUGGESTIONS: `.github/workflows/test-and-mark-stable.yml`, `stall_diag_runs` jq definition in `log_implement_stall_diagnostics`. Print `none (first 100 runs only)` when `.workflow_runs | length == 100`. About 2-3 lines.\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:1543 | severity=low (source: NIT) | confidence=2\n  PROBLEM: The diagnostic window-run read fetches only the most recent 100 runs using `per_page=100` and no pagination.\n  WHY: With more than 100 runs in a noisy window, unfinished Implement runs beyond the first 100 may be missed, giving a misleading `stall-diag window-run: none` or an incomplete list.\nHARDENING_SUGGESTIONS: `.github/workflows/test-and-mark-stable.yml`, line 1543 (`stall_diag_runs` jq filter definition). In `runs($k)`, if `(.workflow_runs | length) == 100`, append a note that only the first 100 runs were fetched. About 2-3 lines.\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nNote: the reviewer judged the pre-push gate failures (`test_agents_fragment_contract.py`, `test_ai_label_precreation_contract.py`, `test_changelog_fragment_contract.py`, `test_implement_post_codex_recovery.py`, `test_review_semble_contract.py`) unrelated to the last-run diff and inherited from the merge base.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nHARDENING_SUGGESTIONS: NONE\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:1543 (stall_diag_runs filter) with 1559-1560 (window-run read) | severity=low (source: NIT) | confidence=2\n  PROBLEM: The window-run read fetches only the newest 100 runs (`per_page=100`, no `&page=`), and `runs(\"window-run\")` filters that single page. The truncation line's \"truncated, <n> more\" count is computed from the same page-1 filtered array.\n  WHY: In a window with more than 100 runs, the count is understated, and an unfinished Implement run on page 2 gives a false `stall-diag window-run: none`. The failure path and exit status are unaffected; only the diagnostic is weakened.\nHARDENING_SUGGESTIONS: `.github/workflows/test-and-mark-stable.yml`, line 1543, `stall_diag_runs` jq definition, `length == 0` branch. Emit `  stall-diag \\($k): none (first 100 runs only)` when `(.workflow_runs | length) == 100`, and plain `none` otherwise. Mirror this in the changelog fragment sentence. About 3 lines.\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "15214ebc60a74e3a69b3881c830b51ffd5c8e03584ae3dae718c88e01fa6d8c7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8379,
+    "run_id": "40939828921",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40939828921",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029203532_d190aff32e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8379,
+    "run_id": "40939828921"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T20:35:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

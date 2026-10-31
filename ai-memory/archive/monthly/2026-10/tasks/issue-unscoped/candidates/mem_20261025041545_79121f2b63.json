@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:3984-3990 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The \"no text events\" check (empty_structured_output) shadows kill-scenario classes (stall_guard, timeout, etc.) in reviewer_attempt_result_failure_class.\n  WHY: A killed or timed-out attempt with no text events is labeled empty_structured_output instead of the kill class, defeating the distinct failure classes (source severity MAJOR). Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus) judged this order to be prescribed by issue #8097, so there is disagreement.\n- scripts/review_run_reviewers.sh:4534-4617 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The pass= field of REVIEWER_ATTEMPT_RESULT uses output_prefix, which is \"review\" for both pass 2 and the single-pass run, so the two cannot be told apart.\n  WHY: Operators cannot tell failures in pass 2 from failures in a single-pass run in the log (NIT; log quality only, not a runtime failure).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Emit one bounded REVIEWER_ATTEMPT_RESULT line per reviewer attempt with distinct failure classes\n  expected_change_site: scripts/review_run_reviewers.sh, execute_reviewer_attempt (pre-launch early returns)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The early returns for config-generation failure (approx. lines 4240-4249), bootstrap-validation failure (4251-4257) and the empty-effective-prompt refusal (4420-4427) emit no REVIEWER_ATTEMPT_RESULT line. Severity ranges from NIT to MAJOR. Other reviewers judged this out of scope because the issue places the emission after the classifier call.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh:3984-3990 | severity=MAJOR | confidence=4\n  PROBLEM: The \"no text events\" check (empty_structured_output) shadows kill-scenario classes (stall_guard, timeout, etc.).\n  WHY: If an attempt is killed by the stall guard or times out and emits no text events, the log entry is labeled empty_structured_output instead of the more accurate kill class.\n- scripts/review_run_reviewers.sh:4534,4611 | severity=NIT | confidence=3\n  PROBLEM: The pass= field in the emitted REVIEWER_ATTEMPT_RESULT line uses \"${output_prefix:-}\", which does not distinguish pass 1 from pass 2.\n  WHY: Operators and tools cannot differentiate failure attempts between the two reviewer passes.\n- TASK_GAP: Requirement: \"emit one bounded REVIEWER_ATTEMPT_RESULT line per reviewer attempt with distinct failure classes\"\n  Expected change site: scripts/review_run_reviewers.sh, execute_reviewer_attempt\n  Evidence of absence: The failure returns for config-generation failure (approx. lines 4240-4250), bootstrap-validation failure (approx. lines 4251-4258) and empty-effective-prompt refusal (approx. lines 4420-4427) emit no REVIEWER_ATTEMPT_RESULT line.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- HARDENING: Duplication of 15 lines for class computation, duration calculation and emission at execute_reviewer_attempt (calls at 4534 and 4611). Suggested fix: refactor into a single function.\n- HARDENING: Reorder the checks in reviewer_attempt_result_failure_class so kill/timeout classes run before the no_text marker.\n- HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Emit one bounded REVIEWER_ATTEMPT_RESULT line per reviewer attempt.\"\n  Expected change site: scripts/review_run_reviewers.sh, execute_reviewer_attempt\n  Evidence of absence: Emission exists on the successful-output path and after the retryable-failure classifier, but not before the early returns for OpenCode config-generation failure (lines 4240-4249), bootstrap-validation failure (4251-4257) or the empty-effective-prompt refusal (4420-4426).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_run_reviewers.sh:4541,4617 | severity=NIT | confidence=4\n  PROBLEM: The pass= field is filled from output_prefix. run_reviewer_pass is called with \"pass1\" for pass 1 (line 5909) but with \"review\" for both pass 2 (line 6020) and the single-pass run (line 6036), so pass=review is ambiguous.\n  WHY: No runtime failure, since the line is log-only. The ambiguity predates the last diff and makes pass-2 and single-pass failures indistinguishable.\n- TASK_GAP: Requirement: Issue #8097 headline, \"emit one bounded REVIEWER_ATTEMPT_RESULT line per reviewer attempt with distinct failure classes\"\n  Expected change site: scripts/review_run_reviewers.sh, execute_reviewer_attempt (lines 4247-4249, 4255-4257, 4425-4426)\n  Evidence of absence: None of the three pre-launch return paths emit a REVIEWER_ATTEMPT_RESULT line, and neither the original diff nor the last run diff touches them. Caveat: issue \u00a72 pins the emission to right after REVIEWER_ATTEMPT_RETRYABLE_CLASS=..., so a narrow reading makes this defensible.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "293ab3572b6cd6a792af5fe6ee60291ecddef5862f6a1e38391848ff64024248",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8101,
+    "run_id": "40159398117",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40159398117",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025041545_79121f2b63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8101,
+    "run_id": "40159398117"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T04:15:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

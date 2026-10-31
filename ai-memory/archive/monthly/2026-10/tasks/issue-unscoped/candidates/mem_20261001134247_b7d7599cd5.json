@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/inline_edit_guard.py:117-118, 283 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The env wrapper parser omits GNU env's -a/--argv0 options, so it mistakes the option argument for the command and fails to detect inline interpreter writes.\n  WHY: `env -a alternate-name python3 -c \"open('x','w').write('y')\"` executes the write while the guard returns no decision; the `--argv0=NAME` attached form is not affected.\n- workflow-templates/.claude/hooks/inline_edit_guard.py:117-118, 283 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash]\n  PROBLEM: The workflow template hook has the same env parser omission for GNU env's -a/--argv0 options, allowing wrapped inline-interpreter writes to bypass the guard in consumer repositories.\n  WHY: Consumer repositories synced from this template inherit the bypass for `env -a <name>` and `env --argv0 <name>`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/inline_edit_guard.py:117-118, 283 | severity=high | confidence=5\n  PROBLEM: GNU env's -a/--argv0 options take a separate argument, but neither is in _WRAPPER_VALUE_OPTIONS[\"env\"], so the parser mistakes the argument for the command.\n  WHY: `env -a alternate-name python3 -c \"open('x','w').write('y')\"` runs the Python write while the guard checks `alternate-name` and returns no decision; the same bypass occurs with `--argv0` and within env -S strings, while `--argv0=NAME` is not affected.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .claude/hooks/inline_edit_guard.py:117-118, 283 | severity=high | confidence=5\n  PROBLEM: GNU env option parsing does not consume arguments for -a and --argv0, causing the option argument to be parsed as the command name.\n  WHY: The guard treats `alternate-name` as the command, fails to match an interpreter, and returns no decision while the inline file edit executes.\n- workflow-templates/.claude/hooks/inline_edit_guard.py:117-118, 283 | severity=high | confidence=5\n  PROBLEM: The workflow template hook has the identical option-parsing omission for -a and --argv0.\n  WHY: Consumer repositories synced from this template can bypass the inline edit guard with inline-interpreter writes via `env -a <name>` or `env --argv0 <name>`.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/inline_edit_guard.py: `_WRAPPER_VALUE_OPTIONS[\"env\"]` at the dict entry around line 110-114 of the file; the option loop inside `_command_start` around line 265-285. | severity=high | confidence=5\n  PROBLEM: GNU env's -a NAME / --argv0=NAME options take an argument, but the env options set omits them, causing the parser to return the argv[0] string as the command word.\n  WHY: `env -a alternate-name python3 -c \"open('x','w').write('y')\"` runs the inline Python write while the guard checks the argv[0] string and returns no decision.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/inline_edit_guard.py: `_WRAPPER_VALUE_OPTIONS[\"env\"]` (line 118) and `_command_start()` option handling (lines 271-283) | severity=high | confidence=5\n  PROBLEM: The env option table omits -a/--argv0, which take a separate argument, so the generic option handling advances past -a but not its argument.\n  WHY: For `env -a alternate-name python3 -c \"open('x','w').write('y')\"`, the guard treats `alternate-name` as the command and gives no decision although env executes the inline Python write.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/inline_edit_guard.py: _WRAPPER_VALUE_OPTIONS[\"env\"] at line 91, consumed in _command_start at line 196 | severity=high | confidence=5\n  PROBLEM: The env option parser does not consume arguments for GNU env's -a/--argv0 option.\n  WHY: `env -a alternate-name python3 -c \"open('x','w').write('y')\"` runs the inline Python write while the guard checks `alternate-name` and returns no decision; the single-token `--argv0=name` form is already handled correctly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/inline_edit_guard.py: line 118, `_WRAPPER_VALUE_OPTIONS[\"env\"]` and line 283, `index += 2 if tokens[index] in options else 1` | severity=high | confidence=5\n  PROBLEM: The env wrapper's value-option set omits GNU env's -a/--argv0 option, which takes a separate argument, so the parser mistakes `alternate-name` for the command word.\n  WHY: `env -a name python3 -c \"open('x','w').write('y')\"` executes the inline Python write, but the guard's `_command_start` returns the index of `name` and gives no decision; the `--argv0=name` form is not affected.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fd763aa41c3e0a52b524e5b0a3df7f6c4bee975c235a88c0e48fa6a21e9a71d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 4877,
+    "run_id": "36865498669",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36865498669",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001134247_b7d7599cd5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 4877,
+    "run_id": "36865498669"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T13:42:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

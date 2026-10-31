@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:1382 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The jq selector `.[]` does not require the root of consumer_repos.json to be an array, so an object-shaped registry such as `{\"entry\":\"owner/repo\"}` still yields a value that passes validation.\n  WHY: A malformed registry can still trigger a repository_dispatch to that value. Severity disagreement: gemini said BLOCKER, luna said MAJOR, so the highest is used. anthropic_claude-sonnet-5_5 explicitly judged this not reportable, because the original `jq -r '.[]'` behaved the same way, the registry is a committed repo-owned file, and the issue does not require an array root.\n- .github/workflows/test-and-mark-stable.yml:7057-7058 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The jq selector `.[]` does not require the root of consumer_repos.json to be an array, so an object-shaped registry such as `{\"entry\":\"owner/repo\"}` still yields a value that passes validation.\n  WHY: A malformed registry can still trigger a repository_dispatch to that value. Severity disagreement: gemini said BLOCKER, luna said MAJOR, so the highest is used. anthropic_claude-sonnet-5_5 explicitly judged this not reportable, because the original `jq -r '.[]'` behaved the same way, the registry is a committed repo-owned file, and the issue does not require an array root.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- No reportable findings in any checklist category (all NONE). It explicitly rejected the object-root consensus finding as pre-existing and out of scope.\n- HARDENING_SUGGESTIONS: .github/workflows/mark-stable.yml and .github/workflows/test-and-mark-stable.yml, the `GH_RETRY_IDEMPOTENT=true gh_retry gh api \"repos/${REPO}/dispatches\"` call inside the `while ... done <<< \"${REPOS}\"` loop. The dispatch call inherits the loop's here-string as stdin, so a future stdin-reading change to the retry helper could consume the remaining registry entries. Suggested fix: add `</dev/null \\` on its own continuation line (1 line per workflow). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/mark-stable.yml:1382 | severity=BLOCKER | confidence=4\n  PROBLEM: The jq selector .[] | tostring ... does not enforce that the root of consumer_repos.json is an array.\n  WHY: If the registry is malformed as an object (e.g., {\"my-repo\": \"owner/repo\"}), jq .[] yields the object value (owner/repo), which passes validation and triggers a dispatch to an unintended repository. The registry structure is defined as a JSON array.\n- .github/workflows/test-and-mark-stable.yml:7057 | severity=BLOCKER | confidence=4\n  PROBLEM: The jq selector .[] | tostring ... does not enforce that the root of consumer_repos.json is an array.\n  WHY: If the registry is malformed as an object (e.g., {\"my-repo\": \"owner/repo\"}), jq .[] yields the object value (owner/repo), which passes validation and triggers a dispatch to an unintended repository. The registry structure is defined as a JSON array.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/mark-stable.yml:1382 and .github/workflows/test-and-mark-stable.yml:7058 | severity=MAJOR | confidence=4\n  PROBLEM: The `jq` filter iterates `.[]` without requiring the registry root to be an array. For example, `{\"entry\":\"owner/repo\"}` yields `owner/repo`, which passes the subsequent entry validation.\n  WHY: A malformed registry object can still trigger a `repository_dispatch` to its valid-looking value instead of being rejected. The contract defines `consumer_repos.json` as a JSON array, but neither dispatch step validates that root shape.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "357eb2da96262093c36f1322e049f243f19a6c9fddc0bd33ae07c187486d514d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7686,
+    "run_id": "39228210859",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39228210859",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019093404_094ec92d89",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7686,
+    "run_id": "39228210859"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T09:34:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

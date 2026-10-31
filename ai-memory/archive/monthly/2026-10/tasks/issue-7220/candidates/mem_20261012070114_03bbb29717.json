@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this change ship, given the pipeline cannot write the live `.claude/hooks/pr_merge_status_guard.py` and `.claude/settings.json`, and CI requires them to match their `workflow-templates/` twins?\nChoices:\nA. Hand it to an interactive Claude Code session. It edits the live hook and its template together (byte-identical), plus `tests/test_pr_merge_status_guard.py` and the limitation note in `CLAUDE.md`. The pipeline issue is closed or parked as `ai:needs-human`. (RECOMMENDED)\nB. The pipeline edits only the template hook and the tests. The live copy and `CLAUDE.md` are then synced by hand in a follow-up interactive PR, and this PR stays red on the parity test until then.\nC. The pipeline edits the template and lists the hook in `.github/ai/claude_template_divergence.json` until someone syncs the live copy. **Note:** this leaves a security hook knowingly out of step between this repo and consumers.\nQ2: When the guard cannot work out the default branch locally (`git symbolic-ref refs/remotes/origin/HEAD` fails, so `default_branch()` returns `\"\"`), what should a push do?\nChoices:\nA. Treat `main` and `master` as default-branch names, which matches today's static ask rules, and allow the push otherwise. No network call. (RECOMMENDED)\nB. Ask for confirmation on every push in that checkout whose destination is not a `claude/*` branch.\nC. Run one `git ls-remote --symref origin HEAD` to find the default branch, and ask if that also fails.",
+  "fingerprint": "a9d5cc043010db167e2622d79f6bb6eeb630a587d5690613e69b7f1bc5494811",
+  "lineage": {
+    "issue_number": 7220,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38214912702",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38214912702",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012070114_03bbb29717",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7220,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38214912702"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7220 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T07:01:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

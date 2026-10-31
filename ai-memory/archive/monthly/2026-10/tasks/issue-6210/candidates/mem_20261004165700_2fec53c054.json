@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6210,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6210\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6212\",\"pr_number\":6212,\"branch\":\"ai/issue-6210\",\"run_id\":\"37217708361\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37217708361\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/ai/label_contract.v1.json\",\"scripts/label_helpers.sh\",\"scripts/operator_step_issue.py\",\"tests/test_activation_verify.py\"]}",
+  "fingerprint": "df167585b0048058cde7c0c0dc74fcd891fa83f9e9a29412358470cc5b2ad838",
+  "lineage": {
+    "issue_number": 6210,
+    "parent_ids": [],
+    "pr_number": 6212,
+    "run_id": "37217708361",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37217708361",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6212"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261004165700_2fec53c054",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6210,
+    "level": "run",
+    "pr_number": 6212,
+    "run_id": "37217708361"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6210: https://github.com/shubhodeep1/coding-workflows/pull/6212",
+  "timestamps": {
+    "created_at": "2026-10-04T16:57:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

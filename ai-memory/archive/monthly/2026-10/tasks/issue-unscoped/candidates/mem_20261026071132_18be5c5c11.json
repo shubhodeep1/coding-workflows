@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add a `stage=pre_diagnosis` skip for run-less `engine_fallback` reports, with README.md and agents.md getting small in-place corrections to match (README env-var reference rows for `HEAL_INTAKE_SCOPE_GUARD_ENABLED` and `WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED`)\n  expected_change_site: README.md:2735 and README.md:2748 (env-var reference rows for `HEAL_INTAKE_SCOPE_GUARD_ENABLED` and `WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED`)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: README.md:2748 still documents the run-less report skip as `stage=marker_guard`, README.md:2735 still says the marker guard skips such reports \"the same way\" or names no stage, while scripts/workflow_failure_heal_intake.sh:2282-2285 now skips at `stage=pre_diagnosis` before the marker guard; README.md:2200 and agents.md:1488 were updated. Reviewer note: the marker guard at line 2774 still applies to other run-less reports and when the gate is off, so the README row is only partly out of date. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: The PR adds a `stage=pre_diagnosis` skip for run-less `engine_fallback` reports, and says README.md and agents.md get small in-place corrections to match.\n  Expected change site: README.md:2748, the env-var reference text for `WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED` (the neighbouring `HEAL_INTAKE_SCOPE_GUARD_ENABLED` text, put at README.md:2735 by the consensus gap, was not checked)\n  Evidence of absence: README.md:2200 and agents.md:1488 were updated to mention `pre_diagnosis`; README.md:2748 still has `stage=marker_guard`. With the gate on (default), `scripts/workflow_failure_heal_intake.sh:2282-2284` now skips the case at `pre_diagnosis` first. The marker guard at line 2774 still applies to other run-less reports and when the gate is off, so the README row is only partly out of date.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Update the README.md documentation to reflect the new skip behavior for engine-fallback reports, specifically updating the log stage in the env-var reference table for WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED (line 2748) and HEAL_INTAKE_SCOPE_GUARD_ENABLED (line 2735).\n  Expected change site: README.md:2735, 2748\n  Evidence of absence: README.md:2748 still documents the run-less report skip as \"(WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=marker_guard, exit 0, no alert)\". The PR implementation changed the stage to stage=pre_diagnosis in scripts/workflow_failure_heal_intake.sh:2282.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: The PR description lists \"`README.md`, `agents.md`: small in-place corrections (\u00a730.B)\" among the changed files, and documents the new behaviour as \"The skip logs `WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=pre_diagnosis`\".\n  Expected change site: README.md:2735 (`HEAL_INTAKE_SCOPE_GUARD_ENABLED` row) and README.md:2748 (`WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED` row) in the env-var reference table.\n  Evidence of absence: README.md:2735 still states \"the earlier scope-marker guard (`WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED`) skips such reports the same way\", but `scripts/workflow_failure_heal_intake.sh:2282-2285` now exits at `stage=pre_diagnosis` BEFORE the marker guard runs. README.md:2748 still documents the skip as `stage=marker_guard` for an `engine_fallback` report whose `reporter_run` is missing or did not verify. README.md:2195-2204 and agents.md:1487-1488 were corrected in this PR but the env-var reference table rows were not.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\nHARDENING_SUGGESTIONS:\n- .github/workflows/implement.yml, line 1770-1775 (the `if [ \"${is_self_repo}\" = \"false\" ] && [ -f .codex-workflow-src/agents.md ]; then` block): when `is_self_repo=true` the canonical copy is silently skipped with no log line. Suggested fix: add an `else` branch with an `echo \"::notice::agents_canonical.md skipped: ...\"`. Estimated lines changed: 3. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: Document that, with `HEAL_INTAKE_SCOPE_GUARD_ENABLED` on, an unbound or missing-run `engine_fallback` report is skipped before diagnosis with `stage=pre_diagnosis`.\n  Expected change site: README.md, the `HEAL_INTAKE_SCOPE_GUARD_ENABLED` and `WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED` reference rows.\n  Evidence of absence: README.md:2735 says the skip has no stage, and README.md:2748 still documents `stage=marker_guard` for an `engine_fallback` report whose run is missing or unverified. The intake now skips these reports at `scripts/workflow_failure_heal_intake.sh:2282-2285`, before the marker guard.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "3fdb0abc838e825fa5f2c493e9255e2848727901d3883b9ede3cd37c4cdd21b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8185,
+    "run_id": "40280904977",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40280904977",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026071132_18be5c5c11",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8185,
+    "run_id": "40280904977"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T07:11:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

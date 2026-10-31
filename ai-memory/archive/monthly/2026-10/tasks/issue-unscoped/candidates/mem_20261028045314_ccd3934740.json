@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml (the four moved entries at lines 1776-1800 inside tests-promote-stall-and-review, removed at lines 1893-1898, 1908-1913, 2028-2033, 2053-2058 from tests-release-and-log-analysis) and tests/test_ci_poll_test_sharding.py MOVED_RELEASE_TO_PROMOTE_STEPS\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml:1776-1780 states the run's step timings could not be read and the four steps were chosen by subprocess and test counts, changelog.d/8245-release-job-steps-to-promote-stall.md:11 restates the caveat, no timing-based comparison in the PR diff shows these are the slowest steps (structural requirements of unchanged bodies and preserved names are satisfied)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\n  Expected change site: .github/workflows/ci.yml (the selection of steps to move)\n  Evidence of absence: The PR explicitly states in the changelog and YAML comments (lines 1776-1780) that the run's step timings could not be read, so the four steps were selected by subprocess and test counts rather than measured slowest steps as requested in the issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml (the four moved entries at lines 1776-1800 inside tests-promote-stall-and-review, removed at lines 1893-1898, 1908-1913, 2028-2033, 2053-2058 from tests-release-and-log-analysis) and tests/test_ci_poll_test_sharding.py MOVED_RELEASE_TO_PROMOTE_STEPS.\n  Evidence of absence: The YAML comment at .github/workflows/ci.yml:1776-1780 states the step timings could not be read; changelog fragment changelog.d/8245-release-job-steps-to-promote-stall.md:11 restates the caveat. No timing-based comparison appears in the PR diff; selection is by heuristic. Structural requirements are satisfied and the same pattern was used in #8208/#7576/#7677 with the next budget-watch run as mitigation, but the literal \"(see the run's step timings)\" instruction is not honored.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection and relocation of steps from `tests-release-and-log-analysis` to `tests-promote-stall-and-review`.\n  Evidence of absence: The workflow comment says the run's step timings could not be read and that the four steps were chosen by subprocess and test counts instead. The PR diff contains no timing-based comparison establishing that these are the slowest steps.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3dc8a6fc3f08c98001f059df6fd0977136f557bfeb7b8470a0a992bdeb49cf47",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8247,
+    "run_id": "40632766461",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40632766461",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028045314_ccd3934740",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8247,
+    "run_id": "40632766461"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T04:53:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

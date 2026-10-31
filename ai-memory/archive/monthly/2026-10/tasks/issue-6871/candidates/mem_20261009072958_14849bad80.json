@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: While `HEAL_INTAKE_SCOPE_GUARD_ENABLED` is off (the default), what should the heal intake do just before `gh issue create`?\nChoices:\nA: Create no heal issue at all, whether or not a scope marker is present, and log a stable skip line. This stops all heal issue filing by default until an operator turns the flag on.\nB: Create the issue only when a well-formed `ai:workflow-heal-scope:v1` marker was produced. If the marker is missing or invalid, skip creation with a stable warning log line, no CRITICAL alert and exit 0. The CRITICAL alert and nonzero exit apply only when the flag is on. (RECOMMENDED)\nC: Keep today's behaviour exactly: create the issue even with an unresolved marker, and rely on the existing implement-side `HEAL_SCOPE_REFUSED` preflight to fail closed later. The flag only enables the new pre-creation refusal.",
+  "fingerprint": "65f73469c07681a4ae278ae3f074c569de48e0344a265820e41c6b40a59b07df",
+  "lineage": {
+    "issue_number": 6871,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37898849727",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37898849727",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009072958_14849bad80",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6871,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37898849727"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6871 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T07:29:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

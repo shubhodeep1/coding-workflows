@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which area of the repository should this issue change?\nChoices:\nA. Clarify, plan or implement issue-pipeline workflows (`ai-clarify.yml`, plan, implement)\nB. The review/autofix pipeline (`review_autofix.yml` and its helper scripts)\nC. Orchestrator workflows (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nD. Documentation only (README, `docs/`, `agents.d/` fragments)\nE. Other (name the specific file, workflow or script in your `/answer`) (RECOMMENDED)\nQ2. What kind of improvement is wanted?\nChoices:\nA. Fix a specific bug or failure (link the failing run, error or log line) (RECOMMENDED)\nB. Lower cost or runtime (fewer API calls, tokens or tool calls)\nC. Better reliability or recovery (retries, stall handling, fail-open behavior)\nD. Better developer or operator experience (clearer logs, docs or alerts)\nE. New feature (describe the expected behavior)\nQ3. How will we know the change is done?\nChoices:\nA. You will give concrete acceptance criteria or an observable expected behavior in your `/answer` (RECOMMENDED)\nB. A specific metric must improve (name the metric and the target)\nC. The existing contract tests keep passing and a new focused test covers the change",
+  "fingerprint": "47f01453db0bce34173e43afefd37c55dfa1d18e1ad407d706d741bdfe2cdf7d",
+  "lineage": {
+    "issue_number": 8455,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41027810023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41027810023",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261030090026_f4aa6ca909",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8455,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41027810023"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #8455 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-30T09:00:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

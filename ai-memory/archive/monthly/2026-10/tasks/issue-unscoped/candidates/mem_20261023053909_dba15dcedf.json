@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:5737 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `implement_stale_branch_check.sh` helper invocation in the \"Push branch\" step has no wall-clock timeout, so a hung `gh api` call could stall the step until the job timeout.\n  WHY: `GH_RETRY_MAX_ATTEMPTS=1` bounds attempts, not duration; a `timeout 120` wrapper would route a stall into the existing `api_unavailable` keep path. All three reviewers rated it NIT, with confidence 2 to 3.\n- scripts/implement_stale_branch_check.sh:52-56 | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The reviewer examined the fallback `gh_retry() { \"$@\"; }` and concluded that it is not a defect, so it reported it as a NIT only.\n  WHY: The helper deliberately makes one attempt (`GH_RETRY_MAX_ATTEMPTS=1`), and any non-zero exit maps to `api_unavailable`, which takes the existing rebase path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/implement_stale_branch_check.sh:52-56 | severity=NIT | confidence=1\n  PROBLEM: The reviewer examined google_gemini's claim that the fallback `gh_retry() { \"$@\"; }` does no retry or rate-limit handling, and concluded it is not a defect.\n  WHY: The single attempt is deliberate (`GH_RETRY_MAX_ATTEMPTS=1`), and a non-zero exit maps to `outcome=keep reason=api_unavailable`.\n- .github/workflows/implement.yml (the `bash \"${stale_branch_helper}\" ...` call in the \"Push branch\" step) | severity=NIT | confidence=2\n  PROBLEM: The helper runs with no wall-clock bound, because `GH_RETRY_MAX_ATTEMPTS=1` limits attempts only, not the duration of a hung `gh api` call.\n  WHY: The step could wait until the job timeout if the network hangs. The risk is low, and a one-line `timeout 120` wrapper would end up in the existing `api_unavailable` keep path.\n- HARDENING_SUGGESTIONS: add `timeout 120` to the helper call in the \"Push branch\" step (about 1 line); HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:5737 | severity=NIT | confidence=3\n  PROBLEM: The `implement_stale_branch_check.sh` helper is executed without an explicit timeout.\n  WHY: If the `gh` API lookup hangs, the implementation workflow waits until the global job timeout, because the helper runs synchronously with no timeout guard.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml:5737 | severity=NIT | confidence=2\n  PROBLEM: The helper invocation has no wall-clock bound; `GH_RETRY_MAX_ATTEMPTS=1` (`scripts/implement_stale_branch_check.sh:64`) bounds attempts only.\n  WHY: A hung `gh api` holds the \"Push branch\" step open until the job timeout, so neither the supersede path nor the rebase fallback runs. `timeout 120 bash \"${stale_branch_helper}\" ...` would route a stall into the existing `outcome=keep reason=api_unavailable rc=124` path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "92cb79a79275cc81eccb4df7e2ce8f09ff9caf98b84615e2f82fa7ee76a3fc01",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7911,
+    "run_id": "39904517472",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39904517472",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023053909_dba15dcedf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7911,
+    "run_id": "39904517472"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T05:39:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

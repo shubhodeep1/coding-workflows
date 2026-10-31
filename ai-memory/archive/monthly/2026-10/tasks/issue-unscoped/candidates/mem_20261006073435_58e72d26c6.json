@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:42-52 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: In the `implement` profile, `.env.example` paths return `True` before trusted-directory, `.claude/commands` inventory, and hidden-directory checks, admitting files such as `.claude/commands/.env.example`.\n  WHY: Snapshot and transfer can accept untrusted `.env.example` files under restricted `.claude/**` paths, bypassing the frozen command inventory and hidden-directory trust boundaries.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_untrusted_workspace.py:lines 45\u201346 | severity=high | confidence=5\n  PROBLEM: `.env.example` files return `True` before hidden-directory, command-inventory, and trusted-file checks, allowing `.claude/commands/.env.example` to be admitted.\n  WHY: An editor can create the path in the isolated workspace and transfer it to the host, bypassing the trusted command-file boundary.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_workspace.py:42-52 | confidence=4\n  PROBLEM: With `UNTRUSTED_WORKSPACE_PROFILE=implement`, `.env.example` files are admitted without verifying their parent directory is trusted.\n  WHY: A path such as `.claude/commands/.env.example` can be admitted and transferred back to the host, bypassing the intended trust boundaries.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_untrusted_workspace.py:lines 42-46 | severity=high | confidence=4\n  PROBLEM: In the `implement` profile, an early return admits any `.env.example` path before the command inventory, `.claude/hooks` allowlist, and hidden-directory checks.\n  WHY: Paths such as `.claude/commands/.env.example` and `.claude/hooks/.env.example` can be admitted by snapshot and transfer, bypassing those boundaries.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_untrusted_workspace.py: `allowed()`, lines 42-46 | severity=high | confidence=4\n  PROBLEM: In the `implement` profile, any path whose basename is `.env.example` returns `True` before the hidden-directory restriction and trusted `.claude/commands` inventory check.\n  WHY: Workspace enumeration and transfer accept `.claude/commands/.env.example` even though it is absent from the frozen trusted command inventory.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_untrusted_workspace.py: lines 42-44 | severity=high | confidence=5\n  PROBLEM: The `implement_env_example` check returns `True` before the `.claude/commands` inventory check, admitting `.claude/commands/.env.example` without verifying it is in the frozen trusted inventory.\n  WHY: The isolated workspace can copy this path from the host and accept it back on transfer, bypassing the trusted command snapshot.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_untrusted_workspace.py:45-46 | severity=high | confidence=4\n  PROBLEM: When the profile is `implement` and the final path component is `.env.example`, `allowed()` returns `True` before command-inventory and hidden-directory checks.\n  WHY: An editor can write arbitrary content under `.claude/**` with that basename, and transfer it to the host despite the frozen-command-inventory and hidden-directory restrictions.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7b0e89d5a206a8a9da5d3d04bb26dbf0fac41d352d84f6d14063158fa6f40f6d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6452,
+    "run_id": "37427076991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37427076991",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006073435_58e72d26c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6452,
+    "run_id": "37427076991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T07:34:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

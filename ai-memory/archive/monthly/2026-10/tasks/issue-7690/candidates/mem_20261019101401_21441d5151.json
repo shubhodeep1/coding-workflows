@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The run's step timings can't be read in this pipeline, and option B needs someone to paste data, which would loop the clarification. Timing the steps locally is the only way to pick steps without that data. All four test jobs use the same three setup steps (`Checkout repository`, `Setup Python`, `Install Python CI dependencies`). `tests-heal-plan-and-validation` has no setup of its own (ci.yml lines 852-870), so any of its steps can move to another test job unchanged. `tests/test_ci_job_split_contract.py` only checks that no step runs in two jobs and that every job sets itself up first, so moving steps between jobs passes it. Option C moves steps without measuring, which could just push the overrun into another job, as happened under #7387.\nQ2: The issue asks for steps to be moved unchanged, so moving stays the main approach. Sharding inside a step is the fallback, and only when a single step is too large to fit anywhere. That reuses the existing pattern from the heal step and the orchestrate-poll step, and keeps every job name, step name and `timeout-minutes`, so it stays within the issue's limits.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml jobs `tests-heal-plan-and-validation` (line 852), `tests-hooks-and-orchestrator` (line 501), `tests-promote-stall-and-review` (line 1209) and `tests-release-and-log-analysis` (line 1470); all have `timeout-minutes: 20`\n    - Steps in the source job after `Workflow failure heal contract and driver tests` (line 872), including `Plan decisions lint unit tests` (line 959), `Plan decisions advisory lint` (line 964), `Regression tests wired by the CI wiring guard (part 1)` (line 1062) and `(part 2)` (line 1121)\n    - tests/test_ci_job_split_contract.py, tests/test_ci_wires_every_test_file.py, docs/INVENTORY.md (if it lists step-to-job placement)\n  steps:\n    - In the implement sandbox, time each `run:` body of the source job's steps, and the step bodies of the three candidate destination jobs, by running their commands locally. Record the per-step seconds in the PR description as relative weights.\n    - Keep `Workflow failure heal contract and driver tests` where it is. It is already sharded, and #7387 tuned it.\n    - Move whole steps unchanged, keeping their names and bodies, starting with the heaviest of the steps after line 959. Put each one into the destination job with the lowest measured total, mainly `tests-hooks-and-orchestrator` and `tests-release-and-log-analysis`. Use `tests-promote-stall-and-review` only if the measurements show it has room.\n    - Stop when roughly 4-5 minutes (by measured share) has left the source job, and no destination's measured total is more than about 75% of its 20-minute budget (the `CI_BUDGET_JOB_WARN_RATIO` level, roughly 15 minutes).\n    - Add each moved step after the destination job's existing test steps. Keep every `if:`, `env:` and `continue-on-error:` unchanged (`Plan decisions advisory lint` keeps `continue-on-error: true`).\n    - Run tests/test_ci_job_split_contract.py, tests/test_ci_wires_every_test_file.py, tests/test_ci_poll_test_sharding.py and actionlint/yamllint on ci.yml.\n    - Add a changelog.d fragment. Do not touch timeout-minutes, job ids, step names, or `lint`'s `needs`.\n  replaces_acceptance_criterion: \"see the run's step timings\" is replaced by locally measured step durations, used as relative weights\n  equivalence_argument: Run 39230958248 timed the same step bodies the sandbox runs. Relative step cost is enough to choose which steps to move and where, and the budget-watch job checks the real per-job durations on the next push to main.\n  reversibility: Each move is a cut-and-paste of a step block in one file. Reverting the PR, or moving a block back, restores the old layout exactly. Budget-watch opens a new `ai:ci-budget` issue if a destination job later gets close to its timeout.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - The `Workflow failure heal contract and driver tests` step (ci.yml line 872) and the orchestrate-poll sharding (`CI_POLL_TEST_SHARDS`, partition `NR % total == n`, recorded per-shard exit codes) as reference patterns\n    - tests/test_ci_poll_test_sharding.py\n  steps:\n    - Use this only when one step's measured time, added to any destination job's total, would go past about 15 minutes.\n    - In that case, keep the step's name and job. Split its test modules into a fixed number of local background shards inside the same `run:` body. Fail the step if any shard fails or did not record an exit code, as the existing patterns do.\n    - Add a contract assertion that the shard split covers every module exactly once.\n  replaces_acceptance_criterion: \"move steps unchanged\" is relaxed only for a step that cannot fit anywhere unchanged\n  equivalence_argument: The same tests run under the same step name and the same job-level checks. Sharding only shortens wall-clock time, and the pattern is already proven in this file.\n  reversibility: Replace the sharded loop with the original sequential command list.",
+  "fingerprint": "984b17ae24273414428ac8ace3b6768d810ce99a74edb2bdb8078f80b9e4d058",
+  "lineage": {
+    "issue_number": 7690,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39235009573",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39235009573",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7690"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261019101401_21441d5151",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7690,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39235009573"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7690",
+  "timestamps": {
+    "created_at": "2026-10-19T10:14:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

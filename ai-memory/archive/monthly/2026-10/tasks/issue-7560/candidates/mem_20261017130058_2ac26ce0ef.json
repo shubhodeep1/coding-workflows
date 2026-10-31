@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7560,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7560\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7569\",\"pr_number\":7569,\"branch\":\"ai/issue-7560\",\"run_id\":\"39033114795\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39033114795\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/7560-ci-release-job-step-move.md\"]}",
+  "fingerprint": "9339bb8f157173731d6dbe461dbcc10e80d85390d488cc7f57b70a517fc210af",
+  "lineage": {
+    "issue_number": 7560,
+    "parent_ids": [],
+    "pr_number": 7569,
+    "run_id": "39033114795",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39033114795",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7569"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261017130058_2ac26ce0ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7560,
+    "level": "run",
+    "pr_number": 7569,
+    "run_id": "39033114795"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7560: https://github.com/shubhodeep1/coding-workflows/pull/7569",
+  "timestamps": {
+    "created_at": "2026-10-17T13:00:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

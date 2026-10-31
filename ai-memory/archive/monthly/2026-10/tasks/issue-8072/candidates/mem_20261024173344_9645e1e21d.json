@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8072,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8072\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8078\",\"pr_number\":8078,\"branch\":\"ai/issue-8072\",\"run_id\":\"40115315323\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40115315323\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/8072-orchestrate-poll-group-3-steps-to-group-1.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "9d962511374ed40701ec10a434f96f3493837fad8a7d01f4a5289fdd3453b3f9",
+  "lineage": {
+    "issue_number": 8072,
+    "parent_ids": [],
+    "pr_number": 8078,
+    "run_id": "40115315323",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40115315323",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8078"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261024173344_9645e1e21d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8072,
+    "level": "run",
+    "pr_number": 8078,
+    "run_id": "40115315323"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8072: https://github.com/shubhodeep1/coding-workflows/pull/8078",
+  "timestamps": {
+    "created_at": "2026-10-24T17:33:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

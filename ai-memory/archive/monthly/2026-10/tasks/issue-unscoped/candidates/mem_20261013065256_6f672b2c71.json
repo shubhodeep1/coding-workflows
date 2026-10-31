@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:667-692 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_PLAN_GRANT_FILE_SEGMENT_RE` accepts dotted directory names such as `scripts/v1.0` as exact file grants, allowing the grant to cover files beneath that directory.\n  WHY: Because `entry_matches` treats slashless entries as covering descendants, the proposed grant can approve a plan with broader scope than its listed file; severity was rated NIT by anthropic_claude-sonnet-5_5 and MAJOR by minimax_minimax-m3, openai_gpt-6-luna, and qwen_qwen3_7-plus, while google_gemini-3_1-flash-lite did not state a severity.\n- .github/workflows/plan.yml:2390-2398 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `plan.yml` PATCH can overwrite a concurrent issue-body edit because it does not re-read the issue body immediately before writing the grant.\n  WHY: A stale grant body can clobber a human or bot edit, and the hold-comment branch omits `pipeline_plan_grant_body_changed`, so the user-facing message can be wrong.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A plan that lists a directory or a glob, names more than 50 files, or belongs to an issue a person wrote without `files_touched` still waits for a human `/approved`.\"\n  expected_change_site: `scripts/files_touched_scope_guard.py` `_plan_grant_path` and matching tests\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `scripts/files_touched_scope_guard.py` accepts dotted directory names such as `scripts/v1.0`; matching test cases in `tests/test_files_touched_scope_guard.py::test_extract_plan_file_paths_keeps_exact_files_from_the_files_section` and `test_plan_gate_pipeline_plan_grant_holds_when_the_plan_cannot_be_granted` do not cover this case.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:about lines 679-692 | severity=low | confidence=[2]\n  PROBLEM: The last-segment test accepts dotted directory names such as `scripts/v1.0` as exact file grants.\n  WHY: `entry_matches` treats a slashless entry as a prefix for descendants, so the grant covers every file under that directory instead of only an exact file.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:around line 664, around line 689 | confidence=[4]\n  PROBLEM: The file-segment regex treats a dotted directory name such as `scripts/v1.0` as an exact grant.\n  WHY: `files_touched` entries are recursive, so files beneath the directory are granted as well.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/files_touched_scope_guard.py:685-693 | severity=high | confidence=[4]\n  PROBLEM: A slashless nested path whose last segment looks like it has an extension can be accepted as an exact file grant even when the segment is a directory.\n  WHY: The grant matcher covers descendants, so the grant can include unlisted files under the directory and the approval gate can approve that broader grant.\n- .github/workflows/plan.yml:2390-2398 | severity=low | confidence=[3]\n  PROBLEM: The `plan.yml` PATCH does not re-read the issue body before writing and can overwrite a concurrent edit with a stale grant body.\n  WHY: The poller detects body drift but `plan.yml` does not, and its hold-comment branch omits `pipeline_plan_grant_body_changed`.\n- Requirement: \"A plan that lists a directory or a glob, names more than 50 files, or belongs to an issue a person wrote without `files_touched` still waits for a human `/approved`.\"\n  Expected change site: `scripts/files_touched_scope_guard.py` `_plan_grant_path` and matching tests in `tests/test_files_touched_scope_guard.py::test_extract_plan_file_paths_keeps_exact_files_from_the_files_section` / `test_plan_gate_pipeline_plan_grant_holds_when_the_plan_cannot_be_granted`.\n  Evidence of absence: The implementation only filters segments without any `.` separator; `scripts/v1.0` still passes, and the cited tests do not cover dotted directory names.\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/files_touched_scope_guard.py:lines 667 and 685-692 | severity=high | confidence=[4]\n  PROBLEM: A slashless nested path with a suffix that looks like an extension, such as `scripts/v1.0`, is accepted as an exact file path even when it names a directory.\n  WHY: The proposed grant can cover descendants such as `scripts/v1.0/unlisted.py`, violating the stated behavior that directory plans hold without a grant.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/files_touched_scope_guard.py:685-692 | severity=high | confidence=[4]\n  PROBLEM: A slashless nested path whose last segment contains a dot, such as `scripts/v1.0` or `docs/2.0`, passes the file-segment regex even when it names a directory.\n  WHY: The grant can include everything beneath the directory, despite the PR description and agents fragment claiming the grant is exact.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0e01806f9a236b5dd25957a5c0c0c5abd4bbc890f75e51b9c91c0b7a630a81c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7303,
+    "run_id": "38356642097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38356642097",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013065256_6f672b2c71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7303,
+    "run_id": "38356642097"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T06:52:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

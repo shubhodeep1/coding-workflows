@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Option A matches the existing design. In `scripts/ai_engine.sh`, `claude_run` (lines 209-216) already says the CLI runs \"in the credential-free container of codex_isolated_exec.sh, never on the runner\". It falls back to Codex with exit 75 (`support_missing`) when `scripts/codex_isolated_exec.sh` is missing, and that file is not in this checkout. So A finishes the intended boundary without inventing a new one. B leaves Claude on a host where the token files and the authenticated Git remote can still be reached, which is the reported exposure. C only postpones the fix. Network isolation does not need a provider credential, so this is not a reason to escalate.\nQ2: Option A. Inside a sandbox that can only reach the provider relay, `WebFetch` gives a prompt-injected model a way to send data out, and `WebSearch` widens what the relay has to allow. Removing both keeps the relay narrow. The list exists in two places that must match: `scripts/ai_engine.sh:275` and `PROFILE_TOOLS[\"write\"]` in `scripts/claude_engine.py:168`. The comment at `ai_engine.sh:274` asks for them to be kept in sync.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are letters. Implementation notes for the planner, all inside the approved scope:\n- Target the integration branch `claude/clever-lamport-fefnrk` (exists at a4d9023cbc18).\n- Q1:A: add `scripts/codex_isolated_exec.sh` to that branch with the interface `claude_run` already calls:\n  - `run --engine claude --mode read-only|workspace --workdir --claude-models --claude-cli-version --claude-settings --claude-guard-hook --claude-instructions --claude-home [--hide-claude-md] [--root]`, plus `prepare --deps`.\n  - Container rules: no Git credentials, no `GH_TOKEN`, no OpenRouter key, no pool `tokens/` directory. The only network path is a host relay that reads `${CLAUDE_ENGINE_POOL_DIR}/tokens/<NAME>`.\n  - Model it on the existing isolation pattern in `scripts/clarify_isolated_run.sh`: container plus host broker, exit 75 when anything fails.\n  - Keep the Codex fallback (exit 75) for any isolation failure. Comments written by issue authors reach Claude only as untrusted prompt data.\n- Q2:A: remove `WebFetch` and `WebSearch` from both write-profile lists.\n- Tests: update `tests/test_ai_engine.py`, the one test file that references `WebFetch` / `codex_isolated_exec`. Add contract tests for:\n  - the tool list being the same in both files;\n  - no credentials or token paths being passed into the container;\n  - fallback with exit 75 when the helper is missing.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "1bff60b48204d690ab3cad26453c2c6f71cf8f50819d244cfe38c942c9e99e1e",
+  "lineage": {
+    "issue_number": 6494,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37416680298",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37416680298",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6494"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006051200_e1a8bfa7c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6494,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37416680298"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6494",
+  "timestamps": {
+    "created_at": "2026-10-06T05:12:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

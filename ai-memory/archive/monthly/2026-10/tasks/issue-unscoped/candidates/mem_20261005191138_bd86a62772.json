@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrator_judges_claude_engine.py:595-601 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The `label_cleared` test cases expect a reason in stdout and a cleared latch, but call only the read-only `_judge_isolation_should_run` predicate.\n  WHY: Those assertions fail because the predicate neither prints `reason=label_cleared` nor clears state; reviewers disagreed on severity (BLOCKER vs MAJOR), so the highest severity is used.\n- scripts/orchestrate_poll_process.sh:_judge_isolation_should_run, fresh issue fetch projection `--jq '{labels: [.labels[]?.name]}'` | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The optional iterator turns a missing or null `labels` field into `{\"labels\":[]}`, which the subsequent validation accepts as a valid label list.\n  WHY: A malformed but valid-JSON issue response can be treated as confirmation that `ai:needs-human` was removed, clearing the isolation latch and allowing the judge to run instead of deferring.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR creates a new changelog fragment at `changelog.d/6399-judge-isolation-latch-label-fetch.md`; all other changelog fragments are registered in `.ai/.workspace_source_manifest.txt`.\n  expected_change_site: `.ai/.workspace_source_manifest.txt`\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The PR diff adds `changelog.d/6358-poller-judges-isolated-sandbox.md` but does not add `changelog.d/6399-judge-isolation-latch-label-fetch.md`; every other fragment in that neighborhood is listed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrator_judges_claude_engine.py | severity=BLOCKER | confidence=5\n  PROBLEM: Two assertions in the `label_cleared` parameter cases expect `reason=label_cleared` in stdout and a cleared latch, but the test calls only `_judge_isolation_should_run`, which is read-only.\n  WHY: For the pair ([] or null snapshot, {\"labels\":[]} live, escalated=true), `_judge_isolation_should_run` returns 0 without emitting any \"reason=\" line, so (1) assert \"reason=label_cleared\" in result.stdout raises AssertionError, and (2) assert (WAVE_JUDGE in state) is False raises AssertionError because the latch was never cleared.\n- TASK_GAP\n  Requirement: The PR creates a new changelog fragment at changelog.d/6399-judge-isolation-latch-label-fetch.md. All other changelog fragments are tracked in the workspace source manifest.\n  Expected change site: .ai/.workspace_source_manifest.txt\n  Evidence of absence: The PR diff for .ai/.workspace_source_manifest.txt adds changelog.d/6358-poller-judges-isolated-sandbox.md (from a prior issue) but does not add changelog.d/6399-judge-isolation-latch-label-fetch.md, which was created in this PR. The manifest habitually lists every changelog.d/ fragment; the new one is missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrator_judges_claude_engine.py | severity=MAJOR | confidence=5\n  PROBLEM: The `label_cleared` parameter cases expect `WAVE_JUDGE` to be absent from state, but the test calls only `_judge_isolation_should_run` and never calls `_clear_judge_isolation_state`.\n  WHY: The read-only gate does not mutate `judge_isolation_state`; pytest will report `AssertionError` for the `label_cleared` parameter rows.\n- TASK_GAP\n  Requirement: The PR creates `changelog.d/6399-judge-isolation-latch-label-fetch.md` to document the security fix; every other `changelog.d/*.md` fragment in the repository is registered in `.ai/.workspace_source_manifest.txt` so that `scripts/assemble_changelog.py` and the workspace-init copy step see it (CLAUDE.md \u00a720).\n  Expected change site: `.ai/.workspace_source_manifest.txt` \u2014 add a line `changelog.d/6399-judge-isolation-latch-label-fetch.md` immediately after `changelog.d/6359-rb-judge-atomic-transfer.md` (and before `changelog.d/claude-branch-push-pr-grace-window.md`, which sorts next alphabetically).\n  Evidence of absence: The PR diff's hunk for `.ai/.workspace_source_manifest.txt` only adds `changelog.d/6358-poller-judges-isolated-sandbox.md` (lines 219-225). The new `changelog.d/6399-judge-isolation-latch-label-fetch.md` is created by the PR but no corresponding manifest line is added. Every other fragment in that neighborhood of the manifest is listed, so this is a clear omission, not a convention gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh | severity=MAJOR | confidence=4\n  PROBLEM: The optional iterator converts a response with a missing or null `labels` field into `{\"labels\":[]}`. The subsequent validation accepts that as a valid label list.\n  WHY: A malformed but valid-JSON issue response is treated as confirmation that `ai:needs-human` was removed. The isolation latch is cleared and the judge is allowed to run instead of deferring.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrator_judges_claude_engine.py, lines 595-601 | severity=BLOCKER | confidence=5\n  PROBLEM: The parameterized test expects `reason=label_cleared` in stdout and expects the latch to be cleared from state, but `_judge_isolation_should_run` is a read-only predicate.\n  WHY: The helper returns 0 without printing that reason or modifying state, so both assertions fail for the `label_cleared` cases.\n- TASK_GAP\n  Requirement: The PR creates a new changelog fragment at `changelog.d/6399-judge-isolation-latch-label-fetch.md` to document the security fix.\n  Expected change site: `.ai/.workspace_source_manifest.txt` should include an entry for `changelog.d/6399-judge-isolation-latch-label-fetch.md` in numerical order (after `changelog.d/6359-rb-judge-atomic-transfer.md` and before `changelog.d/claude-branch-push-pr-grace-window.md`).\n  Evidence of absence: The PR diff shows the workspace manifest is updated to add `changelog.d/6358-poller-judges-isolated-sandbox.md` (from a previous issue), but no corresponding entry is added for the new `changelog.d/6399-judge-isolation-latch-label-fetch.md` fragment created in this PR. All other changelog fragments in the `changelog.d/` directory are listed in the workspace manifest.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d3851746fd6810fa710d92752e8732ce379a367c2cac5899e39a92a591f0d716",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6405,
+    "run_id": "37358003604",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37358003604",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005191138_bd86a62772",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6405,
+    "run_id": "37358003604"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T19:11:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

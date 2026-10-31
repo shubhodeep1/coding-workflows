@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:704-719 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The parser recognizes only one wrapper around `cd` or `pushd`, so nested wrappers such as `command builtin cd` can leave the guard tracking the original checkout when Bash changes directories through `CDPATH`.\n  WHY: A following `git push` or commit can be evaluated against the wrong repository instead of being blocked; severity disagreement: openai_gpt-6-luna rated this BLOCKER and qwen_qwen3_7-plus rated it MAJOR, so the higher severity is used.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:704-719 | severity=critical | confidence=5\n  PROBLEM: The parser recognizes only one wrapper around cd or pushd. For example, `command builtin cd wt` is not recognized because the `command` branch stops at `builtin`, which is not a directory command.\n  WHY: After `export CDPATH=<parent>; command builtin cd wt && git push origin HEAD:<branch>`, Bash can enter the redirected worktree, but the guard leaves its directory set to the original checkout. The push is then judged against the wrong repository instead of being blocked. The same parser is present in the template twin.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py:704-719 | severity=high | confidence=5\n  PROBLEM: The helper recognizes only one wrapper around cd/pushd (either command or builtin), not nested chains. For command builtin cd .git or builtin command cd .git, the function returns (\"\", []) because after consuming the first wrapper's options, it finds the second wrapper name (builtin or command) which is not in _CDPATH_DIRECTORY_COMMANDS.\n  WHY: With CDPATH set, Bash executes nested wrappers and applies CDPATH redirection. For example, CDPATH=.. command builtin cd .git enters the parent repository's .git through CDPATH, but the guard leaves its tracked directory unchanged and evaluates a following git push or commit against the original checkout instead of blocking it. This is the exact wrong-repository bypass the PR is designed to prevent. Note: AD-7 in the progress log states the PR covers builtin and command wrappers \"for the CDPATH rule only\" and leaves \"wrapper prefixes in general\" to #6038. If nested wrappers are considered \"wrapper prefixes in general,\" this may be intentionally out of scope; otherwise it is a real bypass of the security fix.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "15dfabe9c3312527f2b217acab089d693abf9a55d389c90ba9352356c787213b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6113,
+    "run_id": "37095602079",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37095602079",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003043101_4eb8cbe4fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6113,
+    "run_id": "37095602079"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T04:31:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The claim that every step from \"Detect smoke test and tune LLM settings\" onward is gated on SKIP_PLAN is over-broad, because six `if: failure() || cancelled()` steps in `.github/workflows/plan.yml:3178-3288` have no SKIP_PLAN condition. The six are \"Clean up progress comment on failure\", \"Capture planning failure context\", \"Revert label on planning failure\", \"Comment on issue failure\", \"Telegram failure notification\" and \"Exit safely\".\n  WHY: This is a documentation inaccuracy only, and the workflow behaviour is unchanged. The reviewers rated it NIT, which is mapped here to low. Once the fragment is folded into agents.md, it would misdescribe which steps run on a held run that fails or is cancelled.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=NIT | confidence=3\n  PROBLEM: The list of ungated steps is incomplete. Six failure-handler steps in `.github/workflows/plan.yml` (lines 3178-3287) use `if: failure() || cancelled()` with no SKIP_PLAN condition, yet the fragment says everything from \"Detect smoke test...\" onward is gated.\n  WHY: This is a documentation inaccuracy only, and the workflow behaviour is correct. After folding into agents.md, readers diagnosing a failed or cancelled held run would be misled.\n- HARDENING_SUGGESTIONS: add a clause saying the `failure() || cancelled()` handler steps are not gated but run only on failure or cancellation (about 1 line changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=NIT | confidence=4\n  PROBLEM: The fragment overstates SKIP_PLAN gating. The steps \"Clean up progress comment on failure\", \"Capture planning failure context\", \"Revert label on planning failure\", \"Comment on issue failure\", \"Telegram failure notification\" and \"Exit safely\" use `if: failure() || cancelled()` without checking SKIP_PLAN (`.github/workflows/plan.yml:3178-3288`).\n  WHY: \"Fetch issue metadata\" is listed as still running on a held plan, and its failure can activate those ungated handlers. The fragment therefore misdescribes which steps may run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/8151-plan-label-missing-hold.md:2 | severity=NIT | confidence=4\n  PROBLEM: The claim is still over-broad after this run's edit. Six steps have no `env.SKIP_PLAN != 'true'` condition because they are gated only on `if: failure() || cancelled()`: \"Clean up progress comment on failure\" (`.github/workflows/plan.yml:3178-3179`), \"Capture planning failure context\" (3190-3191), \"Revert label on planning failure\" (3204-3205), \"Comment on issue failure\" (3235-3236), \"Telegram failure notification\" (3252-3253) and \"Exit safely\" (3286-3287). The adjacent memory steps at plan.yml:3122-3123 and 3149-3150 do carry SKIP_PLAN.\n  WHY: If a held run is cancelled or times out, \"Comment on issue failure\" (plan.yml:3235-3250) posts a failure comment and \"Revert label on planning failure\" (plan.yml:3204-3233) re-reads labels. This is a documentation accuracy defect only, fixable by naming these steps in the fragment.\n- HARDENING_SUGGESTIONS: none. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f431f952974d10e92086f09dd1d2be4377a742ef18a72310fb82774b309dc29a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8170,
+    "run_id": "40248820594",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40248820594",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026003635_46f4e84b32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8170,
+    "run_id": "40248820594"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T00:36:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

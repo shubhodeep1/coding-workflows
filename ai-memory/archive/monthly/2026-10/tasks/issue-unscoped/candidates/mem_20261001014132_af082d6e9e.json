@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/scripts/check_in_status.py:255-271 | severity=low | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The PR description says reusing the comments listing adds no API call, but a blocking-label path without a hold fetches the listing and returns without reusing it.\n  WHY: Each check-in for that case adds one or more paginated REST requests compared with the previous behavior, so the PR description understates API usage and can mislead rate-limit budgeting.\n- changelog.d/5667-checker-waits-on-held-head.md:line 12, table row \"Extra GitHub API calls, `claude/implement-plan-*` PR with a blocking label and no hold\" | severity=low | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The PR description says reusing the comments listing adds no API call, but a blocking-label path without a hold now pays one paginated comments REST read per check-in that the previous early-return path skipped.\n  WHY: This is a documentation-precision gap in the PR description that could mislead operators who read only the PR description without the changelog.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description's `Summary` section claims \"The comment listing is read once and reused for the hand-off check, so no API call is added\" without qualifying the case where a `claude/implement-plan-*` PR has a blocking label and no hold \u2014 that path now reads the comments listing before the blocking-label return and never reuses it, costing 1 paginated REST call per check-in.\n  expected_change_site: PR description (top-level `Summary`)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The current Summary has no qualification; the changelog row for the blocking-label-no-hold path (`changelog.d/5667-checker-waits-on-held-head.md:9-10`) states \"1 per 100 PR comments per check-in (the hold must be ruled out before the label hands the PR back; this path used to return before reading comments)\", and `test_blocked_fixer_head_without_a_hold_reads_comments_once` pins that API call.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR description's `Summary` section claims \"The comment listing is read once and reused for the hand-off check, so no API call is added\" without qualifying the case where a `claude/implement-plan-*` PR has a blocking label and no hold \u2014 that path now reads the comments listing before the blocking-label return and never reuses it, costing 1 paginated REST call per check-in. The changelog at `changelog.d/5667-checker-waits-on-held-head.md:9-10` documents the full per-path budget correctly; the PR description was not brought in line.\n  Expected change site: PR description (top-level `Summary`).\n  Evidence of absence: The current `Summary` reads \"...The comment listing is read once and reused for the hand-off check, so no API call is added.\" with no qualification. The changelog's row for the blocking-label-no-hold path (`changelog.d/5667-checker-waits-on-held-head.md:9-10`) reads \"1 per 100 PR comments per check-in (the hold must be ruled out before the label hands the PR back; this path used to return before reading comments)\", which contradicts the unqualified PR-description claim. The `test_blocked_fixer_head_without_a_hold_reads_comments_once` test pins that exact API call.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/scripts/check_in_status.py:255-271 | severity=low | confidence=5\n  PROBLEM: The PR description says reusing the comments listing means \u201cno API call is added.\u201d For an open `claude/implement-plan-*` PR with a blocking label but no hold, this code fetches the comments listing and then returns at the blocking-label check without reusing it.\n  WHY: Each check-in for that case adds one or more paginated REST requests compared with the previous behavior, so the PR description understates API usage and can mislead rate-limit budgeting.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/5667-checker-waits-on-held-head.md:line 12, table row \"Extra GitHub API calls, `claude/implement-plan-*` PR with a blocking label and no hold\" | severity=low | confidence=5\n  PROBLEM: The PR description (Evidence step 5, final bullet) says \"The comment listing is read once and reused for the hand-off check, so no API call is added.\" This is imprecise for the narrow case the changelog itself documents: a `claude/implement-plan-*` PR with a blocking label and no hold now pays one paginated comments REST read per check-in that the previous early-return path skipped.\n  WHY: No runtime failure. The verdict is correct (`state: blocked`, `done: true`). This is a documentation-precision gap in the PR description that could mislead operators who read only the PR description without the changelog.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b633754255e54e23bb4bd7f00785fb0b3779b7db7eaf3a167909887b2568f5ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5716,
+    "run_id": "36799721438",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36799721438",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001014132_af082d6e9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5716,
+    "run_id": "36799721438"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T01:41:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

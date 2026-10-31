@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "> **Q1: Where should the step timings and job durations come from?**\n>\n> Choices:\n> - **A** \u2014 The answer pastes them: the per-step durations of `tests-heal-plan-and-validation` and the total durations of `static-checks`, `tests-hooks-and-orchestrator`, `tests-promote-stall-and-review` and `tests-release-and-log-analysis` in run 40626853481 (from `GET actions/runs/40626853481/jobs`). The plan then picks the steps and the target from those numbers. (RECOMMENDED)\n> - **B** \u2014 Go without timings and guess from step size. The two biggest bodies, \"Release CI gate tests (stubbed gh; both release workflows)\" and \"Regression tests wired by the CI wiring guard (part 1)\", would move to `tests-hooks-and-orchestrator`. This can repeat the #7387 overrun.\n> - **C** \u2014 Leave out the heal step. It was already sharded under #7387, so only steps other than \"Workflow failure heal contract and driver tests\" are candidates. Timings still come from the answer as in A.\n>\n> Reply: `Q1: A`\n> **Q2: What if no single job can take the moved steps and stay under the 0.75 budget-watch warning (15 of 20 minutes)?**\n>\n> Choices:\n> - **A** \u2014 Split the moved steps across two or more existing worker jobs, so every job stays under 15 minutes. Job names, step names and `timeout-minutes` stay unchanged. (RECOMMENDED)\n> - **B** \u2014 Move them all into the one job with the most headroom, even if that job lands above the 15-minute warning line. That may open another budget-watch issue.\n> - **C** \u2014 Use only the four `tests-*` jobs, never `static-checks` (15-minute timeout) or the `orchestrate-poll` matrix (a step there runs once per group unless it is gated on the group index). If that is still not enough, split as in A.\n>\n> Reply: `Q2: A`",
+  "fingerprint": "c3f211352def09a6cca89f26c19b003e565456d9e77aeb145fd0205167c46cd6",
+  "lineage": {
+    "issue_number": 8246,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40628315098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40628315098",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261028035110_b03bc4ac99",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8246,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40628315098"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8246 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-28T03:51:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

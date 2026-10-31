@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:829 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The credential preflight checks only the first 100 open `ai:engine-claude` issues, while standalone stall recovery can scan up to 1,000 issues and select a Claude-labeled issue beyond that limit.\n  WHY: The preflight may leave `any_claude=false`, so the Claude CLI and account pool are not prepared when recovery selects that issue; severity ratings disagreed (BLOCKER, MAJOR), so the highest rating is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_poll.yml: Line 829 | severity=BLOCKER | confidence=5\n  PROBLEM: The credential preflight examines only the first 100 open issues labeled ai:engine-claude, while the standalone stall recovery logic scans up to 1,000 issues.\n  WHY: If the chosen standalone stall judge issue is outside the first 100 results returned by the gh issue list, the preflight pre-condition check incorrectly leaves any_claude=false. The standalone stall recovery logic can still independently select that issue and identify its judge engine as Claude (based on its labels), but because the credential preflight did not fetch the Claude pool, the judge unexpectedly falls back to the OpenCode path, ignoring the engine label on the issue and violating the engine selection contract.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/orchestrate_poll.yml: 829; compared with scripts/orchestrate_poll_process.sh:17454-17506 | severity=MAJOR | confidence=5\n  PROBLEM: The credential preflight lists at most 100 open `ai:engine-claude` issues, but standalone recovery scans up to 1,000 issues for each phase label.\n  WHY: A stalled standalone issue beyond the first 100 Claude-labeled issues can still be selected by the recovery scan. The preflight then leaves `any_claude=false`, so the Claude CLI and pool are not prepared; when the judge resolves that issue\u2019s labels to Claude, it falls back to OpenCode instead of using the selected engine.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/orchestrate_poll.yml: line 829 (`--limit 100` in the `gh issue list` call within \"Resolve AI engine\" step) | severity=MAJOR | confidence=5\n  PROBLEM: The credential preflight lists at most 100 open `ai:engine-claude` issues, but `run_standalone_stall_recovery` in `scripts/orchestrate_poll_process.sh:17456` scans up to 1,000 open issues per phase label (`--limit 1000`).\n  WHY: When more than 100 open issues carry `ai:engine-claude`, the preflight's 100-result window is a strict subset of the standalone recovery's 1,000-result window. The preflight answers \"no Claude needed\" but the downstream scan answers \"this issue wants Claude\" \u2014 the judge then falls back to OpenCode silently, defeating the purpose of the `ai:engine-claude` label on that issue. The fix is to raise `--limit` to at least 1000 to match the standalone recovery scan, or to paginate.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a3e536ed2ef7b89805d59f956be63c08cae7701641c0ab9836f8a04cf13c7d6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6576,
+    "run_id": "37903994026",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37903994026",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009084804_d0e9eca976",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6576,
+    "run_id": "37903994026"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T08:48:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` at `66707437b53aa54446d661c8f409795577d13ead`. Integration branch metadata is empty, so there is no branch mismatch. The `/answer [auto-answered-by-clarify]` response confirms that no clarification question remains.\n\nScope-mode: Selective Expansion  \nReuse-audit: extends `.claude/hooks/pr_merge_status_guard.py`  \nScope-mode justification: The fix needs both effective-repository resolution and push-destination parsing; doing only one leaves a missed-block path. Covering both within the existing hook and tests follows \u00a76 Core Priorities in `unattended_system_instructions.md`: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed. No new dependency or external interface is needed. Budget: \u226460 minutes.\n\n## Automation and files\n\n- **Existing code only:** extend the existing PreToolUse hook; add no script, scheduler, supervisor, or DB operation. The Bash hook is already wired in `.claude/settings.json`; leave that trigger unchanged.\n- **Files likely to change:** `.claude/hooks/pr_merge_status_guard.py` and its byte-identical `workflow-templates/.claude/hooks/pr_merge_status_guard.py` twin; `tests/test_pr_merge_status_guard.py`; `CLAUDE.md` \u00a721; one `changelog.d/5144-*.md` fragment for the observable security fix. `workflow-templates/CLAUDE.md` is a symlink, not a separate document to edit. The existing CI step already runs the guard tests.\n\n## Implementation\n\n1. Extend the hook\u2019s existing `_shell_segments`, `git_subcommands`, and `_evaluate_bash` path to evaluate **each guarded git invocation**. Track a resolvable preceding `cd`, then apply that invocation\u2019s `git -C` and `GIT_DIR`/`GIT_WORK_TREE` or git-global directory options with Git\u2019s path-ordering semantics. Run branch, default-branch, repository-slug, and ancestry checks against that effective repository\u2014not the hook checkout. `git -C` affects the interpretation of git-directory and work-tree paths. ([git-scm.com](https://git-scm.com/docs/git.html?utm_source=openai))\n2. For a push with an explicit branch refspec, judge the **destination branch** and the commit identified by its source. In particular, `HEAD:<open-PR-branch>` must work from detached HEAD; `<src>:<merged-branch>` must not inherit an unrelated checkout branch\u2019s verdict. Preserve the existing behavior for a resolvable push without an explicit destination. Git defines refspecs as `[+]<src>[:<dst>]`. ([git-scm.com](https://git-scm.com/docs/git-push/2.53.0?utm_source=openai))\n3. Reuse `query_pull_requests`, `blocking_pull_request`, the history fallback, and the existing cache. Memoize verdicts within one Bash command by `(repository slug, judged branch)` so repeated targets do not duplicate REST reads; retain live re-verification of a cached *block*. The existing REST listing supports `state=all` and `head=<owner>:<branch>`, answering the merged- and open-PR questions together. ([docs.github.com](https://docs.github.com/en/rest/pulls/pulls?apiVersion=latest&utm_source=openai))\n4. When a command\u2019s directory or ref cannot be resolved safely, use the current checkout-based behavior for that invocation **and emit a warning**. Do not execute command text to discover its directory.\n\n## Decisions\n\n### D1 \u2014 Judge invocations, not the session checkout\n- **Chosen:** Resolve repository context and push target per guarded git invocation.\n- **Alternatives considered:** Keep the single checkout-wide check; resolve only `cd`.\n- **Why:** Neither alternative covers both the observed false block and the missed-block case.\n\n### D2 \u2014 Preserve uncertain-command behavior visibly\n- **Chosen:** Fall back to the existing check with a warning for unresolvable directories; retain the hook\u2019s existing API-unavailable handling.\n- **Alternatives considered:** Silently allow; block every uncertain command.\n- **Why:** This meets the issue\u2019s fallback requirement without making ordinary worktrees unusable.\n\n## Security considerations\n\nThe Bash tool input, path tokens, refspecs, and PR responses cross trust boundaries. Parse them as data; never pass the command through a shell or use an unverified path as an authorization signal. An attacker could disguise a merged-branch push behind `cd`, `-C`, an environment prefix, or a detached-HEAD refspec; tests must exercise those forms. Preserve the existing user-credentialed, read-only PR lookup and API-write confirmation guard. No endpoint, credential, or GitHub write is added.\n\n## Risks and edge cases\n\n- Shell constructs whose execution order cannot be established, missing/inaccessible directories, and ambiguous refspecs must not silently produce an *allow* based on the wrong repository.\n- A source branch different from `HEAD`, multiple guarded commands or push targets, cached blocks followed by a newly opened PR, and API failure need distinct tests.\n- **Ref conflict:** issue comments describe substantial work on a Claude project branch, but the planning checkout on `main` still has the checkout-wide `_evaluate_bash` implementation. Treat those comments as historical context, not code present at this ref; compare the implementation branch before editing to avoid duplicating landed work. The separate `case`-arm gap is described as deferred to #6038 and is not part of this plan.\n\n## Verification and self-check\n\nAdd focused parser and end-to-end scratch-worktree tests for all four acceptance cases, plus detached HEAD, explicit source, repeated-target cache, and warning/fallback behavior. Run the repository\u2019s pinned Python tooling with `PYTHONDONTWRITEBYTECODE=1`: guard tests first, then relevant hook/guardrail tests and lint. Verify twin byte parity and the final diff; do not claim a check passed before running it.\n\nAssumption: this plan targets the supplied `main` planning ref, not the unverified state of the earlier project branch. Missing context: no live PR or branch-head state was supplied or checked.\n\nPLAN_SELF_CHECK: WARNING: Earlier Claude-branch progress may overlap this plan; reconcile it against the implementation ref before editing.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "144d9a5806cedbcca29c00a58d94655f8b0b9af754962a9ec031dae7da90e4a9",
+  "lineage": {
+    "issue_number": 5144,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37101436531",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37101436531",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5144"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261003060326_5a238e9501",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 5144,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37101436531"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #5144",
+  "timestamps": {
+    "created_at": "2026-10-03T06:03:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

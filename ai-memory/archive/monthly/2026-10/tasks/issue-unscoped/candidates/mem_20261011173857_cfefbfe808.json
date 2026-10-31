@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1651-1657 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The per-shard cap of 20 FAIL annotations can exceed GitHub\u2019s rendered error-annotation limit, leaving some failing test names absent from the checks UI.\n  WHY: GitHub renders at most 10 error annotations per step, while the remaining FAIL lines are still available in the raw job log; both reviewers rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml\n  Line or code reference: lines 1651-1657 (identical in mark-stable.yml:398-404 and test-and-mark-stable.yml:4866-4872)\n  Problem: The 20-line FAIL cap can exceed GitHub's per-step rendered-annotation summary. If a shard has more than the rendered threshold of failing tests, the trailing FAIL annotations are absent from the checks UI summary even though every line is preserved in the raw job log.\n  Why it fails at runtime: A failing shard with, say, 15 failing tests would render all 15 today (within the typical 10-20 per-step UI limit), but a flagrant regression with 30 failures would only surface the first 20 in annotations; triage and humans see 20 names and have to scroll the raw log for the rest. The cap is a deliberate trade-off, the data is not lost, and the changelog documents the bound.\n  severity=NIT\n  confidence=3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml\n  Line or code reference: 1651-1657 (identical in .github/workflows/mark-stable.yml:398-404 and .github/workflows/test-and-mark-stable.yml:4866-4872)\n  Problem: The per-shard FAIL annotation cap is 20, but GitHub renders at most 10 error annotations per step. With one failing shard emitting 20 annotations (the `test_fail_annotations_are_capped` case) or multiple failing shards, annotations 11+ are dropped from the rendered checks UI, so some failing test names never appear in annotations \u2014 the exact symptom the PR was written to fix (issue #6885's triage could not see failing test names).\n  Why it fails at runtime: A shard (or set of shards) with more than 10 failing tests yields only the first 10 rendered error annotations; later `::error::orchestrate-poll shard N: FAIL ...` lines remain in the raw job log but are not rendered. The raw-log text still carries them, so triage's log tail does see them \u2014 impact is limited to the rendered-annotation surface.\n  severity=NIT\n  confidence=3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5fe25a47e4163d79fdc3ec96003e0258fba27ee1379354f9891bda061974acf6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6896,
+    "run_id": "38159477151",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38159477151",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011173857_cfefbfe808",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6896,
+    "run_id": "38159477151"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T17:38:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/audit-plans.md:1, 103, 126-127 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5_2]\n  PROBLEM: The root `audit-plans.md` copy differs from its workflow-template twin, causing the byte-for-byte parity test to fail.\n  WHY: `tests/test_audit_plans_command.py:30` asserts equality between the copies; the mismatch fails CI and blocks the aggregate lint check.\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna]\n  PROBLEM: The byte-for-byte parity assertion fails because `.claude/commands/audit-plans.md` differs from `workflow-templates/.claude/commands/audit-plans.md`.\n  WHY: The failure blocks `tests-hooks-and-orchestrator` and the aggregate lint check.\n- scripts/summarize_unselected_runs.py:492, 761-773 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: If the Claude time budget expires while fetching or processing a run's logs, Claude is still called with a non-positive remaining timeout, and the resulting exception skips the run instead of falling back to OpenRouter.\n  WHY: The available OpenRouter summarizer is not used for that run, which is abandoned and counted as a summary error.\n- scripts/security_audit.sh:95-98, 1302-1303 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: When Claude's stderr file is exactly 65,538 bytes, `tail -c 65538` forwards the whole file, but the sanitizer treats it as truncated and discards its first line.\n  WHY: If that line contains the only provider status, it is lost and the audit reports `provider=unknown`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/security_audit.sh:1302-1303 | severity=low | confidence=[2]\n  PROBLEM: When Claude's stderr file is exactly 65,538 bytes, `tail -c 65538` forwards the whole file, but the sanitizer discards its complete first line.\n  WHY: If that line contains the only provider error classification, the audit reports `provider=unknown`; the reviewer notes this is an unlikely diagnostic edge case.\n- .claude/commands/audit-plans.md:103 (and 126-127) | severity=critical | confidence=[5]\n  PROBLEM: The root command file differs from its workflow-template twin.\n  WHY: The byte-for-byte comparison fails, failing tests-hooks-and-orchestrator and the aggregate lint check-run.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_audit_plans_command.py:lines 29-30, test_template_parity | severity=critical | confidence=[5]\n  PROBLEM: The byte-for-byte parity assertion fails because `.claude/commands/audit-plans.md` differs from `workflow-templates/.claude/commands/audit-plans.md`.\n  WHY: The assertion failure makes `tests-hooks-and-orchestrator` fail and blocks the aggregate lint check-run.\n- scripts/summarize_unselected_runs.py:lines 761-773 | severity=low | confidence=[4]\n  PROBLEM: If `claude_deadline` expires while fetching or extracting a run log archive, Claude is called with a timeout clamped to one second; its timeout exception is caught and the run is skipped without falling back to OpenRouter.\n  WHY: The run is counted as a summary error even though the OpenRouter summarizer is available.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=[5]\n  PROBLEM: The byte-for-byte parity assertion fails for `.claude/commands/audit-plans.md` and `workflow-templates/.claude/commands/audit-plans.md`.\n  WHY: CI run 37254616959 reports the assertion failing in `tests-hooks-and-orchestrator`, causing the job and aggregate `lint` check to fail.\n- scripts/summarize_unselected_runs.py:761-773; timeout clamp at 492 | severity=low | confidence=[4]\n  PROBLEM: If the Claude time budget expires while fetching or processing a run's logs, the code still calls Claude with a non-positive remaining timeout; the summarizer clamps it to one second and the exception handler skips the run instead of falling back to OpenRouter.\n  WHY: The run is abandoned even when the OpenRouter summarizer is available.\n- scripts/security_audit.sh:1302-1303; sanitizer at 95-98 | severity=low | confidence=[4]\n  PROBLEM: When Claude's stderr file is exactly 65,538 bytes, `tail -c 65538` forwards the whole file, but the sanitizer treats that size as truncated and discards its first line.\n  WHY: If the only provider status is on that first line, it is discarded and the audit reports `provider=unknown`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/audit-plans.md: line 1, line 103, line 126, line 127 \u2014 compare with workflow-templates/.claude/commands/audit-plans.md at the same lines | severity=critical | confidence=[5]\n  PROBLEM: The root copy of `audit-plans.md` has stale Phase 5c wording compared with the template copy.\n  WHY: `tests/test_audit_plans_command.py:29-30` asserts byte-for-byte equality; the mismatch fails the test and blocks the PR from merging.\n- scripts/summarize_unselected_runs.py: lines 761-773 | severity=low | confidence=[4]\n  PROBLEM: If `claude_deadline` expires during log archive fetching, Claude is still called with a negative remaining timeout, clamped to one second; the exception handler skips the run instead of reaching the OpenRouter fallback.\n  WHY: The run is abandoned and counted as a summary error instead of using OpenRouter.\n- scripts/security_audit.sh: line 1303 \u2014 `tail -c 65538 -- \"$audit_claude_stderr_file\" >&2`; sanitizer at lines 95-98 (`if length > 65537: content = content.partition(b\"\\n\")[2]`) | severity=low | confidence=[3]\n  PROBLEM: If the original Claude stderr file is exactly 65,538 bytes, `tail -c 65538` outputs the full file, but the sanitizer discards its complete first line.\n  WHY: If that line contains the only provider status, it is discarded and the failure is reported with `provider=unknown`; this is an unlikely diagnostic edge case.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "68f7609d257355c3b1627a9e58bf0174ff0fc336e9e502647cf454e6ad801be6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37254617192",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37254617192",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005030358_1bede9519c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37254617192"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T03:03:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

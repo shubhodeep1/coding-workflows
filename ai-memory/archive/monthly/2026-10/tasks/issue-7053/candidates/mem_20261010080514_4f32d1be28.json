@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7053,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7053\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7057\",\"pr_number\":7057,\"branch\":\"ai/issue-7053\",\"run_id\":\"38035543763\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38035543763\",\"changed_files\":[\"agents.md\",\"changelog.d/7053-merge-guard-live-parity-operator-step.md\"]}",
+  "fingerprint": "42531c7340d175305959b252ca586b3e2735f3cb3d94f7aa5acd9c93d04c15a2",
+  "lineage": {
+    "issue_number": 7053,
+    "parent_ids": [],
+    "pr_number": 7057,
+    "run_id": "38035543763",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38035543763",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7057"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261010080514_4f32d1be28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7053,
+    "level": "run",
+    "pr_number": 7057,
+    "run_id": "38035543763"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7053: https://github.com/shubhodeep1/coding-workflows/pull/7057",
+  "timestamps": {
+    "created_at": "2026-10-10T08:05:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: Every poller judge picks its engine at one place, `poller_judge_isolated` in `scripts/orchestrate_poll_process.sh` (lines 208 and 211). It currently passes only the tracking issue's labels, so an `ai:codex` label on the judged issue is ignored. That bug affects every per-issue judge, not only the standalone stall judge, so A would leave the managed stall judge and `RB_JUDGE` open to the same bypass. C would quietly move sub-issues from wave 2 onward off Claude, because only the tracking and wave-1 issues carry `ai:engine-claude`. B closes the gap without that regression: it combines the two label sets and lets `ai:codex` win, the same rule `engine_label_create_args` (line 5716) already uses.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/orchestrate_poll_process.sh: `poller_judge_isolated` (lines 196-216), which sets `AI_ENGINE_LABELS=\"${TRACKING_LABELS:-[]}\"` on lines 208 and 211.\n    - scripts/orchestrate_poll_process.sh: `engine_label_create_args` (lines 5712-5721), the existing rule where `ai:codex` wins over `ai:engine-claude`.\n    - scripts/ai_engine.sh: `ai_engine_for_role`, which reads `AI_ENGINE_LABELS`.\n    - The places that call `poller_judge_isolated` for the roles `STALL_JUDGE` (managed and standalone), `RB_JUDGE`, `WAVE_JUDGE`, `INTEGRATION_JUDGE` and `SECURITY_JUDGE`.\n  steps:\n    - Add a way for callers to pass the judged issue's labels to `poller_judge_isolated`, for example a new optional environment variable or a 6th argument with a name that does not clash with anything existing. Unset means no per-issue labels were given.\n    - Standalone stall judge: build `AI_ENGINE_LABELS` only from the judged issue's verified label snapshot, taken from the existing candidate-details cache (`_candidate_details_json`) with no new API call. Never use `TRACKING_LABELS` here, since in standalone mode it may be left over from another project. If the snapshot is missing or is not a JSON array, use codex and do not call `ai_engine_for_role` with Claude-selecting labels.\n    - Managed stall judge and `RB_JUDGE`: set `AI_ENGINE_LABELS` to the union of the judged issue's label names and `TRACKING_LABELS`, so `ai:codex` on either issue wins and a project-level `ai:engine-claude` still applies to sub-issues without the label. Get the judged issue's labels from the per-issue data the loop already fetched. If those labels cannot be read or are not a JSON array, use codex.\n    - `WAVE_JUDGE`, `INTEGRATION_JUDGE` and `SECURITY_JUDGE`: keep `TRACKING_LABELS` unchanged.\n    - Add contract tests: an `ai:codex` standalone issue stays on codex even when the tracking labels contain `ai:engine-claude`; `ai:codex` on a managed sub-issue overrides tracking `ai:engine-claude`; a sub-issue with no label inherits the tracking `ai:engine-claude`; a missing per-issue snapshot gives codex; the project-level judges are unchanged.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: This does what the finding recommends (\"pass the judged issue's verified labels; default to codex when unavailable\") and also keeps the project-level Claude cutover working for sub-issues that have no engine label.\n  reversibility: The change is local to engine-label assembly in one function and its callers. Going back to A (standalone only) or C (judged issue's labels only) means changing only how the label sets are combined for the managed per-issue roles.",
+  "fingerprint": "9700abaf85fcd6866660fa62f2a715cebaf2b2cc20e3c774b92da0b9239b1205",
+  "lineage": {
+    "issue_number": 6491,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37415544185",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37415544185",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6491"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006045758_7a413de18f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6491,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37415544185"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6491",
+  "timestamps": {
+    "created_at": "2026-10-06T04:57:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

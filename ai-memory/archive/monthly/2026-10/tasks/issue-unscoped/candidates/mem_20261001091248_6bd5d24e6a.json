@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_nonblocking.py:1073-1103\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The demoted record retains live references to `entry` and `rejecters` rather than defensive copies.\n  WHY: Neither list is currently mutated along the path, so this is not a runtime bug, but a future mutation could silently alter the stored demoted record.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/review_claude_fixer_nonblocking.py\n  Location: lines 1073-1080 (the demotion_candidate dict construction) and line 1103 (demoted.append)\n  Issue: demotion_candidate captures \"entry\" and \"rejecters\" as live references into the consensus block and the rejecter set, not as defensive copies. The disproof_check call on lines 1084-1086 already wraps the call payload in list(entry) and list(rejecters) (and the test_issue_5582_the_disproof_check_sees_a_copy_of_the_candidate test pins that contract), but the demoted.append({**demotion_candidate, \"moved\": moved}) on line 1103 then unpacks the original references into the captured demoted record. In the current code, neither list is mutated between construction and append, so this is a latent hardening gap rather than a runtime bug. A future refactor that introduces a list mutation in the moved-block loop, the kept.append paths, or any code added between lines 1086 and 1103 would silently store already-mutated data in the demoted record \u2014 exactly the kind of \"future reordering\" risk the test_issue_5582_the_disproof_check_sees_a_copy_of_the_candidate pattern was designed to head off for the disproof_check input.\n  Suggested minimal fix: change the two list-valued fields in demotion_candidate to defensive copies so the demoted record is self-contained:\n    \"entry\": list(entry),\n    ...\n    \"rejecters\": list(rejecters)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: scripts/review_claude_fixer_nonblocking.py\n  Location: lines 1076-1084, 1103\n  Issue: The demoted record stored via `demoted.append({**demotion_candidate, \"moved\": moved})` retains direct references to the original `entry` and `rejecters` lists rather than copies. The `disproof_check` receives safe copies, but the appended record does not. No current code path mutates either list before or after the append, so this is not a runtime bug today \u2014 it is a latent risk if a future change inserts a mutation between candidate construction and record use.\n  Suggested minimal fix: Change line 1103 to `demoted.append({**demotion_candidate, \"entry\": list(entry), \"rejecters\": list(rejecters), \"moved\": moved})` so the demoted record holds its own copies, matching the copy already given to `disproof_check`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ce4797d67f88d3e3b7c2bc2015aebe557e46a66e2d6992d4b2a64985526f2ceb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5605,
+    "run_id": "36832619840",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36832619840",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001091248_6bd5d24e6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5605,
+    "run_id": "36832619840"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T09:12:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

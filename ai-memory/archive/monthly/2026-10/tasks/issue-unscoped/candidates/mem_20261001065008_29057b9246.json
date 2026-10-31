@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3547-3556 (metadata-head comparison), 3574-3578 (fork exit), 4435 (reviewer gate) | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: A dispatched review of a fork PR can run reviewers against default-branch files because the fork path skips the metadata-head comparison, sets `CAN_PUSH=false` without setting `AUTOFIX_STALE_BASE_SKIP`, and the reviewer gate does not check `CAN_PUSH`.\n  WHY: The workspace contains the dispatch SHA while the PR metadata and diff describe the fork head, so reviewers can report false \u201cmissing at HEAD\u201d findings; all reviewers rated this MAJOR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Dispatched review runs now review the pull request's head, not the default branch.\" (PR title, changelog fragment, and the \"Evidence (phase done-condition)\" table's last row: \"Runs whose checkout changes | runs with no `pull_request` payload on a same-repository PR\".)\n  expected_change_site: Either the metadata-head comparison in `.github/workflows/review_autofix.yml` \"Checkout PR head branch\" or the gate's cross-repo-head branch.\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The metadata-check outer guard exempts dispatched forks (`{ [ -n \"${{ github.event.pull_request.head.sha }}\" ] || [ \"${HEAD_REPO}\" = \"${{ github.repository }}\" ]; }` is false for fork dispatch), and the gate's cross-repo-head branch only logs the warning without touching `AUTOFIX_STALE_BASE_SKIP`. No test pins a dispatched fork soft-exiting today; the only fork-dispatch test asserts `env_text == \"\"` and `stdout == \"\"`, locking in the gap.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:Lines 3547-3551 (metadata-head comparison exempts dispatched fork PRs), lines 3574-3577 (fork exit sets CAN_PUSH=false without AUTOFIX_STALE_BASE_SKIP), line 4435 (reviewer gate checks only AUTOFIX_STALE_BASE_SKIP, not CAN_PUSH) | severity=high | confidence=5\n  PROBLEM: A dispatched review run for a fork PR can skip stale-base detection and run reviewers against default-branch files and the fork PR's diff.\n  WHY: The reviewer gate does not check `CAN_PUSH`, so the workspace/PR-head mismatch can produce false \u201cmissing at HEAD\u201d findings.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/review_autofix.yml:lines 3548-3556, 3574-3578, and line 4435 | severity=high | confidence=5\n  PROBLEM: A dispatched review run for a fork PR can skip stale-base detection and run reviewers against base-branch files while evaluating the fork PR's diff.\n  WHY: `AUTOFIX_STALE_BASE_SKIP` is not set for the mismatched workspace, and the reviewer step is not gated on `CAN_PUSH`.\n\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:the metadata-head comparison in \"Checkout PR head branch\" (the new block at the lines added around 3533-3559), the fork-exit branch (\"PR head repo (${HEAD_REPO}) is not writable from this workflow.\") that follows it, and the \"Run reviewer models\" / \"Hand review round to Claude session (Claude-fixer mode)\" / \"Enable auto-merge on PR\" `if: env.AUTOFIX_STALE_BASE_SKIP != 'true'` gates | severity=high | confidence=5\n  PROBLEM: A dispatched review run for a fork PR skips the metadata-head comparison, then can run reviewer-family steps against default-branch files and the fork PR's diff.\n  WHY: The fork exit sets `CAN_PUSH=false` without setting `AUTOFIX_STALE_BASE_SKIP`, which is the condition used by those reviewer-family steps.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:Lines 3548-3550, 3574-3577, 4434-4435; checkout ref at line 2475 | severity=high | confidence=5\n  PROBLEM: A dispatched review for a fork PR can skip the metadata-head comparison, check out `github.sha`, and exit with `CAN_PUSH=false` without setting `AUTOFIX_STALE_BASE_SKIP`.\n  WHY: The reviewer step is not gated on `CAN_PUSH`, so it can review workspace files that do not match the fork PR head.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:3547-3556 (metadata-head comparison), 3574-3578 (fork exit), 4435 (reviewer gate) | severity=high | confidence=5\n  PROBLEM: A dispatched fork PR can run reviewers on default-branch files against the fork PR's diff, producing false findings.\n  WHY: The comparison is skipped, the fork exit sets `CAN_PUSH=false` but not `AUTOFIX_STALE_BASE_SKIP`, and the reviewer gate does not check `CAN_PUSH`.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/review_autofix.yml:lines 3547-3556 (metadata-check condition), 3574-3577 (fork exit), 4435 (\"Run reviewer models\" if condition) | severity=high | confidence=5\n  PROBLEM: A dispatched run on a fork PR can review default-branch files against the fork PR's diff, producing false findings.\n  WHY: The metadata comparison is skipped, the fork exit sets `CAN_PUSH=false` without setting `AUTOFIX_STALE_BASE_SKIP`, and the reviewer step does not check `CAN_PUSH`.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b7faa81e6825578c417fefe53408be53b3c60be3593125464fba77d79ebba022",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5857,
+    "run_id": "36824420116",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36824420116",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001065008_29057b9246",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5857,
+    "run_id": "36824420116"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T06:50:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

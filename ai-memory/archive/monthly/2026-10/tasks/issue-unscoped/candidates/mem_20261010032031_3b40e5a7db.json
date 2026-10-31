@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md:4 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The changelog omits `status=skipped_empty` as a trigger for manual secret setup.\n  WHY: An operator reading only the changelog would not know that an unset library secret also requires manual setup; this is a NIT finding.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the changelog to reflect that /seed-repo requests manual secret setup when propagation logs status=skipped_empty, just as it does for a failed run or a no-register seed.\n  expected_change_site: changelog.d/6712-propagate-consumer-secrets-schedule.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The changelog entry describes manual setup only for failed propagation runs or a no-register seed; it omits the status=skipped_empty case, which occurs when a library secret is unset, meaning operators will not be correctly instructed to add it manually in that scenario.\n- requirement: \"Install the missing propagation workflow\" (the activation verifier reported `.github/workflows/propagate-consumer-secrets.yml` as absent)\n  expected_change_site: The workflow file is already on `main` since #6709; the PR adds the schedule trigger to it.\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: Not a gap. The workflow file exists on the base branch and the PR extends it with the weekly schedule. The activation verifier's checkout excluded pull-request workflows, so its report was a false absence.\n- requirement: \"Backfill existing consumers automatically \u2014 add a scheduled reconciliation trigger\"\n  expected_change_site: `.github/workflows/propagate-consumer-secrets.yml` schedule trigger + `PROPAGATE_ONLY_MISSING` wiring\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: Not a gap. The PR adds `on.schedule: [cron: '23 5 * * 1']`, resolves targets from the registry, and exports `PROPAGATE_ONLY_MISSING: ${{ github.event_name == 'schedule' }}`. The script handles only-missing mode with presence listing, skip, and fail-closed semantics. README and agents.md document the new schedule.\n- requirement: \"Remove the contradictory manual-secrets onboarding step \u2014 both copies of seed-repo.md should treat registration + propagation as the normal secrets path\"\n  expected_change_site: `.claude/commands/seed-repo.md` and `workflow-templates/.claude/commands/seed-repo.md`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: Not a gap. Both copies are updated: step 6 no longer tells the agent to list secrets for manual setup by default; it describes the propagation run as the normal path and names manual setup only for `no-register`, failed propagation, or `status=skipped_empty`. Steps 8 and the checklist template (item 2) match. The two copies are byte-identical per the editor summary.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/6712-propagate-consumer-secrets-schedule.md:4 | severity=NIT | confidence=5\n  PROBLEM: The changelog fragment says `/seed-repo` \"asks for manual setup only after a failed run or a `no-register` seed,\" but the updated seed-repo instructions at `.claude/commands/seed-repo.md:49` and `workflow-templates/.claude/commands/seed-repo.md:49` also request manual setup when propagation logs `status=skipped_empty` for a secret (the library secret is unset, so the run stays green without copying it). The changelog omits this third trigger.\n  WHY: An operator reading only the changelog would not know that an unset library secret (status=skipped_empty) also requires manual setup \u2014 the seed-repo agent would flag it in the checklist, but the changelog's claim that manual setup happens \"only after a failed run or a no-register seed\" is factually incomplete.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Install the missing propagation workflow\" (the activation verifier reported `.github/workflows/propagate-consumer-secrets.yml` as absent)\n  Expected change site: The workflow file is already on `main` since #6709; the PR adds the schedule trigger to it.\n  Evidence of absence: Not a gap. The workflow file exists on the base branch and the PR extends it with the weekly schedule. The activation verifier's checkout excluded pull-request workflows, so its report was a false absence.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Backfill existing consumers automatically \u2014 add a scheduled reconciliation trigger\"\n  Expected change site: `.github/workflows/propagate-consumer-secrets.yml` schedule trigger + `PROPAGATE_ONLY_MISSING` wiring\n  Evidence of absence: Not a gap. The PR adds `on.schedule: [cron: '23 5 * * 1']`, resolves targets from the registry, and exports `PROPAGATE_ONLY_MISSING: ${{ github.event_name == 'schedule' }}`. The script handles only-missing mode with presence listing, skip, and fail-closed semantics. README and agents.md document the new schedule.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Remove the contradictory manual-secrets onboarding step \u2014 both copies of seed-repo.md should treat registration + propagation as the normal secrets path\"\n  Expected change site: `.claude/commands/seed-repo.md` and `workflow-templates/.claude/commands/seed-repo.md`\n  Evidence of absence: Not a gap. Both copies are updated: step 6 no longer tells the agent to list secrets for manual setup by default; it describes the propagation run as the normal path and names manual setup only for `no-register`, failed propagation, or `status=skipped_empty`. Steps 8 and the checklist template (item 2) match. The two copies are byte-identical per the editor summary.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: Update the changelog to reflect that /seed-repo requests manual secret setup when propagation logs status=skipped_empty, just as it does for a failed run or a no-register seed.\n  Expected change site: changelog.d/6712-propagate-consumer-secrets-schedule.md\n  Evidence of absence: The changelog entry describes manual setup only for failed propagation runs or a no-register seed; it omits the status=skipped_empty case, which occurs when a library secret is unset, meaning operators will not be correctly instructed to add it manually in that scenario.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "c74c26831c722a25c23fe04893437843ec792c4aab115545e25e55ea6d01ae19",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6722,
+    "run_id": "38018357180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38018357180",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010032031_3b40e5a7db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6722,
+    "run_id": "38018357180"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T03:20:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

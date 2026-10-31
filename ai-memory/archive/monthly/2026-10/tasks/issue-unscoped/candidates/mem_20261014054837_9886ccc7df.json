@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_sweep_merge_queued_skip.py:36-63 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: BLOCK_END_RE (line 36) only accepts comments or list items at 0-6 spaces and mapping keys at 0-8 spaces, so a valid 7- or 8-space comment after the `run: |` block matches neither alternative and trips the assertion at line 63.\n  WHY: A valid workflow edit, such as a comment at the step-key indent, would raise AssertionError and break CI. Severity disagreement: google_gemini-3_1-flash-lite rated it MAJOR, while minimax_minimax-m3 and openai_gpt-6-luna rated it NIT. The highest is used, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_sweep_merge_queued_skip.py:36 | severity=MAJOR | confidence=4\n  PROBLEM: `BLOCK_END_RE` is too restrictive for valid YAML indentation.\n  WHY: The regex allows comments and list items at 0-6 spaces and keys at 0-8 spaces. A valid line less indented than the 10-space `run:` block, such as a comment or key at 9 spaces, fails the match, so the assertion on line 63 wrongly breaks CI.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_sweep_merge_queued_skip.py:36,63 | severity=NIT | confidence=4\n  PROBLEM: BLOCK_END_RE accepts comments only at 0-6 spaces and mapping keys only at 0-8 spaces, so a valid 7- or 8-space comment is rejected and the assert on line 63 raises.\n  WHY: The linked issue suggested breaking on any non-blank line indented under 10 spaces, but the implementation adds a strict pattern match on top of that. The current workflow has no such comment, so the test passes today. A future comment at the step-key indent would fail the `tests-promote-stall-and-review` job. `test_extractor_ignores_a_sibling_step_added_after_it` covers only a 6-space comment.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_autofix_sweep_merge_queued_skip.py:36,63 | severity=NIT | confidence=4\n  PROBLEM: The boundary check rejects valid YAML comments indented eight spaces.\n  WHY: An eight-space comment after the `run: |` block is outside the ten-space script body, but it matches neither comment alternative in `BLOCK_END_RE`. The extractor then raises an assertion and fails the test module.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "48d52d945d3af50325893a5c65bbcad43369d34a7e0c8aaee498eb7736e99e9b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7344,
+    "run_id": "38515121278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38515121278",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261014054837_9886ccc7df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7344,
+    "run_id": "38515121278"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-14T05:48:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

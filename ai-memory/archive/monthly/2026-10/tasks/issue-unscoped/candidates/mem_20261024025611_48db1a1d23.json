@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"report the larger of the two counters, plus the phase and the limit, in the close comment, the linked-PR close note and the Telegram alert\" (PR description, Change section)\n  expected_change_site: scripts/orchestrate_poll_process.sh:22281 (the `close_linked_pr` invocation in the standalone `skip)` arm)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The linked-PR close note at line 22281 reads only \"Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts}).\" and omits the phase and limit, while the issue close comment (line 22284) and the Telegram alert (line 22285) include them. The regression test covers only the `-c` close comment. Severity disagreement: MAJOR (minimax_minimax-m3) vs NIT (qwen_qwen3_7-plus). Note that z-ai_glm-5_3-flash reported all three sites updated, which conflicts with this.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"scripts/orchestrate_poll_process.sh (standalone skip) case): report the larger of the two counters, plus the phase and the limit, in the close comment, the linked-PR close note and the Telegram alert.\"\n  Expected change site: scripts/orchestrate_poll_process.sh:22281 (the `close_linked_pr` invocation in the standalone `skip)` arm)\n  Evidence of absence: The issue close comment (line 22284) and the Telegram alert (line 22285) now include `${phase}` and `${effective_max_recoveries}`, but the linked-PR close note at line 22281 still reads only \"Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts}).\" The counter fix did land there, but the phase and limit are absent. The regression test covers only the `-c` close comment.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP:\n  Requirement: \"report the larger of the two counters, plus the phase and the limit, in the close comment, the linked-PR close note and the Telegram alert\" (PR description, Change section)\n  Expected change site: scripts/orchestrate_poll_process.sh:22281 (close_linked_pr call)\n  Evidence of absence: The close_linked_pr call at line 22281 only includes the attempt count, not the phase or limit. The issue close comment (line 22284) and Telegram alert (line 22285) both include phase and limit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "72730db0c98bbbcc1f6a549568ef27393c059067d72c30c82cd6008afce9b3db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8043,
+    "run_id": "40054485337",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40054485337",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024025611_48db1a1d23",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8043,
+    "run_id": "40054485337"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T02:56:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

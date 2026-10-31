@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/ai/label_contract.v1.json:259-266 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The contract does not declare `ai:engine-claude`, although the rewritten commands instruct users to add and use that label.\n  WHY: `sync-labels` will not create the label, so consumer issue routing can fail when GitHub cannot resolve it.\n- .claude/commands/claude-issue-pickup.md:deleted file (no line) | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The deleted command is absent from `workflow-templates/retired_files.txt`.\n  WHY: Consumer syncs can leave the stale command behind after removing its sibling, and the manifest is the cleanup mechanism for library-removed files.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The plan (Phase 2, step 8) orders: \"Ensure `.claude/commands/claude-issue-pickup.md` is deleted (it has no twin).\"\n  expected_change_site: `workflow-templates/retired_files.txt`\n  confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: `.claude/commands/claude-issue-pickup.md` is deleted from the working tree, but it has no entry in `workflow-templates/retired_files.txt`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/ai/label_contract.v1.json: lines 259-266 (retired_labels array) \u2014 no `ai:engine-claude` entry in `labels` object | severity=BLOCKER | confidence=[5]\n  PROBLEM: The `implement-issue-claude.md` and `implement-plan-claude.md` commands add and reference the `ai:engine-claude` label, but it is not declared in the contract's `labels` object.\n  WHY: `sync-labels` will not create the label, so a user running `/implement-issue-claude` can fail when GitHub cannot resolve it, and consumer standalone Claude issue routing is left without a label.\n- .claude/commands/claude-issue-pickup.md: deleted file (no line) | severity=NIT | confidence=[4]\n  PROBLEM: The deleted file has no entry in `workflow-templates/retired_files.txt`.\n  WHY: A consumer sync can leave this stale command behind after removing its sibling, and the manifest is the advertised cleanup mechanism.\n- Requirement: The plan (Phase 2, step 8) orders: \"Ensure `.claude/commands/claude-issue-pickup.md` is deleted (it has no twin).\"\n  Expected change site: `workflow-templates/retired_files.txt`, or explicit deletion of root `.claude/commands/claude-issue-pickup.md` with sha256\n  Evidence of absence: `.claude/commands/claude-issue-pickup.md` is deleted from the working tree (confirmed in the diff), but it has no entry in `workflow-templates/retired_files.txt`. The manifest lists `claude-issue-dispatch.md`, `fix-claude-pr.md`, `check_in_status.py`, `claude_fix_claim.py`, `stale_routines.py`, `permission_prompts.py`, `dispatch_workflow.py`, `edit_comment.py`, `security_pass_skip.py`, `pr_check_in_reminder.py`, and `permission_prompt_logger.py` \u2014 but not `claude-issue-pickup.md`. The plan's Phase 2 retirement map step 8 explicitly names this file for deletion alongside its twin-less status; the retirement manifest is the shipping vehicle for library-removed files, so the absence from it is the gap.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "03a0bdcb472e6ffb2433922fa0144be712b79d63f342ca77adfc0015450617b7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37184367981",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37184367981",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004071349_1147114a03",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37184367981"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-04T07:13:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

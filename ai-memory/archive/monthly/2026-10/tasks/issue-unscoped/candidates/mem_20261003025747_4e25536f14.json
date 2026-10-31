@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/claude-issue-dispatch.md:lines 46-48 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The failure reply says the blocker comment was not posted when either the label write or comment write fails, including when the label write fails but the comment succeeds.\n  WHY: The session can report that no comment exists even though it is visible on the issue.\n- .claude/commands/claude-issue-dispatch.md:line 46 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The failure reply says the blocker comment was not posted when either the label write or comment write fails, including when the label write fails but the comment succeeds.\n  WHY: The session can report that no comment exists even though it is visible on the issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/commands/claude-issue-dispatch.md:line 46 | severity=low | confidence=5\n  PROBLEM: The failure reply uses a single message (\"blocker comment not posted\") for two distinct failure modes \u2014 label write failure or comment write failure. When only adding `ai:claude-blocked` fails but the comment POST succeeds, the reply says the comment was not posted even though it is visible on the issue.\n  WHY: An operator or the pickup's wake report sees \"blocker comment not posted\" as the reason, checks the issue, finds a visible comment, and concludes the message was wrong \u2014 eroding trust in the failure path's accuracy. The operational impact is negligible because the comment itself carries the `/reclarify` instruction and the issue is correctly blocked.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/.claude/commands/claude-issue-dispatch.md:lines 46-48 (the launch-prompt failure branch); same text in .claude/commands/claude-issue-dispatch.md at lines 46-48 | severity=low | confidence=5\n  PROBLEM: The failure-branch reply uses the suffix `(label check failed; blocker comment not posted)` whenever EITHER the `ai:claude-blocked` label add OR the comment post fails. When only the label add fails (the comment still posts), the reply still says the blocker comment was not posted even though the `<!-- ai:claude-blocked:v1 -->` comment IS visible on the issue.\n  WHY: Pickup logs that grep for `blocker comment not posted` to triage stuck issues will see false positives \u2014 a target whose `ai:claude-blocked` label never made it on but whose marker comment is on the issue will be reported as \"comment not posted\". Operators investigating a stuck issue cannot distinguish \"label failed\" from \"comment failed\" from this single reply string. The test `tests/test_implement_issue_claude_command.py::test_dispatched_session_stops_when_the_claim_was_removed` only asserts on the order of the three branches in the prompt and the literal presence of the failure text; it does not exercise the per-call attribution, so this regression ships unguarded.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/commands/claude-issue-dispatch.md:46 | severity=low | confidence=5\n  PROBLEM: The failure reply says \u201cblocker comment not posted\u201d when either the blocker-label write or the comment write fails.\n  WHY: If adding `ai:claude-blocked` fails but the comment succeeds, the session reports that the comment was not posted even though it appears on the issue.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/claude-issue-dispatch.md:46 | severity=low | confidence=4\n  PROBLEM: The failure instruction says \"blocker comment not posted\" when either the label write or comment write fails, but if only the label write fails while the comment succeeds, the comment IS posted.\n  WHY: The session would report \"blocker comment not posted\" even though the comment is visible on the issue, creating a misleading status report. This is a wording precision issue in the prompt text rather than a runtime bug, but it could confuse operators reading the session's reply.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/commands/claude-issue-dispatch.md:line 46, the parenthetical `issue not started (label check failed; blocker comment not posted)` when the label or the comment call failed | severity=low | confidence=5\n  PROBLEM: The failure-reply message conflates two distinct failure modes. If the label write fails but the comment POST succeeds, the reply claims the blocker comment was not posted even though it is visible on the issue.\n  WHY: The two writes are independent REST calls; each can fail on its own. The reply string does not distinguish which one failed, so it can misreport the comment's state. This is a display-only inaccuracy (no state corruption), but it could mislead an operator into reposting a comment that already exists or missing a comment that is present.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a41debb66486a975ca098b16254e611b9436e4f5874e065750ce8b93aeb1df24",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6081,
+    "run_id": "37090064349",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37090064349",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003025747_4e25536f14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6081,
+    "run_id": "37090064349"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-03T02:57:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

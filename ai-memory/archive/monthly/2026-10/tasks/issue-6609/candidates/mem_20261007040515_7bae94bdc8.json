@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The repository already treats `workflow-templates/CLAUDE.md` as a tracked symlink to `../CLAUDE.md`. Two places say so: `tests/test_claude_md_section_numbers.py:33-36`, which compares resolved paths, and `.github/workflows/update_workflows.yml:81-85` and `:315-321`, where the sparse-checkout comment and `cp -L` dereference it. The isolated snapshot skips symlinks, which is why the file looks absent: my own glob of `workflow-templates/CLAUDE*` also returned nothing. So the \"absent\" finding is most likely an artefact of the snapshot, and the real state has to be checked outside the sandbox before anything changes. Option B can't land through the sandbox, because write-back rejects new or changed symlinks. Option C breaks `test_template_claude_md_is_the_same_file` and leaves two copies to keep in sync by hand.\nQ2: Keep this issue to the CLAUDE.md gap. How the activation verifier treats symlinks is a separate fix to `scripts/activation_verify.sh` and its prompt, and it needs its own plan and tests. If Q1 confirms the false positive, record it as a separate follow-up issue.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - tests/test_claude_md_section_numbers.py:33-36 (`test_template_claude_md_is_the_same_file`)\n    - .github/workflows/update_workflows.yml:81-85, 315-341 (symlink expectation and `cp -L` sync)\n    - CLAUDE.md (root target)\n  steps:\n    - Check the real tree, never the sandbox snapshot, because it hides symlinks. Two ways count: the host checkout (`git ls-files -s workflow-templates/CLAUDE.md`, expected mode `120000` with blob content `../CLAUDE.md`), or the result of `test_template_claude_md_is_the_same_file` in the latest `CI` run on `main` after PR #6438 merged.\n    - If the entry is present with mode `120000` and target `../CLAUDE.md`, and the test passes: change no code. Comment the evidence on the issue and close it as a verifier false positive.\n    - Only if the entry really is missing from `main`: recreate it in a deterministic host-side git step outside the sandboxed editor, with `ln -s ../CLAUDE.md workflow-templates/CLAUDE.md` then `git add`. Confirm mode `120000` with `git ls-files -s`, run `pytest tests/test_claude_md_section_numbers.py`, and commit nothing else.\n    - Do not replace the symlink with a regular file.\n  replaces_acceptance_criterion: n/a (the issue's own fix, a tracked symlink to `../CLAUDE.md`, still applies; it just isn't repeated when it already holds)\n  equivalence_argument: The issue only requires that `workflow-templates/CLAUDE.md` resolves to the root `CLAUDE.md`, so the release gate passes and `update_workflows.yml` syncs it. An already-tracked symlink meets that exactly, and the check proves it on the real tree.\n  reversibility: If a human disagrees, they can recreate the symlink in one commit, or reopen the issue. No code is changed in the false-positive case.\nQ2:\n  strategy: n/a (letter A)\n  inputs:\n    - scripts/activation_verify.sh\n    - prompts/mode-activation-verify.txt\n  steps:\n    - If Q1 ends as a false positive, open one standalone follow-up issue. It should ask for files the snapshot leaves out (symlinks and other paths it skips) to be graded \"not verifiable\" instead of \"absent\". Cite this issue and PR #6438 as the incident.\n    - Make no verifier changes in this issue.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: n/a\n  reversibility: The follow-up can be closed without impact if the verifier behaviour is judged acceptable.",
+  "fingerprint": "232e46dc3edff34fa649125a8f6020739c8ea052d50642efe22f31d813d5b718",
+  "lineage": {
+    "issue_number": 6609,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37569172407",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37569172407",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6609"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007040515_7bae94bdc8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6609,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37569172407"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6609",
+  "timestamps": {
+    "created_at": "2026-10-07T04:05:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

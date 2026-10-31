@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The resolver stopped on purpose. `.claude/hooks/pr_merge_status_guard.py` is a host-executed safety hook, so the sandbox excludes it (`scripts/review_untrusted_workspace.py`), and `scripts/review_conflict_resolve.sh` refuses before any model runs. That refusal is correct. What is wrong is the intake: it keeps filing heal issues (#6738 was closed as `not_planned`, and this one is generation 3) for a failure that no shared-code change can fix. Option B would let model-resolved content reach a host-executed safety hook, and the fix constraints forbid weakening the guard. Option C ships no regression test, so the loop would come back. Option A removes the real defect, which is routing a deterministic, human-only conflict into the heal pipeline. It also fits the existing `NON_RETRYABLE_FAILURE_REASONS` set in `scripts/workflow_failure_heal.py` (line 176), which the fingerprint cap already uses.\nQ2: Labelling the source PR `ai:needs-human` and posting one comment with the existing `::error::` headline tells a human exactly which paths need a manual merge. The intake already sends a Telegram WARNING for similar cases. The new value `reason=non_retryable_host_only` goes under the existing `WORKFLOW_HEAL` prefix, next to the existing `skip reason=phase_report_unverified` line in `scripts/workflow_failure_heal_intake.sh` (line 408), so no log prefix is renamed. Option B would leave the PR with no state change and no alert, so it could stall without anyone seeing it. Option C would misuse a classification meant for consumer configuration.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none \u2014 both decisions are lettered. Implementation notes for the planner:)\n- `scripts/workflow_failure_heal.py`: add a predicate that returns true when the `autofix_failure` report's `failure_reason` is in `NON_RETRYABLE_FAILURE_REASONS`. Do not change the existing set or its identifiers.\n- `scripts/workflow_failure_heal_intake.sh`: when that predicate is true, skip both diagnosis and issue filing:\n  - before any heal-issue creation, label the source PR `ai:needs-human`;\n  - upsert one marker-keyed comment naming the host-only paths, taken from the report's `::error::Conflict resolver: host-only conflicted path(s) need a manual merge: <paths>` headline;\n  - send a Telegram WARNING;\n  - log `WORKFLOW_HEAL skip reason=non_retryable_host_only source=<repo> pr=<n>`.\n  - The handling fails closed: if the label write fails, do not file an issue; log and exit.\n  - Reuse the existing intake token. Make no new API calls beyond the label, comment and alert writes.\n- Regression test, in the existing workflow-failure-heal intake test module: feed an `autofix_failure` report with reason `conflict_resolver_sandbox_path_host_only`. Assert that no issue is created and the skip log line and the PR label/comment are emitted. The test must fail on the current routing, which files `inconclusive`/`workflow-defect`. Record both runs in the PR.\n- Do not change the resolver's sandbox admission, the conflicted-path check, or the hook files.\n- Add a changelog fragment under `changelog.d/`.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n(none)",
+  "fingerprint": "aaab3f8fcdd4d50e7672223a67a252b38b0990673125d4ac9b5dad58923501d7",
+  "lineage": {
+    "issue_number": 6750,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37753955532",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37753955532",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6750"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008091139_cc763452b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6750,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37753955532"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6750",
+  "timestamps": {
+    "created_at": "2026-10-08T09:11:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:7449-7456 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The hard-failure loop omits the `workflow-log-analysis-test` job, so its failure leaves `release_hard_failure` false.\n  WHY: A failed `workflow-log-analysis-test` could produce a SUPERSEDED header instead of FAILED (source labelled it MAJOR). Another reviewer (z-ai_glm-5_3-flash) found the omission consistent with the documented `all_supplemental_ok` policy at lines 7395-7397, so it disagrees that this is a bug.\n- .github/workflows/test-and-mark-stable.yml:7453-7458 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `gh api ... 2>/dev/null || true` silently swallows lookup failures, so a failed lookup looks the same as \"no newer run\" in the logs.\n  WHY: Operators cannot tell whether the SUPERSEDED lookup was attempted and failed. This was raised as a NIT and a hardening suggestion, with no behaviour change.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Report SUPERSEDED when the smoke test was cancelled, no other job failed, and a newer run of this workflow exists.\"\n  expected_change_site: .github/workflows/test-and-mark-stable.yml (hard-failure job enumeration loop, lines 7447-7456)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The loop enumerates jobs explicitly and omits `workflow-log-analysis-test`, so its failure would not block SUPERSEDED. Also, tests/test_release_notify_superseded.py exercises only `validate-scripts.result` and `release.result` as overrides, so the ORPHANS, ORCHESTRATE_DECOMPOSE, VALIDATE_STANDALONE, CLARIFY_REJECTS and ALT_MODEL arms are unexercised. minimax_minimax-m3 called this a forward-looking maintenance gap, not a present bug.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:7449-7456 | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: The loop checking for hard failures omits the `workflow-log-analysis-test` job.\n  WHY: If that job fails, `release_hard_failure` may stay false and the workflow reports \"SUPERSEDED\" instead of \"FAILED\".\n- TASK_GAP:\n  Requirement: \"Report SUPERSEDED when the smoke test was cancelled, no other job failed, and a newer run of this workflow exists.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml (within the `release_hard_failure` check loop).\n  Evidence of absence: The hard-failure loop enumerates jobs explicitly but omits `workflow-log-analysis-test`, which violates the requirement that no other job failed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:7453-7458 | severity=low (source: NIT) | confidence=3\n  PROBLEM: When `gh api` fails (auth error, rate limit, network), the error is silently swallowed and `RELEASE_SUPERSEDED_BY` stays empty, so the header stays FAILED with no diagnostic.\n  WHY: Operators cannot tell from the logs whether the SUPERSEDED lookup was attempted and failed. A `::warning::` on failure would keep observability without changing behaviour.\n- TASK_GAP:\n  Requirement: \"Report SUPERSEDED when the smoke test was cancelled, no other job failed, and a newer run of this workflow exists.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml (hard-failure job enumeration loop, lines 7447-7456)\n  Evidence of absence: The loop uses a hardcoded list of eight job result variables, and the tests cover only `validate-scripts.result` and `release.result` as overrides. A future job not added to the loop and tests could be misreported as SUPERSEDED. The source calls this a forward-looking maintenance gap, not a present bug.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- HARDENING_SUGGESTIONS: .github/workflows/test-and-mark-stable.yml 7453-7458: capture the `gh api` exit status and emit a single `::warning::` line on lookup failure (~3 lines).\n- HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- HARDENING_SUGGESTIONS: .github/workflows/test-and-mark-stable.yml line 7454-7455: `2>/dev/null || true` hides the API failure. Capture stderr and emit one `::warning::` when the value is blanked (~3 lines).\n- HARDENING_SUGGESTIONS: tests/test_release_notify_superseded.py 120-130: the ORPHANS, ORCHESTRATE_DECOMPOSE, VALIDATE_STANDALONE, CLARIFY_REJECTS and ALT_MODEL arms are unexercised. Add one parametrized case per arm asserting the FAILED header (~5 lines).\n- HARDENING_RISK_SCORE: 2\n- Note: no BLOCKER or MAJOR findings. The reviewer found the last-run diff comment-only and the PR logic correct. Omitting `LOG_ANALYSIS` from the loop mirrors the documented `all_supplemental_ok` policy at lines 7395-7397.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fe59d02ae61feea26f03652d64d3f6239ca5138c8325f82d7a1063c1310e2980",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7542,
+    "run_id": "39006332178",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39006332178",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017055307_be0f789ef5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7542,
+    "run_id": "39006332178"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T05:53:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_fixer_pending_checks.py:~556-558 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Older bound review runs that are re-run after the marker is posted are excluded by the run-ID filter, so a failed attempt can be masked by a successful gate-skipped rerun and the old marker can authorize auto-merge.\n  WHY: The re-run retains its old ID, and the code does not inspect its earlier attempts.\n- scripts/claude_fixer_pending_checks.py:720 (marker_run_attempt_problem() lines 427-450) | severity=high | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Older bound review runs that are force-rerun after the marker is posted are excluded by the run-ID filter, so a failed attempt can be masked by a successful gate-skipped rerun and the unchanged marker can authorize auto-merge.\n  WHY: The marker-attempt check only inspects the marker's own run, while the older run is excluded from the newer list.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"every newer review run bound to the PR must have succeeded, on every attempt\" (PR DESCRIPTION); \"any completed review run bound to the PR with an id above the marker's run id concluded anything but success\" (plan \u00a7G1)\n  expected_change_site: scripts/claude_fixer_pending_checks.py check_review_runs() and marker_run_attempt_problem()\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The implementation only inspects earlier attempts for runs with id > marker_run_id (in check_review_runs) and for the marker's own run id (in marker_run_attempt_problem); tests/test_claude_fixer_pending_checks.py lines ~683-694 explicitly pins this as merge_enabled without reading attempts.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_fixer_pending_checks.py:~556-558 | severity=MAJOR | confidence=[4]\n  PROBLEM: An older bound review run (id < marker_run_id) that is re-run after the marker is posted is excluded from both the `newer` filter and `marker_run_attempt_problem`; its failed earlier attempt is not inspected, so a gate-skipped successful rerun can leave the old marker authorizing auto-merge.\n  WHY: The re-run keeps its old id, so `_earlier_unsuccessful_attempt` is never called on it.\n- scripts/claude_fixer_pending_checks.py: marker_run_attempt_problem(), the `_attempt_started_at(marker_run, ...)` call at the top of the function | severity=NIT | confidence=[2]\n  PROBLEM: Test coverage is incomplete for a malformed newest-attempt `run_started_at` when `run_attempt > 1` and the marker may have been posted by an earlier attempt.\n  WHY: The code handles this by raising `ReadError`, but the described case has no test.\n- TASK_GAP\n  Requirement: \"every newer review run bound to the PR must have succeeded, on every attempt\" (PR DESCRIPTION); \"any completed review run bound to the PR with an id above the marker's run id concluded anything but success\" (plan \u00a7G1)\n  Expected change site: scripts/claude_fixer_pending_checks.py check_review_runs() and marker_run_attempt_problem()\n  Evidence of absence: The implementation only inspects earlier attempts for runs with id > marker_run_id (in check_review_runs) and for the marker's own run id (in marker_run_attempt_problem). An older bound review run (id < marker_run_id) that is re-run after the marker is posted is not inspected. The test case \"a re-run of an older review\" at tests/test_claude_fixer_pending_checks.py lines ~683-694 explicitly pins this as merge_enabled without reading its attempts.\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTION: scripts/claude_pr_sweep.py, lines 44-45. The API-budget sentence is grammatically dense; suggested minimal fix: \"When the marker's own run was re-run after the marker was posted, 1 attempt read per earlier attempt back to the one that posted it (usually none, at most 5).\"\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_fixer_pending_checks.py:720 (marker_run_attempt_problem() lines 427-450) | severity=MAJOR | confidence=[5]\n  PROBLEM: The ID filter excludes bound review runs whose IDs are below the marker's run ID, and marker_run_attempt_problem() only checks the marker's own run; a force-rerun of an older review can have a failed attempt that is never inspected, followed by a gate-skipped successful rerun that lets the unchanged marker authorize auto-merge.\n  WHY: The listing stops at the marker's run ID, so older runs are excluded from the newer list. The marker-run check only inspects the marker's own run.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "555b92b1ee7e8d53d9cda7b0c50d1ed697112e5f791bed0174d42d0b1fb449b4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5914,
+    "run_id": "37097282704",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37097282704",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261003050055_649cb32aa7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5914,
+    "run_id": "37097282704"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-03T05:00:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

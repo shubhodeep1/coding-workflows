@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the fix to the two test assertions (`tests/test_unblock_scan.py::test_poller_runs_the_scan_once_per_tick_after_the_project_loop` and `tests/test_orchestrate_poll_workflow_contract.py::test_unblock_scan_runs_without_tracking_issues`) land?\nChoices:\nA. Commit it to PR #7259's head branch `ai/issue-7257`, where the dependency-wait call was added, so that PR's CI goes green. The implementer adds `Target branch: ai/issue-7257` to the issue. (RECOMMENDED)\nB. Close this issue without a code change and leave the failure to PR #7259's own review/autofix loop, which owns PR-specific CI failures.\nC. Land it on the default branch with assertions that accept either order: the dependency-wait call is present before recovery and scanning, or absent. This passes both before and after PR #7259 merges, but makes the ordering check weaker.",
+  "fingerprint": "fef9a49846f782f94c8ae4a6577ed2d970c1fd6805427d4563ceaac3639e4f99",
+  "lineage": {
+    "issue_number": 7330,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38474024830",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38474024830",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013215903_13d51c372c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7330,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38474024830"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7330 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T21:59:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

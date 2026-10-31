@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:523-524, 535-536 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: If posting the failed marker fails, the dispatch failure is not recorded durably, so repeated dispatch and comment-write failures can prevent the gate from reaching exhaustion.\n  WHY: Later runs derive cycles_used and head_attempts from markers, leaving the PR held without the ai:security-pass-failed label; severity ranges from NIT to MAJOR, and the highest rating is used.\n- .github/workflows/ci.yml:471 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The PR head's tests-hooks-and-orchestrator CI check is failing because of failures in tests/test_pr_merge_status_guard.py.\n  WHY: The failing required check blocks the aggregate CI status from passing; reviewers note the failures concern the merged-PR guard and are outside this PR's changed files.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_single_issue_security_pass.sh:523-524 and 535-536 | severity=MAJOR | confidence=3\n  PROBLEM: When publishing the failed marker also fails, the cycle counter and head_attempts counter do not advance durably.\n  WHY: The gate derives cycles_used and head_attempts from trusted PR comment markers, so repeated audit-dispatch and comment-write failures loop without advancing either count.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:471 | severity=BLOCKER | confidence=5\n  PROBLEM: The current PR head has a failing required CI test job (tests-hooks-and-orchestrator).\n  WHY: The failing job blocks the aggregate CI status from passing, preventing the PR from reaching a mergeable state, even if the PR itself is correct.\n- scripts/review_single_issue_security_pass.sh:523-524, 535-536 | severity=MAJOR | confidence=5\n  PROBLEM: If publishing the failed security-pass marker fails (e.g., GH API call failure), the failed audit attempt is not recorded durably.\n  WHY: Because the gate logic relies on the existence of these markers to compute cycles_used and head_attempts, missing markers prevent the gate from reliably advancing toward exhaustion.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_single_issue_security_pass.sh:523-524, 535-536 | severity=NIT | confidence=4\n  PROBLEM: When publishing the failed marker also fails, the dispatch failure is not recorded durably.\n  WHY: cycles_used and head_attempts are recomputed on every review run from the PR comment markers, so without a marker the gate keeps retrying dispatch against the same head.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_single_issue_security_pass.sh:523-524 and 535-536 | severity=MAJOR | confidence=5\n  PROBLEM: If posting the failed marker fails, the dispatch failure is not recorded.\n  WHY: Later runs derive cycles_used and head_attempts from markers, so repeated dispatch and comment-write failures never reach the exhaustion path.\n- .github/workflows/ci.yml:471 | severity=BLOCKER | confidence=5\n  PROBLEM: The PR head\u2019s CI run reports nine failures in that test module.\n  WHY: Run 37628933058 reports `9 failed, 474 passed`, so the check fails.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "541954f10c0f1b2f55b62fcfc446cca7ec0de74a63cd6198039a0929bdf744e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6214,
+    "run_id": "37628961824",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37628961824",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007140224_905daf5ea0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6214,
+    "run_id": "37628961824"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T14:02:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

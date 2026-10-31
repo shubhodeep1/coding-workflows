@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:863 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `_env_split_string_has_guarded_git` treats any token ending in `/env` as an `env` executable, so a benign path argument such as `/tmp/env` followed by `-S` and a Git command triggers an unnecessary permission prompt.\n  WHY: The token scan includes ordinary arguments, causing false confirmation requests; severity is high because minimax_minimax-m3 and qwen_qwen3_7-plus rated it MAJOR, while deepseek_deepseek-v4-pro, openai_gpt-6-luna, and z-ai_glm-5_2 rated it NIT. The mirrored hook is also affected: workflow-templates/.claude/hooks/pr_merge_status_guard.py:863.\n- tests/test_pr_merge_status_guard.py: `test_non_git_env_split_string_is_ignored` (the new assertion at line 1732) | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The regression test covers `/bin/env` but not a path-argument false positive such as `/tmp/env` followed by `-S` and a Git command.\n  WHY: The false-positive behavior can therefore pass `pytest tests/test_pr_merge_status_guard.py` without being caught.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: 863 (and workflow-templates/.claude/hooks/pr_merge_status_guard.py:863)\n  severity=low | confidence=5\n  PROBLEM: The `token.endswith(\"/env\")` check in `_env_split_string_has_guarded_git` matches ordinary path arguments ending in `/env`, not just `env` executables.\n  WHY: A benign command containing `/tmp/env` can trigger an unnecessary permission prompt.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: line 863 in `_env_split_string_has_guarded_git`\n  severity=high | confidence=5\n  PROBLEM: The broadened match treats any token whose string ends with `/env` as an `env` executable, including ordinary path arguments and unrelated files.\n  WHY: A benign path argument can trigger a permission prompt for a non-threatening command; the same pattern is present at workflow-templates/.claude/hooks/pr_merge_status_guard.py:863.\n- tests/test_pr_merge_status_guard.py\n  Line or code reference: `test_non_git_env_split_string_is_ignored` (the new assertion at line 1732)\n  severity=low | confidence=5\n  PROBLEM: The regression test covers `/bin/env` but not the false-positive surface introduced by `endswith(\"/env\")`.\n  WHY: A path-argument invocation such as `printf '%s\\n' /tmp/env -S 'git push origin HEAD:feature/x'` could pass CI without catching the false positive.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: _env_split_string_has_guarded_git(), line 863\n  severity=low | confidence=5\n  PROBLEM: The detector treats any token ending in `/env` as an `env` executable, even when it is an ordinary command argument.\n  WHY: A benign command can trigger a confirmation prompt and be interrupted; the same logic exists in the consumer template at workflow-templates/.claude/hooks/pr_merge_status_guard.py:863.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py:863; workflow-templates/.claude/hooks/pr_merge_status_guard.py:863\n  Line or code reference: `if token != \"env\" and not token.endswith(\"/env\"):`\n  severity=high | confidence=5\n  PROBLEM: The broadened match treats any path argument ending in `/env` as an `env` executable.\n  WHY: A benign command containing `/tmp/env` followed by `-S` and a Git command triggers a spurious permission confirmation.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: line 863 (`_env_split_string_has_guarded_git`: `if token != \"env\" and not token.endswith(\"/env\")`)\n  severity=low | confidence=4\n  PROBLEM: The `endswith(\"/env\")` match scans all tokens, so a path argument ending in `/env` followed by `-S` and a string containing `git push` or `git commit` triggers a false confirmation request.\n  WHY: The guard requests confirmation for an unrelated benign command, regressing from the previous check; the same change applies to workflow-templates/.claude/hooks/pr_merge_status_guard.py:863.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "108d12203f660ad4aa32624df16231a6dd9e1059268065648b95105a3414c2cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6448,
+    "run_id": "37414195940",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37414195940",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006044958_d94dd48daa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6448,
+    "run_id": "37414195940"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T04:49:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

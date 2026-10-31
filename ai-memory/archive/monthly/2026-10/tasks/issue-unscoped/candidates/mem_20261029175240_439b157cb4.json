@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:N/A | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Updating the smoke-test canary file has caused multiple E2E smoke tests (e.g., in tests/test_implement_post_codex_recovery.py) to fail.\n  WHY: The integration test suite relies on the canary file, and the PR description attributes the failures to this change; the source rated it BLOCKER, mapped here to critical.\n- PR Description:Closes https://github.com/shubhodeep1/coding-workflows/issues/8363 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR description uses the auto-close keyword \"Closes\" against issue #8363.\n  WHY: If #8363 is an `ai:orchestrator-tracking` issue, merging closes it and stops the orchestrator's state machine, which violates the CLAUDE.md \u00a719 policy. The source rated it MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Overwrite the entire file content completely with the three specified lines.\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR used a diff patch to replace only specific lines (\"decompose-run\" replaced by two new lines) rather than overwriting the whole file. The source rated it NIT and noted it is functionally correct. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each examined this gap and rejected it, because the final bytes match the spec.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:N/A (Interaction with tests/test_implement_post_codex_recovery.py and other integration tests) | severity=BLOCKER | confidence=4\n  PROBLEM: Updating the smoke-test canary file has caused multiple E2E smoke tests (e.g., in tests/test_implement_post_codex_recovery.py) to fail.\n  WHY: The integration test suite relies on the canary file for E2E validation. By changing the file content, the tests now fail to validate, preventing CI from passing. The PR description explicitly attributes these failures to this change.\n- PR Description:Closes https://github.com/shubhodeep1/coding-workflows/issues/8363 | severity=MAJOR | confidence=3\n  PROBLEM: The PR description uses the auto-close keyword \"Closes\".\n  WHY: If issue #8363 is an `ai:orchestrator-tracking` issue, merging this PR will automatically close the tracking issue. That silently terminates the orchestrator's state machine for this project and prevents further waves from dispatching. This violates the CLAUDE.md \u00a719 policy against auto-close keywords for orchestrator-tracking issues.\n- TASK_GAP\n  Requirement: Overwrite the entire file content completely with the three specified lines.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR used a diff patch to replace only specific lines (\"decompose-run\" replaced by two new lines) rather than overwriting the entire file as instructed (\"Replace the file content completely\"). While functionally correct, it technically deviates from the explicit implementation constraint to overwrite the whole file.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8657bf96e760fb9adb830ed73a02966f9d7395de41fcbdb828924263c616d182",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "40912176049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40912176049",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029175240_439b157cb4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "40912176049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T17:52:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

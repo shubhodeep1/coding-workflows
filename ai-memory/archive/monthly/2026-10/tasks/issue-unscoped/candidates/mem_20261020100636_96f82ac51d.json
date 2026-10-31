@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4449-4456 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The clamped final sleep ends at DEADLINE, so the loop exits without a final poll, and the last listing can be up to about 30 s before the deadline.\n  WHY: A run that registers after the last listing but before the deadline is missed and the step reports no_run; both reviewers rated it NIT (no severity disagreement). anthropic_claude-sonnet-5_5 says the clamp is what the issue requires, and openai_gpt-6-luna says the new cadence widens the final gap to as much as 30 s.\n- changelog.d/wfopt-0922-2-phase7-no-run-diagnostics.md:2 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The changelog line \"about 25 run listings instead of about 60\" does not match the implemented backoff ladder.\n  WHY: This is a documentation accuracy issue only. The reviewers disagree on the real count: anthropic_claude-sonnet-5_5 says about 30 against about 67, and google_gemini-3_1-flash-lite says about 37. Both rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:4449-4456 | severity=NIT | confidence=3\n  PROBLEM: The clamped sleep ends at DEADLINE, so the loop exits without a final poll. The last listing can be up to about 30 s before the deadline.\n  WHY: Nothing breaks. The effective detection window shrinks slightly, which is what the issue's clamp requirement asks for.\n- changelog.d/wfopt-0922-2-phase7-no-run-diagnostics.md:2 | severity=NIT | confidence=3\n  PROBLEM: The new ladder gives about 30 listings and the old cadence about 67, so the quoted \"about 25 run listings instead of about 60\" slightly overstates the saving.\n  WHY: Documentation accuracy only. Nothing breaks.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/wfopt-0922-2-phase7-no-run-diagnostics.md:2 | severity=NIT | confidence=3\n  PROBLEM: The changelog claims a reduction from 60 run listings to 25. Based on the implemented backoff logic, the actual number is closer to 37.\n  WHY: The documentation is inaccurate and could mislead operators about the actual performance improvement.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:4449-4456 | severity=NIT | confidence=4\n  PROBLEM: When the remaining budget is shorter than the selected sleep, the sleep is clamped to the deadline. The loop condition at line 4410 then prevents another listing.\n  WHY: A cancel-on-close run that registers after the last listing but before the deadline is missed, and the step reports no_run even though the run registered within the budget. The new cadence increases this final detection gap to as much as 30 seconds.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e443b54ea9ab5dbf824389a92d8e75a455bd376194fbcf60c834865a3a46154b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7734,
+    "run_id": "39403287089",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39403287089",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020100636_96f82ac51d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7734,
+    "run_id": "39403287089"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T10:06:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

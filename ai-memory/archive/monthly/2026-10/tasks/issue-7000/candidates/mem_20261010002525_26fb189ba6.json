@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix be planned and implemented against?\nChoices:\nA. PR #6999's head branch `ai/issue-6987`, where the failing assertion was introduced. Add `Target branch: ai/issue-6987` to the plan context so the fix stacks onto that PR. (RECOMMENDED)\nB. The default branch `main`. On `main` the cited assertion is not present, so this would most likely produce no changes.\nC. No separate fix. Close this issue and let PR #6999's own review/autofix loop repair its test.\nQ2: If reproducing the shard shows a different cause from the one the triage guessed, how far may the fix go?\nChoices:\nA. Fix whichever side is wrong, test or `scripts/orchestrate_poll_process.sh`, using the documented behaviour. The waiver records the finding's actual `exploit_scenario` (`scripts/orchestrate_poll_process.sh:7156-7170`, agents.md waiver matching), so a test that expects a different scenario is the side to change. (RECOMMENDED)\nB. Change only `tests/test_orchestrate_poll_process.py`. If the cause turns out to be in the script, emit BLOCKED.\nC. Change only the single assertion the triage suggested, even if the shard still fails afterwards.",
+  "fingerprint": "3258ce6c6ea84c3cbc2da78287e7c317ccd3b3b236dba07fb0ee6e19c862f07b",
+  "lineage": {
+    "issue_number": 7000,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38008667991",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38008667991",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010002525_26fb189ba6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7000,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38008667991"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7000 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T00:25:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

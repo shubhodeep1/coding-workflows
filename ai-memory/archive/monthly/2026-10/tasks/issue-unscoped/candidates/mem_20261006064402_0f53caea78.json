@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:1518-1522 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: An unresolved path in a direct `git -C \"$VAR\" commit` invocation does not trigger confirmation because the parser sets `uncertain` but not `config_override`, allowing the guard to check the session checkout instead of the target repository.\n  WHY: The commit can proceed without confirmation when the target repository is on a branch whose PR has merged; all reviewers rated this major, with confidence scores ranging from 4 to 5.\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:1518-1522 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: An unresolved path in a direct `git -C \"$VAR\" commit` invocation does not trigger confirmation because the parser sets `uncertain` but not `config_override`, allowing the guard to check the session checkout instead of the target repository.\n  WHY: The commit can proceed without confirmation when the target repository is on a branch whose PR has merged; both reviewers rated this major, with confidence scores of 4 and 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py:1520-1522 (condition: invocation.config_override); 510-522 (git -C parsing does not set config_override) | severity=high | confidence=5\n  PROBLEM: The unresolved-directory confirmation guard only applies when `invocation.config_override` is true; bare `git -C \"$VAR\" commit` leaves it false when the path cannot be resolved and falls through to checking the session checkout.\n  WHY: A commit targeting a repository on a merged-PR branch can proceed without confirmation if the session checkout's PR state does not block it.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py (and its twin at workflow-templates/.claude/hooks/pr_merge_status_guard.py): pr_merge_status_guard.py:1520; parser sets uncertain but not config_override at pr_merge_status_guard.py:510-522 for `git -C \"$VAR\"` | severity=high | confidence=4\n  PROBLEM: An unresolved `git -C \"$VAR\"` path does not set `config_override`, so the new confirmation check is skipped and the guard checks the session checkout instead.\n  WHY: A commit can proceed without confirmation when the target repository is on a merged-PR branch and the session checkout is not; the cited test covers env-wrapped commands but not direct `git -C \"$VAR\"`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py: `_guarded_git_invocations` lines 520\u2013522 and `_evaluate_bash` lines 1518\u20131522 | severity=high | confidence=5\n  PROBLEM: Confirmation for an unresolved commit directory is conditional on `invocation.config_override`, but an expanded `git -C` path sets the invocation warning without setting `config_override`.\n  WHY: The guard falls back to checking the session checkout and may allow a commit without confirmation even when the target repository's branch belongs to a merged PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py: 1518-1522 | severity=high | confidence=4\n  PROBLEM: The unresolved-directory confirmation only applies when `invocation.config_override` is true; `git -C \"$OTHER_REPO\" commit -m x` sets `uncertain` but leaves `config_override` false, so the guard checks the session checkout instead.\n  WHY: The command can proceed without confirmation even when the target repository selects a branch whose PR has merged; the fix only handles env-wrapped commits.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .claude/hooks/pr_merge_status_guard.py: 1520-1522 (new code in LAST RUN DIFF); the gap is that `config_override` is only set by `-c`/`--config-env`/env-wrappers (lines 516-518, 485), not by `-C` (lines 504-509, 520-522) | severity=high | confidence=4\n  PROBLEM: An unresolvable `git -C \"$VAR\" commit` path produces a warning and sets `uncertain`, but `-C` does not set `config_override`, so the confirmation check is skipped and the guard falls through to checking the session checkout.\n  WHY: The commit can proceed without confirmation even when the target repository's branch belongs to a merged PR; the cited test only covers env-wrapped commands.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a09892eeb05068551383c07cad48f5c2329ecfc672eea83c1d41f6c6398b3187",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6433,
+    "run_id": "37420713044",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37420713044",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006064402_0f53caea78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6433,
+    "run_id": "37420713044"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T06:44:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

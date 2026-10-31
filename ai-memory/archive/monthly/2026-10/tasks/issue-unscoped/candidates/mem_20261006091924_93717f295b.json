@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16214-16224 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The `2>/dev/null` on the jq invocation suppresses parse-error details when `COMMENTS` is malformed, leaving operators with only the generic `request_parse_failed` outcome.\n  WHY: The guard correctly stops further processing, but hiding jq\u2019s error reduces the information available to diagnose the parse failure.\n- scripts/orchestrate_poll_process.sh:16235-16238 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The `invalid_request` diagnostic logs the comment ID but does not identify whether the `item` or `id` field failed validation.\n  WHY: Operators must reproduce or inspect the request to distinguish malformed `item` values from malformed `id` values.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace the legacy human-gated stall recovery with the automated unblock-judge verdict system (docs/plans/replace-claude-sessions-with-cli-engine-plan.md, Phase 7).\n  expected_change_site: .github/workflows/unblock_judge.yml, scripts/unblock_scan.py, scripts/unblock_judge.sh, and supporting CI tests\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer reports that the unblock judge system appears implemented in the diff, but the `tests-hooks-and-orchestrator` CI check (specifically `tests/test_audit_plans_command.py`) remains red; the required root `.claude/commands/audit-plans.md` file is excluded from the review-transfer workspace, preventing CI parity.\n- requirement: \"`run_project_activation_verify` (8c). A failing `git rev-parse origin/HEAD` substitution ended the poll tick under `set -euo pipefail` right after a project completed. Found by `test_external_finalize_*`; fixed here and on the 8c branch.\" (PR DESCRIPTION, \"Proactive fixes included\" section)\n  expected_change_site: scripts/orchestrate_poll_process.sh in or around the `run_project_activation_verify` function\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The visible portion of the full PR diff (273,116 / 522,113 bytes) covers `scripts/orchestrate_poll_process.sh` lines ~16103-24801 and shows the unblock judge, judge output failures, and merge deferral handovers, but no modification to `run_project_activation_verify` or its `git rev-parse origin/HEAD` substitution is visible; the function could live in the truncated portion, so this is a soft absence.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:16224 | severity=low | confidence=4\n  PROBLEM: The `2>/dev/null` on the jq invocation discards parse-error detail when evaluating `${COMMENTS}`.\n  WHY: There is no runtime failure because the guard stops processing and returns early, but suppressing stderr affects operator diagnosis.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:16214 | severity=low | confidence=4\n  PROBLEM: Suppression of jq stderr using 2>/dev/null in handle_unblock_judge_project_hooks hides the error when `COMMENTS` JSON is malformed.\n  WHY: Operators see a generic `request_parse_failed` outcome without knowing whether the input was truncated, malformed, or missing, increasing diagnosis time.\n- Requirement: Replace the legacy human-gated stall recovery with the automated unblock-judge verdict system (docs/plans/replace-claude-sessions-with-cli-engine-plan.md, Phase 7).\n  Expected change site: .github/workflows/unblock_judge.yml, scripts/unblock_scan.py, scripts/unblock_judge.sh, and supporting CI tests.\n  Evidence of absence: The unblock judge system appears implemented in the diff, but the `tests-hooks-and-orchestrator` CI check (specifically `tests/test_audit_plans_command.py`) remains red. This is documented as an unresolved blocker in the review-autofix comments because the review-transfer policy excludes the required root `.claude/commands/audit-plans.md` file from this editor workspace, preventing CI parity. As long as this check fails, Phase 7 cannot be verified as completed and shippable.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:handle_unblock_judge_project_hooks, lines 16235-16238 in the LAST RUN DIFF | severity=low | confidence=2\n  PROBLEM: The new `invalid_request` diagnostic only logs `comment=<id>` without identifying which field failed validation.\n  WHY: The `item` and `id` failure modes produce the same generic `outcome=invalid_request` line, making them harder to distinguish in the poll log.\n- Requirement: \"`run_project_activation_verify` (8c). A failing `git rev-parse origin/HEAD` substitution ended the poll tick under `set -euo pipefail` right after a project completed. Found by `test_external_finalize_*`; fixed here and on the 8c branch.\" (PR DESCRIPTION, \"Proactive fixes included\" section)\n  Expected change site: scripts/orchestrate_poll_process.sh in or around the `run_project_activation_verify` function.\n  Evidence of absence: The visible portion of the full PR diff (273,116 / 522,113 bytes) covers `scripts/orchestrate_poll_process.sh` lines ~16103-24801 and shows the unblock judge, judge output failures, and merge deferral handovers, but no modification to `run_project_activation_verify` or its `git rev-parse origin/HEAD` substitution is visible. The function could live in the truncated portion, so this is a soft absence.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:handle_unblock_judge_project_hooks, the `if !` jq wrapper and the `invalid_request` diagnostic | severity=low | confidence=3\n  PROBLEM: When jq fails to parse COMMENTS, the `2>/dev/null` suppresses the underlying error; similarly, the `invalid_request` diagnostic names the comment ID but not which field (`item` or `id`) failed validation.\n  WHY: An operator investigating a parse failure or rejected request must reproduce the jq call manually to determine the root cause, since neither path surfaces the relevant diagnostic.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b9d01af090f016e16bd84f51bd8dc488d8ac4428fd58658b79f251bbff3cbc48",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37437471401",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37437471401",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006091924_93717f295b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37437471401"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T09:19:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

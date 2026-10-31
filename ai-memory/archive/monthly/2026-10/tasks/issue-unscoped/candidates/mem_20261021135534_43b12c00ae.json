@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CHANGELOG.md:3443 (also changelog.d/wfopt-0922-validate-dispatch-notice.md:2) | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The post-merge validation changelog entry exists twice with conflicting text, once folded at CHANGELOG.md:3443 and once as a pending fragment. The folded copy says a failed dispatch \"still warns\". The fragment says a failed required dispatch now fails the job.\n  WHY: The next release fold will publish both bullets, and the stale one at 3443 contradicts CHANGELOG.md:3409-3411. Severity disagreement: reviewers rated it NIT (anthropic_claude-sonnet-5_5, openai_gpt-6-luna) or MAJOR (minimax_minimax-m3, qwen_qwen3_7-plus); the highest is used. Their fix directions also differ: one says to keep the 3443 wording, another says to replace it with the fragment's wording.\n- CHANGELOG.md:3443 (vs 3409) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The bullet at line 3443 (\"no longer warns\") contradicts the existing bullet at line 3409 (\"still warns\").\n  WHY: The conflict misleads operators about the behavior of the review workflow. This may be the same root cause as the finding above, but the reviewer cited a different contradiction, so it is listed separately.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Maintain the agent documentation by folding fragments into agents.md.\n  expected_change_site: agents.md\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: agents.d/7604-synced-security-finding-intake.md was deleted. The reviewer says its content exists in agents.md but that the folding contract was not followed. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and qwen_qwen3_7-plus checked this and judged the deletion lossless (content at agents.md:1578-1600).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CHANGELOG.md:3443 (also changelog.d/wfopt-0922-validate-dispatch-notice.md:2) | severity=NIT | confidence=4\n  PROBLEM: The entry exists twice with conflicting text. The folded copy says \"A failed dispatch, or an issue whose labels could not be read, still warns with the same text.\" The pending fragment says a failed required dispatch now fails the job.\n  WHY: The next release fold will publish two near-identical bullets, and the older one contradicts the entry saying a failed required dispatch fails the job.\n- TASK COMPLETENESS: NONE. The reviewer judged the deletion of agents.d/7604-synced-security-finding-intake.md correct and lossless, because its heading appears once in agents.md.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CHANGELOG.md:3443 | severity=MAJOR | confidence=4\n  PROBLEM: Conflicting documentation for the post-merge review warning.\n  WHY: The bullet at line 3443 (\"no longer warns\") contradicts the existing bullet at line 3409 (\"still warns\"), which misleads operators.\n- TASK_GAP: severity=MAJOR | ISSUE_CONFIDENCE: 3\n  Requirement: Maintain the agent documentation by folding fragments into agents.md.\n  Expected change site: agents.md\n  Evidence of absence: The fragment agents.d/7604-synced-security-finding-intake.md was deleted. Its content exists in agents.md, but the deletion did not follow the folding contract, and the fragment was lost before verification could confirm consolidation, as required by CLAUDE.md \u00a730.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- CHANGELOG.md:3443 vs changelog.d/wfopt-0922-validate-dispatch-notice.md:2 | severity=MAJOR | confidence=5\n  PROBLEM: The forward-merge left the fragment in the tree although the same entry is already folded at CHANGELOG.md:3443, and the two copies contradict each other. Line 3443 says a failed dispatch \"still warns\". The fragment says a required dispatch that fails now fails the job.\n  WHY: assemble_changelog.py is purely additive with no content dedupe (assemble_changelog.py:44-45, 283-304), so the next fold publishes a second bullet. The stale copy at 3443 contradicts CHANGELOG.md:3411. The fix is to delete the fragment and replace the sentence at 3443 with the fragment's wording. This is the only surviving fragment of this class.\n- TASK COMPLETENESS: NONE. The reviewer refuted the gemini finding and task gap. The fragment's text is present at agents.md:1578-1600, so the deletion was the correct modify/delete resolution and loses nothing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/wfopt-0922-validate-dispatch-notice.md:2 (compare CHANGELOG.md:3409-3411, 3443) | severity=NIT | confidence=5\n  PROBLEM: The pending fragment repeats an entry already in CHANGELOG.md, with different wording about failed required dispatches.\n  WHY: The next automated changelog assembly will publish the fragment again, creating a duplicate and conflicting operational descriptions.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- CHANGELOG.md:3443 | severity=MAJOR | confidence=4\n  PROBLEM: Line 3443 says \"A failed dispatch, or an issue whose labels could not be read, still warns with the same text.\" This contradicts the pending fragment (changelog.d/wfopt-0922-validate-dispatch-notice.md:2) and CHANGELOG.md:3409. The fragment is deleted in this forward merge without correcting line 3443.\n  WHY: After the release fold, CHANGELOG.md will hold two contradictory statements about whether a failed validation dispatch is a warning or a failure, and the fragment's more precise wording is lost.\n- TASK COMPLETENESS: NONE. The reviewer judged the deletion of agents.d/7604-synced-security-finding-intake.md lossless (content at agents.md:1578-1600) and the gemini finding a false positive.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5eea0318eaf5f99e06ded69cdc69b79258eb95cfdc9aabf875a33d6f66acf96c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7795,
+    "run_id": "39604068731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39604068731",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021135534_43b12c00ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7795,
+    "run_id": "39604068731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T13:55:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

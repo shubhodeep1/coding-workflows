@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The last-run diff adds a non-boolean `seed_only` rejection in `derive_allowed_paths` (scripts/build_sync_manifest.py:261-262); the new test is expected to cover it across the CLI modes that reach that check, including allowed-paths\n  expected_change_site: tests/test_build_sync_manifest.py:test_non_boolean_seed_only_is_rejected\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: tests/test_build_sync_manifest.py:test_non_boolean_seed_only_is_rejected (line 160/170) loops only over (\"managed-paths\", \"managed-digests\") and omits \"allowed-paths\", so the allowed-paths CLI mode has no direct non-boolean case; the existing allowed-paths tests (line 109, line 130) only feed valid contracts. All three reviewers rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The last-run diff adds a non-boolean seed_only rejection in derive_allowed_paths (scripts/build_sync_manifest.py), and a test is expected to cover it.\n  Expected change site: tests/test_build_sync_manifest.py:test_non_boolean_seed_only_is_rejected\n  Evidence of absence: The test loop in test_non_boolean_seed_only_is_rejected (line 160) only exercises managed-paths and managed-digests modes, failing to exercise the non-boolean rejection logic in derive_allowed_paths which is triggered by allowed-paths mode.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The last-run diff adds a strict boolean check for `seed_only` in both `derive_allowed_paths` (scripts/build_sync_manifest.py:261-262) and `derive_managed_digests` (scripts/build_sync_manifest.py:332-333); the new contract-level rejection should be exercised in all three CLI modes that read the contract.\n  Expected change site: tests/test_build_sync_manifest.py:test_non_boolean_seed_only_is_rejected (around line 160)\n  Evidence of absence: The new test's loop is `for mode in (\"managed-paths\", \"managed-digests\"):` \u2014 it does not include `\"allowed-paths\"`. The `derive_allowed_paths` boolean guard added in the last run therefore has no direct test; the existing tests that exercise `allowed-paths` (e.g. test_managed_paths_are_the_allowlist_minus_consumer_edited_entries at line 109 and test_seed_only_audit_gate_target_is_allowed_but_consumer_owned at line 130) only feed valid contracts. The pre-push test gate confirms all added tests pass, but the `allowed-paths` rejection path remains uncovered.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: The last-run diff adds a non-boolean `seed_only` rejection in `derive_allowed_paths` (scripts/build_sync_manifest.py:261-262), and the new test is expected to cover it across the modes that reach that check.\n  Expected change site: tests/test_build_sync_manifest.py:test_non_boolean_seed_only_is_rejected\n  Evidence of absence: tests/test_build_sync_manifest.py:170 loops only over (\"managed-paths\", \"managed-digests\"); the \"allowed-paths\" CLI mode (derive_allowed_paths with include_consumer_owned=True, line 264 branch not taken) has no direct non-boolean case, even though the shared check at line 261 is exercised indirectly through managed-paths. No other test in the PR diff runs allowed-paths against a non-boolean `seed_only` contract.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fda0124442a203bf0119d4eb2566b3baa07bb7dbbbcda2c7f712e2451bb61e38",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8355,
+    "run_id": "40888629600",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40888629600",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029153109_a9f064d011",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8355,
+    "run_id": "40888629600"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T15:31:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

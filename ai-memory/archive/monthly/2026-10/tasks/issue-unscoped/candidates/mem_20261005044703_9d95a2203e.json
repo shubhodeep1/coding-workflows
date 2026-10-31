@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:998-1004 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The live and workflow-template copies of `pr_merge_status_guard.py` differ, so the byte-for-byte parity assertion fails.\n  WHY: This leaves `tests-hooks-and-orchestrator` and the aggregate `lint` check failing on the PR head; severity differed between reviewers (MAJOR and BLOCKER), so the highest severity is used.\n- changelog.d/review-sandbox-audit-plans-parity.md:filename | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The fragment filename omits the numeric issue-or-PR prefix required by the changelog fragment naming convention.\n  WHY: Without the prefix, a future fragment using the same slug could target the same path, defeating per-PR filename uniqueness.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CLAUDE.md \u00a720.B mandates changelog fragment filenames follow the pattern `changelog.d/<issue-or-pr>-<slug>.md`; the number is the issue or PR the work belongs to.\n  expected_change_site: changelog.d/review-sandbox-audit-plans-parity.md\n  confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The fragment file exists at `changelog.d/review-sandbox-audit-plans-parity.md` with no numeric prefix; the PR references #6204, #6208, and #6288 but the filename carries none of them.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/review-sandbox-audit-plans-parity.md:filename | severity=low | confidence=3\n  PROBLEM: The fragment filename is missing the numeric prefix that CLAUDE.md \u00a720.B mandates (\"changelog.d/<issue-or-pr>-<slug>.md\").\n  WHY: A future fragment under a different PR could pick the same slug and produce a collision, breaking the \"concurrent PRs never touch the same path\" invariant that \u00a720.A relies on. The absence of a number also makes provenance untraceable from the filename alone.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_pr_merge_status_guard.py:998-1004 | severity=high | confidence=5\n  PROBLEM: The live `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` differ in content, but `test_template_copies_are_identical` requires byte-for-byte equality.\n  WHY: The CI run on this PR head (run 37262308688) reports 5 failed, 172 passed in `tests-hooks-and-orchestrator`, blocking the aggregate `lint` check. The PR description explicitly defers the parity repair to #6288, so the failure is not introduced by this PR's diff but is still present on this PR head.\n- changelog.d/review-sandbox-audit-plans-parity.md:filename `changelog.d/review-sandbox-audit-plans-parity.md` | severity=low | confidence=3\n  PROBLEM: The fragment filename is missing the numeric prefix that CLAUDE.md \u00a720.B mandates.\n  WHY: The fragment mechanism relies on `<issue-or-pr>-<slug>.md` naming so concurrent PRs never touch the same path (CLAUDE.md \u00a720.A). A missing number leaves the slug without provenance and risks a future fragment added under a different issue/PR picking the same name, which would break the \"concurrent PRs never touch the same path\" invariant. The PR description references #6204, #6208, and #6288, so the numeric prefix should be one of these.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_pr_merge_status_guard.py:998-1004 | severity=critical | confidence=5\n  PROBLEM: The live and workflow-template copies of `pr_merge_status_guard.py` differ, so this byte-for-byte parity assertion fails.\n  WHY: The current CI run reports `tests-hooks-and-orchestrator` failed, which also fails the aggregate `lint` check. The PR description defers syncing these copies to #6288, but the check remains red on this PR head.\n- changelog.d/review-sandbox-audit-plans-parity.md:Fragment filename | severity=low | confidence=4\n  PROBLEM: The fragment filename omits the issue-or-PR number required by the `changelog.d/<issue-or-pr>-<slug>.md` convention.\n  WHY: Two PRs using the same slug can target the same fragment path, reintroducing a changelog-file conflict and defeating the per-PR filename uniqueness rule.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: CLAUDE.md \u00a720.B mandates changelog fragment filenames follow the pattern `changelog.d/<issue-or-pr>-<slug>.md` (e.g. `changelog.d/3712-soft-deadline-finalization.md`). The number is the issue or PR the work belongs to.\n  Expected change site: changelog.d/review-sandbox-audit-plans-parity.md\n  Evidence of absence: The fragment file exists at `changelog.d/review-sandbox-audit-plans-parity.md` with no numeric prefix. The PR references #6204, #6208, and #6288 but the filename carries none of them. The majority of existing fragments follow the pattern (e.g. `6202-claude-md-25-scheduled-status-checks.md`, `6181-review-transfer-failure-evidence.md`, `6055-review-editor-edits-reach-work-tree.md`), though a handful of older fragments also lack the prefix.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "9f385f525c3e7739aa292c5f861e7f45ecff9416effc5591ac3e5645054769d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6299,
+    "run_id": "37262308885",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37262308885",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005044703_9d95a2203e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6299,
+    "run_id": "37262308885"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T04:47:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

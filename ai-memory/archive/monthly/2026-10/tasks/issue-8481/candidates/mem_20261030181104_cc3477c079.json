@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The \"Fix constraints\" block forbids retry and backoff, but the suggested fix is a bounded retry. Which one wins?\nChoices:\nA. Accept the bounded retry for this lineage. The single OIDC 503 is a transient upstream error, the \"deterministic\" boilerplate does not fit it, and a 503-then-200 regression test fails on the current head and passes with the fix. (RECOMMENDED)\nB. No retry. Instead, stop the transient OIDC/broker reasons (`oidc_request_failed_000`/`429`/`5xx`) from counting toward `judge_isolation_state` in `scripts/orchestrate_poll_process.sh`. This goes against the issue's \"isolation counting stays as it is\" and is also outside the heal scope paths.\nC. Close as `transient` with no code change.\n**Note:** C makes Q2 and Q3 moot. B needs `scripts/orchestrate_poll_process.sh` added to scope.\nQ2: `scripts/claude_pool_token.sh` is not in the heal scope's `paths=`, which list `.github/actions/claude-pool-token/action.yml`, `tests/**` and others. Where may the change land?\nChoices:\nA. Add `scripts/claude_pool_token.sh` to the allowed scope and put the retry inside the script around the OIDC `curl`. The final reason string `oidc_request_failed_<code>` stays the same. (RECOMMENDED)\nB. Stay strictly inside the listed scope: retry the whole pool step from the action wrapper (`.github/actions/claude-pool-token/action.yml` / `main.js`) when the reason is `oidc_request_failed_000|429|5xx`.\nC. Both: a retry inside the script, plus a guard at the wrapper level.\nQ3: Should the bounded retry also cover the broker POST at `scripts/claude_pool_token.sh:145-147` (`broker_unavailable_<code>`)?\nChoices:\nA. OIDC request only. The broker's 503 carries a `pool_empty` capacity signal (already covered at `tests/test_claude_pool_token.py:229`), so retrying it only delays a real capacity answer. (RECOMMENDED)\nB. Both OIDC and the broker, retrying only on `000`/`429`/`5xx`. A `403` still ends with `broker_refused_<reason>` at once.\nC. Both, but for the broker only on `000` (network or timeout) and `502`/`504`, not `503`.",
+  "fingerprint": "7149b36adc6729d9a29bc545ffedc80beb5338928891e9be333b13003fd1b668",
+  "lineage": {
+    "issue_number": 8481,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41103729553",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41103729553",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261030181104_cc3477c079",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8481,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41103729553"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8481 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-30T18:11:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

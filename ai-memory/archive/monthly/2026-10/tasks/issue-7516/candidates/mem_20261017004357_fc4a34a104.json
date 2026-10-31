@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7516,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7516\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7523\",\"pr_number\":7523,\"branch\":\"ai/issue-7516\",\"run_id\":\"38985760245\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38985760245\",\"changed_files\":[\".github/workflows/clarify.yml\",\"changelog.d/7516-clarify-label-missing-hold.md\",\"tests/test_workflow_checkout_integration_ref_audit.py\"]}",
+  "fingerprint": "489c4b7e71927ce90bf60fa2259a2c37da8057c744122dd91d1973c749fd4f4d",
+  "lineage": {
+    "issue_number": 7516,
+    "parent_ids": [],
+    "pr_number": 7523,
+    "run_id": "38985760245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38985760245",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7523"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261017004357_fc4a34a104",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7516,
+    "level": "run",
+    "pr_number": 7523,
+    "run_id": "38985760245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7516: https://github.com/shubhodeep1/coding-workflows/pull/7523",
+  "timestamps": {
+    "created_at": "2026-10-17T00:43:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

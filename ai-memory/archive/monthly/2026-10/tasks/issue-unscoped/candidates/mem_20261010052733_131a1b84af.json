@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/heal_isolated_implement.sh:110-112 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `grep` command uses `head -n 20` but does not guarantee the order of error messages when validation errors occur across multiple files.\n  WHY: This is not a functional failure, but output may be inconsistent across runs, making debugging harder if order matters.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/heal_isolated_implement.sh:110-112 | severity=NIT | confidence=2\n  PROBLEM: The grep command uses `head -n 20` but does not guarantee the order of error messages if multiple validation errors occur across different files.\n  WHY: Not a functional failure, but the output might be inconsistent across different runs of the same syntax error set, making debugging harder if order matters.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "c63c924896f5a1b9baf6db2762e89a476e8157809580d5d11742aff82345a472",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7030,
+    "run_id": "38025118762",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38025118762",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010052733_131a1b84af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7030,
+    "run_id": "38025118762"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-10T05:27:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

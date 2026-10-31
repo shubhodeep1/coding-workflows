@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Option A is the only option that fits the frozen heal scope (`paths=.github/workflows/clarify.yml,tests/**,changelog.d/*.md`). B and C need the scope marker widened, and D ships nothing for a real defect. The repo shows that rc 76 (`_AI_ENGINE_EXIT_REFUSED=76`, `scripts/ai_engine.sh:143`) is retried blindly at `.github/workflows/clarify.yml:1683-1690`. For `no_credential` the retry cannot help: the pool reason file is written once by the earlier \"Resolve Claude credential\" step and stays the same for the whole job. One refinement over A as written: `scripts/clarify_isolated_run.sh:253-257` also exits 76 with `image_build_failed`, and that can be transient (the same run hit a Docker mirror 429). That one reason must keep today's retry so the change takes nothing away from the existing recovery.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/clarify.yml lines 1646-1691 (\"Run Codex\" retry loop: rc 80 branch at 1655, rc 75 branch at 1663, generic retry/sleep at 1683-1690)\n    - scripts/clarify_isolated_run.sh:202-205 (exit-code contract: 75 = capacity fallback, 76 = fail closed, 80 = wait), :212-218 and :226-227 (inline v1 record plus `exit 76` for `support_missing`), :236-257 and :345-350 (every `ai_engine_fallback` exit path)\n    - scripts/ai_engine.sh:217-223 (`ai_engine_fallback_class`: only `all_gated` and `all_usage_limit` are capacity), :246-261 (`ai_engine_no_account_reason`), :263-289 (`ai_engine_fallback` sets exit 76 when action=refused and appends the record `v1\\t<ts>\\t<ROLE>\\t<reason>\\t<class>\\t<action>\\t<policy>` to `${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}`)\n  steps:\n    - In the clarify.yml \"Run Codex\" loop, inside the `CLARIFY_ENGINE = claude` branch and after the existing rc 80 and rc 75 checks, add an `rc -eq 76` branch. Leave the rc 80 and rc 75 branches exactly as they are.\n    - In that branch, read the reason field (column 4) of the last `v1` record in the fallback records file whose role column is `CLARIFY` and whose action column is `refused`. Use the same default path expression the scripts use (clarify.yml does not set `AI_ENGINE_FALLBACK_RECORDS_FILE`). Skip the file if it is a symlink, and sanitise the value to `[A-Za-z0-9_.-]`, at most 60 characters. Use new local variable names that clash with nothing in the step (for example `clarify_refused_reason`).\n    - If the reason is exactly `image_build_failed`, fall through to the existing warning, sleep and retry path unchanged.\n    - For any other reason, including an empty or unreadable one, emit `::error::Claude clarify refused (rc 76, reason=<reason>); deterministic refusal, not retrying.` and `exit 1` at once, with no further attempts and no sleep. The job outcome stays exactly as today (step failure, exit 1). Only the wasted attempts and sleeps go away. Do not change the existing `AI_ENGINE_FALLBACK_REFUSED` line, the `AI_ENGINE_FALLBACK*` prefixes, the `reason=` values, or the \"clarify failed after N attempts\" message on the remaining exhaust path.\n    - Add a code comment at the new branch citing heal run binance-blessings 40951784257. It should say that refusals other than `image_build_failed` are deterministic within a job, because the pool reason is resolved once in \"Resolve Claude credential\".\n    - Add a regression test under `tests/` (new file, for example `tests/test_clarify_refused_rc_no_retry.py`). Extract the \"Run Codex\" loop from clarify.yml and run it in bash with a stub `scripts/clarify_isolated_run.sh` that appends a CLARIFY v1 record and exits 76, plus a stub `sleep` that counts calls. Case 1: reason `no_credential`. Expect exactly 1 stub invocation, 0 sleeps, exit 1, and stdout/stderr containing `reason=no_credential`. Case 2: reason `auth_failed`, written as `all_accounts_failed` in the record per `clarify_isolated_run.sh:348`, or as the raw token. Expect the same terminal result. Case 3: reason `image_build_failed`. Expect 3 invocations, 2 sleeps and the existing \"failed after 3 attempts\" error. Case 4: rc 75 followed by codex success, and rc 80. Expect behaviour unchanged.\n    - Add a changelog fragment under `changelog.d/` following the existing fragment naming convention, describing the fast-fail on deterministic Claude refusals in clarify.\n    - Do not touch `scripts/ai_engine.sh`, `scripts/ai_engine_fallback_report.sh`, `.github/workflows/plan.yml` or `scripts/run_plan_codex.sh`; all are outside the frozen heal scope. The plan loop lives in `scripts/run_plan_codex.sh:~440-472`, not in plan.yml. Record two follow-ups in the plan's Deferred scope: (1) the `pool_reason=` diagnosability field, using a new record version accepted alongside `v1` (option C's shape); (2) the same rc 76 fast-fail in `scripts/run_plan_codex.sh`.\n    - Say plainly in the plan that the credential failure itself is environmental, a pool or broker credential outage, and is not fixed by code. Operator steps: read the `CLAUDE_POOL available=false reason=\u2026` and `CLAUDE_POOL probe \u2026` lines in the \"Resolve Claude credential\" and \"Install Claude Code CLI\" steps of binance-blessings run 40951784257; check the claude-pool-broker logs around 2026-10-29T20:46Z; fix the pool secret or the broker; then post `/reclarify` on binance-blessings#405. Only #405 is confirmed by GITHUB FACTS. The #408 named in option A is not verified for binance-blessings (the #408 in GITHUB FACTS is an unrelated coding-workflows PR), so leave it out.\n  replaces_acceptance_criterion: The original suggestion to treat every `rc -eq 76` as terminal, and to change plan.yml in this heal, becomes: treat rc 76 as terminal for every refusal reason except `image_build_failed`, in clarify.yml only.\n  equivalence_argument: Every rc 76 reason except `image_build_failed` is fixed for the life of the job: support files, policy, instructions, the pool reason file written in an earlier step, and rejected account tokens. Retrying them only adds 10-40 s of sleep before the same exit 1, which is the observed failure. `image_build_failed` depends on the Docker registry and can recover, so keeping its retry preserves today's behaviour where a retry can help. Final job outcomes for refusals are unchanged (exit 1). The check fails just as closed and is not weakened.\n  reversibility: The change is a single additive branch in one loop and is covered by its own test. Reverting it restores blind retries. If a human prefers terminal-on-all-76 (option A as written), delete the `image_build_failed` carve-out and test case 3. If a human wants B or C, widen the scope marker in the follow-up issue; nothing here blocks that.",
+  "fingerprint": "d3e6c5fdf6d0f87e1dfe6ae117a39617e3ffac74592f15423694a96db4963212",
+  "lineage": {
+    "issue_number": 8393,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40954275836",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40954275836",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8393"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029211505_b757594b78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8393,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40954275836"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8393",
+  "timestamps": {
+    "created_at": "2026-10-29T21:15:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

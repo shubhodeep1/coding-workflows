@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The GitHub facts show PR #6650 is still open and unmerged, and CI failed on its current head `c6edb1d07f41` (run 37922343747, branch `ai/issue-6637`). So the fix goes on that branch, where the failing combination lives. If the PR has merged, closed, or gone green on a later head by implement time, option C applies instead: close this issue as superseded.\nQ2: The test list for shard 1 can be rebuilt exactly from the repo. `.github/workflows/ci.yml` lines 1371-1398 select tests with the fixed rule `NR % total == n`, applied twice: once to pick the matrix group, then again to pick the local shard. Because of this, option C is not needed, and it would also break the data-provision guard. Option B takes about 35 minutes and is a fallback only.\nQ3: If every shard 1 test passes when reproduced on the same head, there is nothing in the repo to fix. Changing a test without a known failure would break the minimal-change rule and the rule against hiding failures. Closing the issue with a list of the tests run, and their results, is the conservative choice that can be undone.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - PR #6650 head branch `ai/issue-6637` (open, at c6edb1d07f41 per GITHUB FACTS)\n  steps:\n    - Before editing, check the state of PR #6650 again. If it is merged or closed, or its current head passes the `CI` check, stop and close this issue as superseded with a comment naming the PR state or run.\n    - Otherwise, check out `ai/issue-6637` and target the fix PR at that branch, not `main`.\n    - If the failing test also fails on `main` at the merge base, still fix it on `ai/issue-6637`, because PR #6650 cannot merge while it is red. Say in the PR body that the defect predates the PR.\n  replaces_acceptance_criterion: none\n  equivalence_argument: The failure was seen on this branch's head, so a fix there clears the red check on PR #6650.\n  reversibility: The fix is one commit on the PR branch, and it can be reverted or cherry-picked onto `main`.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - `.github/workflows/ci.yml` lines 1346-1398 (`CI_POLL_TEST_SHARDS` default 4, `CI_POLL_TEST_GROUP_INDEX` = `strategy.job-index`, `CI_POLL_TEST_GROUP_COUNT` = `strategy.job-total`, file `/tmp/orchestrate_poll_remaining_tests.txt`)\n    - `tests/test_orchestrate_poll_process.py`, which takes test names as argv\n    - `tests/test_ci_poll_test_sharding.py`\n  steps:\n    - On the target branch, rebuild `/tmp/orchestrate_poll_remaining_tests.txt` with the same commands the workflow uses earlier in that step: the full test list minus the fast-fail subset.\n    - Apply `awk 'NR % 4 == 3'` to get group 3 of 4. Use the matrix size from the `orchestrate-poll` matrix in `ci.yml`, and confirm that `(3)` is job-index 3.\n    - Apply `awk 'NR % 4 == 1'` to that group to get local shard 1.\n    - Run `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py <shard-1 tests...>`. Fix only the tests that fail, making the smallest change that the failure supports. Change `scripts/orchestrate_poll_process.sh` only if the failure shows a poller defect.\n    - Do not change the shard-failure or `lint` aggregate checks in `ci.yml`.\n    - If the rebuilt list cannot match CI, for example because the matrix size differs, run the whole module instead (option B).\n  replaces_acceptance_criterion: Reading shard 1's `FAIL` line from the CI log.\n  equivalence_argument: The split is deterministic, so the same branch gives the same shard 1 test set, and rerunning those tests reproduces the failure without needing the log.\n  reversibility: This is read-only work up to the point of editing a test or the poller, and any edit can be reverted on its own.\nQ3:\n  strategy: derive_from_repo\n  inputs:\n    - Shard 1 test results from the Q2 steps\n  steps:\n    - If every shard 1 test passes on the same head, make no code change.\n    - Post a comment listing the tests run, the head SHA, and the pass result. Then close the issue as a no-op, possibly flaky or environment-only.\n  replaces_acceptance_criterion: none\n  equivalence_argument: With no failure that can be reproduced, no fix can be shown to be correct.\n  reversibility: If CI fails again, check-failure triage will open a new issue (lineage cap 3).",
+  "fingerprint": "e1c642dd103103ded6f7dd6154e5af26ff4787fd85c4261adbba259df22dbd0c",
+  "lineage": {
+    "issue_number": 6933,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37927124731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37927124731",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6933"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009120846_42a28c0e4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6933,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37927124731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6933",
+  "timestamps": {
+    "created_at": "2026-10-09T12:08:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

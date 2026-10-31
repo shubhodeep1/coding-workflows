@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fail closed on symlinks and non-regular PR files before prompt assembly; read README.md with no-follow, size-bounded validation, and keep PR content separate from trusted instructions.\" (linked issue #6272 recommendation; applies to every prompt-assembly path, not only review_autofix.yml)\n  expected_change_site: scripts/build_static_context.sh (emit_readme_trimmed) plus .github/workflows/orchestrate.yml:566-570, .github/workflows/orchestrate_clarify_respond.yml:678-682, scripts/validate_process.sh:3038-3042, scripts/orchestrate_poll_process.sh:819-823\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR DIFF and LAST RUN DIFF do not touch scripts/build_static_context.sh, the four other call sites still emit `cat README.md` / `awk ... README.md` after a `[ -f README.md ]` test that follows symlinks, and the new `readme-trimmed` subcommand added at scripts/review_untrusted_workspace.py is not invoked from any of them; build_static_context.sh is the canonical helper for clarify.yml, plan.yml, and implement.yml, so reusing it for review_autofix.yml would have closed the gap with one change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Fail closed on symlinks and non-regular PR files before prompt assembly; read README.md with no-follow, size-bounded validation, and keep PR content separate from trusted instructions.\" (linked issue #6272 recommendation; applies to every prompt-assembly path, not only review_autofix.yml)\n  Expected change site: scripts/build_static_context.sh (emit_readme_trimmed) plus .github/workflows/orchestrate.yml:566-570, .github/workflows/orchestrate_clarify_respond.yml:678-682, scripts/validate_process.sh:3038-3042, scripts/orchestrate_poll_process.sh:819-823\n  Evidence of absence: PR DIFF and LAST RUN DIFF do not touch scripts/build_static_context.sh, the four other call sites still emit `cat README.md` / `awk ... README.md` after a `[ -f README.md ]` test that follows symlinks, and the new `readme-trimmed` subcommand added at scripts/review_untrusted_workspace.py is not invoked from any of them; build_static_context.sh is the canonical helper for clarify.yml, plan.yml, and implement.yml, so reusing it for review_autofix.yml would have closed the gap with one change.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e4f1739feb82dc331d1598719e83d79a93c942640049a62a5d901ad1f82ad360",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6281,
+    "run_id": "37283234324",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37283234324",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005092515_8f46ffbd09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6281,
+    "run_id": "37283234324"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T09:25:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

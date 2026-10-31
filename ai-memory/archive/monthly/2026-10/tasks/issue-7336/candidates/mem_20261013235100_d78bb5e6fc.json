@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should this fix land?\nChoices:\nA) Make no code change. Close this issue and leave the failure to PR #7285's own review/autofix loop. This matches the documented rule that a PR-specific failure belongs to that PR's loop and a default-branch fix cannot repair it. (RECOMMENDED)\nB) Fix it on PR #7285's branch `ai/issue-7283`. This needs someone to add the line `Target branch: ai/issue-7283` to this issue's body first (the routing flag `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` is off by default, so the pipeline will not route it on its own). Without that line, planning falls back to the default branch, where nothing fails.\nC) Fix it on the default branch anyway by changing the test or the script there.\n**Note:** with C, the change would edit code that already passes and would not fix PR #7285. It is listed only so you can rule it out.\nQ2: If Q1 is B, how should the third base-gate call to `triage_report_routing_unverified` added on `ai/issue-7283` be handled?\nChoices:\nA) Keep the call if it reports an unverified route before a separate skip-and-exit path that PR adds. Raise the assertion in `test_routing_contract` to 3 and update the comment above it to name the new path. (RECOMMENDED)\nB) Remove the third call if it repeats one of the two existing calls (the base-run success skip or the pending skip). Keep the assertion at 2.\nC) Let the implementer decide by reading the PR's code, using A's rule for a separate exit and B's rule for a repeat.\n**Note:** Q2 only applies when Q1 is B. With Q1 A or C it is ignored.\nAssumptions: The default-branch checkout I read here is not the head CI tested. The line numbers of the assertion (2572 here, 2589 in the CI log) show that the failing test file came from PR #7285's head.\nMissing context: The contents of PR #7285 and issue #7283, and whether PR #7285 is still open, could not be read from the repository snapshot.",
+  "fingerprint": "00eb93ce205ccc168e391eb1df251415379ebfe0b0c1edf6bf6f1b4577b4e144",
+  "lineage": {
+    "issue_number": 7336,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38486146259",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38486146259",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013235100_d78bb5e6fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7336,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38486146259"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7336 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T23:51:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

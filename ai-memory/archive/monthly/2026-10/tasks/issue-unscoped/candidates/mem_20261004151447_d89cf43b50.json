@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:998-1004 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The root and workflow-template copies of `pr_merge_status_guard.py` diverge despite the test requiring byte-for-byte equality, causing the parity assertion to fail.\n  WHY: This fails `tests-hooks-and-orchestrator` and the aggregate `lint` check, blocking the PR from merging.\n- docs/INVENTORY.md:228-232 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, qwen_qwen3_7-plus]\n  PROBLEM: `scripts/review_single_issue_security_pass.sh` is inserted out of alphabetical order in the inventory.\n  WHY: The inventory is documented as a sorted list; the misplaced entry may hinder lookups or cause the drift-check contract test to flag it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- tests/test_pr_merge_status_guard.py:998-1004 | severity=critical | confidence=[5]\n  PROBLEM: The root hook copy `.claude/hooks/pr_merge_status_guard.py` has diverged from `workflow-templates/.claude/hooks/pr_merge_status_guard.py`, lacking recent shell redirect target stripping and assignment token handling.\n  WHY: In the CI tests-hooks-and-orchestrator job, test_template_copies_are_identical fails due to byte mismatch between TEMPLATE_GUARD_PATH and GUARD_PATH, and test_push_parser_guards_real_destination fails on commands containing += assignments and stderr redirects (e.g., COUNT+=1 git push and 2>&1).\n- docs/INVENTORY.md:228-232 | severity=low | confidence=[4]\n  PROBLEM: `scripts/review_single_issue_security_pass.sh` is inserted out of alphabetical order.\n  WHY: In docs/INVENTORY.md, inventory entries follow alphabetical order. scripts/review_single_issue_security_pass.sh is placed immediately after scripts/review_resolve_review_threads_plan.py and before scripts/review_run_judge_interim.sh, whereas review_single should be placed after scripts/review_sandbox/Dockerfile and before scripts/review_synthesise_smoke.sh.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_pr_merge_status_guard.py:998-1004 | severity=critical | confidence=[5]\n  PROBLEM: The root and workflow-template copies of `pr_merge_status_guard.py` diverge; the root copy is 1474 lines and the template copy is 1501 lines.\n  WHY: The parity assertion fails, causing `tests-hooks-and-orchestrator` and the aggregate `lint` check to fail and blocking the PR from merging.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_pr_merge_status_guard.py:998-1004 | severity=critical | confidence=[5]\n  PROBLEM: The root and workflow-template copies of the merge guard are not identical, but this test requires byte-for-byte equality.\n  WHY: The parity assertion fails and causes the aggregate `lint` check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- docs/INVENTORY.md:229 | severity=low | confidence=[4]\n  PROBLEM: `review_single_issue_security_pass.sh` is placed out of alphabetical order.\n  WHY: The inventory is documented as a sorted list and future lookups may miss the entry or the drift-check contract test may flag it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d223924deb8cd346aebd6457533e20f99a76d7eba2e203c9553398a103af22bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6201,
+    "run_id": "37210035234",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37210035234",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004151447_d89cf43b50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6201,
+    "run_id": "37210035234"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-04T15:14:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

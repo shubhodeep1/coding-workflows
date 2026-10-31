@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The README.md \u201cVariables\u201d table convention is to enumerate every new repo variable consumed by a workflow, including its default, used-by workflow, and description; this PR introduces `REVIEW_SANDBOX_BUILD_ATTEMPTS`, `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1`, and `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2` but does not add them to that table.\n  expected_change_site: README.md, the formal \u201cVariables\u201d table\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: PR diff for README.md adds narrative prose about the variables but no rows in the formal Variables table; agents.md mentions `REVIEW_SANDBOX_BUILD_ATTEMPTS` but omits the two sleep variables.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: The existing README.md \"Variables\" table convention is to enumerate every new repo var consumed by a workflow with its required/default/used-by/description.\n  Expected change site: README.md, the formal 'Variables' table.\n  Evidence of absence: PR diff for README.md adds narrative prose inside the new bullet for sandbox retry behavior, but does not add the three new variables (REVIEW_SANDBOX_BUILD_ATTEMPTS, REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1, REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2) to the formal 'Variables' table. agents.md also omits these variables.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR description says \"`scripts/review_untrusted_sandbox.sh` also retries the sandbox image build when Docker Hub or the network fails (429/5xx, `failed to resolve source metadata`, TLS or I/O timeouts, resets): up to `REVIEW_SANDBOX_BUILD_ATTEMPTS` attempts (default `3`), sleeping `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1` (default `10`) then `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2` (default `30`) seconds\". This introduces three new repository variables whose defaults are 3 / 10 / 30. The README.md has a canonical `| Variable | Default | Used By | Description |` table for every repo var consumed by a workflow, and the convention (already pinned for `WORKFLOW_EDITOR_MODEL`, `AUTOFIX_SKIP_MAX_ADDITIONS`, etc.) is to enumerate new vars there with their default, used-by workflow, and description.\n  Expected change site: README.md, the existing 'Variables' table near the top of the file (the same table that lists `WORKFLOW_EDITOR_MODEL`, `REVIEW_HEAD_GATE_STATUS_ENABLED`, `CHECK_RUNS_AUTOFIX_ENABLED` and friends).\n  Evidence of absence: PR diff for README.md adds the three vars only inside the new narrative bullet at lines 1707-1732 \u2014 a free-form prose mention of `REVIEW_SANDBOX_BUILD_ATTEMPTS` (default `3`) and the two sleep vars. No new `| Variable | Default | Used By | Description |` row is added. agents.md mentions `REVIEW_SANDBOX_BUILD_ATTEMPTS` parenthetically (line 425) but omits the two `_SLEEP_*` vars, leaving the trio partially documented in prose only.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: The PR introduces three new repo vars: `REVIEW_SANDBOX_BUILD_ATTEMPTS` (default `3`), `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1` (default `10`), `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2` (default `30`). The existing README.md \"Variables\" table convention is to enumerate every new repo var consumed by a workflow with its required/default/used-by/description; this PR does not add the three vars to the table.\n  Expected change site: README.md, the formal 'Variables' table\n  Evidence of absence: PR diff for README.md adds only narrative prose (`REVIEW_SANDBOX_BUILD_ATTEMPTS attempts (default 3)`, `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1 (default 10)`, `REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2 (default 30)`) inside the new bullet near lines 1707-1732; no new `| Variable | Default | Used By | Description |` row is added; `agents.md` similarly mentions only `REVIEW_SANDBOX_BUILD_ATTEMPTS` (in the trailing parenthetical near line 425) and omits the two sleep vars, leaving the in-PR variable trio partially documented in only one prose sentence.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "e7debbcddbd8c3a7e215358dca724dcd40c78a67b45cd98f852c2d0ca4a55f46",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7010,
+    "run_id": "38016777409",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38016777409",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010030049_74b3885a98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7010,
+    "run_id": "38016777409"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T03:00:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

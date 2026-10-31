@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/heal_isolated_implement.sh:lines 85-88 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The comment incorrectly says `claude_run` returns exit 76 and refers to `AI_ENGINE_FALLBACK_POLICY`, which does not exist.\n  WHY: `claude_run` maps its internal exit 76 to 75 before returning; deepseek rated this nit/low because it does not affect runtime, while qwen rated it major/high because it misleads maintainers.\n- scripts/ai_engine.sh:427-440, 442-449; scripts/heal_isolated_implement.sh:78-82 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The heal editor treats every `claude_run` exit 75 as permission to run Codex, including when all Claude pool accounts fail authentication.\n  WHY: Exhausting the pool after authentication failures returns 75, so the implementation runs with Codex rather than failing closed as the PR describes.\n- tests/test_heal_isolated_claude_editor.py:`test_claude_failure_fails_without_transfer_or_codex_rerun` parametrize with `claude_rc=76` | severity=high | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The test injects exit 76 directly into the fake `claude_run`, a status the production `claude_run` does not return.\n  WHY: The passing test gives false confidence about the production exit-code contract because the real helper maps its internal exit 76 to 75.\n- scripts/heal_isolated_implement.sh:lines 78-82 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The `75)` case falls back to Codex when isolation is unavailable, contradicting the PR description's stated behavior that this condition should fail closed.\n  WHY: `claude_run` maps the isolation-unavailable path to 75, which triggers the Codex fallback; qwen notes that either the code or the PR description is wrong.\n- agents.md:line 2329 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: No defect is reported; the `SANDBOX_IMAGE` log-prefix registry entry is described as well-formed and correctly placed.\n  WHY: The reviewer states that it matches the documented stable-prefix list and has no runtime impact.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/heal_isolated_implement.sh:lines 85-88 | severity=low | confidence=[4]\n  PROBLEM: The comment on the `*` (any-other-exit) branch claims claude_run \"returns 76 as is when the capacity-only AI_ENGINE_FALLBACK_POLICY refuses a fallback\". This is incorrect on two counts: (1) claude_run in ai_engine.sh lines 442-444 explicitly converts subshell exit 76 to return 75 via `return \"${_AI_ENGINE_EXIT_FALLBACK}\"`, so it never returns exit 76 to any caller; (2) AI_ENGINE_FALLBACK_POLICY does not exist anywhere in this codebase.\n  WHY: Does not affect runtime \u2014 the subshell exits 76 only when codex_isolated_exec.sh exits 75 (genuine isolation unavailable), and falling back to codex in that case is the intended behavior.\n- agents.md:line 2329 | severity=low | confidence=[5]\n  PROBLEM: The `SANDBOX_IMAGE` log-prefix registry entry is correct and correctly placed.\n  WHY: It matches the documented stable-prefix list and has no runtime impact.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- ai_engine.sh lines 427-440, 442-449; heal_isolated_implement.sh lines 78-82 | severity=high | confidence=[4]\n  PROBLEM: The heal editor treats every `claude_run` exit 75 as permission to run Codex. In `claude_run`, `auth_failed` accounts are retried, but exhausting the pool exits with `_AI_ENGINE_EXIT_FALLBACK` (75); the heal editor then falls back to Codex.\n  WHY: When all Claude pool accounts fail authentication, the heal implementation runs with Codex instead of failing closed as the PR describes for a non-capacity fallback refusal.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/heal_isolated_implement.sh:lines 85-88 (the `*)` case comment in `run_editor_claude`) | severity=high | confidence=[5]\n  PROBLEM: The comment states \"That includes 76, which claude_run returns as is when the capacity-only AI_ENGINE_FALLBACK_POLICY (project #6664) refuses a fallback\". This is factually wrong. `claude_run` in scripts/ai_engine.sh never returns 76 to its caller: when the container returns 75 (isolation unavailable), the subshell exits 76 (line 410), but lines 442-444 catch that 76 and return `${_AI_ENGINE_EXIT_FALLBACK}` which is 75 (line 81). The caller only ever sees 0, 1, 75, or 124 from `claude_run`.\n  WHY: The comment misleads future maintainers into believing exit 76 reaches this case statement. It does not.\n- tests/test_heal_isolated_claude_editor.py:`test_claude_failure_fails_without_transfer_or_codex_rerun` parametrize with `claude_rc=76` | severity=high | confidence=[5]\n  PROBLEM: The test injects `FAKE_CLAUDE_RC=76` directly into the fake `claude_run`, asserting the heal script fails closed. But in production, `claude_run` maps its internal exit 76 to 75 before returning (scripts/ai_engine.sh:442-444), so the heal editor's `run_editor_claude` never receives 76.\n  WHY: The test passes, giving false confidence that exit 76 is handled correctly.\n- scripts/heal_isolated_implement.sh:lines 78-82 (the `75)` case in `run_editor_claude`) | severity=high | confidence=[4]\n  PROBLEM: The PR description states \"Any other exit fails the run with no transfer. That includes 76, the fallback that project #6664's capacity-only policy refuses\". But `claude_run` maps exit 76 to 75 (scripts/ai_engine.sh:442-444), so when isolation is unavailable (container returns 75 \u2192 subshell exits 76 \u2192 `claude_run` returns 75), the heal editor's `75)` case fires and falls back to codex.\n  WHY: The code and the PR description disagree. Either the code is wrong (should not map 76\u219275, or the heal editor should distinguish isolation_unavailable from all_accounts_failed) or the PR description is wrong (76\u219275 mapping is intentional and isolation_unavailable should fall back).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "8108dfb628985208fa80b0356c4c19fd7f3b068424b45e279e3395a033a92c9b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7026,
+    "run_id": "38040992410",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38040992410",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010102007_d5dadb82de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7026,
+    "run_id": "38040992410"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T10:20:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

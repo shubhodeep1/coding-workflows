@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/apply_analysis_on_main.sh:247-513 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The branch-tip existence check, in-flight orchestrator-run check, and workflow dispatch are not synchronized, so the purge can delete a source doc after dispatch checks it but before the new run appears in the runs list.\n  WHY: The dispatched project's plan stage can then fail because its source doc is missing; reviewers disagree on severity, and the highest rating is MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/apply_analysis_on_main.sh: ~443-462 (doc_exists_on_ref check) through ~507-513 (gh workflow run dispatch) | severity=low | confidence=3\n  PROBLEM: A narrow race window remains between the branch-tip contents check and the workflow dispatch call, during which the purge can delete the doc.\n  WHY: The subsequently created project's plan stage reads the doc from the default branch and finds it missing, blocking the project the same way #7022 blocked; this window is acknowledged in the PR description and is a dramatic improvement from the previous hours-wide window.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/apply_analysis_on_main.sh: dispatch branch-tip loop (~lines 437-468 in the new file); in-flight-docs orchestrator-runs gate (~lines 350-373) | severity=high | confidence=4\n  PROBLEM: The LAST RUN's new `orchestrate_run_in_flight` gate narrows but does not eliminate the dispatch-vs-purge race because the dispatcher's `doc_exists_on_ref` read and the purge's orchestrator-runs read are independent point-in-time reads.\n  WHY: `gh workflow run` can return success before the new run appears in the `/actions/runs` listing, allowing the purge to delete the doc before the orchestrator reads it and causing the project to block with \"source doc unavailable.\"\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- `apply_analysis_on_main.sh:351-377, 443-513`; `workflow-log-analysis.yml:1270-1276` | severity=high | confidence=5\n  PROBLEM: The in-flight-doc listing and branch-tip existence check are not synchronized with the purge.\n  WHY: The purge can find no active orchestrator runs, then the dispatcher can verify the doc exists before the purge deletes it; the workflows have separate concurrency groups, so the dispatcher can start the orchestrator with a doc no longer on the branch tip for planning to read.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/apply_analysis_on_main.sh: in_flight_docs at lines 347-382, doc_exists_on_ref at lines 247-270, dispatch at lines 507-513 | severity=low | confidence=3\n  PROBLEM: The in-flight-docs check, branch-tip check, and workflow dispatch are not atomic, so the purge can run after the dispatcher confirms a doc exists and before the orchestrator run appears in the runs list.\n  WHY: The purge may not yet see the new run, delete the doc, and cause the project's plan stage to fail with \"source doc unavailable\"; this reduces the race window from hours to seconds, and the reviewer considers the remaining race rare and an acceptable limitation.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "dcffd8a1f4309b92efd63709ade241fc126778eb74788f4b68a0935a6ba322ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7025,
+    "run_id": "38022223342",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38022223342",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010043618_12ae4bb9a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7025,
+    "run_id": "38022223342"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T04:36:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

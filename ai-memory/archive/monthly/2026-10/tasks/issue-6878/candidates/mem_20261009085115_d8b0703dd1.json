@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the test-harness fix go to?\nChoices:\nA) PR #6597's head branch `ai/issue-6595`, where the resolver change lives. The fix then shows up as a new commit on #6597, and #6597's CI reruns against it. (RECOMMENDED)\nB) The default branch, with a guarded harness change: set the two variables (harmless when unused), and add `_resolver_report_rejected_path` only if the script defines it. #6597 picks the fix up on its next sync with the default branch.\nC) No separate fix. Close this issue and let #6597's own review/autofix loop repair its harness, since the resolver change and the test drift come from the same PR.",
+  "fingerprint": "353834b0814634795b8483939882511ddf86bba345f97fe1907453e37a331a67",
+  "lineage": {
+    "issue_number": 6878,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37906924430",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37906924430",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009085115_d8b0703dd1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6878,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37906924430"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6878 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T08:51:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

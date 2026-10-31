@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: C\nQ2: A\n\nRATIONALE:\nQ1: Option A would break the orchestrator. Managed sub-issues always merge into `orchestrator/project-N`. Today `issue_pr_status.yml` (lines 443-459) labels and closes them on that merge, and the wave reconciliation relies on that. Option B fixes the incident but leaves a gap. Security follow-ups that target a branch (single-issue security-pass follow-ups, or `security-audit.yml` runs with an explicit `ref`) are not managed and carry an `Integration branch:` line. Under B they would stay open after their fix merges, and once that branch lands, `retarget_merged_base.sh` could send already-fixed findings back to the default branch to be built again. Option C handles both cases and still keeps the incident issue open: #4748 merged into `claude/implement-plan-issue-4688-*`, which is not #4688's declared integration branch. That matches the issue's own note that the remaining step was the merge into #4586's branch.\nQ2: Option A is the smallest change and stays within the requested scope. Requested change 1 already says such a PR \"falls through to the existing no-merged-PR policy for its label class\". Option B adds a compare call for every candidate (\u00a714) and widens scope. Option C adds a comment write and needs a new marker to avoid posting the same comment twice, and nothing here asks for it.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo (lettered choice C; this records how to carry it out)\n  inputs:\n    - scripts/orchestrate_poll_process.sh: `close_merged_issues_sweep` (line 4420), its two `gh issue list --json number,labels` calls (lines 4432-4443), the candidate loop that calls `_pr_json_is_issue_implementation_pr` (lines 4529-4542), and the helper itself (line 16287)\n    - scripts/resolve_integration_ref.sh line 15: the canonical `Integration branch:` regex, including the bold and backticked forms. The `Target branch:` alias is at line 28, mirrored by TARGET_BRANCH_LINE_RE in scripts/orchestrate_lib.py\n    - .github/workflows/issue_pr_status.yml step \"Update linked issue labels when PR closes\" (lines 182-467). Issue bodies are already fetched by the closingIssuesReferences GraphQL call and the aliased batch query. `PR_BASE_REF` is at line 188, and line 451 hardcodes `main`\n    - tests/test_orchestrate_poll_process.py\n  steps:\n    - Sweep: add `body` to both `gh issue list --json` field lists (no new API call) and carry it into the normalised `issues_json` entries. For each candidate PR that passes `_pr_json_is_issue_implementation_pr`, read `.base.ref` from the `_sweep_candidate_pr_json` already fetched. Accept the PR only if the base is the repository's default branch, or equals the issue's declared integration branch. Parse that branch with the same regex as resolve_integration_ref.sh: the `Integration branch:` line wins, otherwise the `Target branch:` alias. Get the default branch from whatever value the poller already resolves. If it has none, add one cached `gh repo view --json defaultBranchRef` call per sweep, with a \u00a714 comment. If the default branch cannot be resolved, do not close anything this cycle (log it and skip). A PR rejected here logs `CLOSE_MERGED_SWEEP issue=<n> origin=<o> candidate_pr=<p> rejected=non_target_base base=<ref>` and moves on to the next candidate. If no candidate qualifies, apply the existing no-merged-PR policy for the label class.\n    - Managed-child fallback: an `ai:orchestrator-managed` issue with no parseable branch line in its own body may still have its branch declared only on the tracking issue (resolve_integration_ref.sh lines 75-101). For those, keep today's any-base acceptance and log `reason=managed_no_child_metadata`, so waves are not stranded.\n    - issue_pr_status.yml: replace the hardcoded `main` with `github.event.repository.default_branch`, passed in through `env:`. Apply `FINAL_LABEL=ai:merged` and the close only when the base is the default branch, the base equals the issue's declared integration branch (parsed from the body the GraphQL calls already return), or the issue is managed with no child-level metadata. Otherwise leave the labels unchanged and log `PR merged into <base>; issue #<n> not a target merge \u2014 labels unchanged`. A closed-unmerged PR (`ai:closed`) keeps its current behaviour.\n    - Tests in tests/test_orchestrate_poll_process.py: (a) a closing-keyword PR merged into a non-default, undeclared base leaves the issue open and unclosed; (b) a merge into the default branch still closes; (c) a merge into the issue's declared `Integration branch:` closes; (d) a managed child with no metadata merged into `orchestrator/project-N` still closes. Add or extend a contract test that pins the issue_pr_status.yml default-branch and declared-branch gate.\n    - Add the changelog fragment `changelog.d/<issue>-close-sweep-target-branch.md` (fixed).\n  replaces_acceptance_criterion: Requested change 1 (\"closes only on a merge into the repository's default branch\") becomes \"default branch, or the issue's own declared integration branch, with a managed-child fallback when that metadata is missing\".\n  equivalence_argument: The rule still rejects the incident: #4748's base is neither `main` nor #4688's declared branch. It keeps the orchestrator's existing contract for wave children, and it stops fixed branch-targeted follow-ups from staying open and being implemented again after their branch lands.\n  reversibility: Removing the declared-branch clause gives option A's stricter rule. Issues wrongly left open can still be closed by hand or by a later merge into the default branch.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None.\n\nAssumption: only issues already labelled `ai:merged` or `ai:ready-to-merge` reach this check, and the `Integration branch:` body line is trusted to the same degree `resolve_integration_ref.sh` already trusts it. A wrongly declared branch can at worst close an issue early; it cannot write any code.",
+  "fingerprint": "e76312f3fd8620b7fb3085a2a7e700fea9e23abe4f298d4f42bb552d55ceca43",
+  "lineage": {
+    "issue_number": 6631,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618498717",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618498717",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6631"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007121733_5e732c64f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6631,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618498717"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6631",
+  "timestamps": {
+    "created_at": "2026-10-07T12:17:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

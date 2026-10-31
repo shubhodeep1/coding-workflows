@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) The clarify/plan/implement issue pipeline (`clarify.yml`, `plan.yml`, `implement.yml`)\nB) Review & autofix (`review_autofix.yml` and its `scripts/review_*` helpers)\nC) The orchestrator and poller (`orchestrate.yml`, `orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nD) Documentation only (README / docs)\nE) None of these; I will describe the target in a reply (RECOMMENDED)\nQ2: What does \"better\" mean for that target?\nChoices:\nA) Fix a specific bug or failure (please link the run, issue or PR) (RECOMMENDED)\nB) Reduce cost or run time (fewer model calls or API calls, faster CI)\nC) Improve reliability (fewer stalls, retries or escalations)\nD) Improve clarity (logs, alerts, docs)\nE) Add a new feature (please describe it)\nQ3: How will we know the change worked?\nChoices:\nA) I will give a concrete, testable outcome in a reply (RECOMMENDED)\nB) A specific failing test or failing run passes afterwards (please name it)\nC) A measurable metric improves (please name the metric and the target)",
+  "fingerprint": "8caf8793ef061576d8fd4a83743199fdfa1601ce4d25aac62e6ef0ba218d6bdb",
+  "lineage": {
+    "issue_number": 7232,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38217887412",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38217887412",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261012073740_af6ff909f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7232,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38217887412"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7232 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-12T07:37:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the test fix land on, and how strict should it be?\nChoices:\nA) Fix it on PR #7314's head branch `ai/issue-7295`. Add `Target branch: ai/issue-7295` to this issue so the pipeline routes there. On that branch, expect exactly two `SECURITY_JUDGE` call sites, raise the total `poller_claude_judge` count to match, and assert that one call sits inside the audit-worktree directory-switch branch and the other in its `else` fallback. (RECOMMENDED)\nB) Fix it on the default branch and make the test accept one or two `SECURITY_JUDGE` call sites. With two, it also asserts they are mutually exclusive branches. This passes on `main` now and after PR #7314 merges, but PR #7314 stays red until it syncs `main`.\nC) Change nothing here. Treat this as PR #7314's own failure, leave it to that PR's review/autofix loop, and close this issue.\n**Note:** with A and no target-branch line added, the pipeline plans against the default branch anyway, and the fix can't be applied there because the second call site doesn't exist.",
+  "fingerprint": "f04f762e4191b6feb399730b9bbbfc4296d6b315e74e89ddc1d8044b03d7909d",
+  "lineage": {
+    "issue_number": 7316,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38385204628",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38385204628",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261013104839_228304100e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7316,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38385204628"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7316 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-13T10:48:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

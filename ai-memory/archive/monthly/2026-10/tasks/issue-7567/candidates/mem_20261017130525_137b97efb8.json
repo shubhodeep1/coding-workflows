@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan: rewrite `tests/e2e_smoke_canary.txt` on `orchestrator/project-7564`\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue gives the exact final content of one existing file and says no other file may change. The change replaces three lines with two. There is no helper, test or doc to add, and widening the scope would break the \"no other file is changed\" acceptance criterion.\n\nPlanning ref: HEAD `d1cdb4ceb4d18ca7d4cd00eaf8c70890e94a2cd5` on branch `orchestrator/project-7564`. That is the declared integration branch, and the integration-branch mismatch check reads `false`.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. Replace the whole file content with exactly these two lines, each ending in a newline (LF):\n```\nstatus: ok\ndecompose-run: 39033435276\n```\n\n## Data structures affected\nNone. This is a plain text fixture.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the whole file instead of editing lines\n- Chosen: overwrite the file with the exact two-line content.\n- Alternatives considered: edit in place, deleting the `run_id` and `updated-by` lines and adding the `decompose-run` line.\n- Why: a full overwrite is deterministic and guarantees the exact bytes the issue requires, including the trailing newline. It also leaves no stale lines behind.\n\n## Security considerations\n- No trust boundary, endpoint, credential or money state is involved.\n- The value `39033435276` comes from the issue body, which is treated as untrusted. It is a plain number and nothing executes it.\n\n## Risks and edge cases\n- Line endings: use LF only and end the file with exactly one newline. No blank line at the end, no CRLF.\n- Committing from the `ai/issue-*` branch must not stage any other path, such as staged-support copies or `.ai/` manifests. The acceptance criteria forbid any second file.\n- The parallel re-issue for `tests/e2e_smoke_canary_b.txt` touches a different path, so the two cannot conflict.\n- Re-issue context: #7565 was closed without a merged PR. The current file still holds the stale `run_id: 26151428977` and `updated-by: ai-pipeline` lines, so the PR must show a non-empty diff that removes them.\n\n## Testing considerations\n- `cat -A tests/e2e_smoke_canary.txt` should print exactly `status: ok$` then `decompose-run: 39033435276$`.\n- `wc -l` should report 2.\n- `git diff --stat` against the base should list only `tests/e2e_smoke_canary.txt`.\n- No test suite reads this fixture as far as the issue states, so no other test changes are needed.\n\nPre-execution self-check: the plan meets every acceptance criterion with a one-file change, and nothing is blocking.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "3ebdaa2ac17e41bade71aad484cd0f6b88d44d1eaf7e3619d7652064b3716e3c",
+  "lineage": {
+    "issue_number": 7567,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39034559408",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39034559408",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7567"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261017130525_137b97efb8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7567,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39034559408"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7567",
+  "timestamps": {
+    "created_at": "2026-10-17T13:05:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

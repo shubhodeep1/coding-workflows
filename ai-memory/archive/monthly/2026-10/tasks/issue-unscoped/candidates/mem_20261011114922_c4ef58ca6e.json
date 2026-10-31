@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:around line 726 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The report alleges that `git checkout MERGE_HEAD -- \"${_ho_path}\"` checks out PR-side changes instead of the base branch's version.\n  WHY: This claim is disputed: minimax_minimax-m3, qwen_qwen3_7-plus, and z-ai_glm-5_3-flash state that HEAD is the PR branch and MERGE_HEAD is the base branch, and cite a test confirming the base-side content is selected.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_prepare.sh:around line 726 | severity=BLOCKER | confidence=5\n  PROBLEM: The host-only conflict resolution incorrectly checks out the PR-side changes (MERGE_HEAD) instead of the base branch's version (HEAD).\n  WHY: This overwrites the base branch's safety-critical host code with the PR's divergent version, defeating the purpose of the safe resolution and potentially introducing breaking changes in host-safety hooks.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8659d3e944ed387e232f94a08de263f0d05fbcd38c9885d6e74f44558b05c43e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6752,
+    "run_id": "38132475918",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38132475918",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011114922_c4ef58ca6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6752,
+    "run_id": "38132475918"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T11:49:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:375-394\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: When `CHECK_DETAILS_URL` is empty or does not match the expected pattern, `base_gate_run_id` remains empty and the flow reaches `reason=workflow_unresolved` without a diagnostic that distinguishes an unavailable URL, an unparseable URL, or a failed `workflow_id` read.\n  WHY: Three reviewers independently flag missing or underspecified diagnostics for this flow; the fail-open behavior is already correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/check_failure_triage.sh, line 390-391\n  PROBLEM: When the `CHECK_DETAILS_URL` does not match the expected pattern, `base_gate_run_id` is empty and the code degrades to `reason=workflow_unresolved` without a diagnostic log recording the unexpected URL shape.\n  WHY: A diagnostic would help operators triage a GitHub URL-format change; the issue is still correctly filed rather than skipped.\n  Suggested minimal fix: After line 391, when `base_gate_run_id` is non-numeric but CHECK_DETAILS_URL is non-empty and starts with \"http\", log a diagnostic before falling through to the reason=workflow_unresolved branch. Something like: `[ -z \"${base_gate_run_id}\" ] && [ -n \"${CHECK_DETAILS_URL}\" ] && [[ \"${CHECK_DETAILS_URL}\" == http* ]] && log \"base_gate warn=details_url_unparseable pr=${PR_NUMBER}\" || true`\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_failure_triage.sh, line 375-377\n  PROBLEM: The regex extracting `base_gate_run_id` is fragile to URL format changes; if parsing fails, the ID becomes empty without a diagnostic log.\n  WHY: Log a diagnostic before falling through to the \"no_completed_base_run\" logic when `CHECK_DETAILS_URL` is non-empty but the parsed ID is empty.\n  Suggested minimal fix: Before falling through to the \"no_completed_base_run\" logic, add a diagnostic log if CHECK_DETAILS_URL is non-empty but the parsed base_gate_run_id is empty, e.g.,: `[ -n \"${base_gate_run_id}\" ] || log \"CHECK_TRIAGE base_gate_run_id parse failed for URL: ${CHECK_DETAILS_URL}\"`.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/check_failure_triage.sh\n  PROBLEM: When `CHECK_DETAILS_URL` does not match the expected pattern, or is empty, the IDs remain empty and the script logs `reason=workflow_unresolved`, conflating an unset URL, an unparseable URL, and a failed or empty `workflow_id` read.\n  WHY: The fail-open path is already correct; the diagnostic does not distinguish the three cases.\n  Suggested minimal fix: distinguish the three cases \u2014 empty `CHECK_DETAILS_URL`, parse failure on a non-empty URL, and a failed workflow_id read \u2014 by logging a more specific reason in each branch before falling through (`reason=details_url_unavailable`, `reason=details_url_unparseable`, `reason=workflow_id_read_failed`).\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/check_failure_triage.sh (line ~389)\n  PROBLEM: When `CHECK_DETAILS_URL` is non-empty but the `sed` pattern does not match, `base_gate_run_id` is silently empty and the flow reaches `reason=workflow_unresolved` without a log indicating that the URL was unparseable.\n  WHY: An unparseable GitHub Enterprise URL shape can otherwise go undiagnosed.\n  Suggested minimal fix: after the sed extraction, when base_gate_run_id is empty and CHECK_DETAILS_URL starts with http, log `base_gate outcome=unknown reason=details_url_unparseable base=${BASE_REF} pr=${PR_NUMBER}` before falling through to the existing workflow_unresolved path.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "1f8a19897516e1cf19a35933b0043afaa9fc86c4386bbe50e5982acd0c56e9f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7037,
+    "run_id": "38041699516",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38041699516",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010101436_6ca96df5e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7037,
+    "run_id": "38041699516"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T10:14:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

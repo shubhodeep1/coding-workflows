@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:1922-1960 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `resolve_orchestrator_engine_sha` can mistake the parent repository's HEAD for the workflow engine SHA when `.codex-workflow-src` is a plain directory without its own Git metadata.\n  WHY: `git -C .codex-workflow-src rev-parse HEAD` walks up to the parent repository, producing a false engine SHA that triggers a security-pass auto-reset from `failed` to `in_progress` and causes the reported CI test failure.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:1942-1943 | severity=BLOCKER | confidence=5\n  File: scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 1942-1943\n  PROBLEM: resolve_orchestrator_engine_sha runs git -C .codex-workflow-src rev-parse HEAD without verifying that .codex-workflow-src is an independent git checkout.\n  WHY: When .codex-workflow-src is a plain directory, git resolves the parent repository's HEAD, causing the security-pass auto-reset to change the project status from failed; the test harness creates .codex-workflow-src/scripts/ as a plain directory (test_orchestrate_poll_process.py:879-880), and the test at line 6754 asserts latest_state[\"status\"] == \"failed\".\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:1942-1944 | severity=BLOCKER | confidence=4\n  File: scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 1942-1944\n  PROBLEM: `resolve_orchestrator_engine_sha` accepts a non-empty result from `git -C .codex-workflow-src rev-parse HEAD` even when `.codex-workflow-src` is not itself a git checkout.\n  WHY: Git resolves the parent repo's HEAD, which triggers a spurious security-pass auto-reset from `failed` to `in_progress`; the failure is reported in CI run 37317373525, and the test fixture is at `tests/test_orchestrate_poll_process.py:879-897`.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:1942-1944 | severity=BLOCKER | confidence=5\n  File: scripts/orchestrate_poll_process.sh; tests/test_orchestrate_poll_process.py\n  Line or code reference: `resolve_orchestrator_engine_sha` at `scripts/orchestrate_poll_process.sh:1942-1944` checks only for the `.codex-workflow-src` directory before running `git -C .codex-workflow-src rev-parse HEAD`. The test harness creates `.codex-workflow-src/scripts` without its own Git metadata at `tests/test_orchestrate_poll_process.py:879-880`, and exports the sandbox as `GITHUB_WORKSPACE` at line 3404.\n  PROBLEM: Git discovers the sandbox repository\u2019s `.git` by walking up from `.codex-workflow-src`, so the resolver treats the sandbox HEAD as the workflow engine SHA.\n  WHY: Poller tests without an explicit `ORCHESTRATE_ENGINE_SHA` resolve a false engine SHA, causing a failed security-pass state with no recorded engine SHA to auto-reset before the test verifies that bot-authored and malformed `/security-pass-waive` commands are rejected; the supplied CI log shows `test_security_pass_waive_command_rejects_bots_and_malformed_ids` failing in the `orchestrate-poll` shard.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:1942-1943 | severity=BLOCKER | confidence=5\n  File: scripts/orchestrate_poll_process.sh\n  Line or code reference: 1942-1943\n  PROBLEM: `resolve_orchestrator_engine_sha` treats any existing `.codex-workflow-src` directory as a Git checkout, allowing `git -C .codex-workflow-src rev-parse HEAD` to resolve the parent repository's HEAD.\n  WHY: The plain-directory test sandbox causes a false engine SHA and an unwanted state transition from `failed`; the test fixture is at `tests/test_orchestrate_poll_process.py:879-880`, `_run_poller` at line 3404 exports `GITHUB_WORKSPACE=str(sandbox)`, and the assertion is at line 6754.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh:1922-1960 | severity=BLOCKER | confidence=5\n  File: scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 1922-1960, resolve_orchestrator_engine_sha\n  PROBLEM: The function checks `[ -d .codex-workflow-src ]` and then runs `git -C .codex-workflow-src rev-parse HEAD`, which can resolve the parent repository's HEAD when `.codex-workflow-src` is not itself a git checkout.\n  WHY: The false engine SHA triggers a spurious security-pass auto-reset from `failed` to `in_progress`; the test fixture is at tests/test_orchestrate_poll_process.py:879-897, and CI reports `test_security_pass_waive_command_rejects_bots_and_malformed_ids: author` in orchestrate-poll shard 1, run 37317373525.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fd5a0d4fcc0797104a4327b0d2ba0efb1645c140edfe3bd019aad918af1b98bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37317374193",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37317374193",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005141109_5170956e30",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37317374193"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T14:11:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2170-2177 | severity=nit | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The comment claims \"#8268 removed the collector test that took about 5 minutes here\", but tests/test_collect_workflow_logs.py still runs in the `Workflow log collector coverage gate` step (ci.yml:2149-2154).\n  WHY: The history is wrong and misleads future budget-watch readers, and it weakens the headroom argument. It causes no runtime failure. Reviewers cite lines 2170-2177, 2174, 2174-2175 and 2175.\n- changelog.d/8279-heal-job-steps-to-release.md:2-11 | severity=nit | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog repeats the false claim that #8268 removed the collector test.\n  WHY: The statement is factually incorrect and misleads readers. Reviewers cite lines 11, 2,11 and 7.\n- changelog.d/8279-heal-job-steps-to-release.md:2 | severity=nit | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The changelog says all four moved steps came from `tests-heal-plan-and-validation`, but the workflow (ci.yml:2189-2195) identifies the last two as coming from `tests-promote-stall-and-review`.\n  WHY: The source-job misstatement can mislead future job-capacity decisions.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation to tests-release-and-log-analysis\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: ci.yml:2170-2173 says step timings were not readable and the steps were chosen by test and subprocess counts, so the diff does not show the moved steps were the source job's slowest, ci.yml:2189-2195 identifies two of the four moved steps as coming from tests-promote-stall-and-review. Severity disagreement: MAJOR from gemini and luna, NIT from anthropic, which judged the planner unable to read the timings. Anthropic's confidence was 2.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, steps moved from `tests-heal-plan-and-validation` to `tests-release-and-log-analysis`.\n  Evidence of absence: ci.yml lines 2170-2173 and the changelog say the step timings could not be read. The four moved steps were chosen by test and subprocess counts, the same method earlier budget-watch moves used. All other requirements are met. The reviewer rated this MAJOR but judged it NIT.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- .github/workflows/ci.yml (about lines 2170-2177) and changelog.d/8279-heal-job-steps-to-release.md | severity=NIT | confidence=4\n  PROBLEM: \"#8268 removed the collector test that took about 5 minutes here\" is wrong. tests/test_collect_workflow_logs.py still runs in `tests-release-and-log-analysis` (ci.yml line 2153).\n  WHY: It causes no runtime failure, but the comment and changelog mislead readers and weaken the headroom argument.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2174 | severity=NIT | confidence=4\n  PROBLEM: Incorrect historical context. The comment says #8268 removed the collector test, but tests/test_collect_workflow_logs.py still exists and runs.\n  WHY: It does not fail at runtime but misleads developers.\n- changelog.d/8279-heal-job-steps-to-release.md:11 | severity=NIT | confidence=4\n  PROBLEM: The same incorrect historical context is repeated in the changelog.\n  WHY: It is factually incorrect, with no runtime failure.\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: Selection of steps moved from tests-heal-plan-and-validation to tests-release-and-log-analysis in .github/workflows/ci.yml\n  Evidence of absence: The workflow comments say step timings were not readable and the steps were chosen by heuristic (test and subprocess counts), not measured timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2175; changelog.d/8279-heal-job-steps-to-release.md:2,11 | severity=NIT | confidence=4\n  PROBLEM: The capacity rationale says #8268 removed the collector test, but the workflow still runs it at `.github/workflows/ci.yml:2149-2154`. The changelog also says all four moved steps came from `tests-heal-plan-and-validation`, while ci.yml:2189-2195 attributes the last two to `tests-promote-stall-and-review`.\n  WHY: CI still runs the collector test, so the stated five-minute saving does not describe the current workload. The inaccuracies can mislead job-capacity decisions but do not fail this CI run.\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` to `tests-release-and-log-analysis`.\n  Evidence of absence: The workflow says step timings were not readable and the steps were selected by test and subprocess counts (`.github/workflows/ci.yml:2172-2173`). Only the first two moved steps are identified as coming from `tests-heal-plan-and-validation`. The other two are identified as coming from `tests-promote-stall-and-review` (`.github/workflows/ci.yml:2189-2195`).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2174-2175 and changelog.d/8279-heal-job-steps-to-release.md:7 | severity=NIT | confidence=4\n  PROBLEM: The sentence \"#8268 removed the collector test that took about 5 minutes here\" is wrong. tests/test_collect_workflow_logs.py still runs in the `Workflow log collector coverage gate` step at ci.yml:2149-2153. The same claim is copied into the changelog.\n  WHY: It causes no runtime failure, but it misleads future budget-watch triage readers.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d0875d4f31ce6ea2926810f4138e0881a2e1601d2ccf1d3f5e813859752228c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8283,
+    "run_id": "40758827069",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40758827069",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028203305_3495651d71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8283,
+    "run_id": "40758827069"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T20:33:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

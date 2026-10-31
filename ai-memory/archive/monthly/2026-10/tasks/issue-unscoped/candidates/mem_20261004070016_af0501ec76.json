@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh: lines 7363 and 7477 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Two Python heredoc bodies fail the slop-scan parser with unexpected indentation.\n  WHY: A Python heredoc that fails to parse cannot be loaded or run; the reviewer reports this is a static defect, though the exact indented content is not visible.\n- .claude/commands/implement-plan-claude.md: rewrite (full body, ~22 lines visible in the diff) | severity=high | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new `ai:engine-claude` label may lead operators to expect Claude to run every role even though it is currently inert and each role uses its configured engine.\n  WHY: The command body documents the label's inertness, but the reviewer could not verify whether `.github/ai/label_contract.v1.json` makes the same promise.\n- .claude/settings.json: lines 44-49, 64-70, 124-129 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The truncated diff prevents confirming that allow-rule references to the deleted permission-prompt logger and post-push reminder hooks were removed in lockstep.\n  WHY: A stale allow rule would be dead text rather than an added capability, but could cause operator confusion.\n- .github/workflows/clarify.yml: line 1298 (`render --comments-file \"${ISSUE_COMMENTS_FILE}\"`) combined with line 529 (`gh_retry gh api \".../comments?sort=created&direction=asc&per_page=50\" > \"${ISSUE_COMMENTS_FILE}\"`) | severity=high | confidence=[3]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The auto-decide step can create a duplicate auto-decisions comment when the existing comment is outside the 50 oldest comments fetched into `ISSUE_COMMENTS_FILE`.\n  WHY: `find_comment` cannot find a comment absent from that file, so the workflow posts a new comment instead of updating the existing one, fragmenting the AD-<n> numbering history.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: (Cannot cite a verbatim or close-paraphrase requirement \u2014 the LINKED ISSUE is empty and the plan body is not inlined.)\n  expected_change_site: docs/plans/replace-claude-sessions-with-cli-engine-plan.md and any unrenamed consumer wiring called out in its later phases.\n  confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The plan file is in the changed-files list as \"no diff hunks\" and is not inlined in the prompt, so I cannot confirm whether every phase's deliverable is in the PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: lines 7363 and 7477 | severity=MAJOR | confidence=4\n  PROBLEM: The slop-scan preflight reports \"failed to parse python_heredoc: unexpected indent\" at two Python heredoc bodies inside this file.\n  WHY: A Python heredoc that fails to parse is a static defect and will not be loadable as a module; the exact indented content cannot be read at review time.\n- .claude/commands/implement-plan-claude.md: rewrite (full body, ~22 lines visible in the diff) | severity=MAJOR | confidence=3\n  PROBLEM: The new `ai:engine-claude` label may lead operators to assume Claude is running every role, while each role still uses its configured engine.\n  WHY: The inline text documents the label's inertness, but the reviewer could not verify whether the label contract makes the same promise.\n- .claude/settings.json: lines 44-49, 64-70, 124-129 | severity=NIT | confidence=2\n  PROBLEM: The truncated diff prevents confirming that allow rules referencing the deleted hooks were removed in lockstep.\n  WHY: A stale allow rule does not grant extra capability because the underlying script is gone, but could cause operator confusion.\n- Requirement: (Cannot cite a verbatim or close-paraphrase requirement \u2014 the LINKED ISSUE is empty and the plan body is not inlined.)\n  Expected change site: docs/plans/replace-claude-sessions-with-cli-engine-plan.md and any unrenamed consumer wiring called out in its later phases.\n  Evidence of absence: The plan file is in the changed-files list as \"no diff hunks\" and is not inlined in the prompt, so I cannot confirm whether every phase's deliverable is in the PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/clarify.yml: line 1298 (`render --comments-file \"${ISSUE_COMMENTS_FILE}\"`) combined with line 529 (`gh_retry gh api \".../comments?sort=created&direction=asc&per_page=50\" > \"${ISSUE_COMMENTS_FILE}\"`) | severity=MAJOR | confidence=3\n  PROBLEM: The auto-decide step can create a duplicate auto-decisions comment when the existing comment is outside the 50 oldest comments fetched into `ISSUE_COMMENTS_FILE`.\n  WHY: `find_comment` cannot find a comment absent from that file, so the workflow posts a new comment instead of updating the existing one, fragmenting the AD-<n> numbering history.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "a4373f5f7b5610304688c901c29798488b4604953943b2a4f9b9d75267e57a32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37183721232",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37183721232",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261004070016_af0501ec76",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37183721232"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-04T07:00:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

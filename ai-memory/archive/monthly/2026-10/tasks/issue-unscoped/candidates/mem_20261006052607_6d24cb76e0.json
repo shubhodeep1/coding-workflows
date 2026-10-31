@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_parse_and_post_answer.sh:47-50 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The freshness check treats any commenter whose login ends in \u201c[bot]\u201d as authorized to supersede the answer.\n  WHY: An unrelated GitHub App bot can post a newer `/answer` and make the responder skip its answer, although the documented route requires trusted user associations or the specifically authorized `github-actions[bot]` with its required marker.\n- scripts/orchestrate_parse_and_post_answer.sh:69-75, 81-83; retry check at 138-145 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A temporary freshness-read failure is recorded as `superseded` before the script exits with an error.\n  WHY: The next run for the same clarification comment skips before retrying the freshness check, leaving the question unanswered unless a new clarification event is created.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_parse_and_post_answer.sh:47-50 | severity=MAJOR | confidence=[4]\n  PROBLEM: The freshness check trusts any commenter whose login ends in \u201c[bot]\u201d as authorized to supersede the answer.\n  WHY: An unrelated GitHub App bot can post a newer `/answer` and make the responder skip its answer. The documented `/answer` route accepts trusted user associations or the specifically authorized `github-actions[bot]` with its required marker; this check accepts other bots without that authorization.\n- scripts/orchestrate_parse_and_post_answer.sh:69-75, 81-83; retry check at 138-145 | severity=MAJOR | confidence=[4]\n  PROBLEM: A temporary freshness-read failure is recorded as `superseded` before the script exits with an error.\n  WHY: The next run for the same clarification comment finds the processed-command entry and skips before retrying the freshness check. A transient GitHub API failure therefore leaves that question unanswered unless a new clarification event is created.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .ai/.workspace_source_manifest.txt:218 | PROBLEM: The new changelog fragment `changelog.d/6340-clarify-respond-answer-freshness.md` is committed but not listed in the workspace source manifest.\n  WHY: The deterministic manifest union-merge during sibling-PR conflict resolution uses the committed manifest as its base, so a concurrently-merging sibling PR could produce a manifest that drops 6340. Suggested minimal fix: Add `changelog.d/6340-clarify-respond-answer-freshness.md` in sorted position after line 218.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0ac7b950f45445b05fb776caf66a2ba49f65861102104f871952489c260aa25e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6487,
+    "run_id": "37415498531",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37415498531",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006052607_6d24cb76e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6487,
+    "run_id": "37415498531"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T05:26:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

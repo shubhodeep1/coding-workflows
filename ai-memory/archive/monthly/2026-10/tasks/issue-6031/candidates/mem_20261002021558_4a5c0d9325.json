@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply still-valid recommendations from the September 3 workflow analysis\",\"issues\":[{\"id\":\"conditional-review-pass\",\"title\":\"Gate the second reviewer pass on verified first-pass evidence\",\"priority\":1},{\"id\":\"shared-review-pr-poll\",\"title\":\"Deduplicate parallel reviewers' PR-state polling\",\"priority\":2},{\"id\":\"fresh-clean-merge-checks\",\"title\":\"Require a fresh head-bound check snapshot before clean-review auto-merge\",\"priority\":1},{\"id\":\"bounded-check-wait\",\"title\":\"Shorten check-run context waits only when final merge safety is preserved\",\"priority\":2},{\"id\":\"memory-stage-timings\",\"title\":\"Measure AI-memory retrieval and persistence stages\",\"priority\":2},{\"id\":\"reuse-poll-memory-checkout\",\"title\":\"Safely reuse a poll run's AI-memory checkout for its end event\",\"priority\":2},{\"id\":\"lazy-poll-semble\",\"title\":\"Initialize Semble only when a poller judge requests context\",\"priority\":3},{\"id\":\"semble-query-measurement\",\"title\":\"Add honest byte accounting to Semble query telemetry\",\"priority\":4},{\"id\":\"ci-drift-diagnostics\",\"title\":\"Make existing contract-drift failures actionable\",\"priority\":3},{\"id\":\"implement-terminal-observability\",\"title\":\"Finalize claimed approval commands on terminal implement outcomes\",\"priority\":2},{\"id\":\"implement-environment-hygiene\",\"title\":\"Keep issue prose out of implement step environments and clear git pins at teardown\",\"priority\":3},{\"id\":\"recommendation-closeout\",\"title\":\"Record recommendation verdicts and retire the processed source document\",\"priority\":9}],\"dependency_edges\":[{\"from\":\"conditional-review-pass\",\"to\":\"shared-review-pr-poll\"},{\"from\":\"shared-review-pr-poll\",\"to\":\"fresh-clean-merge-checks\"},{\"from\":\"fresh-clean-merge-checks\",\"to\":\"bounded-check-wait\"},{\"from\":\"memory-stage-timings\",\"to\":\"reuse-poll-memory-checkout\"},{\"from\":\"reuse-poll-memory-checkout\",\"to\":\"lazy-poll-semble\"},{\"from\":\"implement-terminal-observability\",\"to\":\"implement-environment-hygiene\"},{\"from\":\"bounded-check-wait\",\"to\":\"recommendation-closeout\"},{\"from\":\"lazy-poll-semble\",\"to\":\"recommendation-closeout\"},{\"from\":\"semble-query-measurement\",\"to\":\"recommendation-closeout\"},{\"from\":\"ci-drift-diagnostics\",\"to\":\"recommendation-closeout\"},{\"from\":\"implement-environment-hygiene\",\"to\":\"recommendation-closeout\"}]}",
+  "fingerprint": "bf30b9253a4810671215c7248725b8dcbf56398f9cb0a523651da1e54cc0f9bd",
+  "lineage": {
+    "issue_number": 6031,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "36953997510",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36953997510",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261002021558_4a5c0d9325",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6031,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "36953997510"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply still-valid recommendations from the September 3 workflow analysis' into 12 issues (tracking #6031)",
+  "timestamps": {
+    "created_at": "2026-10-02T02:15:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The heal scope marker only allows `.github/workflows/plan.yml`, `tests/**` and `changelog.d/*.md`. The issue's suggested fix also asks for a comment edit in `.github/workflows/clarify.yml` (lines 185-188) and an `agents.d/<issue>-plan-pr-not-open.md` fragment. The isolated heal editor only transfers scoped paths. How should the fix handle those two extra edits?\nChoices:\nA) Stay inside the heal scope: change `plan.yml`, the tests and a `changelog.d/` fragment, and drop the `clarify.yml` comment edit and the `agents.d/` fragment (the clarify comment stays a little out of date) (RECOMMENDED)\nB) Widen the scope to include `.github/workflows/clarify.yml` and `agents.d/*.md`, so the whole suggested fix lands (this needs an operator to re-grant scope; a heal editor run would otherwise refuse or drop those paths)\nC) Stay inside the heal scope now, and file a separate follow-up issue for the `clarify.yml` comment and the `agents.d/` fragment\nQ2: When refctx takes the new `pr_not_open` path, the ref is empty. The superseded-PR helper may then report `merged_check_not_passed`: the PR merged but its check is not verified green. The existing reroute only fires when the resolved ref equals the PR's `head_ref`, so it never fires here, and planning would run on the default branch. What should plan do when the merged PR's base is not the default branch (for example an `orchestrator/project-*` or a routed `ai/issue-*` base)?\nChoices:\nA) Reroute to the merged PR's `base_ref` when it differs from the default branch, using the existing reroute checkout logic. If that checkout fails, skip planning with the existing `reroute_failed` WARNING. When the base is the default branch, plan there as now (RECOMMENDED)\nB) Always plan on the default branch on the `pr_not_open` path, whatever the PR's base\nC) Treat a non-default base on the `pr_not_open` path as unresolved: set `SKIP_PLAN=true` and log `reason=pr_not_open_unresolved` with one WARNING",
+  "fingerprint": "3fcdbb881e2e91b6687a72b11d163f0bc72c6b1f05a8588d8df390986671632f",
+  "lineage": {
+    "issue_number": 7477,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38862335829",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38862335829",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261016064424_7a86612f45",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7477,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38862335829"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7477 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-16T06:44:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

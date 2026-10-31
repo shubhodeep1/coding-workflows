@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The issue asks for a standalone-only poller mode that runs on cron ticks with no tracking project, and that forwards both `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` and \"the recovery environment\". Option A matches that. It also fixes the real gap: `run_standalone_stall_recovery` (`scripts/orchestrate_poll_process.sh:18184`, called at 26634) only runs when the full poller runs, which `orchestrate_poll.yml:893` limits to `has_work == 'true'`. The idle-tick sweeps at lines 1055 and 1066 exit before reaching it (`orchestrate_poll_process.sh:20488`, `20496`). So standalone issues never recover on idle ticks, not just those held for automation paths. Option B would tie general stall recovery to an unrelated approval flag. Option C would add a narrower code path parallel to the existing one, against \"extend existing mechanisms\". Option A keeps the existing switches (`ENABLE_STANDALONE_STALL_RECOVERY` defaults to `true` at line 2595 and is read at workflow lines 780/814/991, plus `ENABLE_STALL_JUDGE`), so operators keep their current controls.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: none needed (letter A chosen). Notes for the planner:\n  inputs:\n    - .github/workflows/orchestrate_poll.yml:\n      - lines 768\u2013814: engine resolution, gated on `has_work`\n      - lines 862\u2013880: Claude-pool and CLI setup, gated on `has_work && any_claude`\n      - lines 893\u2013991: full poller env, including `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` at 936 and `ENABLE_STANDALONE_STALL_RECOVERY` at 991\n      - lines 1055\u20131079: the existing idle-tick sweep steps\n    - scripts/orchestrate_poll_process.sh:\n      - the sweep-only early exits at 200, 20488 and 20496\n      - `run_standalone_stall_recovery` at 18184, called at 26634\n  steps:\n    - Add a new sweep-only flag next to the existing `*_SWEEP_ONLY` flags. Use a name not already in use, for example `STANDALONE_RECOVERY_SWEEP_ONLY`, default `false`. When it is true, the poller does the minimum init that `run_standalone_stall_recovery` needs, runs it, and exits. It skips all tracking-project processing.\n    - Add an idle-tick step in `orchestrate_poll.yml` with `if: steps.find_tracking.outputs.has_work != 'true'`, in every repository. It sets the new flag and carries the same stall-recovery, stall-judge and `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` env as the full poller step. Make it mutually exclusive with the full poller through the `has_work` predicate.\n    - Widen the gates on the engine-resolution and Claude-pool/CLI setup steps. They should also run on idle ticks when standalone recovery is enabled and the stall judge resolves to Claude. Otherwise the judge falls back as it does today.\n    - Add contract tests:\n      - a pipeline-authored held issue is approved after its grant is added, with no tracking project;\n      - the new step and the full poller never both run;\n      - the env forwarding matches the full poller step.\n  reversibility: Setting `ENABLE_STANDALONE_STALL_RECOVERY=false` turns off the new idle-tick recovery and restores today's behaviour. No data migration is involved.\n\nNote: the issue's other gap (passing `--origin-repo` in `plan.yml` and the poller's `--emit-automation-grant` calls) was not asked about, so it should go ahead as the issue describes it.",
+  "fingerprint": "1dfe4b5a9e8a49f0314412e882efb6907a5667ee8407b3e9b0f2930d0e8fbbd6",
+  "lineage": {
+    "issue_number": 7174,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38144931169",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38144931169",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7174"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261011140138_700e379b40",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7174,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38144931169"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7174",
+  "timestamps": {
+    "created_at": "2026-10-11T14:01:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

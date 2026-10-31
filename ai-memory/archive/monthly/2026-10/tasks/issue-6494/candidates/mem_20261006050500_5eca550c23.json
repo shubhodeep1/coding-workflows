@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this fix deliver for the implement-phase Claude roles (`IMPLEMENT`, `IMPLEMENT_REPAIR`, `IMPLEMENT_DIAGNOSE`)?\nChoices:\nA) Build or land the isolation helper `scripts/codex_isolated_exec.sh` that `claude_run` already expects. It needs a credential-free, network-restricted container, with model access only through a host relay that alone reads `${CLAUDE_ENGINE_POOL_DIR}/tokens/<NAME>`. No Git remote credentials, `GH_TOKEN` or OpenRouter key go into the container, and author-controlled comments arrive only as untrusted prompt data. Keep the existing fail-closed fallback to Codex (exit 75) and add contract tests for these guarantees. (RECOMMENDED)\nB) Keep Claude on the runner, but remove the risk there: strip Git credentials and token files from Claude's environment and filesystem view before launch, and add contract tests.\nC) Switch the three implement roles back to `codex` in `.github/ai/claude_engine.json` until a separate change delivers isolation. Only add a contract test that keeps them on Codex.\nQ2: Inside a network-restricted sandbox, what happens to the write profile's `WebFetch` and `WebSearch` tools (the `tools=` list for the write profile in `scripts/ai_engine.sh`, and `PROFILE_TOOLS[\"write\"]` in `scripts/claude_engine.py`)?\nChoices:\nA) Remove both from the implement write profile, so all network access goes through the provider relay only. (RECOMMENDED)\nB) Keep `WebSearch`, which runs on the provider side through the relay, and remove `WebFetch`, which fetches from inside the container.\nC) Keep both, and let the relay forward allow-listed fetches.\n**Note:** C weakens the network restriction that Q1:A and Q1:B rely on. With Q1:C, this question doesn't matter.",
+  "fingerprint": "faa048e7602f21bb3a28c8b4b9bb71de77e3080d8786afd7de134dc71b33ea68",
+  "lineage": {
+    "issue_number": 6494,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37416230488",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37416230488",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006050500_5eca550c23",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6494,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37416230488"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6494 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T05:05:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

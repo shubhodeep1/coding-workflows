@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:483-486 (OLD) replaced by 491-503 (NEW in LAST RUN DIFF) | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The working tree checked out for the review does not contain the changes described in the LAST RUN DIFF, so the intended code cannot be verified against the checkout.\n  WHY: The file on disk still uses the old `_push_targets` and `_evaluate_bash` logic, and the cited regression tests are absent.\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py:495-503 (approximately) | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: With `git push --repo=upstream origin`, the parser can discard `origin` as a positional remote even though `--repo` already supplies the repository, causing a real refspec to be ignored.\n  WHY: The guard can check the current branch instead of the `origin` branch, allowing a push of a branch with a merged PR to bypass the merged-PR check.\n- .claude/hooks/pr_merge_status_guard.py:495-499 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: If the `git config` check fails transiently for a configured remote, the parser treats the remote as a refspec and checks the wrong branch.\n  WHY: A push such as `git push --repo=my-remote features` may check `my-remote` instead of `features`, causing a false negative or needless confirmation prompt.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Remove numeric tokens only when lexically attached to a redirection operator, such as `2>`. Preserve whitespace-separated numeric refspecs and fail closed if a push target cannot be determined.\"\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: Grep of the working tree shows `redirect_fd` (old code, lines 264, 268, 271, 274, 285) is still present; `last_token_attached_redirect`, `_is_unquoted_fd_prefix`, and `unknown_destination_reasons` are absent; the new test functions `test_numeric_push_target_before_redirect` and `test_numeric_push_refspec_guards_merged_branch` are also absent from the test file.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py:483-486 (OLD) replaced by 491-503 (NEW in LAST RUN DIFF) | severity=critical | confidence=5\n  PROBLEM: The working tree checked out for this review does not contain the changes described in the LAST RUN DIFF.\n  WHY: The file on disk at `.claude/hooks/pr_merge_status_guard.py` still uses the old `redirect_fd` variable name (line 264, 268, 271, 274, 285), the old `_push_targets` logic at lines 478-486, and the old `_evaluate_bash` post-loop logic at lines 1395-1402; `test_numeric_push_target_before_redirect` and `test_numeric_push_refspec_guards_merged_branch` also do not exist in the test file.\n- .claude/hooks/pr_merge_status_guard.py (LAST RUN DIFF): _push_targets git config remote check at lines 495-499 | severity=low | confidence=2\n  PROBLEM: The git config subprocess run (`_run([\"git\", \"config\", \"--get\", f\"remote.{positionals[0]}.url\"], ...)`) can fail for reasons other than the remote not existing, such as `GIT_TIMEOUT_SECONDS` expiry or `OSError`.\n  WHY: If a genuinely configured remote's config check fails transiently, a push like `git push --repo=my-remote features` would check branch `my-remote` for merged PRs instead of branch `features`, causing a false negative or a needless confirmation prompt.\n- TASK_GAP\n  Requirement: \"Remove numeric tokens only when lexically attached to a redirection operator, such as `2>`. Preserve whitespace-separated numeric refspecs and fail closed if a push target cannot be determined.\"\n  Expected change site: `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py`\n  Evidence of absence: Grep of the working tree shows `redirect_fd` (old code, lines 264, 268, 271, 274, 285) is still present; `last_token_attached_redirect`, `_is_unquoted_fd_prefix`, and `unknown_destination_reasons` are absent. The new test functions `test_numeric_push_target_before_redirect` and `test_numeric_push_refspec_guards_merged_branch` are also absent from the test file. The working tree is at a pre-PR state despite the review being dispatched against commit fb54e0c50e95270b96b9c5c9f28ad0d8d8a3b774. The ORIGINAL PR DIFF shows all these changes should be present on the PR head.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py; workflow-templates/.claude/hooks/pr_merge_status_guard.py:495-503 (approximately) | severity=high | confidence=4\n  PROBLEM: The parser can discard a real refspec as though it were a positional remote. For `git push --repo=upstream origin`, `--repo` already supplies the repository, so `origin` is a refspec; when a local remote named `origin` exists, this code drops it and falls back to checking the current branch.\n  WHY: Git can push the local `origin` branch to `upstream`, but the guard checks the current branch instead. If `origin` has a merged PR and the current branch does not, the push bypasses the merged-PR check. The template copy has the same logic.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b4bdf7ffdc52e343762e4586acd72c329a3f1888213c2084a34f6a37c6885dcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6297,
+    "run_id": "37270438135",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37270438135",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005063842_f90035b6cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6297,
+    "run_id": "37270438135"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T06:38:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1547-1569 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `closes_before` treats either `]` or `}` as closing either kind of opener, allowing a mismatched bracket to make a malformed reply appear balanced and a trailing `[]` be accepted as a clean audit.\n  WHY: This can suppress the Codex fallback and report a clean security audit for malformed input. Severity ranged from BLOCKER to MAJOR; Qwen disputed the concrete runtime trigger, reasoning that the prefix regex rejects the cited examples.\n- tests/test_security_audit_workflow_contract.py:2852-2877 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The malformed-reply contract test cases do not cover the bracket-type mismatch that `closes_before` accepts.\n  WHY: The suite can pass without catching this regression, leaving CI unable to prevent its reintroduction.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/security_audit.sh: function closes_before | severity=BLOCKER | confidence=5\n  PROBLEM: The bracket-balance check (`closes_before`) treats any closing bracket (']' or '}') as closing any opening bracket ('[' or '{'), failing to distinguish bracket types.\n  WHY: This logic incorrectly validates malformed JSON responses by treating mismatched closing brackets as valid closures. For example, a response like `Findings so far.\\n[\\n}\\n[]` is incorrectly balanced, leading the parser to accept the final `[]` as a valid audit result, which skips the necessary fallback to the codex-engine. This can result in reporting clean security audits when they should have been retried, potentially missing security findings.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh: closes_before function at lines 1547-1569, used at line 1589 in the empty-array elif branch | severity=MAJOR | confidence=5\n  PROBLEM: `closes_before` tracks bracket depth without checking that closing brackets match opening bracket types, so a mismatched `}` can close an unmatched `[` and the empty-array elif can accept a trailing `[]` as a clean audit.\n  WHY: The malformed reply can be written as `[]` to `CODEX_OUTPUT_FILE`, causing the security audit to report clean and preventing the codex fallback.\n- tests/test_security_audit_workflow_contract.py: cases tuple at lines 2852-2877 in test_security_audit_claude_fallback_malformed_missing_and_wrong_shape | severity=NIT | confidence=4\n  PROBLEM: The new test cases do not cover the bracket-type-mismatch case introduced by the `closes_before` change.\n  WHY: Without a regression case, the contract test suite can pass even when the runtime accepts the malformed reply.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh: 1547-1569, especially 1561-1565; empty-array acceptance at 1585-1589 | severity=MAJOR | confidence=5\n  PROBLEM: `closes_before` treats either `]` or `}` as closing either kind of opener, without checking that the bracket types match.\n  WHY: For the malformed reply `Findings so far.\\n[\\n}\\n[]`, the unmatched `[` fails to parse, then `}` incorrectly reduces the bracket depth to zero. The trailing line-start `[]` passes the empty-array checks, is written as clean findings, and suppresses the Codex fallback.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/security_audit.sh: `closes_before` at lines 1547-1569, consumed by the empty-array `elif` at line 1589 (`all(closes_before(failed, position) for failed in failed_opens)`) \u2014 this is the code introduced by the LAST RUN DIFF (the `failed_opens` / `closes_before` change in `security_audit_try_claude`). | severity=MAJOR | confidence=5\n  PROBLEM: `closes_before` counts brackets as a single undifferentiated depth, so a closer of the wrong type is counted as closing an opener of the wrong type.\n  WHY: For the reply `Findings so far.\\n[\\n}\\n[]`, the malformed reply is accepted as an empty array, causing the run to report a clean audit and skip the codex fallback.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4a2b3685f3146d9d9cb75e67abea937857cf7687f6325de9dfef5cb3901dbb9a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7155,
+    "run_id": "38132312511",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38132312511",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011115427_5e023f3c8c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7155,
+    "run_id": "38132312511"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T11:54:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

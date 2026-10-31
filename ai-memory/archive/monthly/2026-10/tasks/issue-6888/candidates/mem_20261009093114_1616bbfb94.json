@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Shard 1's log was printed inside a collapsed `::group::`. The tail the triage read showed only the last shard's `33 passed`, so nothing points to a test that can be reproduced. Option B would spend about 35 minutes of sandbox time with no target and will most likely end as a no-op. Option D changes nothing, so the next shard failure would be just as hard to read. Option A fixes the real gap: the shard check loop in `.github/workflows/ci.yml` (lines 1416-1443) prints a failed shard's log only inside its group and never repeats the failing test names after the loop.\nQ2: The diagnostics change is in shared CI and has nothing to do with PR #6879's OpenCode pin change. GitHub facts show that PR is still open against `main`, so it picks up the change when it merges or syncs with `main`.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml, the `orchestrate-poll` step: the shard check loop at lines 1416-1443 and the `/tmp/poll_shard_${shard}.log` / `.rc` files\n    - tests/test_orchestrate_poll_process.py, which prints a named `TEST_CASE_EVENT` with `\"status\":\"fail\"` and `FAIL` lines for each failure (around lines 23395-23429)\n    - tests/test_ci_poll_test_sharding.py, the contract test for this step (it also pins the copies in `mark-stable.yml` and `test-and-mark-stable.yml`)\n  steps:\n    - In the shard check loop, when a shard has `shard_rc -ne 0`, pull up to 20 failure lines from its log (lines starting with `FAIL`, or `TEST_CASE_EVENT` lines containing `\"status\":\"fail\"`) into a per-run summary file. Prefix each line with `shard <n>:`.\n    - A shard with a nonzero exit and no matching lines gets one summary line, `shard <n>: exit <rc>, no FAIL line recorded (runner likely died)`. The no-log case at lines 1421-1424 gets a similar line.\n    - After the loop, if `shard_failures -ne 0`, print each summary line as `::error::orchestrate-poll failing test: <line>` before the existing `::error::${shard_failures} orchestrate-poll shard(s) failed.` and `exit 1`. Keep the existing exit codes, failure counting and partition logic exactly as they are.\n    - Strip characters that could break GitHub's annotation syntax (`%`, CR, LF) from the summary lines before printing.\n    - Add assertions to tests/test_ci_poll_test_sharding.py checking that the ci.yml step prints the post-loop failing-test summary and still ends with `exit 1` when a shard fails. If that test requires the step to match in `mark-stable.yml` / `test-and-mark-stable.yml`, make the same change in both, using the same block.\n    - Run `wc -c .github/workflows/ci.yml` to confirm the file stays well under the 480,000-byte limit.\n    - Add a changelog fragment at `changelog.d/6888-ci-poll-shard-failure-summary.md`.\n  replaces_acceptance_criterion: \"Identify and fix the failing shard-1 test\". Without the full log this cannot be done from the repo. The new criterion: the next orchestrate-poll shard failure names its failing test(s) in an `::error::` line visible in the job tail.\n  equivalence_argument: The issue's suggested fix was to find the `FAIL` / `TEST_CASE_EVENT` line for shard 1. The change makes the job print that line for every future failure, so the root cause can be read straight from triage evidence. The triage workflow's next generation (cap 3) or a CI rerun of PR #6879 can then show a real reproducible defect without guessing. The CI gate is not weakened.\n  reversibility: The change only adds output. Reverting the ci.yml block and its test assertion restores the old behaviour with no state left behind. If someone later finds the shard-1 test in the full run log (run 37907017153, job 113742812335), they can file a targeted fix as a separate issue.\n\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - GitHub facts: PR #6879 is open, its base is `main`, and its head is `claude/elegant-mendel-5pli2i-install-opencode-pin`\n  steps:\n    - Target the PR at the default branch `main`. Do not set an `Integration branch:` override.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: n/a\n  reversibility: If the change is wanted on PR #6879 sooner, that PR can merge `main` once this lands.\n\n**Assumptions:**\n- Diagnostics alone is the right deliverable, because the full run log was not available to this run.\n- The release-gate copies of the step change only if the contract test requires them to match.\n\n**Missing context:**\n- The full log of shard 1 in run 37907017153 was not available, so the actual failing test is still unknown.",
+  "fingerprint": "42540213f08d3baece9590ad894c0f306ff6177fbc0ee1c2dd2f552bdbc64e55",
+  "lineage": {
+    "issue_number": 6888,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37910966833",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37910966833",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6888"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009093114_1616bbfb94",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6888,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37910966833"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6888",
+  "timestamps": {
+    "created_at": "2026-10-09T09:31:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:581-609 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The merged-fix-up handoff overwrites the existing `unblock-<item>` operator-step entry with generic instructions, losing the prior verdict's specific `operator_instructions` and `dormant_until` placeholder.\n  WHY: The newest trusted comment for a key supersedes earlier entries, leaving the operator-facing tracker without the specific instructions and placeholder needed to complete the handoff.\n- scripts/unblock_judge.sh:874-912 | severity=high | confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The merged-fix-up handoff path returns before checking whether `unblock_try_regrant` now grants all rejected paths.\n  WHY: If the paths have already been added to `files_touched`, the issue still receives or retains an operator handoff instead of resuming; severity was rated NIT by anthropic_claude-sonnet-5_5 and MAJOR by the other reviewers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_actions.py: `followup_handoff_ops` (lines 587-609) calls `_protected_handoff_ops`, which builds the operator step with `\"key\": f\"unblock-{item}\"` (line 581). | severity=MAJOR | confidence=[4]\n  PROBLEM: The merged-fix-up handoff upserts the same operator-step key used by `plan()` and replaces the original placeholder and judge instructions with generic text.\n  WHY: The newest trusted comment for a key supersedes earlier comments, so the operator tracker loses the placeholder a person must set and the judge's specific instructions.\n- scripts/unblock_judge.sh: merged-fix-up arm, lines 874-910 (`operator_handoff_pending` skip and the `followup-handoff` branch); `unblock_try_regrant` is only called later, at line 942. | severity=NIT | confidence=[3]\n  PROBLEM: The new branch hands off or skips and returns before checking whether today's automation-path guard already grants every rejected path.\n  WHY: If a person has already added the paths to `files_touched`, the run still records an operator step and hold comment instead of resuming, with the retry delay applying after the wait comment refreshes `updatedAt`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh: 878-912 (new `if unblock_protected_handoff_applies ...` block) | confidence=[4]\n  PROBLEM: The new merged-fix-up handoff logic returns early, bypassing `unblock_try_regrant`.\n  WHY: If a human grants the rejected paths before the next judge run, the early return leaves the issue blocked until manual intervention or a later automated event.\n- scripts/unblock_actions.py: 581 (`key=f\"unblock-{item}\"` in `_protected_handoff_ops`) | confidence=[4]\n  PROBLEM: The operator-step key collides with the key used for original fix-ups.\n  WHY: `_protected_handoff_ops` overwrites the original entry, losing its placeholder and specific judge instructions and leaving only generic text.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_actions.py: followup_handoff_ops at lines 587-609, calling _protected_handoff_ops at line 609 with the synthetic verdict (no `placeholder`, generic `instructions`); the hardcoded key `unblock-{item}` at line 581 collides with the same key in plan()'s operator_step path at lines 647-659. | severity=MAJOR | confidence=[4]\n  PROBLEM: The handoff upserts a generic operator-step entry under the same key as the original, dropping its `operator_instructions` and `dormant_until`.\n  WHY: The newest trusted comment supersedes earlier entries for the key, so the operator tracker no longer shows the judge's specific instructions or the placeholder a person must set.\n- scripts/unblock_judge.sh: the new block at lines 874-910 inside the `if fixup-state-closed-and-ai-merged` check; unblock_try_regrant() at line 942 in the post-fixup deterministic-exit block. | severity=MAJOR | confidence=[4]\n  PROBLEM: The merged-fix-up handoff returns before `unblock_try_regrant` can check whether the rejected paths are now granted.\n  WHY: If the user has added the paths to `files_touched`, the code records an operator step, hold comment, and warning instead of resuming; the refreshed wait marker delays the next run.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_actions.py: followup_handoff_ops() lines 601-609; _protected_handoff_ops() lines 555-581 | severity=MAJOR | confidence=[4]\n  PROBLEM: A merged fix-up handoff reuses the `unblock-<item>` operator-step key but creates a generic step without the prior verdict's `operator_instructions` or `placeholder`.\n  WHY: The newest trusted comment for a key supersedes the tracker entry containing the specific instructions and any `dormant_until` placeholder, leaving the current operator-step entry without actionable guidance.\n- scripts/unblock_judge.sh: merged-fix-up handling at lines 874-908; regrant runs later at lines 939-943 | severity=MAJOR | confidence=[4]\n  PROBLEM: The merged-fix-up branch hands off or skips before checking whether `unblock_try_regrant` now grants all rejected paths.\n  WHY: If the `files_touched` grant has been corrected by the time the fix-up merges, this branch returns without resuming, and the updated wait marker can defer another check by the default six-hour `UNBLOCK_JUDGE_RETRY_HOURS` interval.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_actions.py: followup_handoff_ops() at lines 597-603 and _protected_handoff_ops() at line 581 | severity=MAJOR | confidence=[4]\n  PROBLEM: The merged-fix-up handoff upserts the operator-step entry under the same key as the original verdict, replacing its specific placeholder and judge instructions with generic instructions.\n  WHY: The highest-id trusted comment for a key supersedes earlier ones, so the operator tracker loses the specific context operators need, although the original verdict comment still has that information.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9f9d26a686b7e04cc71860c203402ecc60d75691704cdce95b2248036a65c2e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7290,
+    "run_id": "38319044339",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38319044339",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012232942_2e3cf88c6f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7290,
+    "run_id": "38319044339"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T23:29:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

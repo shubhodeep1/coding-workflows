@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/escalation-judge.md:Line 54 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Close-path condition (b) accepts any same-repository PR whose head starts with `claude/implement-plan-<slug>-` and whose base is the project branch, without requiring the head suffix to match a branch kind this project creates.\n  WHY: An unrelated PR can pass the ownership check and be closed if its number appears in a stale or tampered log.\n- workflow-templates/.claude/commands/escalation-judge.md:Step 8 `close` branch, condition (b) | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Condition (b) accepts any same-repository PR whose head starts with `claude/implement-plan-<slug>-` and whose base is the project branch, without requiring the suffix to match a branch kind this project opens.\n  WHY: An unrelated PR targeting the project branch can pass condition (b) and be closed if its number appears in a stale, mistyped, or tampered log entry.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/escalation-judge.md:Line 54 | severity=MAJOR | confidence=5\n  PROBLEM: Condition (b) accepts any same-repository PR whose head starts with `claude/implement-plan-<slug>-` and whose base is the project branch. It does not require the head suffix to match a branch kind this project creates.\n  WHY: For slug `example`, an unrelated PR from `claude/implement-plan-example-unrelated` to `claude/implement-plan-example` passes the ownership check. If its number appears in a stale or tampered log, the judge closes that unrelated PR despite the instruction to close only PRs opened by the chain.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- workflow-templates/.claude/commands/escalation-judge.md:Step 8 `close` branch, condition (b) | severity=MAJOR | confidence=4\n  PROBLEM: Condition (b) accepts any same-repository PR whose head starts with `claude/implement-plan-<slug>-` and whose base is the project branch, without requiring the suffix after `<slug>-` to match a branch kind this project opens.\n  WHY: A PR with head `claude/implement-plan-<slug>-unrelated` targeting the project branch passes condition (b). If its number appears in a stale, mistyped, or tampered log entry, the judge closes it even though the chain did not open it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "97de7014f0a7aa1ee8958bad9bd338ed8e9c3b8daf5f255830c145a6babe6a21",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5164,
+    "run_id": "36967433427",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36967433427",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002053030_6af64508a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5164,
+    "run_id": "36967433427"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-02T05:30:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cIt makes at most two REST calls, and only when something needs syncing.\u201d\n  expected_change_site: `scripts/sync_claude_live_copies.py`, the provenance checks and sync-PR lookup/create path.\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: commit-to-PR associations at line 231, PR commits at line 276, the open-sync-PR lookup at line 404, and PR creation at line 463 are reported to result in four REST calls for a fresh authorized sync of one changed template commit; z-ai_glm-5_2 notes that `agents.md:792-796` documents the actual budget and says the PR description's \u201cat most two REST calls\u201d claim is the discrepancy.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nRequirement: \u201cIt makes at most two REST calls, and only when something needs syncing.\u201d\nExpected change site: `scripts/sync_claude_live_copies.py`, the provenance checks and sync-PR lookup/create path.\nEvidence of absence: A fresh authorized sync for one changed template commit currently makes four REST calls: commit-to-PR associations at line 231, PR commits at line 276, the open-sync-PR lookup at line 404, and PR creation at line 463. This exceeds the specified limit of two REST calls.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cIt makes at most two REST calls, and only when something needs syncing.\u201d\nExpected change site: `scripts/sync_claude_live_copies.py`, the provenance checks and sync-PR lookup/create path.\nEvidence of absence: A fresh authorized sync with one template commit and no existing sync PR makes four REST calls: commit association lookup at line 231, PR commit lookup at line 276, open-PR lookup at line 404, and PR creation at line 463. The implementation exceeds the stated two-call limit.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nRequirement: \"It makes at most two REST calls, and only when something needs syncing (\u00a715).\"\nExpected change site: `scripts/sync_claude_live_copies.py`, the provenance checks and sync-PR lookup/create path.\nEvidence of absence: A fresh authorized sync for one changed template commit makes four REST calls: commit-to-PR associations at line 231, PR commits at line 276 (paginated), the open-sync-PR lookup at line 404, and PR creation at line 463. The implementation does not enforce the stated two-call limit. The PR description and agents.md both claim \"at most two REST calls\" but the code makes four.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\nRequirement: \"It makes at most two REST calls, and only when something needs syncing (\u00a715).\" (PR Description, \"Drift guard (Q57)\")\nExpected change site: `scripts/sync_claude_live_copies.py` \u2014 the provenance and sync-PR create/lookup path.\nEvidence of absence: A fresh authorized sync for a single template commit issues at least four `gh api` calls: commit-to-PR associations at line 231, PR commits at line 276 (1\u20133 pages), the open-sync-PR lookup at line 404, and PR creation at line 463. The \"at most two REST calls\" claim is not enforced. However, `agents.md:792-796` (also added in this PR) correctly documents the actual budget: \"at most one association lookup per distinct template commit, 1-3 pages per distinct merged PR, and two sync-PR lookups plus at most one create/convert per nonempty group.\" The PR description's oversimplified claim is the only discrepancy; the implementation matches the agents.md description.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5e1f079b8dbe624a0a642a28164eb60a650384738e8f82045048c53059373639",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6288,
+    "run_id": "37363434268",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37363434268",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005212700_7f99fb08f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6288,
+    "run_id": "37363434268"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T21:27:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

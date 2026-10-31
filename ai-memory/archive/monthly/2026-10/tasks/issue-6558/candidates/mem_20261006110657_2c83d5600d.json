@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should the guard do when it finds a Git write inside a shell wrapper (`bash -c`, `sh -c`, `eval`, `$(...)`, backticks)?\nChoices:\nA. Parse a literal inline script (`bash -c '<literal>'`) and run the normal merged-PR check on it, so a push to a merged PR's branch is blocked as usual. When the script can't be read safely (`eval \"$x\"`, variables, nested substitution that mentions `git`), ask for confirmation, the way the guard already handles an unparsed `env` wrapper. (RECOMMENDED)\nB. Always ask for confirmation when a wrapper's text mentions `git` together with `push` or `commit`, without parsing the inner script.\nC. Hard-block (exit 2) any wrapped Git commit or push and tell the agent to run Git directly.\n**Note:** C will also block legitimate wrapped commits on unmerged branches.\nQ2: Which wrapper forms are in scope?\nChoices:\nA. Shell `-c` interpreters (`bash`, `sh`, `zsh`, `dash`, including absolute paths), `eval`, and command substitution / backticks. These are the forms the finding names. (RECOMMENDED)\nB. Everything in A, plus prefix wrappers: `sudo`, `command`, `exec`, `nohup`, `time`, `nice`, `timeout`, `xargs git ...`.\nC. Only shell `-c` interpreters, which is the exact exploit in the finding.\nQ3: How should the live `.claude/hooks/pr_merge_status_guard.py` stay identical to its template, given that pipeline editors can't write `.claude/hooks/**` and CI never prepares security hooks for the parity test?\nChoices:\nA. The PR changes only the template (and its tests). A maintainer copies the change to the live hook by hand in the same PR before merge. The PR body flags this as a required manual step. (RECOMMENDED)\nB. Let the parity test fail on the PR and rely on the post-merge `sync-claude-live-copies.yml` held draft PR for a human to merge afterwards.\nC. Add the hook to `.github/ai/claude_template_divergence.json` temporarily.\n**Note:** C weakens the parity guarantee for a security hook, so it is not advised.",
+  "fingerprint": "f25633123f661dc7c77bc5ddaa567e8af61f8c6216ad6a4019cd0259643bd31b",
+  "lineage": {
+    "issue_number": 6558,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37453090819",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37453090819",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006110657_2c83d5600d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6558,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37453090819"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6558 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T11:06:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:2293-2309 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `phase4b_rate_limit_wait_seconds` uses `now_epoch` captured before the rate-limit request to calculate and cap the subsequent sleep, so request latency can make the sleep overshoot the deadline.\n  WHY: Reviewers rated this NIT or MAJOR; using the highest rating, the stale timestamp can allow one read after the deadline, though the loop's fresh time check bounds the overshoot and the step still fails closed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:2293-2307 | severity=NIT | confidence=4\n  PROBLEM: `phase4b_rate_limit_wait_seconds` captures `now_epoch` at line 2293 via `date +%s` before the `gh api rate_limit` request at line 2294, then uses that stale timestamp for the wait calculation at line 2298 (`core_reset - now_epoch + 1`) and the deadline cap at line 2307 (`now_epoch + wait_seconds`).\n  WHY: In the pathological case where the `gh api rate_limit` request takes nontrivial time near a deadline, the helper sleeps for the request's elapsed time twice; the practical error is typically negligible because the request completes in well under a second.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Reviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:2293, 2307-2309 | severity=NIT | confidence=4\n  PROBLEM: The wait duration is calculated using `now_epoch` captured before the `GET /rate_limit` request, but the sleep begins after that request completes.\n  WHY: If the request takes 5 seconds with 10 seconds left before the deadline, the helper caps the wait at 10 seconds and then sleeps for 10 seconds, finishing 5 seconds past the deadline; the poll loop can then perform another read after its configured deadline.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml: phase4b_rate_limit_wait_seconds function, lines 2293-2309 | severity=MAJOR | confidence=4\n  PROBLEM: `now_epoch` is captured before the GET /rate_limit API call, then used to calculate and cap the sleep duration; if the API call takes time near a deadline, the helper sleeps for the stale duration, potentially overshooting the deadline.\n  WHY: With 10 seconds left before the deadline and a 5-second API request, the helper sleeps for 10 seconds, so the poll loop continues past the registration or retry deadline.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/test-and-mark-stable.yml: phase4b_rate_limit_wait_seconds (lines ~2293-2309), specifically `now_epoch=$(date +%s)` captured before `gh api rate_limit ...` | severity=NIT | confidence=3\n  PROBLEM: `now_epoch` is captured once before the `GET /rate_limit` request, then reused for both the reset-derived wait and the deadline cap, so request latency can cause the deadline to be overshot.\n  WHY: The next loop iteration's fresh `date +%s` check bounds the overshoot to one extra owed read, and the step still fails closed; the impact is a small timing imprecision.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ee945976d6b2482fc1c078d0d8969f89285f912af17db8536804f88a9d46edb8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5874,
+    "run_id": "36863632612",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36863632612",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001143437_2dc796c373",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5874,
+    "run_id": "36863632612"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T14:34:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

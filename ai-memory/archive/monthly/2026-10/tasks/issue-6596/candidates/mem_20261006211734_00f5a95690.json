@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The pre-model check in `scripts/review_conflict_resolve.sh:2245` calls `check-paths`. That runs `check_paths()` in `scripts/review_untrusted_workspace.py:403-415`, which calls `allowed(name)` with no `commands` argument. That rejects two kinds of conflicted path. Every `.claude/commands/<name>.md` is rejected, even when it has a trusted template twin (lines 66-67). The live safety hook `.claude/hooks/pr_merge_status_guard.py` is always rejected (lines 61-62). Both are real causes that this code can confirm, and option A removes both without widening admission for anything else. Option C's manifest delete/modify resolver is left out. The common two-sided manifest conflict is already resolved and staged before `conflicted_paths.txt` is built (prepare lines 235 and 843), so C would be a speculative resolution with no clear correct answer. The logging from Q2 will name the path if that shape ever shows up.\nQ2: Today the refusal tells nobody which path failed: `check_paths` prints a fixed \"unsupported path\", and line 2245 also sends its stderr to `/dev/null`. That gap is why this heal generation could not name the cause. `_log_safe_dir` (lines 35-41) already gives a bounded filter that turns unsafe names into `redacted`, and that is the same pattern the `transfer` error path uses (line 477). The fail-closed exit and the existing `AI_ENGINE_FALLBACK \u2026 reason=sandbox_path_unsupported` line stay as they are.\n\nEXECUTION PLAN (required for any non-letter decision):\nBoth decisions are lettered. The implementer should follow these constraints.\n\nQ1 (A):\n  inputs:\n    - `scripts/review_untrusted_workspace.py`: `allowed()`, `check_paths()`, `template_command_inventory()`, `COMMAND_TWIN_DIR`, `main()` `check-paths` branch\n    - `scripts/review_conflict_resolve.sh`: check-paths calls at lines 2245 and 2465, `_resolver_fail_closed`, the host-side staging after validated transfer\n    - `scripts/review_conflict_prepare.sh`: lines 191-201 (prints unmerged paths) and 841-859 (builds `CONFLICTED_PATHS_FILE`)\n    - `tests/test_review_conflict_resolve_sandbox_only.py`\n  steps:\n    - **Commands.** Give `check-paths` an optional argument for the trusted support root (`GITHUB_WORKSPACE/.codex-workflow-src`, the same source the editor uses). Admit a conflicted `.claude/commands/<name>.md` only when its `workflow-templates/.claude/commands/<name>.md` twin exists both in the host checkout and in that trusted support checkout. Build the admitted set from that intersection and pass it as `commands=` to `allowed()`. If the support checkout is missing, admit no commands (fail closed). Keep the 4-argument call form working so callers on older support code are unaffected.\n    - **Safety hook.** `.claude/hooks/pr_merge_status_guard.py` is admitted for the conflict path only when `workflow-templates/.claude/hooks/pr_merge_status_guard.py` is in the same conflicted list. Remove the live hook from what the model works on, so the sandbox resolves only the template. After validated transfer, and before staging, the host checks that the resolved template has no conflict markers, is a regular file, and is not a symlink. It then copies the template bytes and mode over the live hook and runs `git add` on both. A live-hook conflict without a template conflict still fails closed. The live hook stays excluded from snapshot and transfer: `allowed()` at lines 61-62 is unchanged for every other caller.\n    - **Unchanged rejections.** Every other rejection stays as it is, including `.github/ai/*` except `claude_engine.json`, `.claude/settings.json`, `.ai/**`, `.env*`, secrets and credentials paths, symlinks, and unknown suffixes.\n    - **Regression tests.** Add scratch-merge tests to `tests/test_review_conflict_resolve_sandbox_only.py`:\n      - (a) A conflicting template plus live hook pair. Assert it is admitted, the two files end up byte-identical and staged, and the live hook never appears in the sandbox snapshot.\n      - (b) A conflicting `.claude/commands/<name>.md` with a trusted twin is admitted.\n      - (c) The same command with no twin in the trusted support checkout is still refused.\n      - (d) A live-hook conflict without a template conflict is refused.\n      - (e) An unrelated excluded path (for example `.github/ai/other.json`) is still refused with `sandbox_path_unsupported`.\n    - Run the tests against the reported head `b0b3dd3485219717aa378372d59f7982b21bd618` (expect a fail) and with the fix (expect a pass). Record both runs in the PR.\n    - Hook template/live parity is enforced by `tests/test_claude_template_live_parity.py`. The copy step must keep the two files byte-identical, including the executable bit.\n  reversibility: Removing the support-root argument and the copy step restores today's fail-closed behaviour. No state or label changes are involved.\n\nQ2 (A):\n  steps:\n    - In `check_paths()`, for each refused path, print `REVIEW_SANDBOX_PATH_REFUSED path=<_log_safe_dir(name)> reason=<code>` to stderr, then exit 1. Use these codes:\n      - `excluded_dir`\n      - `hidden_dir`\n      - `safety_hook`\n      - `command_not_admitted`\n      - `unsupported_suffix`\n      - `symlink`\n      - `invalid_path`\n    - Keep the name filter: only names that pass `_log_safe_dir` are printed, and everything else prints as `redacted`. Cap output at 20 refused paths.\n    - At `scripts/review_conflict_resolve.sh:2245`, capture stderr from `check-paths` to a runtime file instead of `/dev/null`. Echo only the `REVIEW_SANDBOX_PATH_REFUSED` lines, then call `_resolver_fail_closed sandbox_path_unsupported` exactly as today, so the `AI_ENGINE_FALLBACK \u2026 reason=sandbox_path_unsupported action=fail_closed` line and the `::error::` line are byte-for-byte unchanged.\n    - Add a test asserting that an unsafe path name (for example one containing `secret` or a newline) is logged as `redacted`, and that the existing `AI_ENGINE_FALLBACK` line is unchanged.\n    - Add `REVIEW_SANDBOX_PATH_REFUSED` to the stable log-prefix list in `agents.md`.\n\nASSUMPTIONS:\n- I could not read the prepare-step log for run 37529533323, so I don't know which path was refused. The fix therefore covers the two path types that the current code is confirmed to reject, and the new log line names the path if a different one causes the next failure.\n- The two-sided `.ai/.workspace_source_manifest.txt` conflict is already resolved before the conflicted-path list is built (prepare lines 235 and 843). Only the delete/modify manifest shape would still reach this check, so it is left out of scope (Q1 C not taken).",
+  "fingerprint": "736f44ffc09462bf283895aa6256620b380f768e9286abb15d0e935a7a5ba47d",
+  "lineage": {
+    "issue_number": 6596,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37531483733",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37531483733",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6596"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006211734_00f5a95690",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6596,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37531483733"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6596",
+  "timestamps": {
+    "created_at": "2026-10-06T21:17:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6248,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6248\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6253\",\"pr_number\":6253,\"branch\":\"ai/issue-6248\",\"run_id\":\"37245083781\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37245083781\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"agents.md\",\"changelog.d/6248-static-context-symlink-guard.md\",\"scripts/build_static_context.sh\",\"scripts/targeted_file_context.py\",\"tests/test_static_context_symlink_guard.py\",\"tests/test_targeted_file_context.py\"]}",
+  "fingerprint": "bd64a5a0da15306f3f6a9e16a793d0339e32d0e21b7bb0266aeebaf6dc361763",
+  "lineage": {
+    "issue_number": 6248,
+    "parent_ids": [],
+    "pr_number": 6253,
+    "run_id": "37245083781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37245083781",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6253"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005000818_223180fc77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6248,
+    "level": "run",
+    "pr_number": 6253,
+    "run_id": "37245083781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6248: https://github.com/shubhodeep1/coding-workflows/pull/6253",
+  "timestamps": {
+    "created_at": "2026-10-05T00:08:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

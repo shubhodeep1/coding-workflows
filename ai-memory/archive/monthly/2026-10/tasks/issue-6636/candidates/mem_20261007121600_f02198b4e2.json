@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Installed consumer wrappers call `@<40-hex sha> # stable` (`workflow-templates/*.yml` keep `@stable` as a token that `scripts/workflow_wrapper_refs.py` renders to a SHA when it installs them). Option B would therefore cut every consumer off the pool. Option C would also cut off consumers that haven't synced the latest release. Option A is the only one that keeps consumers working and still closes the exploit: it accepts exact allowlisted workflow files at `refs/heads/main`, or at a SHA that the broker confirms, through `job_workflow_sha`, is reachable from protected `main`/`stable` or equals a release tag. A branch-only workflow file is refused, and the check fails closed when verification is unavailable.\nQ2: A workflow file dispatched from a non-`main` branch is exactly the untrusted code the finding describes, so the broker must not hand it tokens. Refusing it costs little. `scripts/claude_pool_token.sh:134` already maps a 403 to `broker_refused_<reason>`, and every Claude role (the security audit included) falls back to codex when Claude is unavailable. So the single-issue security pass's `--ref <PR branch>` dispatch and feature-branch smoke runs still finish, just on codex.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none: both decisions are lettered)\n\nImplementation constraints the planner should carry from these decisions:\n- Allowlist exact workflow paths, matched in full (not by prefix): `shubhodeep1/coding-workflows/.github/workflows/<file>.yml`. Build the list of files from the reusable workflows that fetch the pool. Find them by grepping for `claude_pool_token.sh` / the broker URL in `.github/workflows/`.\n- Accepted ref forms:\n  - `@refs/heads/main`.\n  - `@<40-hex>`, accepted only when it equals the signed `job_workflow_sha` and that SHA either equals a release tag's commit or is an ancestor of protected `main` or `stable`.\n  - Everything else, including `@refs/heads/stable` given as a branch ref, is refused with a 403 and a fixed reason code, for example `workflow_ref_not_allowed` or `workflow_sha_unverified`.\n- If the GitHub verification call errors, times out, or is rate-limited, refuse with a 403 (`workflow_sha_unverifiable`). Never allow on uncertainty.\n- Add contract tests covering both the broker and the client mapping: `tests/test_claude_pool_token.py` and the broker's own tests under `tools/claude-pool-broker/`. Note that the broker source is not in this read-only snapshot. Its path comes only from the finding (`tools/claude-pool-broker/src/index.ts:310`) and from `changelog.d/6118-phase-4-claude-pool-broker.md`.\n- Deployment follows the existing Cloudflare session rule (CLAUDE.md \u00a724.C, worker `claude-pool-broker` in `agents.md` \"Cloudflare resources\"). Record the redeploy as an operator step in the PR.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- BROKER_GITHUB_READ_TOKEN (secret, optional): a read-only token the worker can use to call the GitHub API for the ancestry/tag checks, if the unauthenticated public-API rate limit turns out to be too low. Until it is set, the broker uses unauthenticated reads, and any rate-limited verification is refused with a 403, so the job falls back to codex.",
+  "fingerprint": "cfe62e54ada9bd09fd9c1c96921796c12ba23ac10eed27490927a878eb141b4d",
+  "lineage": {
+    "issue_number": 6636,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618480426",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618480426",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6636"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007121600_f02198b4e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6636,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618480426"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6636",
+  "timestamps": {
+    "created_at": "2026-10-07T12:16:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

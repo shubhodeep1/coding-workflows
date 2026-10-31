@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: REFRAME\nQ2: D\n\nRATIONALE:\nQ1: Option A needs the step timings of run 40750326439. That data isn't in the issue, the GitHub facts block (it only says the run completed with success) or the repo, and neither this responder nor the network-isolated implementer can read Actions logs. Choosing A would loop clarification again. Option B is a pure guess. Earlier moves out of this job (#8208, #8245, #8268) were also picked \"by estimated cost\", and this job has still come back to about 15 minutes three times. The replacement is to measure each step's command in the implement sandbox and use those numbers, falling back to B's candidates only if measurement is impossible.\nQ2: The shortest job in the run (option A) can't be known for the same reason. Recorded history in the repo rules out the other single destinations:\n- `tests-heal-plan-and-validation` took in 8 steps in #8208 and #8268.\n- `static-checks` took 15m18s of its 15-minute budget (ci.yml line 35).\n- Every `orchestrate-poll` group already carries steps gated to it (groups 0\u20134, ci.yml lines 2274\u20132756), and all five groups have hit the 15-minute line before.\nSplitting the moved steps across `tests-hooks-and-orchestrator` and `tests-promote-stall-and-review` keeps the added load on each one small.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - .github/workflows/ci.yml, job `tests-release-and-log-analysis` (lines 1934\u20132208). Its steps are listed from \"Integration-ahead-by gate regression tests\" to \"Workflow scenario trace renderer coverage gate\".\n    - The source job's reported CI duration of 15m14s (issue body), used to scale local timings.\n    - changelog.d/8208-*, 8245-*, 8268-* (precedent for format, wording and the `tests/test_ci_poll_test_sharding.py` update).\n    - tests/test_ci_job_split_contract.py (no step may run in two jobs) and tests/test_ci_poll_test_sharding.py (each moved step runs once, in its new job).\n  steps:\n    - In the implement sandbox, run each test step's `run:` body from the source job on its own, from the repo root, timed with `/usr/bin/time -p` or `date +%s` around it. Record the wall seconds per step name.\n    - Do not run \"AI label sync dry-run smoke\": it needs `GH_TOKEN` and the network. Count it as 0 s and keep it in place.\n    - Treat a step that fails or hangs because the sandbox has no network as unmeasurable. A hang over 120 s counts as a network dependency of the kind found in #8268. Name it in the changelog fragment and PR body, and do not change the test.\n    - Compute the scale factor: 914 s divided by the sum of measured local seconds. Rank the steps by measured seconds.\n    - Pick the slowest steps until their scaled total is at least 260 s, so the source job drops to about 11 minutes or less.\n    - Never pick these steps: Checkout, Setup Python and Install Python CI dependencies; \"SessionStart hook repo-slug contract test\" (needs full history and `CLAUDE_PARITY_PR_BASE_SHA`); \"Inventory parity\" and \"Inventory parity order contract test\" (an order contract pins them).\n    - Fallback, if fewer than half the steps can be measured: move \"Promote cycle and blocked-verdict unit tests\" plus the three \"Workflow log \u2026 coverage gate\" steps. That is option B, and the changelog must say the pick is an estimate.\n    - Move each picked step's YAML block byte-for-byte: same `name:`, `env:` and `run:`. Put a short comment above each block naming issue #8278, run 40750326439, the 15m14s figure, and whether the pick was measured locally or estimated.\n    - Add each moved step to tests/test_ci_poll_test_sharding.py, following the #8268 pattern. Write changelog.d/8278-release-job-steps-moved.md with a table of steps and their new jobs, plus the local timings.\n    - Do not change `timeout-minutes` and do not add or rename jobs. Run tests/test_ci_job_split_contract.py, tests/test_ci_poll_test_sharding.py and tests/test_ci_wires_every_test_file.py locally.\n  replaces_acceptance_criterion: \"Move its slowest steps (see the run's step timings)\"\n  equivalence_argument: Relative step cost measured on the same code is a direct proxy for the run's step timings, and it is better than the estimates used in #8208, #8245 and #8268. Scaling the local timings to the job's reported 15m14s gives a concrete target for how much to move. The next `budget-watch` run on `main` re-checks every job against real timings.\n  reversibility: Each move is a cut-and-paste of named YAML blocks, so it reverts cleanly. If a human or a later budget-watch issue reads the real timings and disagrees, the blocks can move again with no other code changes.\n\nDestination rule for Q2 (option D):\n  - Split the picked steps between `tests-hooks-and-orchestrator` and `tests-promote-stall-and-review`, balancing the scaled seconds so each gets at most about 180 s.\n  - If one step alone (for example \"Promote cycle and blocked-verdict unit tests\") is over 180 s scaled, it goes to `tests-promote-stall-and-review` by itself and the rest go to `tests-hooks-and-orchestrator`.\n  - Append the steps at the end of each destination job's step list. None of the candidate steps needs Node or full git history. Both destinations already run checkout, Python 3.12 and the shared pip install, which covers coverage, pytest and pyyaml.\n  - Do not add steps to `tests-heal-plan-and-validation`, `static-checks` or any `orchestrate-poll` group.",
+  "fingerprint": "30a60041e51285858193a1ec0ecaf8b652e35bf3412284f2aad91373bcfc84e5",
+  "lineage": {
+    "issue_number": 8278,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40754372242",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40754372242",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8278"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261028194349_125ebf8f14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8278,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40754372242"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8278",
+  "timestamps": {
+    "created_at": "2026-10-28T19:43:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

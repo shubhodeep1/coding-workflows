@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/claude-pool-daily-usage-8am-sgt.md:1 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The fragment file name has no numeric issue/PR prefix, which deviates from the documented `changelog.d/<issue-or-pr>-<slug>.md` convention.\n  WHY: It has no runtime impact, but the owning PR is not obvious from the path alone. The reviewer rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/claude-pool-daily-usage-8am-sgt.md:1 | severity=NIT | confidence=4\n  PROBLEM: CLAUDE.md \u00a720.B requires fragment files to be named `changelog.d/<issue-or-pr>-<slug>.md`, but this fragment's name is slug-only with no numeric prefix.\n  WHY: It does not fail at runtime, but the owning PR is not obvious from the path alone.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "392cac99e6576a1582ddd3568127a4bdc6c0d64894cb50b73b90093cda9cfbaa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8177,
+    "run_id": "40267154710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40267154710",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026045111_cd20b98fe3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8177,
+    "run_id": "40267154710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T04:51:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

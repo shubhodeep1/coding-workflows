@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/promote_main_cycle.sh:175 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: `gh_retry gh api ... 2>/dev/null || true` in `gate_failure_location` uses the default retry budget (5 attempts), so a failing jobs read can delay the failure exit. It also hides gh_retry's warnings, so a failed read leaves only `unknown` in the log.\n  WHY: The outcome stays correct and only the delay is affected. The reviewers rated it NIT/hardening. Suggested fix: cap attempts with `GH_RETRY_MAX_ATTEMPTS=2` and optionally print a `::notice::` when the read fails.\n- scripts/promote_main_cycle.sh:167-173 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The audit comment in `gate_failure_location` lists the API calls the run already makes, but omits the compare read, the tag ref and tag object reads, the `search/issues` read and the issue-comments read.\n  WHY: Nothing fails at runtime. The comment's conclusion (none returns job or step data) still holds, but a later reader will find unlisted calls. Both reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add the changelog fragment (CLAUDE.md \u00a720).\" The changelog format calls for a closing \"What this means for <audience>\" paragraph when the information exists.\n  expected_change_site: changelog.d/7614-promote-gate-failure-linkage.md\n  confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: changelog.d/7614-promote-gate-failure-linkage.md has a headline and two body paragraphs but no closing audience paragraph. The fragment is present, so this is a style gap only (all three reviewers rated it NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/promote_main_cycle.sh:~175 (`gate_failure_location`, the `gh_retry gh api` call) | severity=NIT | confidence=2\n  PROBLEM: `gh_retry` is unbounded on this failure-path read. It uses `GH_RETRY_MAX_ATTEMPTS`, default 5, so a failed read can wait out rate-limit backoff before the cycle fails.\n  WHY: Only a slower failure exit when the jobs read keeps failing. The outcome stays correct. This is a hardening point, not a defect.\n- scripts/promote_main_cycle.sh:167-173 | severity=NIT | confidence=4\n  PROBLEM: The audit comment's list of calls the run already makes is incomplete. It omits the compare read (line 228), the tag ref and tag object reads (lines 269, 282), the `search/issues` read (line 300) and the issue-comments read (line 306).\n  WHY: Nothing fails. The conclusion that none of them returns job or step data is still correct.\n- TASK_GAP: requirement: \"Add the changelog fragment (CLAUDE.md \u00a720).\"\n  expected_change_site: changelog.d/7614-promote-gate-failure-linkage.md\n  evidence: The fragment has a headline and two body paragraphs but no closing audience paragraph. The reviewer did not open sibling fragments or CLAUDE.md \u00a720 to confirm the convention.\n  severity=NIT | confidence=3\n- HARDENING_SUGGESTIONS: scripts/promote_main_cycle.sh, the `gh_retry gh api` call in `gate_failure_location`. `2>/dev/null` hides gh_retry's warnings and the retry budget is the default 5. Fix: cap with `GH_RETRY_MAX_ATTEMPTS=2` and optionally print one `::notice::` (1-3 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/promote_main_cycle.sh:167-173 | severity=NIT | confidence=4\n  PROBLEM: The audit comment claims to enumerate the API calls the run already makes, but omits `compare/{base}...{head}` (~line 290), `git/ref/tags/{tag}` (~line 269), `git/tags/{sha}` (~line 282), `search/issues?q=...` (~line 300) and `/issues/{n}/comments?per_page=100` (~line 306).\n  WHY: Nothing fails at runtime. The conclusion still holds, but a future maintainer auditing the comment will find unlisted calls.\n- TASK_GAP: requirement: the changelog fragment (CLAUDE.md \u00a720.D) should include a closing \"What this means for ...\" paragraph when the information exists.\n  expected_change_site: changelog.d/7614-promote-gate-failure-linkage.md (full file, 6 lines)\n  evidence: The fragment has a headline, a lead paragraph and a fail-open paragraph, but no audience-closing paragraph. Sibling fragments `changelog.d/7608-security-audit-render-stderr.md` lines 11-12 and `changelog.d/7602-updater-merged-release-branch.md` lines 5-6 both end with one.\n  severity=NIT | confidence=3\n- HARDENING_SUGGESTIONS: scripts/promote_main_cycle.sh:175, in two parts:\n  1. `2>/dev/null` swallows gh_retry's `::warning::` lines, so a failed read leaves only `unknown`. Fix: capture the exit code or drop the redirect, and print one `::notice::jobs_read_failed` (~3 lines).\n  2. The default of 5 attempts with up to 600 s rate-limit waits could cost ~50 minutes on this failure path. Fix: prefix the call with `GH_RETRY_MAX_ATTEMPTS=2` (1 line).\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: requirement: \"Add the changelog fragment (CLAUDE.md \u00a720).\" The changelog format calls for an audience closing paragraph when the operational takeaway is available.\n  expected_change_site: changelog.d/7614-promote-gate-failure-linkage.md\n  evidence: The fragment explains the changed log fields and failure behavior in lines 2\u20136, but has no audience closing paragraph stating what this means for operators.\n  severity=NIT | confidence=3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8f1a48fdfc45972ff7ac17ae6dd60d142b078c44d1c98b833c874b838a5e6b24",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7618,
+    "run_id": "39106115261",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39106115261",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018071940_8494383f21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7618,
+    "run_id": "39106115261"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T07:19:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

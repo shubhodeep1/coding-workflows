@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:870-876 | severity=critical | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The transfer error mapping does not include \"unsafe file type or size\" -> \"unsafe_file\", but the test expects this reason code when the editor recreates an oversized file (8 MiB + 1).\n  WHY: The transfer handler would default to \"reason=unknown\", so the test assertion `reason=unsafe_file` would fail; the source reports severity BLOCKER (mapped to critical). Note: minimax_minimax-m3 verified the mapping exists (lines 862-863, 875-876) and reported no findings, so the reviewers disagree.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_untrusted_workspace.py:main() error mapping around line 870-876 | severity=BLOCKER | confidence=4\n  PROBLEM: The transfer error mapping does not include \"unsafe file type or size\" -> \"unsafe_file\", but the test expects this reason code when the editor recreates an oversized file (8 MiB + 1).\n  WHY: read_regular raises ValueError(\"unsafe file type or size\") during enumerate_workspace, and the transfer handler maps only \"new result conflicts with host path\" and defaults to \"unknown\", so the test assertion `reason=unsafe_file` would fail. The agents.d fragment and PR description claim reason=unsafe_file, but the code does not implement this mapping for transfer.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7bacc52cde767d8d25657aab43eb1e4c0b23e65874c4af739121af8e987c3e67",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7429,
+    "run_id": "38711520263",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38711520263",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261015094547_ad3a671b93",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7429,
+    "run_id": "38711520263"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-15T09:45:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

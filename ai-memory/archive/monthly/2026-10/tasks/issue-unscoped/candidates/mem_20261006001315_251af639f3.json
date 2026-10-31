@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_github_facts.py: `extract_refs`, lines 142-147; `_is_branch`, lines 90-96 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: An explicitly qualified foreign branch such as `release/1.2` is discarded instead of being listed as \u201cnot read (cross-repository)\u201d.\n  WHY: `_is_branch` rejects it because its final segment matches the file-extension pattern, so the clarification model receives no fact for this referenced branch, contrary to the selected behavior that cross-repository references are listed as not read.\n- scripts/clarify_github_facts.py: build_query function, line 153\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `build_query` filters `issues` by current repo but does not apply an analogous filter to `branches`, leaving foreign slugs able to reach GraphQL if `extract_refs` regresses.\n  WHY: The current `extract_refs` -> `branches` invariant is implicit and only enforced at one site; the reviewer describes this as defense-in-depth, not a current runtime bug.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/clarify_github_facts.py\n  Location: build_query function, line 153\n  Issue: `build_query` filters `issues` by current repo but does not apply an analogous filter to `branches`.\n  Why it fails at runtime: After the fix, `extract_refs` correctly routes foreign branches to `cross_repo` and only current-repo branches reach `branches`, so this is defense-in-depth and not a current runtime bug; a future regression in `extract_refs` would silently let the GraphQL query request data from foreign repositories via `repository(owner: \"<foreign>\", name: \"<name>\")` aliases. The current `extract_refs` -> `branches` invariant is implicit and only enforced at one site.\n  Suggested minimal fix: Add a one-line defensive filter mirroring the issues filter, e.g. `branches = [(slug, token) for slug, token in branches if slug == repo.lower()]` right after the issues filter.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: scripts/clarify_github_facts.py\n  Line or code reference: `extract_refs`, lines 142-147; `_is_branch`, lines 90-96\n  Problem: An explicitly qualified foreign branch such as `release/1.2` is discarded instead of being listed as \u201cnot read (cross-repository)\u201d.\n  Why it fails at runtime: `_is_branch` rejects it because its final segment matches the file-extension pattern. The clarification model receives no fact for this referenced branch, contrary to the selected behavior that cross-repository references are listed as not read.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "8f58b44daf458c728e5d747faba7f95fbb55681c7f1a22d6026aaa3ca4952526",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6351,
+    "run_id": "37391361230",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37391361230",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006001315_251af639f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6351,
+    "run_id": "37391361230"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T00:13:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

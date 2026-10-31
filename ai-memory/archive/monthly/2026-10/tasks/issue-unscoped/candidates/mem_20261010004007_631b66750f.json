@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fix every instance of each finding's defect class across this project's changes, not only the cited line.\"\n  expected_change_site: scripts/workflow_failure_heal.py line 270 (`_FAILURE_CAP_MARKER_RE`)\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: `_FAILURE_CAP_MARKER_RE` is defined at line 270 with no call sites anywhere in the repo; only the line-anchored `_FAILURE_CAP_MARKER_LINE_RE` at line 273 is in use; the LAST RUN DIFF removed `_FAILURE_MARKER_RE` but left `_FAILURE_CAP_MARKER_RE` untouched, leaving dead code of the same non-trailing-anchored marker-regex defect class.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Fix every instance of each finding's defect class across this project's changes, not only the cited line\" \u2014 the finding's defect class is a non-line-anchored marker regex that matches anywhere in the body, enabling attacker-controlled text earlier in the comment to shadow the canonical trailing marker.\n  Expected change site: scripts/workflow_failure_heal.py line 270\n  Evidence of absence: `_FAILURE_CAP_MARKER_RE` is defined at line 270 with no call sites anywhere in the repo. The LAST RUN DIFF removed `_FAILURE_MARKER_RE` (its sibling for the failure-marker tag) but left `_FAILURE_CAP_MARKER_RE` untouched. No diff hunk deletes or comments out the definition.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Fix every instance of each finding's defect class across this project's changes, not only the cited line.\n  Expected change site: scripts/workflow_failure_heal.py line 270.\n  Evidence of absence: LAST RUN DIFF removed _FAILURE_MARKER_RE (the matching dead-code regex for FAILURE_MARKER_TAG) but left _FAILURE_CAP_MARKER_RE defined at line 270 (the matching dead-code regex for FAILURE_CAP_MARKER_TAG). A repo-wide grep confirms _FAILURE_CAP_MARKER_RE has zero call sites; only the line-anchored _FAILURE_CAP_MARKER_LINE_RE at line 273 is in use. The defect class (a regex that matches a marker anywhere in the body, enabling attacker-controlled text earlier in the body to shadow the canonical trailing marker) is the same one the PR retired for the failure marker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Fix every instance of each finding's defect class across this project's changes, not only the cited line\" \u2014 for finding `support-version-failure-marker-shadowing` (STRIDE: Spoofing, scripts/workflow_failure_heal.py:2507). The defect class is a non-trailing-anchored regex that matches a marker tag anywhere in the body.\n  Expected change site: scripts/workflow_failure_heal.py line 270 (the `_FAILURE_CAP_MARKER_RE` definition).\n  Evidence of absence: LAST RUN DIFF removed the unused `_FAILURE_MARKER_RE` regex (the non-trailing-anchored matcher for `FAILURE_MARKER_TAG`) at the previous line 270, but the parallel `_FAILURE_CAP_MARKER_RE = re.compile(r\"<!--\\s*\" + re.escape(FAILURE_CAP_MARKER_TAG) + r\"\\s+(?P<fields>[^>]*?)\\s*-->\")` at the new line 270 remains. A repo-wide grep confirms `_FAILURE_CAP_MARKER_RE` has zero call sites (only the definition matches); only the line-anchored `_FAILURE_CAP_MARKER_LINE_RE` at line 273 is referenced (lines 2406 and 2509). The PR cleaned up one half of the defect class and left the other half as dead code carrying the same shadowing surface.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "95e0cf2d5b1908d9f1579cfcf680756a30914fb46e5862135c9730841f86516a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6997,
+    "run_id": "38008539339",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38008539339",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010004007_631b66750f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6997,
+    "run_id": "38008539339"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T00:40:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

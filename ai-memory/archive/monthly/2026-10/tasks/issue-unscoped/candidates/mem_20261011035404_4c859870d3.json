@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal.py:3017-3023 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The test still expects the old CLI output: it omits the new `newest_reason=` line and assumes `support=` is the last line.\n  WHY: The extra output line makes both assertions fail and blocks CI; severity differed, with five reviewers calling it BLOCKER and openai_gpt-6-luna calling it MAJOR.\n- scripts/workflow_failure_heal.py:4062 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The argparse help text omits output keys emitted by the subcommand, including `support=` and `newest_reason=`.\n  WHY: Operators reading `--help` see an incomplete output contract.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add regression coverage for trusted, untrusted, and different-head markers. Do not change PR #6526\u2019s hook conflict.\"\n  expected_change_site: tests/test_workflow_failure_heal.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The tests `test_gate_force_rb_judge_skips_conflict_steps_only_on_trusted_same_head_host_only_marker` and `test_newest_trusted_failure_reason_does_not_pass_over_outage_markers` cover these cases against the gate logic, but not specifically against the `workflow_failure_heal.py` logic beyond `newest_trusted_failure_reason`; the reviewer says the requirement seems satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal.py:3017 | severity=BLOCKER | confidence=5\n  PROBLEM: The exact-list assertion omits the newly emitted `newest_reason=` line.\n  WHY: The test output contains seven lines, so the six-element expected list fails and blocks CI.\n- tests/test_workflow_failure_heal.py:3023 | severity=BLOCKER | confidence=5\n  PROBLEM: The assertion assumes `support=` is the last output line.\n  WHY: `newest_reason=` is emitted after it, so this assertion fails after the earlier assertion is fixed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal.py:3017-3023 | severity=BLOCKER | confidence=5\n  PROBLEM: The assertions for `autofix-identical-failure-count` CLI output omit the newly added `newest_reason=` field.\n  WHY: The test expects an exact stdout-line match, but the new output line makes the comparison fail.\n- TASK_GAP\n  Requirement: \"Add regression coverage for trusted, untrusted, and different-head markers. Do not change PR #6526\u2019s hook conflict.\"\n  Expected change site: tests/test_workflow_failure_heal.py\n  Evidence of absence: The tests added cover these cases against the `gate` logic, not specifically against the `workflow_failure_heal.py` logic beyond `newest_trusted_failure_reason`. The reviewer says the requirement seems satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal.py:3017 | severity=BLOCKER | confidence=5\n  PROBLEM: The exact six-element expected output list omits the seventh `newest_reason=<reason>` line.\n  WHY: The extra line causes the test to fail in CI and the failed job propagates to the aggregate `lint` check.\n- scripts/workflow_failure_heal.py:4062 | severity=NIT | confidence=3\n  PROBLEM: The argparse help text omits the `support=` and `newest_reason=` output fields.\n  WHY: Callers using `--help` to discover output keys see an outdated list.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_workflow_failure_heal.py:3017, 3023 | severity=MAJOR | confidence=5\n  PROBLEM: The test expects exactly six output lines and expects `support=` to be the last line, despite the new `newest_reason=` line.\n  WHY: The exact-output assertion fails in CI, and the last-line assertion also fails once that expectation is updated.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_failure_heal.py:3017, 3023 | severity=BLOCKER | confidence=5\n  PROBLEM: The test assertions expect the old CLI output format without the new `newest_reason=` line.\n  WHY: The exact six-line assertion and the assertion that `support=` is last both fail because `newest_reason=` follows it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_failure_heal.py:3017 | severity=BLOCKER | confidence=5\n  PROBLEM: The exact-output assertion omits the newly emitted `newest_reason=editor_empty_noop` line.\n  WHY: The extra line causes `tests-heal-plan-and-validation` to fail, which blocks the PR through the aggregate `lint` job.\n- tests/test_workflow_failure_heal.py:3023 | severity=BLOCKER | confidence=5\n  PROBLEM: The assertion expects `support=` to be the final stdout line, but `newest_reason=` is written after it.\n  WHY: This assertion fails once the earlier exact-output assertion is corrected.\n- scripts/workflow_failure_heal.py:4062 | severity=NIT | confidence=4\n  PROBLEM: The subparser help omits the `support=` and `newest_reason=` output keys.\n  WHY: Operators reading `--help` see an incomplete output contract.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f948645a48db1d47eda54c2322f67a6543c3a7adeff0c90bf63cc8c5fe1763ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6746,
+    "run_id": "38107850541",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38107850541",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011035404_4c859870d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6746,
+    "run_id": "38107850541"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T03:54:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

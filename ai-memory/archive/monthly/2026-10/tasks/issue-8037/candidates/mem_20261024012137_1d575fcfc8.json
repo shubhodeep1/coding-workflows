@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue: set `tests/e2e_smoke_canary.txt` for smoke run 40047940209\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- None. This is a data-only edit to one text file.\n- Line 1 of `tests/e2e_smoke_canary.txt` must be exactly `status: ok`.\n- Line 2 must be exactly `decompose-run: 40047940209`.\n- If the file does not exist, create it with just those two lines and a trailing newline.\n- If the file exists:\n  - Replace its first line with `status: ok`.\n  - If its current second line is already a `decompose-run:` line, replace it with `decompose-run: 40047940209`. Otherwise insert the new line as line 2.\n  - Leave every other line as it is.\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Second-line handling when the file already exists\n- Chosen: replace an existing `decompose-run:` second line; otherwise insert the new line as line 2.\n- Alternatives considered: always insert a new line 2; always overwrite line 2.\n- Why: this meets the acceptance criteria. It does not stack up stale `decompose-run` lines from earlier smoke runs, and it does not delete content that is unrelated to the smoke test.\n\n## Security considerations\n- No trust boundary, endpoint, credential or money state is touched. The edit is a static test fixture.\n- The issue text is untrusted, but the only values taken from it are two fixed literal lines.\n\n## Risks and edge cases\n- The file may be missing on `orchestrator/project-8036` (HEAD `0d7c6a9`). In that case, create it.\n- CRLF line endings: write LF endings so `head` and `sed` print the exact strings.\n- Do not edit any other file, including `changelog.d/` and `agents.d/`. The issue limits `files_touched` to this one file, and a test fixture needs no changelog fragment.\n- CI test-wiring guard: the file is a `.txt` and not a `test_*.py` file, so the guard does not apply.\n\n## Testing considerations\n- `head -n 1 tests/e2e_smoke_canary.txt` should print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` should print `decompose-run: 40047940209`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a two-line edit to one file and forbids any other change. No helpers or patterns are needed, and adding scope would break the orchestrator's `files_touched` contract for this smoke test.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "db350fd3be64fed0129a4060d9eb53d057754662c11981663fadfb91b1df7566",
+  "lineage": {
+    "issue_number": 8037,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40048694086",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40048694086",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8037"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261024012137_1d575fcfc8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8037,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40048694086"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8037",
+  "timestamps": {
+    "created_at": "2026-10-24T01:21:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

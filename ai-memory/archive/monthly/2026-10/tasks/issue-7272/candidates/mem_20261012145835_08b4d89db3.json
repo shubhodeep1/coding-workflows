@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: The default-on setting was a deliberate choice in #7029. The changelog fragment `changelog.d/7029-release-validate-ci-gate.md` says `RELEASE_TAGGING_ENABLED` defaults to `true` and that any other value turns tagging off. The safety comes from the `CI / lint` gate (`scripts/release_ci_gate.sh`), not from the switch. agents.md (\"Unblock `operator_step` fixes ship on\") also says an `_ENABLED` flag must ship on and work as an off switch. It forbids defaulting a fix off only so that a person has to turn it on. Options A and C would stop every stable release, GitHub Release and consumer dispatch until someone sets a repository variable. That is the riskiest choice and goes against the documented intent, so the activation verifier's \"gap\" is a false positive.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - changelog.d/7029-release-validate-ci-gate.md (line 10: \"New repository variable `RELEASE_TAGGING_ENABLED`, default `true`\")\n    - .github/workflows/mark-stable.yml:933,936 and .github/workflows/test-and-mark-stable.yml:6622,6625 (`|| 'true'` / `${RELEASE_TAGGING_ENABLED-true}`, keep unchanged)\n    - tests/test_release_validate_ci_gate.py:8,41 (the docstring and `SWITCH_ENV` already pin the default-on contract; keep unchanged)\n    - agents.md section \"Unblock `operator_step` fixes ship on.\"\n  steps:\n    - Do not change either workflow, README.md, or tests/test_release_validate_ci_gate.py.\n    - Add one fragment, `agents.d/<this-issue>-release-tagging-default-on.md`, with the block `<!-- agents: section=\"Immutable consumer wrapper pins\" -->` or another existing `##` heading about release/stable. The fragment says that `RELEASE_TAGGING_ENABLED` (in the `release` jobs of `mark-stable.yml` and `test-and-mark-stable.yml`, #7029) defaults on on purpose: unset, empty or `true` publishes, and any other value skips tag writes, the GitHub Release and the consumer dispatch. The `CI / lint` gate is the safety control. Activation verification should not report the default-on fallback as a gap. Do not edit agents.md directly (\u00a725).\n    - If the implementer would rather not add a fragment, close the issue with a comment that cites the #7029 changelog line and the agents.md rule. That is also acceptable, since no code change is needed.\n  replaces_acceptance_criterion: \"Change both fallbacks and resolver defaults to false, and update README.md and the switch contract tests to match the default-off rollout.\"\n  equivalence_argument: The issue wants a tagging guard that actually protects releases. That protection already comes from the bounded `CI / lint` check-run gate in `validate` and `release`, which fails closed. `RELEASE_TAGGING_ENABLED` is an operator's emergency off switch, and it works as one. Defaulting it off would add no protection; it would only stop releases.\n  reversibility: If a maintainer later wants tagging off by default, it is a four-line workflow change plus updates to `SWITCH_ENV` and the test cases. In the meantime an operator can set the repository variable `RELEASE_TAGGING_ENABLED=false` (and `AUTO_RELEASE_STABLE_ENABLED=false`) at any time, with no code change.",
+  "fingerprint": "36ed5db8b75440844d9e47b1296ba5aaf2b78af4194035df1ac6bde52cbc4209",
+  "lineage": {
+    "issue_number": 7272,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38265678167",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38265678167",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7272"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261012145835_08b4d89db3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7272,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38265678167"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7272",
+  "timestamps": {
+    "created_at": "2026-10-12T14:58:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

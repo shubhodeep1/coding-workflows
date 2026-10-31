@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory() | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1_flash-lite]\n  PROBLEM: The test assertions allegedly do not match updated poller logic for low-severity findings at the round cap, causing CI runtime failures.\n  WHY: The reviewer claims the poller terminalizes low-severity findings at the cap while the test expectations remain unchanged.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update the test's assertions in tests/test_orchestrate_poll_process.py to expect terminal failure, no waiver, and the existing capped-decision log.\"\n  expected_change_site: tests/test_orchestrate_poll_process.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1_flash-lite]\n  EVIDENCE: The last AI run only updated comments in one test function; the assertions in `test_security_pass_cap_converts_low_keep_fixing_to_advisory` remain unfixed and are failing in CI.\n- requirement: The changelog fragment should accurately describe the deliverable of this PR and match the poller behavior.\n  expected_change_site: changelog.d/6914-security-pass-cap-low-test.md (the whole file)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The fragment's headline reads \"The orchestrate-poll test for a low-severity finding at the security-pass `keep_fixing` cap now expects the project to fail, as the poller does.\" The actual test `test_security_pass_cap_converts_low_keep_fixing_to_advisory` (tests/test_orchestrate_poll_process.py:6649-6705) asserts `latest_state[\"status\"] == \"complete\"` (line 6669), `latest_state[\"security_pass_status\"] == \"passed\"` (line 6670), that a waiver is recorded (lines 6674-6680), and that an `ai:security` advisory follow-up issue is created (lines 6681-6685). It explicitly asserts `\"ai:security-pass-failed\" not in result[\"tracking_labels\"]` (line 6686) and `\"SECURITY_PASS_FAILED\" not in combined_log` (line 6693). The test expects the project to PASS, not to fail.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_cap_converts_low_keep_fixing_to_advisory() | severity=BLOCKER | confidence=5\n  PROBLEM: The test assertions do not match the updated poller logic for handling low-severity findings at the round cap.\n  WHY: The poller code logic has been updated to terminalize at the cap for low-severity findings, but the test expectations have not been updated accordingly, causing CI runtime failures.\n- TASK_GAP\n  Requirement: \"Update the test's assertions in tests/test_orchestrate_poll_process.py to expect terminal failure, no waiver, and the existing capped-decision log.\"\n  Expected change site: tests/test_orchestrate_poll_process.py\n  Evidence of absence: The last AI run only updated comments in one test function; the assertions in `test_security_pass_cap_converts_low_keep_fixing_to_advisory` remain unfixed and are failing in CI.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: However, the PR also introduces a changelog fragment whose body accurately describes the actual poller behavior and test on disk.\n  Expected change site: `changelog.d/6914-security-pass-cap-low-test.md` (the whole file), and probably a new fragment that accurately describes the deliverable of this PR.\n  Evidence of absence:\n  - The fragment's headline reads \"The orchestrate-poll test for a low-severity finding at the security-pass `keep_fixing` cap now expects the project to fail, as the poller does.\" The actual test `test_security_pass_cap_converts_low_keep_fixing_to_advisory` (tests/test_orchestrate_poll_process.py:6649-6705) asserts `latest_state[\"status\"] == \"complete\"` (line 6669), `latest_state[\"security_pass_status\"] == \"passed\"` (line 6670), that a waiver is recorded (lines 6674-6680), and that an `ai:security` advisory follow-up issue is created (lines 6681-6685). It explicitly asserts `\"ai:security-pass-failed\" not in result[\"tracking_labels\"]` (line 6686) and `\"SECURITY_PASS_FAILED\" not in combined_log` (line 6693). The test expects the project to PASS, not to fail.\n  - The fragment body says \"Since #6539 the cap converts a low or medium `keep_fixing` decision to `fail`\". `scripts/orchestrate_poll_process.sh:7376-7382` does the opposite: when `keep_fixing_capped` is true, decisions whose `finding.severity` is `low` or `medium` and whose action is `keep_fixing` are rewritten to action `accept_with_followup` and prefixed with `[keep_fixing capped after <N> judge round(s); converted to advisory follow-up]`. The matching waiver-and-follow-up record path is reached only when, after the rewrite, no `keep_fixing` rows remain (lines 7395-7397, 7418). `agents.md:2010` records the same rule (\"after verdict normalization the poller rewrites low/medium `keep_fixing` decisions to `accept_with_followup`\"). The historical record for #6906 (referenced in `changelog.d/6947-heal-scope-failing-test-subjects.md` line 4, `docs/plans/prepush-affected-test-gate-plan.md` line 100, `tests/test_orchestrate_poll_process.py:6654,6709`, `agents.md:997`, and `scripts/workflow_failure_heal.py:2218`) confirms that #6906 restored the advisory rule that #6549 had briefly flipped; the failed heal PRs #6907 and #6916 attempted to rewrite the test to match the obsolete fail rule, which is the same content this fragment still asserts.\n  - The fragment body says \"The test, renamed `test_security_pass_cap_converts_low_keep_fixing_to_fail`\". A grep for `_to_fail` in `tests/test_orchestrate_poll_process.py` returns no such test; `test_security_pass_cap_converts_low_keep_fixing_to_advisory` is the only test at that signature and it is still named exactly that on line 6649.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1e251bb242d175101fca44d7b7f3ffe5bafc6c7cea3d1742f33de1eb8934ba81",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6926,
+    "run_id": "38156436758",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38156436758",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011170754_7fece8ffe4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6926,
+    "run_id": "38156436758"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-11T17:07:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

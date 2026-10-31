@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"the audit is never skipped \u2014 every eligible PR must not auto-merge, or get merge-ready labels, without a clean `status=clean` marker for its current head, the same as today.\"\n  Expected change site: `scripts/review_autofix_step_deterministic_skip_security_pass.sh:186-189` (safe-path probe) and `.github/workflows/review_autofix.yml:1218-1220` (merge step gating)\n  Evidence of presence: the requirement is already satisfied. The probe at `scripts/review_autofix_step_deterministic_skip_security_pass.sh:186-189` fails closed, and the merge step gating at `.github/workflows/review_autofix.yml:1218-1220` is in place. `test_skip_step_holds_when_python_ignores_safe_path` locks the fail-closed branch. SEVERITY: NIT. ISSUE_CONFIDENCE: 5.\n- Requirement: \"Gate the new behaviour on a new default-on repo variable, so that setting it to `false` restores today's suppression exactly.\"\n  Expected change site: `scripts/review_autofix_step_evaluate_gate.sh` near `AUTOFIX_SKIP_RUNS_SECURITY_PASS`; workflow `vars.AUTOFIX_SKIP_RUNS_SECURITY_PASS || 'true'`; README row\n  Evidence of presence: the requirement is already satisfied. The gate branches at `scripts/review_autofix_step_evaluate_gate.sh:827-862` and `:1207-1228` keep the old suppression when the switch is off, and tests lock the off path. SEVERITY: NIT. ISSUE_CONFIDENCE: 5.\n- Requirement: \"`\u00a727`: `review_autofix.yml` must stay under the 480,000-byte guard.\"\n  Expected change site: `.github/workflows/review_autofix.yml` size and the step-script extraction pattern\n  Evidence of presence: the requirement is already satisfied. The editor summary reports 379,052 bytes, and the step body lives in `scripts/review_autofix_step_deterministic_skip_security_pass.sh`. SEVERITY: NIT. ISSUE_CONFIDENCE: 5.\n- Requirement: \"`\u00a715`: reuse the PR payload the gate already fetched; add no per-iteration API calls.\"\n  Expected change site: gate output `det_skip_security_pass_pr_json`; skip step consuming `DET_SKIP_SECURITY_PASS_PR_JSON`\n  Evidence of presence: the requirement is already satisfied. The gate builds the JSON from existing locals at `scripts/review_autofix_step_evaluate_gate.sh:1407-1410`, and the skip step validates the head SHA at `scripts/review_autofix_step_deterministic_skip_security_pass.sh:144-148` with no PR GET. SEVERITY: NIT. ISSUE_CONFIDENCE: 5.\n- Requirement: \"`\u00a720 / \u00a730`: a `changelog.d/` fragment and an `agents.d/` fragment.\"\n  Expected change site: `changelog.d/8333-skip-path-security-pass.md`; `agents.d/8333-skip-path-security-pass.md`\n  Evidence of presence: the requirement is already satisfied. Both fragment files exist in the PR diff in the expected format. SEVERITY: NIT. ISSUE_CONFIDENCE: 5.\n- Requirement: \"Tests: extend `tests/test_single_issue_security_pass.py` and the gate tests that cover `AUTOFIX_GATE_DET_SKIP_SUPPRESSED`, and keep `tests/test_workflow_file_size_limit.py` green.\"\n  Expected change site: `tests/test_single_issue_security_pass.py`, `tests/test_pr_base_freshness_gate.py`, `tests/test_review_autofix_claude_fixer_mode.py`\n  Evidence of presence: the requirement is already satisfied. There are 12 new tests in `tests/test_single_issue_security_pass.py`, new `test_skip_runs_security_pass_*` tests at `tests/test_review_autofix_claude_fixer_mode.py:296-345`, and an updated test at `tests/test_pr_base_freshness_gate.py:969-1002`. SEVERITY: NIT. ISSUE_CONFIDENCE: 5.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "17de06da4c0f4851400dd4ee1468e958f4b1e706a21f2327ce114b1db4aa2aad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8345,
+    "run_id": "40933897469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40933897469",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029194145_b63754e003",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8345,
+    "run_id": "40933897469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T19:41:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix_sweep.yml:590-598 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The \"Re-run cancelled CI failed jobs once\" step passes `CI_CANCELLED_AUTO_RERUN_ENABLED` but not `CI_ACTION_RESOLUTION_RERUN_ENABLED`, so the scheduled sweep cannot apply the new class's documented off switch.\n  WHY: Setting the repository variable to `false` never reaches the helper, which reads it at `scripts/ci_cancelled_rerun.py` lines 469-470, so eligible action-resolution failures keep being rerun. The source labels this SEVERITY: MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Gate only the new class with CI_ACTION_RESOLUTION_RERUN_ENABLED\" as an off switch; `false` must turn that class off.\n  expected_change_site: .github/workflows/review_autofix_sweep.yml, the \"Re-run cancelled CI failed jobs once\" step\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The workflow step at lines 590-598 does not pass `CI_ACTION_RESOLUTION_RERUN_ENABLED` to the helper, README.md line 149 confirms a repository variable alone does not reach it, the documented off-switch is ineffective in the automated sweep runtime\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Gate only the new class with CI_ACTION_RESOLUTION_RERUN_ENABLED\" so false disables action-resolution reruns.\n  Expected change site: .github/workflows/review_autofix_sweep.yml\n  Evidence of absence: The environment variable CI_ACTION_RESOLUTION_RERUN_ENABLED is not passed to the helper script in the workflow file, leaving the documented off-switch ineffective in the automated sweep runtime.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix_sweep.yml:590-598 | severity=MAJOR | confidence=5\n  PROBLEM: The scheduled sweep cannot apply the new class's documented off switch. With no inherited value, the helper treats the switch as unset and enables action-resolution reruns.\n  WHY: Setting the documented repository variable to `false` does not reach the helper, so the sweep continues to rerun eligible action-resolution failures.\n- TASK_GAP\n  Requirement: \"Gate only the new class with CI_ACTION_RESOLUTION_RERUN_ENABLED\" as an off switch; `false` must turn that class off.\n  Expected change site: `.github/workflows/review_autofix_sweep.yml`, the \"Re-run cancelled CI failed jobs once\" step.\n  Evidence of absence: The PR adds helper-side parsing and documents the switch, but the workflow step at lines 590-598 does not pass `CI_ACTION_RESOLUTION_RERUN_ENABLED` to the helper. The README at line 149 confirms that a repository variable alone does not reach it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ff4f0fcf18efa370aadd78e63a63f3fd586ce02130a1efe5cac68512fac05d7c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8473,
+    "run_id": "41099442142",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41099442142",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261030174223_d5690a6062",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8473,
+    "run_id": "41099442142"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-30T17:42:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

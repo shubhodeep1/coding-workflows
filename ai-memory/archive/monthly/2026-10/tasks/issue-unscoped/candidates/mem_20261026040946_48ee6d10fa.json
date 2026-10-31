@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:18793 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The managed-arm condition `{ [ -n \"${local_id}\" ] && [ \"${local_id}\" != \"null\" ]; }` and the standalone-arm dual check (around line 23255) were reviewed and the reviewer found no defect. Source labelled it NIT.\n  WHY: The reviewer states the failure paths fall through to the else branch without exiting, so it does not fail at runtime. Severity is mapped from NIT to low.\n- scripts/orchestrate_poll_process.sh:18749-18752 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When the source-issue read fails, the booleans default to false. In the standalone arm, `ensure_label_exists \"ai:check-triage\"` still runs before the `orig_title` check (around line 23215-23217). Source labelled it NIT.\n  WHY: The reviewer states the label creation is idempotent and the error-path behaviour is correct, so there is no harm. Severity is mapped from NIT to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:18793 | severity=NIT | confidence=2\n  PROBLEM: The managed-arm condition `{ [ -n \"${local_id}\" ] && [ \"${local_id}\" != \"null\" ]; }` and the standalone-arm check (around line 23255) were reviewed. The reviewer concluded there is no correctness defect.\n  WHY: It does not fail at runtime. All-false cases skip the label creation and the `--label` argument.\n- scripts/orchestrate_poll_process.sh:18749-18752 | severity=NIT | confidence=2\n  PROBLEM: When the source-issue read fails, the booleans default to false. In the standalone arm, `ensure_label_exists \"ai:check-triage\"` runs before the `orig_title` check (around line 23215-23217).\n  WHY: It does not fail at runtime. The label creation is idempotent and the error-path behaviour is correct.\n- TASK_GAP (not a gap, deliverable present): requirement: PR description \"New `tests/test_stall_reissue_lineage_labels.py`, wired into `ci.yml`.\" | expected change site: `.github/workflows/ci.yml` `tests-heal-plan-and-validation` job around line 1311 | severity=NIT | confidence=5 | evidence: Present. The diff adds the new step exactly there.\n- TASK_GAP (not a gap, deliverable present): requirement: PR description \"Changelog fragment `changelog.d/7516-stall-reissue-lineage-labels.md`.\" | expected change site: `changelog.d/7516-stall-reissue-lineage-labels.md` | severity=NIT | confidence=5 | evidence: Present. The diff creates the file.\n- TASK_GAP (not a gap, deliverable present): requirement: PR description \"Managed arm: add `ai:orchestrator-managed` only for a wave item (`local_id` set) or a source issue that already carried it... Carry `ai:check-triage` from the source.\" | expected change site: `scripts/orchestrate_poll_process.sh` managed arm of `execute_stall_recovery_action` (around line 18784-18820) | severity=NIT | confidence=5 | evidence: Present. The diff adds `_reissue_lineage_label_args`, and tests cover the wave-item and non-wave managed paths.\n- TASK_GAP (not a gap, deliverable present): requirement: PR description \"Standalone arm: carry `ai:check-triage` from the source.\" | expected change site: `scripts/orchestrate_poll_process.sh` standalone arm of `run_standalone_stall_recovery` (around line 23251-23274) | severity=NIT | confidence=5 | evidence: Present. The diff adds `_std_reissue_lineage_label_args`, and a test covers the path.\n- TASK_GAP (not a gap, deliverable present): requirement: PR description \"Both read the labels from the source-issue call they already make, so no new API calls.\" | expected change site: `scripts/orchestrate_poll_process.sh` source-issue `gh_retry _safe_gh_jq` calls in both arms | severity=NIT | confidence=5 | evidence: Present. The existing `--jq` projection is extended with two boolean keys, still one API call per arm.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cd33ba1724af9f72e998b6ead6c31aacc85c69cfab8890518fc815c22fbe8835",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8178,
+    "run_id": "40265481558",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40265481558",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026040946_48ee6d10fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8178,
+    "run_id": "40265481558"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T04:09:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

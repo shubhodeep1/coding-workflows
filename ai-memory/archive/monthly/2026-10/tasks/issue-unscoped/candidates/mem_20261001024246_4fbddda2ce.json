@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:_mt_inflight_review_branches(), status loop `for __mt_runs_status in pending queued in_progress` | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The active-run listing omits `requested` runs, allowing `_mt_release` to retire a queue marker and dispatch a duplicate review while the original run is still active.\n  WHY: A run in `requested` status is not represented in the listing; reviewers agree this can lead to duplicate dispatches, though they differ on whether `waiting` should also be included.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The release path should query `requested` and `waiting` statuses as part of a complete active-run guard; the PR description says it \u201creads every active run,\u201d and the changelog says it \u201creads every active run.\u201d\n  expected_change_site: `scripts/review_merge_train.sh`, `_mt_inflight_review_branches`; `tests/test_review_merge_train.py`, `test_release_queries_each_active_status_in_lifecycle_order`\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  EVIDENCE: The status loop at `scripts/review_merge_train.sh` queries only `pending`, `queued`, and `in_progress`; the test `test_release_queries_each_active_status_in_lifecycle_order` asserts only those three statuses. The plan explicitly deferred adding `waiting` / `requested` (AD-6); the reviewers differ on whether the cited active-run conventions from other flows apply to the merge-train review-dispatch guard, and whether AD-6's rationale addresses `requested`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: The pass-1 cross-pollination TASK_GAP claims the release path must query `requested` and `waiting` statuses to be a complete active-run guard, citing `scripts/apply_analysis_on_main.sh:231` and `scripts/auto_release_stable.sh:166-177` which treat those as active.\n  Expected change site: scripts/review_merge_train.sh, _mt_inflight_review_branches\n  Evidence of absence: The status loop queries only `pending`, `queued`, `in_progress`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n  This was explicitly deferred. The plan's Non-goals section states: \"Adding the `waiting` / `requested` statuses to what counts as active (AD-6).\" AD-6 records the decision with rationale: \"\u00a75, no semantic widening; the review workflows use no deployment environments that would hold a run in `waiting`.\" The cited callers (`apply_analysis_on_main.sh`, `auto_release_stable.sh`) belong to different flows (promote cycles and auto-release, respectively) whose active-run semantics differ from the merge train's review-dispatch guard.\n- Note: The CI failure on `review / gate` (`failed[0]`) is a GitHub API rate-limit error (HTTP 403, rate limit exceeded for user ID 11442166). This is an infrastructure issue, not a code defect in the PR.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nReviewer minimax/minimax-m3 failed after non-retryable error on attempt 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_merge_train.sh:_mt_inflight_review_branches(), status loop `for __mt_runs_status in pending queued in_progress` | severity=high | confidence=5\n  PROBLEM: The active-run listing excludes `requested` and `waiting` runs.\n  WHY: The repository\u2019s other active-run checks explicitly treat both statuses as active (`scripts/apply_analysis_on_main.sh:231`, `scripts/auto_release_stable.sh:166`). If a review run is in either status during the listing, it contributes no branch or PR key. `_mt_release` can then retire the queue marker, remove the queue label, and dispatch another review while that run is still active.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The PR description says the release path \"reads every active run\" before releasing a queued PR, and the changelog fragment says \"the release step now reads every active run.\" The repo's own convention for active-run guards includes all five nonterminal statuses (`queued`, `in_progress`, `waiting`, `requested`, `pending`), as seen in `scripts/apply_analysis_on_main.sh:231` and `scripts/auto_release_stable.sh:166`, `173`, `177`.\n  Expected change site: `scripts/review_merge_train.sh`, `_mt_inflight_review_branches`, the `for __mt_runs_status in` loop; `tests/test_review_merge_train.py`, `test_release_queries_each_active_status_in_lifecycle_order`.\n  Evidence of absence: The status loop at `scripts/review_merge_train.sh` queries only `pending`, `queued`, and `in_progress`. It omits `requested` and `waiting`. The test `test_release_queries_each_active_status_in_lifecycle_order` asserts only those three statuses. Plan auto-decision AD-6 considered and rejected widening to five statuses, but its rationale (\"the review workflows use no deployment environments that would hold a run in `waiting`\") addresses only `waiting`, not `requested` \u2014 which is a transient initial status any newly dispatched run passes through before reaching `queued`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_merge_train.sh:_mt_inflight_review_branches, the status loop `for __mt_runs_status in pending queued in_progress; do` | severity=high | confidence=3\n  PROBLEM: The listing omits `requested` runs, so `_mt_release` can retire the queue marker and dispatch a duplicate review while a review run remains in `requested` status awaiting runner assignment.\n  WHY: `requested` can occur before a runner is assigned, independently of deployment environments; the reviewer considers excluding `waiting` justified, but identifies `requested` as a risk during overlapping release events.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "249d80767af9510c58082756a993664864bea77ea80905e45a31ff2d86826d47",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5451,
+    "run_id": "36804808448",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36804808448",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001024246_4fbddda2ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5451,
+    "run_id": "36804808448"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-01T02:42:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

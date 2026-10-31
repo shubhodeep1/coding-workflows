@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:2141-2152 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Failing-test subject paths are appended after crash, workflow, and changed paths, so earlier paths can fill the 20-path limit and exclude every subject path from the scope marker.\n  WHY: When the cap is full, the heal cannot edit the code covered by the failing tests, preserving the test-only failure mode; all reviewers rated the issue MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: 2141-2142\n  Problem: Failing-test subject paths are appended at the end of the iteration order, after crash_file, workflow_paths, and changed_files. When the prior entries fill the 20 explicit-path limit, every subject script/workflow file is dropped from the scope marker.\n  Why it fails at runtime: The heal then cannot edit the code its failing tests cover, which preserves the test-only failure mode that Q37: A was intended to fix. The intake can supply enough existing paths to consume the cap before the subject loop reaches those entries; the truncation warning is only observable in runner logs.\n  severity=MAJOR\n  confidence=5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: render_heal_scope_marker (lines 2142-2148 in the patch context)\n  Problem: Failing-test subject paths are appended at the end of the paths list, after crash_file, workflow_paths, and changed_files. The paths list has a hard limit of 20 elements.\n  Why it fails at runtime: If the earlier paths fill the 20-slot limit, the subject paths are dropped, defeating the purpose of this change to allow fixing code covered by failing tests when the scope is otherwise full.\n  severity=MAJOR\n  confidence=4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: render_heal_scope_marker \u2014 the iteration `for path in [crash_file, *workflow_paths, *changed_files, *subjects]:` (the new code at the top of the function as written by this autofix round, just after the `subjects` filter). The trailing `subjects` element is what puts test-derived subjects last in the explicit-path sequence.\n  Problem: Subject paths are appended LAST after crash_file, workflow_paths, and changed_files. The new warning only logs the drop; it does not change which paths are kept. When earlier paths fill the 20-path cap, every subject is dropped from the explicit list.\n  Why it fails at runtime: The rendered marker contains no subject path, and the implement guard refuses to edit the covered script/workflow because the scope marker does not list it. The added test exercises truncation with only one prior slot, so it does not cover the case where non-subject paths fill the cap.\n  severity=MAJOR\n  confidence=4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: 2142-2149\n  Problem: Failing-test subject paths are added after the crash, workflow, and ownership paths, which can consume all 20 explicit scope slots.\n  Why it fails at runtime: When 20 earlier valid paths exist, the mapped script or workflow for a failing test is omitted from the marker, so the heal remains unable to fix the code that test covers.\n  severity=MAJOR\n  confidence=4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: render_heal_scope_marker, the iteration `for path in [crash_file, *workflow_paths, *changed_files, *subjects]` (lines 2142-2152)\n  Problem: Subject paths (the scripts and workflows the failing tests cover) are appended after crash_file, workflow_paths and changed_files. When changed_files is large (a PR that touches 20+ files, which the intake passes verbatim at scripts/workflow_failure_heal_intake.sh:1033 for `CRASH_OWNERSHIP=pr`), the earlier paths fill the 20 explicit-slot limit before any subject is considered, and every mapped subject is dropped.\n  Why it fails at runtime: The marker then contains only `tests/**` as an editable area, preserving the test-only failure mode this PR is intended to fix. The truncation warning counts the dropped subjects but the marker is still emitted and accepted by verify_heal_scope; the cited test only exercises subjects hitting the cap with no changed_files.\n  severity=MAJOR\n  confidence=4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "813357da12579cfdce4f9352dc98fd1094d33d2a6def75bb1841504495967dad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6947,
+    "run_id": "37967034569",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37967034569",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009180648_238b2959e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6947,
+    "run_id": "37967034569"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T18:06:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

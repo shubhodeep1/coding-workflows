@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Build IMPL_RUN_TOTAL, IMPL_RUN_IN_PROGRESS, IMPL_RUN_STATUS and IMPL_RUN_ID_LATEST from runs filtered by display_title, paging through the window up to SCOPED_RUN_LOOKUP_MAX_PAGES (per_page=100), as scoped_implement_runs_complete does.\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, scoped_implement_progress_counts (page loop around lines 1431-1433, metric calculation around lines 1440-1450)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/test-and-mark-stable.yml scoped_implement_progress_counts breaks the page loop on the first page with a match (`progress_page_matches > 0`, lines ~1431-1433) and computes all four metrics from that page only, so matching runs on later pages are excluded and IMPL_RUN_TOTAL and IMPL_RUN_IN_PROGRESS undercount. All three reviewers rated it NIT. They note the changelog documents \"stops at the first page with a match\" as intended, and scoped_implement_runs_complete re-walks every page, so only the progress log lines are affected.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: The issue says to build IMPL_RUN_TOTAL, IMPL_RUN_IN_PROGRESS, IMPL_RUN_STATUS and IMPL_RUN_ID_LATEST from runs filtered by display_title, paging through the window up to SCOPED_RUN_LOOKUP_MAX_PAGES. The counter should reflect the issue's Implement runs, not just the first page that has a match.\n  Expected change site: .github/workflows/test-and-mark-stable.yml, scoped_implement_progress_counts (about lines 1410-1444).\n  Evidence of absence: The loop breaks on the first page with a match (`if [ \"$progress_page_matches\" -gt 0 ]`). Totals are computed only from that page's matches. If the runs span several pages, IMPL_RUN_TOTAL and IMPL_RUN_IN_PROGRESS undercount, and the \"latest\" run may not be the newest. Pass/fail is not affected: the decision at line 1535 only fires when total > 0 and active == 0, and then calls `scoped_implement_runs_complete`, which walks every page. Only the progress log line and the \"returned to ai:awaiting-approval\" line may show partial counts. This is a design choice for API-call economy that the changelog states.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"Build IMPL_RUN_TOTAL, IMPL_RUN_IN_PROGRESS, IMPL_RUN_STATUS and IMPL_RUN_ID_LATEST from runs filtered by display_title == $ISSUE_TITLE, as scoped_implement_runs_complete already does. Page through the window, at most SCOPED_RUN_LOOKUP_MAX_PAGES, using per_page=100.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml, scoped_implement_progress_counts (the while-loop body around line 1431-1433 and the post-loop metric calculations around lines 1444-1450 in the new function).\n  Evidence of absence: The loop breaks as soon as `progress_page_matches > 0` (line ~1431-1433), assigning only the current page's matches to `progress_matches` and never reading later pages. When the runs span multiple pages, IMPL_RUN_TOTAL and IMPL_RUN_IN_PROGRESS reflect only the first matching page. `scoped_implement_runs_complete` walks all pages up to SCOPED_RUN_LOOKUP_MAX_PAGES. The changelog documents \"stops at the first page with a match\" as intended, so this is a deliberate design choice. The terminal walk still detects completion because IMPL_RUN_TOTAL > 0 whenever any matching run exists, and the undercount affects only the progress log lines. Real-world impact is limited to issues with multiple Implement runs spanning pages, which the smoke gate does not produce.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \u201cBuild IMPL_RUN_TOTAL, IMPL_RUN_IN_PROGRESS, IMPL_RUN_STATUS and IMPL_RUN_ID_LATEST from runs filtered by display_title\u201d and \u201cPage through the window, at most SCOPED_RUN_LOOKUP_MAX_PAGES.\u201d\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, `scoped_implement_progress_counts`.\n  Evidence of absence: The counter exits its page loop as soon as a page contains a matching run (lines 1431-1433), then calculates all four metrics from only that page's matches (lines 1440-1444). Matching runs on later pages are excluded from the totals and active count.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "881ee3cb08c803200ffa4ecd7a7399833ae3ea8e195c4dda624144fdd16b8903",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7969,
+    "run_id": "39964829423",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39964829423",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023142717_41a609ac4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7969,
+    "run_id": "39964829423"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T14:27:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

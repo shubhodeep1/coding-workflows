@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7837,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7837\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7845\",\"pr_number\":7845,\"branch\":\"ai/issue-7837\",\"run_id\":\"39705409212\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39705409212\",\"changed_files\":[\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/7837-validation-refresh-smoke-budget.md\",\"tests/test_validation_refresh_workflow_contract.py\"]}",
+  "fingerprint": "2aa82bda219906c87429a206c7725f19f8608cb538dcd06d81e2ff26b04f0f5b",
+  "lineage": {
+    "issue_number": 7837,
+    "parent_ids": [],
+    "pr_number": 7845,
+    "run_id": "39705409212",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39705409212",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7845"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261022013539_fda20b204a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7837,
+    "level": "run",
+    "pr_number": 7845,
+    "run_id": "39705409212"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7837: https://github.com/shubhodeep1/coding-workflows/pull/7845",
+  "timestamps": {
+    "created_at": "2026-10-22T01:35:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

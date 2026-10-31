@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for issue #8235: rewrite `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `git rev-parse HEAD` = `741ec7c3e7b8210f11360b11cbd8a7e2a5f1f2de`, branch `main`. The issue declares no integration branch, so the work targets the default branch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names the file, its exact final content and the method, and limits the change to that one file. There is nothing to widen or narrow, so the plan matches the request exactly. Under the \u00a76 priorities (correctness and safety first), the change must be byte-exact and touch nothing else. Even though `CLAUDE.md` \u00a720 normally asks for a changelog fragment, the issue's \"only modify this file\" rule takes precedence, and the repository's own smoke test checks that only this one file changed.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n\nNone. Replace the whole file content with exactly these three lines, each ending in a newline:\n\n```\nstatus: ok\nrun_id: 40608957733\nupdated-by: ai-pipeline\n```\n\nThat is equivalent to `printf 'status: ok\\nrun_id: 40608957733\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n\n## Data structures affected\n\nOnly the plain-text fixture `tests/e2e_smoke_canary.txt`.\n\n## API or interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Overwrite the file in full, with no other edits\n- Chosen: Overwrite `tests/e2e_smoke_canary.txt` with exactly the three specified lines and one trailing newline, and change no other file (no changelog fragment, no `agents.d/` fragment).\n- Alternatives considered: (1) Editing individual lines in place. (2) Adding a changelog fragment as `CLAUDE.md` \u00a720 usually asks.\n- Why: The issue requires a complete replacement and restricts changes to this one file. A full overwrite guarantees the content is byte-exact, and an extra fragment would break the issue's constraint and the smoke test's single-file check.\n\n## Security considerations\n\n- Trust boundaries touched: none. The file is a static test fixture that nothing executes.\n- New endpoints or surfaces: none, so no new authorization is needed.\n- External input: the content is fixed by the issue; no runtime input is read.\n- Abuse cases: none. The content holds no secrets or credentials, and no money-handling code is involved.\n\n## Potential risks or edge cases\n\n- A missing trailing newline, an extra blank line or CRLF line endings would break the \"exactly three lines\" requirement. Use LF line endings and exactly one final newline.\n- Any change to another file (formatter output, changelog, lockfiles) would break the single-file constraint.\n\n## Testing considerations\n\n- `cat -A tests/e2e_smoke_canary.txt` should show exactly three lines, each ending in `$`.\n- `wc -l tests/e2e_smoke_canary.txt` should print `3`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\n\nThe plan covers every requirement in the issue: the exact content, the trailing newline, the single file changed and no new directories. No external input or clarification is needed.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "96c17a336510fcab95434707bf2978052603047386e19082c6a2e63579007eac",
+  "lineage": {
+    "issue_number": 8235,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40609789665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40609789665",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8235"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261028004548_e8007a7b5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8235,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40609789665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8235",
+  "timestamps": {
+    "created_at": "2026-10-28T00:45:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

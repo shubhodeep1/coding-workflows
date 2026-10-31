@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:\"Pinned mode\" paragraph under \"The daily promote cycle\" | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The README's list of skip reasons for the pinned promote cycle leaves out `freeze_failed`, which scripts/promote_main_cycle.sh emits when `pin_freeze` fails.\n  WHY: Operators use the README as the authoritative source when triaging skip reasons in logs, so the missing reason causes confusion; the source severity was NIT, mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: P3.6, pending status with a pinned marker: \"skip comprehensive_untested_commits_json and read the tag and the branch instead (2 calls).\"\n  expected_change_site: scripts/orchestrate_poll_process.sh, comprehensive_promotion_gate_before_final_merge (pinned branch)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The pinned branch calls `comprehensive_stable_tag_commit promote-cycle-frozen`, which reads the tag ref and then the tag object for an annotated tag (lines 13716-13732), and it then reads `git/ref/heads/promote-candidate` (line 14092), so each pending tick makes 3 API reads instead of 2, earlier editor runs deferred this on purpose because over REST 2 calls would need a new GraphQL helper, the extra read runs once per gate tick and is not inside any per-item loop (\u00a714 still met), source severity NIT\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP | severity=NIT | confidence=3\n  Requirement: P3.6, pending status with a pinned marker: \"skip comprehensive_untested_commits_json and read the tag and the branch instead (2 calls).\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, the pinned branch of `comprehensive_promotion_gate_before_final_merge`.\n  Evidence of absence: The pinned branch calls `comprehensive_stable_tag_commit promote-cycle-frozen`, which for an annotated tag is a ref read plus a tag-object read, and then reads `git/ref/heads/promote-candidate`, so each pending tick makes 3 calls, not 2. Earlier editor runs deferred this on purpose because 2 calls over REST would need a new GraphQL helper. The extra read runs once per gate tick and is not inside any per-item loop, so \u00a714 is still met.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- README.md:\"Pinned mode\" paragraph under \"The daily promote cycle\" | severity=NIT | confidence=4\n  PROBLEM: The listed skip reasons for the pinned promote cycle are incomplete.\n  WHY: The README omits `freeze_failed`, which scripts/promote_main_cycle.sh emits when `pin_freeze` fails, and this causes confusion when triaging skip reasons in logs because the README is the authoritative source for operators.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: P3.6 requires the pending pinned-promotion gate to read the tag and branch in 2 calls.\n  Expected change site: scripts/orchestrate_poll_process.sh, comprehensive_promotion_gate_before_final_merge\n  Evidence of absence: The gate reads the annotated tag through comprehensive_stable_tag_commit, which makes one request for the tag ref and another for its tag object (lines 13716-13732), and then separately reads the promote-candidate branch (line 14092), so the pinned check makes 3 API reads, not 2.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b90430f46b9041c719dd74e63714a9dc4b122e79415e46663785455ab1ceb16c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7777,
+    "run_id": "39574328349",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39574328349",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021093406_1446923c33",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7777,
+    "run_id": "39574328349"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T09:34:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

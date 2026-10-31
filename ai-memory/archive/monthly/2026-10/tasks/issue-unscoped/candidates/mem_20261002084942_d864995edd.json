@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16524-16555, 17570-17595 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_8-flash, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: After a merged linked PR is rejected, the standalone and managed recovery paths retain its payload and pass it to the fresh-push guard, which can suppress terminal skip or escalate_human actions based on the rejected PR's headPushedAt timestamp.\n  WHY: A recent push timestamp on the rejected PR can prevent the stall budget from being consumed or escalation from occurring; severity disagreement: qwen_qwen3_7-plus rated this NIT, while the other reviewers rated it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: 16549 (standalone path, falls through to fresh-push guard at 16555) and 17590 (managed path) | severity=MAJOR | confidence=5\n  PROBLEM: When `_reconcile_merged_pr_issue` rejects a merged PR and `_stall_rejected_merged_link_counts_attempt` returns 1 for `skip` or `escalate_human`, the recovery paths fall through to the fresh-push guard with `_std_linked_json` / `_fresh_lpr_entry` still carrying the rejected PR's payload.\n  WHY: A recent `headPushedAt` timestamp on the rejected PR can suppress recovery, preventing the terminal rung from running.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- scripts/orchestrate_poll_process.sh: lines 16549-16555 and 17577-17590 | severity=MAJOR | confidence=5\n  PROBLEM: After `_reconcile_merged_pr_issue` rejects a merged PR that landed outside the issue's target branch, both recovery paths retain the rejected PR's payload and pass it to `_check_fresh_push_guard_with_fallback`.\n  WHY: The guard may inspect the rejected PR's recent `headPushedAt` and suppress terminal skip or escalation; an older valid timestamp can also prevent fallback to the issue's automation branch.\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh: 16524-16555 (standalone stall) and 17570-17590 (managed stall, `recover_stalled_issue`) | severity=MAJOR | confidence=5\n  PROBLEM: After a wrong-base merged linked PR is rejected, `_std_linked_json` / `_fresh_lpr_entry` is not cleared, so the fresh-push guard inspects the rejected PR's `headPushedAt`.\n  WHY: A recent timestamp can cause `STALL_SKIP reason=fresh_push` without incrementing `stall_recovery_count` or sending the expected `ai:needs-human` alert until the timestamp ages out.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: 16533-16555, 17577-17590; freshness check at 15556-15592 | severity=MAJOR | confidence=5\n  PROBLEM: After a merged PR is rejected, the standalone and managed paths retain that PR as the freshness-check input, and the freshness check tests `headPushedAt` without checking whether the PR was rejected or merged.\n  WHY: If the rejected PR's head was pushed within the 3000-second window, the guard can suppress the terminal action without incrementing the stall budget or escalating.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh: managed path in `recover_stalled_issue`, around the `_check_fresh_push_guard_with_fallback` call after the merged-PR guard (~line 17590+) | severity=NIT | confidence=3\n  PROBLEM: After `_reconcile_merged_pr_issue` rejects a merged linked PR and `_stall_rejected_merged_link_counts_attempt` returns 1, `_fresh_lpr_entry` still holds the rejected PR's JSON when passed to the fresh-push guard.\n  WHY: A recent push on the rejected PR can suppress `skip` or `escalate_human` for one poll cycle; the standalone path has the same shape.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh: lines 16524-16555 (standalone path) and 17570-17595 (managed path); _check_fresh_push_guard at lines 15557-15596 | severity=MAJOR | confidence=5\n  PROBLEM: After `_reconcile_merged_pr_issue` rejects a merged PR, the linked-PR variable is not cleared before the fresh-push guard runs.\n  WHY: The guard can use the rejected PR's recent `headPushedAt` timestamp to suppress the terminal skip or escalate_human action, preventing the recovery ladder from reaching its terminal action during that window.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b646e35c1f4379259b172650df0c36e25e3837654225ee8bce3c8a50e0fc22e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5633,
+    "run_id": "36983986750",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36983986750",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261002084942_d864995edd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5633,
+    "run_id": "36983986750"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-02T08:49:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

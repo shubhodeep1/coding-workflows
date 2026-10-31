@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fail closed for pushes when shell control flow or the effective directory cannot be determined.\"\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py`, `git_subcommands()` / `_guarded_git_invocations()` control-flow handling and `_evaluate_bash()`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `git_subcommands()` at lines 682-720 recognizes `git` only as the first real token of a parsed segment. For `if true; then git push origin; fi`, the push segment begins with `then`, so it is not recognized. `_evaluate_bash()` at lines 1349-1356 then returns without requesting confirmation because the command parses successfully. The new tests cover only `cd`/`exit` redirects; no test asserts fail-closed behavior for reserved-word control flow.\n- ...\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Fail closed for pushes when shell control flow or the effective directory cannot be determined.\"\n  Expected change site: .claude/hooks/pr_merge_status_guard.py, the git_subcommands function or the command-segment tokenizer\n  Evidence of absence: When a guarded git subcommand is embedded inside a shell reserved-word construct such as if true; then git push origin; fi, shlex treats if, then, and fi as ordinary words while ; acts as the segment separator. The segment containing git push origin becomes [\"then\", \"git\", \"push\", \"origin\"], and git_subcommands extracts the first token \"then\" rather than \"git\". The guarded subcommand is not detected, so _evaluate_bash at line 1349 takes the unguarded-command path and returns without any merged-PR check. This is a pre-existing limitation of the shlex-based tokenizer not introduced by this PR, but it aligns with the linked issue recommendation that shell control flow must not silently bypass the guard. The PR correctly addresses the exploit scenario of redirected cd and exit commands.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Fail closed for pushes when shell control flow or the effective directory cannot be determined.\"\n  Expected change site: .claude/hooks/pr_merge_status_guard.py, _guarded_git_invocations() control-flow handling.\n  Evidence of absence: The PR adds redirect uncertainty handling for cd and exit, but does not classify shell reserved-word control flow (e.g., if, then, else, fi). For a command structure like if true; then git push origin; fi, the subcommand parsing in _guarded_git_invocations() fails to detect the git push within the control flow block, resulting in the guard bypassing the merge check.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Fail closed for pushes when shell control flow or the effective directory cannot be determined.\" (verbatim from issue #6289's Recommendation)\n  Expected change site: `.claude/hooks/pr_merge_status_guard.py`, shell command classification in `git_subcommands()` (line 682) and `_evaluate_bash()` (line 1332). The `_shell_segments` splitter only treats `_SHELL_PUNCTUATION_CHARS` (\";&|\\n<>\") as segment breaks, so Bash reserved words like `then`, `else`, `do`, `done`, `{`, `}` stay attached to the next command and prevent the segment from starting with `git`.\n  Evidence of absence: The PR adds `_shell_segments_with_redirects` for redirect uncertainty on `cd`/`exit` and routes the push through the session-checkout path when the working directory is unknown, but does not classify shell reserved-word control flow. For `if true; then git push origin; fi`, shlex tokenizes the inner clause as one segment `[\"then\", \"git\", \"push\", \"origin\"]` (because `then` is a word and only `;` separates segments). `git_subcommands()` then skips that segment because its executable is `then`, returns an empty set, `_evaluate_bash` falls into the `if not guarded_git_subcommands:` branch at line 1349, runs `_shell_segments_with_operators(command)` (which succeeds), and returns `0, \"\"` \u2014 the push slips past the guard with no merged-PR check. The fix's redirect path does not fire because no `cd`/`exit` segment precedes the push. The same shape defeats `for`/`while`/`until`/`case` bodies and any compound after `do`/`then`/`{`, which the issue's recommendation explicitly named. The new tests cover only `cd`/`exit` redirects; no test asserts fail-closed behavior for reserved-word control flow.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cFail closed for pushes when shell control flow or the effective directory cannot be determined.\u201d\n  Expected change site: `.claude/hooks/pr_merge_status_guard.py` command classification in `git_subcommands()` and `_evaluate_bash()`; the mirrored guard in `workflow-templates/.claude/hooks/pr_merge_status_guard.py` should retain the same protection.\n  Evidence of absence: `git_subcommands()` at lines 682-720 recognizes `git` only as the first real token of a parsed segment. For `if true; then git push origin; fi`, the push segment begins with `then`, so it is not recognized. `_evaluate_bash()` at lines 1349-1356 then returns without requesting confirmation because the command parses successfully. The PR changes add redirect uncertainty handling but do not classify this reserved-word control flow, so the push bypass remains.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b475c4b13f2f6374f4afdea1c631af2134ccda7d20a787866de9fb89e9c0b7e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6294,
+    "run_id": "37317617682",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37317617682",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005145100_67f854267e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6294,
+    "run_id": "37317617682"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T14:51:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

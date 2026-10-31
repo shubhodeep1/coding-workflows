@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:27930-27941 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Gate D treats a transient `query_failed` result as a settled required-check failure, paging a person and consuming the per-head `D_check` marker.\n  WHY: A later real failure on the same head can be hidden by the marker; severity differed (low/NIT versus high/MAJOR), so the highest severity is used.\n- scripts/pr_checks_lib.sh:_mark_superseded (in `_pr_checks_completed`) | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Grouping check-runs by `.name // \"\"` aggregates all nameless check-runs into one group.\n  WHY: Distinct nameless check-runs could be incorrectly superseded, hiding a failing check or incorrectly blocking status.\n- scripts/implement_handle_guard_block.sh:guard_block_ensure_label (warning block) | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Truncating the error message to 500 bytes can omit diagnostic information during transient label-creation failures.\n  WHY: Missing error details can make it harder to understand the failure from the job log.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Proactively apply workflow-optimization recommendations for workflows that exceed the new expression-limit threshold.\n  expected_change_site: .github/workflows/\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `tests/test_workflow_file_size_limit.py` detects overly large workflow run-bodies with expressions, but existing workflow bodies are not proactively moved to `scripts/`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=3\n  PROBLEM: A `query_failed` result from the shared gate takes the same path as a settled required-check failure, paging a person and writing the `D_check` marker for the PR head.\n  WHY: The next sweep would have retried anyway, but a real settled failure on the same head later finds the marker and sends no page.\n\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh | confidence=3\n  PROBLEM: A transient API error (e.g., `query_failed` after `gh_retry` exhaustion) is treated as a settled required-check failure.\n  WHY: The orchestrator sends a CRITICAL Telegram alert and posts a per-head marker `gate=D_check` on the tracking issue, which effectively disables further attempts for that head SHA until a human intervenes.\n- scripts/pr_checks_lib.sh | confidence=2\n  PROBLEM: The grouping logic `group_by(.name // \"\")` aggregates all nameless check-runs into a single group.\n  WHY: If multiple distinct nameless check-runs exist, they are incorrectly grouped and then superseded by the \"newest\" one, which could hide a failing nameless check or incorrectly block status.\n- scripts/implement_handle_guard_block.sh | confidence=3\n  PROBLEM: Error messages are truncated to 500 bytes, losing potentially important diagnostic information during transient label-creation failures.\n  WHY: If a complex or lengthy error occurs, important diagnostic information necessary to understand the failure is lost in the job log.\n- Requirement: Proactively apply workflow-optimization recommendations for workflows that exceed the new expression-limit threshold.\n  Expected change site: .github/workflows/\n  Evidence of absence: The PR introduces a test in `tests/test_workflow_file_size_limit.py` to detect overly large workflow run-bodies with expressions, but it does not proactively move those bodies to `scripts/` as required by the commit instructions for existing workflows that reach this threshold.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh | severity=high | confidence=4\n  PROBLEM: Gate D treats `PR_CHECKS_LAST_REASON == \"query_failed\"` as a settled `blocking` failure and calls `_noop_gate_failure_alert \"D_check\"`, posting a per-head marker and sending a Telegram ERROR.\n  WHY: A transient query failure consumes the marker, so a later real `blocking` failure on the same head logs `outcome=skip reason=already_alerted` and emits no new page.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:27930-27938 | severity=low | confidence=5\n  PROBLEM: A `query_failed` result from `_pr_checks_completed` is sent through the same `D_check` alert path as a settled check failure.\n  WHY: `_noop_gate_failure_alert` posts the per-head `D_check` marker and sends an ERROR alert; if a later sweep reads a genuinely failing check on the same head, that marker suppresses its alert.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh | severity=low | confidence=4\n  PROBLEM: A transient `query_failed` from the shared gate now takes the same path as a settled required-check failure, sending an ERROR-level Telegram alert and posting the per-head `D_check` marker.\n  WHY: The next sweep retries, but the marker is already posted; if a real settled failure occurs on the same head later, `_noop_gate_failure_alert` logs `already_alerted` and sends no page.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "04c5801e728d9b131043848e4f34742ddd500cde42c05b85ce44de283c05418c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7131,
+    "run_id": "38305229635",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38305229635",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012211131_73d67bf276",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7131,
+    "run_id": "38305229635"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T21:11:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

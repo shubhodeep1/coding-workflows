@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should the Phase 3b tracker be changed now, without the Implement-run evidence the issue originally asked for? The change would make the probe follow the newest `in_progress` run (falling back to the newest run of any status) and keep reading pages until a page has fewer than 100 runs or `SCOPED_RUN_LOOKUP_MAX_PAGES` is reached. The code itself shows the failure is possible: lines 1512\u20131514 `break` on the first page that has any match, and lines 1523\u20131524 pick the newest-created run whatever its status. So a queued duplicate `/approved` run can hide the run that is actually doing the work.\nChoices:\n- A: Yes, make the change now as hardening. It touches only `test-and-mark-stable.yml` inside the heal scope and comes with a contract test using a fake `gh` (pending duplicate plus in_progress run, and a match on page 2). Candidate 3 stays recorded as unconfirmed. (RECOMMENDED)\n- B: No. Close this item as not actionable without evidence. If the stall happens again, a new heal issue with the run logs will reopen it.\n- C: Make only the run-selection change (prefer `in_progress`) and leave the paging early-stop unchanged.\nQ2: What should happen to the opt-in `--queue-timeout-secs` flag for `scripts/dispatch_and_watch_workflow_run.sh`? It is outside the heal-scope marker (`.github/workflows/test-and-mark-stable.yml`, `tests/**`, `changelog.d/*.md`), so a plan that includes it will wait at the plan gate for human approval. The confirmed failure is already fixed by the 5520 s budget. The flag would mainly give a separate \"still queued\" error.\nChoices:\n- A: Add the flag with default behaviour unchanged for the 5 other callers. Add the fake-`gh` regression test and pass `--queue-timeout-secs 1800` in the validation-refresh step. This accepts that the plan gate will hold the plan for human approval.\n- B: Drop it. The widened completion budget already fixes the confirmed root cause, and \u00a79 (minimal change) argues against a diagnostics-only script change outside scope. Record it as not pursued. (RECOMMENDED)\n- C: Add the flag and its test to the script, but do not wire it into the workflow yet. This still needs human approval at the plan gate.\n**Note:** under A, the planner decides whether `--completion-timeout-secs` stays at 5520 or goes back to 3720, now counted from when the run starts. Either value keeps the existing contract test passing.\nQ3: What should happen to the `e2e-alt-model-test` 4500 s wall-clock deadline (`DEADLINE=$(( $(date +%s) + 4500 ))` in the step \"Wait for clarify\u2192plan\u2192implement (alt-model)\")? There is no Implement-run timeline for #8337 showing the budget is too small. The recorded run lost about 21 minutes to the clarify queue and about 23.5 minutes to the implement queue, but that was runner saturation that is not shown to recur.\nChoices:\n- A: No change. Close this item: without evidence, raising the deadline would be guesswork, and the `/approved` flood that made it worse is already fixed. (RECOMMENDED)\n- B: Raise the deadline enough to absorb the observed queue time, for example from 4500 to 7200 s, and update the step's `timeout-minutes`, the job's `timeout-minutes` and the contract tests to match.\n- C: Replace the single deadline with separate per-phase deadlines that start counting only when each phase's label appears.",
+  "fingerprint": "0e95f11a053df2f1d7c186df85b63d0aba1a29dbf2d01581c782baeaa2400a8d",
+  "lineage": {
+    "issue_number": 8347,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40872525484",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40872525484",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029123218_e342ce34ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8347,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40872525484"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8347 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T12:32:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

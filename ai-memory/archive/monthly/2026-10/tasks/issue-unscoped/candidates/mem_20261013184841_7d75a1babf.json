@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md:lines 1-23 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The pending changelog fragment duplicates an entry already in CHANGELOG.md and contains stale claims about caller coverage and the CI step running the regression test.\n  WHY: The next release fold would publish a duplicate entry with incorrect information about which callers use the mirror pre-seed and how the test is wired in CI.\n- .github/workflows/ci.yml:line 1310 | severity=low | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: This line adds another invocation of a test module already wired elsewhere in CI, without adding coverage.\n  WHY: It repeats the module during each CI run, and the added invocation lacks the `TMPDIR=${RUNNER_TEMP}` override documented as necessary for the fake `docker`.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Wire `tests/test_clarify_sandbox_base_image_preseed.py` into CI so the wiring guard stops failing. The linked issue also says to \"Confirm the test exists in the PR head\" and to update the pending changelog fragment if it still says the test is not run by CI.\n  expected_change_site: `.github/workflows/ci.yml`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The wiring is already present at lines 588, 594, 641 and 963; nothing is missing, and the issue's premise is already satisfied on the base.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md: whole new file, lines 1-23. | severity=MAJOR | confidence=4\n  PROBLEM: The fragment duplicates an entry already folded into CHANGELOG.md at line 2534 and contains stale caller-coverage and CI-step claims.\n  WHY: The next release fold would publish a duplicate entry whose coverage and CI-step claims are false.\n- .github/workflows/ci.yml: line 1310, in the \"Regression tests wired by the CI wiring guard (part 2)\" step of the `tests-promote-stall-and-review` job. | severity=NIT | confidence=4\n  PROBLEM: This adds a fifth run of a test module already named in `ci.yml` at lines 588, 594, 641 and 963, without the `TMPDIR=${RUNNER_TEMP}` override.\n  WHY: It adds no coverage and wastes CI time; Part 1 already runs it with the override.\n- TASK_GAP\n  Requirement: Wire `tests/test_clarify_sandbox_base_image_preseed.py` into CI so the wiring guard stops failing. The linked issue also says to \"Confirm the test exists in the PR head\" and to update the pending changelog fragment if it still says the test is not run by CI.\n  Expected change site: `.github/workflows/ci.yml`. The wiring is already present at lines 588, 594, 641 and 963.\n  Evidence of absence: Nothing is missing. The issue's premise is already satisfied on the base. The right outcome is likely no `ci.yml` change and no new fragment, or at most an existing-fragment correction.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md: Lines 16-23 | severity=MAJOR | confidence=5\n  PROBLEM: This pending fragment duplicates the entry already in CHANGELOG.md (lines 2534-2555) and includes stale claims that only clarify.yml is covered and other callers still pull from Docker Hub.\n  WHY: The changelog assembler folds fragments into CHANGELOG.md without deduplicating their content, so the next release fold adds a duplicate entry with incorrect caller-coverage information.\n- .github/workflows/ci.yml: Line 1310 | severity=NIT | confidence=5\n  PROBLEM: This adds another invocation of `tests/test_clarify_sandbox_base_image_preseed.py`, already invoked at lines 588, 594, 641, and 963.\n  WHY: Each CI run executes the test module a fifth time without adding coverage, extending CI work.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/6985-clarify-sandbox-base-image-mirror.md: whole file (lines 1-23), compare CHANGELOG.md lines 2534-2555 and changelog.d/7215-clarify-base-image-preseed-all-callers.md | severity=MAJOR | confidence=5\n  PROBLEM: The fragment duplicates an entry already folded into CHANGELOG.md and contains outdated claims about caller coverage and the CI step running the regression test.\n  WHY: The next release fold would append the text a second time, including false claims about caller coverage.\n- .github/workflows/ci.yml: line 1310, in step \"Regression tests wired by the CI wiring guard (part 2)\" | severity=NIT | confidence=5\n  PROBLEM: This adds a fifth invocation of `tests/test_clarify_sandbox_base_image_preseed.py`, already wired at lines 588, 594, 641, and 963, without adding coverage.\n  WHY: It repeats subprocess-heavy tests in a third job without the `TMPDIR=RUNNER_TEMP` override documented as necessary for the fake docker, wasting CI time in a job with a 20-minute budget.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "06c9dfa1efbb6e7a00f18bf0c67fff826de9a1849d75a3e51b28db14453c2613",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7241,
+    "run_id": "38446974824",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38446974824",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013184841_7d75a1babf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7241,
+    "run_id": "38446974824"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T18:48:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The `created` log line records the choice as `target_branch_source=default|failed_run_branch|pipeline_mirror_branch|...` (README); PR description says the intake logs `target_branch_source=pipeline_mirror_branch`\n  expected_change_site: `scripts/workflow_failure_heal_intake.sh` line 2957, the consumer-app-defect arm's `created` log line\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The consumer-app-defect arm's `created` log line (line 2957) omits `target_branch_source` (and `target_branch=`), whereas the workflow-defect arm (line 2931) and pr-self-inflicted arm (line 2996) include it; the retarget is logged at lines 2950-2956 (`target_branch_retarget ... reason=pipeline_mirror_branch`) so the decision is recoverable; the new consumer-app-defect test does not assert the source field. Severity NIT in all three.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: The README says \"The `created` log line records the choice as `target_branch_source=default|failed_run_branch|pipeline_mirror_branch|...`\".\n  Expected change site: the consumer-app-defect arm's `created` log line in `scripts/workflow_failure_heal_intake.sh` (around line 2957).\n  Evidence of absence: That arm's `created` line does not include `target_branch_source`. It never did, because the arm has no `TARGET_BRANCH_SOURCE` concept. The retarget is already logged through `target_branch_retarget \u2026 reason=pipeline_mirror_branch`, so the information is recoverable. The PR description's stated requirement is the workflow-defect arm's `target_branch_source` log, which is implemented and tested. This is only a documentation-versus-log nit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- HARDENING: tests/test_workflow_failure_heal.py, `test_intake_consumer_app_defect_on_promote_candidate_targets_the_default_branch` covers only `WORKFLOW_HEAL_DEFAULT_BRANCH=main`, not the `develop` and unset cases; suggested: add the same `pytest.mark.parametrize` matrix as the workflow-defect test (about 3 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: PR description says the intake logs `target_branch_retarget from=promote-candidate to=<default> reason=pipeline_mirror_branch` and `target_branch_source=pipeline_mirror_branch`. The README's \"routing paragraph\" lists `target_branch_source=default|failed_run_branch|pipeline_mirror_branch|support_ref|source_pr_head|shared_workflow|base_branch|wrapper_pin_not_on_target`. Both arms of the intake (workflow-defect|inconclusive and consumer-app-defect) now retarget a release run on `promote-candidate` to the default branch.\n  Expected change site: `scripts/workflow_failure_heal_intake.sh` line 2957, the `consumer-app-defect` arm's `created` log line.\n  Evidence of absence: The `consumer-app-defect` arm's `created` log line is `log \"created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}\"` and emits neither `target_branch=` nor `target_branch_source=`. The retarget is logged at line 2954 (`target_branch_retarget from=${HEAD_BRANCH} to=${HEAL_CONSUMER_APP_TARGET_BRANCH} reason=pipeline_mirror_branch`), so the routing decision is recoverable. The `workflow-defect` arm (line 2931) and `pr-self-inflicted` arm (line 2996) include `target_branch_source=`; the consumer-app-defect arm is the only one that does not. The new test only asserts the retarget line.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- HARDENING: tests/test_workflow_failure_heal.py, `test_intake_consumer_app_defect_on_promote_candidate_targets_the_default_branch` (around line 2245) exercises only `\"main\"`; the workflow-defect test is parametrized over `(\"main\", \"main\"), (\"develop\", \"develop\"), (\"\", \"main\")`. Suggested: parametrize the same three cases (2-3 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: The PR description says the intake logs `target_branch_source=pipeline_mirror_branch`; the README says the `created` log records the routing choice.\n  Expected change site: `scripts/workflow_failure_heal_intake.sh`, the `consumer-app-defect` arm.\n  Evidence of absence: The arm retargets the issue at lines 2950-2956, but its `created` log at line 2957 omits `target_branch_source`. The `workflow-defect|inconclusive` arm's `created` log includes that field at line 2931. The new consumer-app-defect test checks the target branch and retarget message, but not the source field.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3e0b337acceb50894c4b5dc98652f108b4219ad2a48ee7030ec1d9b480d77f5c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8231,
+    "run_id": "40599836955",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40599836955",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027232926_934a5f5833",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8231,
+    "run_id": "40599836955"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T23:29:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

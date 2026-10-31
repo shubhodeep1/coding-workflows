@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_security_audit_workflow_contract.py:test_security_audit_claude_fallback_crash (around line 2640-2650) | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The crash-mode mock exits with code 3 while the test expects the fallback reason `crashed_rc_1`.\n  WHY: If `claude_run` propagates the mock\u2019s exit code, the audit logs `crashed_rc_3` and the assertion fails.\n- scripts/security_audit.sh:1362-1369 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: When `ai_engine.sh` is missing, the audit silently stays on codex without logging that Claude was not attempted.\n  WHY: Operators cannot distinguish missing or incomplete support staging from an intentional codex selection.\n- scripts/security_audit.sh:1409 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The optional `json` label in the fence regex accepts unlabeled outer code fences.\n  WHY: This contradicts the stated contract that only one outer `json` fence is stripped and anything else falls back to codex.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/security_audit.sh:1362-1369 | severity=low | confidence=3\n  PROBLEM: When `SECURITY_AUDIT_AI_ENGINE_SCRIPT` does not exist, the engine silently stays on `codex` without a diagnostic.\n  WHY: Operators cannot distinguish a missing or mis-staged support directory from an intentional codex selection.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_security_audit_workflow_contract.py:`test_security_audit_claude_fallback_crash` (around line 2640-2650); the new `_install_mock_claude` \"crash\" branch (`if mode == \"crash\": ... sys.exit(3)` at line ~170) | severity=high | confidence=4\n  PROBLEM: The mock Claude process exits with code 3, but the assertion expects `crashed_rc_1`.\n  WHY: If `claude_run` propagates exit code 3, the audit logs `crashed_rc_3` and the assertion fails.\n- scripts/security_audit.sh:engine-resolution block, ~lines 1358-1369 | severity=low | confidence=4\n  PROBLEM: When `ai_engine.sh` does not exist, the script silently keeps `SECURITY_AUDIT_ENGINE=\"codex\"` and skips Claude without a log line.\n  WHY: Operators cannot distinguish intentional codex selection from missing or degraded support staging.\n- scripts/security_audit.sh:`security_audit_try_claude` python helper (~lines 1409-1419) | severity=low | confidence=5\n  PROBLEM: The optional `json` label in the fence regex accepts unlabeled outer fences containing valid JSON arrays.\n  WHY: This contradicts the stated contract that only a single outer ` ```json ` fence is stripped and anything else falls back to codex.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh:1409 | severity=low | confidence=5\n  PROBLEM: The optional `json` label accepts an unlabeled outer code fence.\n  WHY: An unlabeled fenced array passes validation instead of triggering the specified codex fallback.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1362-1369 | severity=low | confidence=3\n  PROBLEM: When `SECURITY_AUDIT_SUPPORT_DIR/scripts/ai_engine.sh` does not exist, `SECURITY_AUDIT_ENGINE` stays at `codex` without a log message.\n  WHY: Operators cannot distinguish missing or partial support staging from intentional codex selection.\n- scripts/security_audit.sh:1409 | severity=low | confidence=5\n  PROBLEM: The regex `r\"```(?:json)?[ \\t]*\\n(.*)\\n```\"` accepts plain fences as well as `json` fences.\n  WHY: The code accepts output that the stated contract says should trigger codex fallback; tests only verify the labeled fence case.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "457d9d93f9b5fb201294923af68d820f380f63c4aa8ce6d27fb86e9f803f5782",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6610,
+    "run_id": "37589100241",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37589100241",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007075016_42f2aca7b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6610,
+    "run_id": "37589100241"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T07:50:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

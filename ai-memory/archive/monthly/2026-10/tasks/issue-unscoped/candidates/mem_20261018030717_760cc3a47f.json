@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"an unreadable file (chmod 000) returns 3. Skip this case when `os.geteuid() == 0`, because root can read mode-000 files.\"\n  expected_change_site: tests/test_validate_editor_audit.py, test_exit_three_when_summary_file_unreadable (root branch, lines 155-156)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: tests/test_validate_editor_audit.py:155-156 root branch uses bare return instead of pytest.skip, so the test reports as passed rather than skipped under root; test_exit_three_when_awk_fails_on_readable_file covers the same audit_awk_rc != 0 branch for root runners (severity NIT; anthropic_claude-sonnet-5_5 reviewed the same behaviour and rejected it as deliberate, since the file uses a custom main() runner without pytest)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"an unreadable file (chmod 000) returns 3. Skip this case when `os.geteuid() == 0`, because root can read mode-000 files.\"\n  Expected change site: tests/test_validate_editor_audit.py, test_exit_three_when_summary_file_unreadable root branch\n  Evidence of absence: The root branch uses bare `return` (tests/test_validate_editor_audit.py:156) instead of `pytest.skip(reason)`. The test therefore reports as passed rather than skipped under root, so a future regression of the permission path would not surface in pytest's skip counts. The companion `test_exit_three_when_awk_fails_on_readable_file` exercises the same `audit_awk_rc != 0` branch for root runners, so the runtime coverage is complete and the deviation is purely a reporting/communication one.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Skip this case when os.geteuid() == 0.\"\n  Expected change site: tests/test_validate_editor_audit.py, test_exit_three_when_summary_file_unreadable\n  Evidence of absence: At lines 155\u2013156, the root-user branch returns normally, so pytest reports the test as passed rather than skipped. Root runners therefore do not exercise the unreadable-file permission check and the test report does not show that it was untested.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6b7446eb2eabb8a72ca74c4a71ed09900d0421360c3941936ec443a3e503171a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7596,
+    "run_id": "39091586774",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39091586774",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018030717_760cc3a47f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7596,
+    "run_id": "39091586774"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T03:07:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

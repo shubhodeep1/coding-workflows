@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix be made on?\nChoices:\nA) PR #6572's head branch `ai/issue-6506`. Planning treats it as the target branch and adds a `Target branch: ai/issue-6506` line so `scripts/resolve_integration_ref.sh` routes the fix PR there. The fix is the zero-argument loop rewrite of `test_judge_resume_from_unauthorized_author_is_ignored` and `test_revalidate_from_unauthorized_author_is_ignored`, keeping every assertion. The `pytest` import stays, because the default branch already imports it at line 22. (RECOMMENDED)\nB) Leave this issue unimplemented and let PR #6572's own review/autofix editor fix the tests on its branch, using the failing-check context. Close this issue as a duplicate of that path.\nC) The default branch. Also add a general guard (for example, a pre-commit or CI lint) that rejects `@pytest.mark.parametrize` in custom-runner test modules. The two failing tests on PR #6572 stay unfixed by this issue.",
+  "fingerprint": "276f619dfdb6acf15bc8dd8828f4f653429506579f625ee49af09d0375fdc943",
+  "lineage": {
+    "issue_number": 6817,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37862533356",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37862533356",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009000445_5a8b991e8c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6817,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37862533356"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6817 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T00:04:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

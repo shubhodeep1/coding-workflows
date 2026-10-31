@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_isolated_workspace.py:copy_regular function | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The file copy logic uses O_NOFOLLOW but does not check file status after opening to address a possible file-to-symlink replacement race.\n  WHY: An attacker in the workspace could replace a file with a symlink to a sensitive host path during the copy; O_NOFOLLOW prevents opening the symlink itself, but the reviewer says checking file status after opening should address the TOCTOU risk.\n- scripts/codex_isolated_workspace.py:copy_regular function, target.parent.mkdir(parents=True, exist_ok=True) | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Using exist_ok=True allows directory creation to silently succeed if a file already exists at that path.\n  WHY: A manipulated destination structure could contain a file where a directory is expected, causing the subsequent write to fail or write into an unexpected location.\n- scripts/codex_isolated_exec.sh:docker_env run command flags | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The container includes `git`, which could potentially access `.git` if it were mounted or available, bypassing the synthetic `.git` provided to the container.\n  WHY: The reviewer says relying on the container's own `git` binary increases the surface area for unexpected interactions and recommends removing `git` or making its path unusable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/codex_isolated_workspace.py:copy_regular function | severity=MAJOR | confidence=[3]\n  PROBLEM: The file copy logic uses O_NOFOLLOW to prevent following symlinks. However, it does not explicitly handle cases where a file might be replaced by a symlink during the copy process (Time-of-Check Time-of-Use race condition).\n  WHY: An attacker in the workspace could replace a file with a symlink to a sensitive host path just as the copy opens, potentially bypassing the read-only restrictions. While O_NOFOLLOW prevents opening the symlink itself, the TOCTOU risk should be addressed by checking the file status after opening.\n- scripts/codex_isolated_workspace.py:copy_regular function, target.parent.mkdir(parents=True, exist_ok=True) | severity=MAJOR | confidence=[3]\n  PROBLEM: The use of exist_ok=True allows the directory creation to silently succeed even if a file already exists at that path.\n  WHY: If the destination directory structure is manipulated to include a file where a directory is expected, the subsequent write might fail or write into an unexpected location. While it won't necessarily lead to arbitrary code execution due to the container isolation, it is an insecure error path for workspace transfer.\n- scripts/codex_isolated_exec.sh:docker_env run command flags | severity=NIT | confidence=[3]\n  PROBLEM: The isolation container is built with `apt-get install` including `git`. If the agent process can use this `git`, it might attempt to access the `.git` directory if it were mounted or available, potentially bypassing the synthetic `.git` provided to the container.\n  WHY: While the synthetic `.git` is currently mounted, relying on the container's own `git` binary increases the surface area for unexpected interactions. The container should explicitly remove `git` or ensure the path is unusable.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "89443e686036611afb34edff536d10961e28185c1a81aa7c41f32047796a075e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6187,
+    "run_id": "37359533546",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37359533546",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005191541_1d31e7ec8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6187,
+    "run_id": "37359533546"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T19:15:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6532-stable-release-ci-lint-gate.md:2-16 | severity=high | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: This pending changelog fragment still describes the old default-off behavior and contradicts the new default-on release guidance.\n  WHY: The next changelog assembly will publish both entries, confusing operators; severity was rated NIT by two reviewers and MAJOR by one, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states the goal is to fix the publishing switch so releases ship by default and to keep documentation consistent; all operator-facing documentation describing `STABLE_RELEASE_ENABLED` should reflect the new default-on behavior.\n  expected_change_site: `changelog.d/6532-stable-release-ci-lint-gate.md`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `changelog.d/6532-stable-release-ci-lint-gate.md` still contains line 2 (\"A new repository variable, `STABLE_RELEASE_ENABLED`, defaults to off.\"), line 10 (\"`STABLE_RELEASE_ENABLED` default | off\"), line 12 (\"until `STABLE_RELEASE_ENABLED` is set to `true`, every gate run still validates and runs the CI check but publishes nothing\"), and line 16 (\"the switch counts only `true` as on\"); the PR does not touch this fragment.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/6532-stable-release-ci-lint-gate.md: line 2 (\"A new repository variable, `STABLE_RELEASE_ENABLED`, defaults to off.\"), line 10 (table row \"`STABLE_RELEASE_ENABLED` default | off\"), line 12 (\"until `STABLE_RELEASE_ENABLED` is set to `true`, every gate run still validates ... but publishes nothing\"), line 16 (\"the switch counts only `true` as on\"). | severity=NIT | confidence=3\n  PROBLEM: This fragment is still pending in `changelog.d/`. It states the old default (off) and the old rule that only `true` publishes. This PR reverses both.\n  WHY: The release job's `scripts/assemble_changelog.py` step folds every pending fragment into `CHANGELOG.md`. The next release would publish this fragment's operator guidance (\"defaults to off\", \"until set to true\") next to the new `7206-stable-release-default-on.md` entry (\"publishes by default again\"). The released changelog would contradict itself, and an operator reading it could set the variable unnecessarily or believe releases are held. No workflow behaviour breaks.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR description states the goal is to fix the publishing switch so releases ship by default and to keep documentation consistent. Concretely it lists updating the workflow, the README row, the agents.d fragment, and adding a new changelog fragment. The intent is for all operator-facing documentation describing `STABLE_RELEASE_ENABLED` to reflect the new default-on behavior; otherwise the next release will publish contradictory operator guidance.\n  Expected change site: `changelog.d/6532-stable-release-ci-lint-gate.md` \u2014 the fragment that introduced the switch with `defaults to off`.\n  Evidence of absence: The file still contains (verified via read at `/home/runner/work/coding-workflows/coding-workflows/changelog.d/6532-stable-release-ci-lint-gate.md`):\n  - line 2: \"A new repository variable, `STABLE_RELEASE_ENABLED`, defaults to off.\"\n  - line 10: table row \"`STABLE_RELEASE_ENABLED` default | off\"\n  - line 12: \"until `STABLE_RELEASE_ENABLED` is set to `true`, every gate run still validates and runs the CI check but publishes nothing\"\n  - line 16: \"the switch counts only `true` as on\"\n  \n  The PR updates `README.md:240`, `agents.d/6873-stable-release-switch.md`, both workflow files, the test, and adds a new `changelog.d/7206-stable-release-default-on.md`, but does not touch `changelog.d/6532-stable-release-ci-lint-gate.md`. `scripts/assemble_changelog.py` folds every pending fragment into `CHANGELOG.md` (CLAUDE.md \u00a720.C), so at the next release the published changelog will carry both fragments and read as: \"publishes by default again. Set `STABLE_RELEASE_ENABLED=false` to hold them\" next to \"Stable releases now stay unpublished until an operator turns publishing on ... `STABLE_RELEASE_ENABLED` defaults to off. ... until `STABLE_RELEASE_ENABLED` is set to `true`, every gate run still validates ... but publishes nothing\". The repo-wide grep for `STABLE_RELEASE_ENABLED` confirms this is the only remaining stale operator-facing reference (`README.md`, the two workflows, the test, and the new fragment all describe the new behavior; only this old changelog fragment contradicts it).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/6532-stable-release-ci-lint-gate.md: line 2 (\"defaults to off\"), line 10 (\"STABLE_RELEASE_ENABLED default | off\"), line 12 (\"until STABLE_RELEASE_ENABLED is set to true, every gate run still validates ... but publishes nothing\"), line 16 (\"the switch counts only true as on\") | severity=NIT | confidence=4\n  PROBLEM: This pending changelog fragment still describes the old default-off behavior.\n  WHY: At the next release, `scripts/assemble_changelog.py` folds both this fragment and the new `changelog.d/7206-stable-release-default-on.md` into `CHANGELOG.md`, producing contradictory operator guidance: one entry says \"defaults to off\" and \"only true publishes\", the other says \"publishes by default again\". No workflow behavior breaks \u2014 the code itself is correct. But the assembled changelog would tell operators the switch defaults to off and that they must set it to `true`, directly contradicting the new entry that says it publishes by default. Operators reading the changelog would be confused about the actual behavior.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d032d090ef922845664d1cd69f9e8c32384dceadfa908adfa566131b050afada",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7206,
+    "run_id": "38201587504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38201587504",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261012041918_07f925c4ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7206,
+    "run_id": "38201587504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-12T04:19:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

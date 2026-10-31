@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:59-70 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_unsafe_directory_category` omits the legacy `_directory_category` checks for `..` and `\\`.\n  WHY: Paths containing `..` or backslashes might bypass category classification and be allowed as legitimate subdirectories within an admitted subtree, potentially leading to directory traversal or path manipulation vulnerabilities during workspace snapshot/transfer.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement the new sandbox transfer diagnostics and bucketed directory classification as planned.\n  expected_change_site: scripts/review_untrusted_workspace.py and related diagnostic consumers\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implemented changes for `_unsafe_directory_category` and `_directory_depth_bucket` correctly update diagnostic generation in `main()`; consumers in `scripts/review_apply_fixes.sh`, `scripts/review_conflict_resolve.sh`, and `scripts/review_rb_judge.sh` accept the new tokens; changelog fragments and test suites are also updated; implementation appears complete according to intent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_workspace.py:59-70 | severity=high | confidence=[4]\n  PROBLEM: `_unsafe_directory_category` omits the legacy `_directory_category` checks for `..` and `\\`.\n  WHY: Paths containing `..` or backslashes might bypass category classification and be allowed as legitimate subdirectories within an admitted subtree, potentially leading to directory traversal or path manipulation vulnerabilities during workspace snapshot/transfer.\n- TASK_GAP\n  Requirement: Implement the new sandbox transfer diagnostics and bucketed directory classification as planned.\n  Expected change site: scripts/review_untrusted_workspace.py and related diagnostic consumers\n  Evidence of absence: The implemented changes for `_unsafe_directory_category` and `_directory_depth_bucket` correctly update diagnostic generation in `main()`. All consumers in `scripts/review_apply_fixes.sh`, `scripts/review_conflict_resolve.sh`, and `scripts/review_rb_judge.sh` have been updated to accept these new tokens. The changelog fragments and test suites are also updated. The implementation appears complete according to the intent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_conflict_resolve.sh: lines 2288-2291\n  PROBLEM: The inner block uses inconsistent indentation: lines 2288-2289 and 2291 have 7 spaces, line 2290 has 9 spaces, while line 2292 has 4 spaces.\n  WHY: This creates a 1-space indentation error.\n  Suggested minimal fix: Change lines 2288-2291 to use 6 spaces for the outer body and 8 spaces for the inner body.\n- scripts/review_rb_judge.sh: lines 171-174\n  PROBLEM: The inner block uses inconsistent indentation: lines 171-172 and 174 have 7 spaces, line 173 has 9 spaces, while the surrounding context uses 4 spaces.\n  WHY: This creates a 1-space indentation error.\n  Suggested minimal fix: Change lines 171-174 to use 6 spaces for the outer body and 8 spaces for the inner body.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7eafb4e410bc579449a81d0cd6006adde38b8517887163af7cac5ea71b7bbd81",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6583,
+    "run_id": "37531902985",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37531902985",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006213620_40d938b583",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6583,
+    "run_id": "37531902985"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T21:36:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/sync_claude_live_copies.py:mismatched() | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The symlink guard checks only the top-level `.claude` directory, so a nested symlink can be followed by `Path.write_text()` and cause the sync to overwrite a target outside the repository.\n  WHY: A nested symlink can bypass the guard and redirect a sync write; severity disagreement: deepseek_deepseek-v4-pro and google_gemini-3_1-flash-lite rated this MAJOR, while minimax_minimax-m3 rated it NIT.\n- tests/test_claude_template_live_parity.py::test_sync_refuses_symlinked_live_root (lines 291-302 of the new file per LAST RUN DIFF) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test covers only a top-level `.claude` symlink and does not detect whether nested symlinks are rejected.\n  WHY: A regression that leaves nested symlinks uncaught would pass this test.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Mint a narrowly scoped token only after validation.\n  expected_change_site: .github/workflows/sync-claude-live-copies.yml sync step\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The sync step uses `GH_PAT` rather than minting a narrower token after validation; `.github/workflows/sync-claude-live-copies.yml` \"Sync template-only .claude changes to the live copy\" step binds `GH_TOKEN` to `${{ secrets.GH_PAT }}`. Minimax notes AD-2 explicitly chose to keep `GH_PAT` and limit its exposure to the pinned sync step after provenance checks pass.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/sync_claude_live_copies.py:mismatched() | severity=high | confidence=[4]\n  PROBLEM: The symlink guard checks only the top-level `.claude` directory; a nested symlink can be followed by `Path.write_text()` and cause a write outside the repository.\n  WHY: A nested symlink inside `.claude/` would be followed when the sync writes the corresponding file.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/sync_claude_live_copies.py:mismatched() | severity=high | confidence=[3]\n  PROBLEM: The symlink guard only checks the top-level `.claude` directory, allowing a nested symlink to point outside the repository.\n  WHY: Python `Path.write_text()` follows symlinks, enabling unauthorized overwrites.\n- TASK_GAP\n  Requirement: Mint a narrowly scoped token only after validation.\n  Expected change site: .github/workflows/sync-claude-live-copies.yml sync step\n  Evidence of absence: The PR still uses GH_PAT (which is repository-scoped) in the sync step, rather than minting a narrow-scoped token dynamically after validation as requested in the issue recommendation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/sync_claude_live_copies.py:110-111 | severity=low | confidence=[3]\n  PROBLEM: The symlink guard added by the LAST RUN DIFF only inspects the top-level LIVE_PREFIX entry (`.claude`); a nested symlink can bypass it and be followed by `Path.write_text()`.\n  WHY: A merged PR that adds a nested symlink under `.claude/` will pass the guard, and a subsequent sync can write through that symlink.\n- tests/test_claude_template_live_parity.py::test_sync_refuses_symlinked_live_root (lines 291-302 of the new file per LAST RUN DIFF) | severity=low | confidence=[3]\n  PROBLEM: The new test only constructs the top-level `.claude -> .git` symlink case and does not test a nested symlink.\n  WHY: A regression that leaves nested symlinks uncaught would pass the test suite.\n- TASK_GAP\n  Requirement: \"Mint a narrowly scoped token only after validation, and disable persisted checkout credentials.\" (linked issue #6419 recommendation line)\n  Expected change site: `.github/workflows/sync-claude-live-copies.yml` \"Sync template-only .claude changes to the live copy\" step (GH_TOKEN env binding to `${{ secrets.GH_PAT }}`)\n  Evidence of absence: The sync step still binds `GH_TOKEN: ${{ secrets.GH_PAT }}` (full repo-scope PAT), and no narrower-scope token (GitHub App mint or contents+pull_requests-only PAT) is created after the provenance checks. The PR's AD-2 auto-decision explicitly chose option A (\"Keep GH_PAT but stop giving it to the checkout... Pass it only to the trusted support-copy script after its provenance checks pass\"), which is a deliberate narrowing of the original recommendation rather than a gap; the implementation faithfully follows that decision. The remaining three recommendation lines (immutable verified sync, write-guard by author+path, disable persisted checkout credentials) are all implemented by the PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "6bc1d8128f60a69bddfe261a0998b6f2d9c21e7097d72f4ac8c40574bf9a9ea0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6422,
+    "run_id": "37391400263",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37391400263",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006001654_bc4a83ffd4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6422,
+    "run_id": "37391400263"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T00:16:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

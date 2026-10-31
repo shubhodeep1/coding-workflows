@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_discovery_bootstrap.py:399-405 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If `claude_out_path` is missing or unreadable after engine execution, the empty `proc.stdout` may be treated as a successful manifest.\n  WHY: The caller may propagate an empty manifest to subsequent validation steps, causing hard-to-debug failures.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fetch with `git fetch origin refs/pull/6209/head refs/pull/6615/head`, port only the hunks this item needs onto current main, and list every reused commit SHA in the PR description.\"\n  expected_change_site: PR description\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The PR description references issues #6665 and #6664 but lists no reused commit SHAs from #6209 or #6615.\n- requirement: \"Add `tests/test_claude_engine_utility_roles.py` from #6209 (new file here): the validate-role rows only.\"\n  expected_change_site: tests/test_claude_engine_utility_roles.py\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The file also contains staging and discovery tests; identical staging tests already exist in tests/test_ai_engine.py.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_discovery_bootstrap.py:399-405 | confidence=3\n  PROBLEM: If `claude_out_path` is missing or unreadable after the engine execution, `proc.stdout` is set to an empty string, which may mask a failure to produce the expected manifest.\n  WHY: The caller treats an empty manifest as a successful result, potentially propagating an empty manifest to subsequent validation steps and causing hard-to-debug failures later in the pipeline.\n- Requirement: \"Fetch with `git fetch origin refs/pull/6209/head refs/pull/6615/head`, port only the hunks this item needs onto current main, and list every reused commit SHA in the PR description.\"\n  Expected change site: PR description\n  Evidence of absence: The PR description is missing the list of reused commit SHAs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Fetch with `git fetch origin refs/pull/6209/head refs/pull/6615/head`, port only the hunks this item needs onto current `main`, and list every reused commit SHA in the PR description.\"\n  Expected change site: PR description (current body: \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6665\\nRefs #6664\")\n  Evidence of absence: The PR description lists no reused commit SHAs from #6209 or #6615; the editor's two autofix summaries both flag this as deferred because the editor cannot edit the PR body or fetch those refs from the sandbox, but the issue explicitly requires the SHA list in the PR description before merge.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Add `tests/test_claude_engine_utility_roles.py` from #6209 (new file here): the validate-role rows only.\"\n  Expected change site: tests/test_claude_engine_utility_roles.py\n  Evidence of absence: The new file contains the engine selection tests for VALIDATE/VALIDATE_SELF_HEAL/VALIDATION_REFRESH (the requested rows) but also contains `test_stage_support_copies_the_fixed_list_with_modes`, `test_stage_support_refuses_a_symlink_and_removes_the_partial_root`, `test_stage_support_refuses_a_missing_file`, and `test_discovery_codex_branch_keeps_the_command_line`, which exercise engine-support staging rather than the utility role rows. The identical staging tests already exist in tests/test_ai_engine.py, so the duplication is also redundant.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cList every reused commit SHA in the PR description.\u201d\n  Expected change site: PR description\n  Evidence of absence: The PR description provided here references issues #6665 and #6664 but lists no reused commit SHAs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Fetch with git fetch origin refs/pull/6209/head refs/pull/6615/head, port only the hunks this item needs onto current main, and list every reused commit SHA in the PR description.\"\n  Expected change site: PR description (not editable by the editor sandbox)\n  Evidence of absence: The PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6665 / Refs #6664\" with no reused commit SHAs. Both prior editor summaries flagged this as TASK_GAP_DEFERRED because the sandbox has no network to fetch those refs and cannot edit the PR body. This is a pipeline or operator task, not an editor fix.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c846e89c76df64ce1b717848035ddf1ba0bac162fdb0d60810f013cf7efc5a8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6673,
+    "run_id": "37647793750",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37647793750",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007162247_02b6455c2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6673,
+    "run_id": "37647793750"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T16:22:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

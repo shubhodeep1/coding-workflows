@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nI checked both questions against the code. The poller's `_plan_auto_approval_gate` is called from four places (`scripts/orchestrate_poll_process.sh` lines 18425, 18464, 23042, 23066), and it already reads the newest `ai:plan-proposal:v1` comment written by the `GH_PAT` login. `scripts/partial_delivery.py` already finds the `## Deferred scope` section outside code fences.\n\nDECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: A hold leaves the issue in `ai:awaiting-approval`. That is the state in which the poller's managed and standalone `auto_approve` and `retrigger_implement` arms post `/approved`. With option A, a held heal plan would be auto-approved on a later tick and the gate would do nothing. `_plan_auto_approval_gate` is the shared point all four poller call sites go through, and it already reads the trusted plan comment, so the same parser and flag can be added there with no new GitHub API call. That follows the existing automation-path hold pattern, which defers without spending a recovery attempt. Option C adds a second source of truth (a marker), and a missing or failed marker post would let the plan through, so it is weaker than parsing the plan.\nQ2: A list of exact job names can be checked by a script and fails closed. Matching each name against the `- ` bullets that `partial_delivery.py` already parses reuses the section reader that implement and `issue_pr_status.yml` use, so the plan's Deferred scope means the same thing everywhere. Option B lets a free-text PARTIAL approve a plan that still leaves an undeferred job failing, which is the exact gap the issue is closing. Option C adds a second marker family that the issue never asked for.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered options. The details below apply them:\n- Q1 (B): put the heal-counterfactual check inside `_plan_auto_approval_gate` (or one shared helper it calls), so all four call sites in `scripts/orchestrate_poll_process.sh` pick it up.\n  - Apply it only when the issue is on the heal route, decided the way `workflow_failure_heal.is_heal_route` decides it: the `ai:workflow-heal` label, or the `workflow-failure-heal:fp=` body marker.\n  - Read `HEAL_COUNTERFACTUAL_GATE_ENABLED` with the same normalization as `plan.yml`: default `true`, and an invalid value counts as `true` with a warning. Have `orchestrate_poll.yml` pass it to \"Process each tracking issue\" and \"Run standalone stall recovery without active projects\" with a `true` default, and default it inside the script as well (\u00a78).\n  - On a hold, log `AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=hold result=<...> issue=<n>` and `STALL_SKIP ... reason=heal_counterfactual_hold`, and do not count a recovery attempt.\n  - Post at most one hold comment per plan comment and result.\n  - The parser should be one Python function, used by both `plan.yml` and the poller, kept in a support-staged script (for example a new subcommand of `scripts/files_touched_scope_guard.py` or `scripts/partial_delivery.py`). It must ignore fenced text, accept exactly one `HEAL_COUNTERFACTUAL:` line, and treat zero lines, more than one line, or a malformed line as a hold.\n- Q2 (A): after `PARTIAL:` comes a comma-separated list of job names. Trim each one; an empty list or an empty name counts as `FAIL` and holds.\n  - Each name must appear as a case-insensitive substring of at least one bullet that `partial_delivery.py` returns for `## Deferred scope`.\n  - A missing or empty Deferred-scope section, or a name that matches no bullet, counts as `FAIL` and holds. The hold comment names the unmatched jobs.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "54923d26528cb6b5111d276d1ac5234b7d96f48a14c8218694a9019d22acb3de",
+  "lineage": {
+    "issue_number": 8249,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40634401366",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40634401366",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8249"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261028050030_e61fa16f42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8249,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40634401366"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8249",
+  "timestamps": {
+    "created_at": "2026-10-28T05:00:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_dependency_registry_proxy.py:37-94 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The busy-rejection test can raise `BrokenPipeError` while sending its request because the broker sends 503 and closes the socket before the client finishes `sendall()`.\n  WHY: This race prevents the test from reading and asserting the 503, causing the aggregate CI check to fail; severity was reported as NIT by anthropic_claude-sonnet-5_5 and BLOCKER by qwen_qwen3_7-plus, so the higher severity is used.\n- scripts/dependency_registry_proxy.py:188-198 | severity=critical | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: When the connection limit is reached, the broker sends a 503 and closes the socket without consuming the client's request bytes, so a client still sending its request can encounter `BrokenPipeError`.\n  WHY: The race caused `request()` to raise `BrokenPipeError` before it could read the 503, failing the test and the aggregate CI check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_dependency_registry_proxy.py | severity=NIT | confidence=4\n  File: tests/test_dependency_registry_proxy.py\n  Line or code reference: request() line 37 `client.sendall(head)`, called from test_broker_limits_threads_before_accepting_a_handler at line 94.\n  Problem: CI job tests-hooks-and-orchestrator failed on head 32be92a6 with `BrokenPipeError: [Errno 32] Broken pipe` in this test. That failure turns the aggregate `CI / lint` red.\n  Why it fails at runtime: The busy path writes 503 and closes the connection right away. If that close lands before the client's `sendall`, the client gets EPIPE and never reaches `recv`, so the 503 assertion never runs. This is a timing race in a pre-existing test, and the PR does not touch this file or the proxy script; nothing in the PR diff caused it. A smallest test-only fix: wrap `client.sendall(head)` in `try/except BrokenPipeError: pass` before `return client.recv(512)`, so the queued 503 is still read. Otherwise, re-run the job. (2 related items)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/dependency_registry_proxy.py | severity=BLOCKER | confidence=5\n  File: scripts/dependency_registry_proxy.py\n  Line or code reference: ThreadingUnixServer.process_request(), lines 188-198; the failing test sends its request in tests/test_dependency_registry_proxy.py:33-38.\n  Problem: When the connection limit is reached, the broker sends a 503 and immediately closes the socket without consuming the client\u2019s request bytes. The client can still be sending its CONNECT request when the close occurs.\n  Why it fails at runtime: The current CI run hit this race: `request()` raised `BrokenPipeError` before it could read the 503, failing `test_broker_limits_threads_before_accepting_a_handler` and the aggregate CI check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_dependency_registry_proxy.py | severity=BLOCKER | confidence=5\n  File: tests/test_dependency_registry_proxy.py\n  Line or code reference: test_broker_limits_threads_before_accepting_a_handler, line 94; request() helper, line 37\n  Problem: The broker's busy-rejection path sends HTTP 503 and closes the socket while the test client is still sending its CONNECT request via sendall(), causing BrokenPipeError before the test can assert the expected 503 response.\n  Why it fails at runtime: The test races with the server \u2014 the server's process_request() at dependency_registry_proxy.py:188-198 sends the 503 response and immediately calls shutdown_request(), which closes the socket. The client's sendall() at line 37 raises BrokenPipeError (errno 32) before recv() can read the response. This causes the aggregate CI / lint check to fail on head 32be92a6, blocking merge.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "e57ad74b597f5c41d300fa56b089333554f84432c40dd705ed84552ae74ecae6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6845,
+    "run_id": "38082950886",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38082950886",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010204247_10c4aa1de3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6845,
+    "run_id": "38082950886"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T20:42:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The run's step timings are not in this checkout, and the GitHub facts give only the run's overall result, so option B would make a human supply data. The data-provision guard rules that out. Option A uses only what the repository shows: test module size and test count are a fair stand-in for step duration. It also keeps the issue's limits: steps move unchanged and keep their names, no `timeout-minutes` changes, and no new jobs. Option C is a narrower version of A, but it guesses that the review-autofix/conflict block is where the time goes, and it may move too little or too much. A lets the planner measure first, then decide.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml, job `tests-promote-stall-and-review` (lines 1126-1493, `timeout-minutes: 20`) and its steps 1146-1488, including \"Regression tests wired by the CI wiring guard (part 2)\" (1435) and the review-autofix / review-conflict contract steps (1244-1409)\n    - .github/workflows/ci.yml, receiving job `tests-heal-plan-and-validation` (lines 876-1125, `timeout-minutes: 20`), whose last step is \"Regression tests wired by the CI wiring guard (part 1)\" (1086)\n    - tests/test_ci_job_split_contract.py, which checks that `lint` needs every job, that budgets stay under the old one, that no step runs in two jobs, and that every worker job does its own setup first. It does not tie a step to a particular job.\n    - tests/test_ci_wires_every_test_file.py (every test file must still be named in some workflow)\n    - the test files each candidate step runs (count `def test_` / `test_` functions and look at file size and subprocess use)\n  steps:\n    - For each step of `tests-promote-stall-and-review` after its three setup steps, list the test files it runs. Estimate its cost from test-function count, file size, and whether the tests start subprocesses or bash sandboxes (those are slowest).\n    - Choose a contiguous or near-contiguous set of the heaviest steps worth roughly 4-5 minutes, so the job falls to about 10-11 minutes. Start with \"Regression tests wired by the CI wiring guard (part 2)\", then add the largest review-conflict-resolve / review-autofix contract steps until the estimate is reached.\n    - Move those step blocks byte-for-byte (same `name:`, `run:`, `env:`, `if:`) to the end of `tests-heal-plan-and-validation`, right after \"Regression tests wired by the CI wiring guard (part 1)\", in their original order. Delete them from the source job.\n    - Before moving a step, check whether it relies on setup that only the source job has (Node, Docker, an extra install step). If it does, leave that step where it is and pick the next-heaviest one. Do not add new setup steps to the receiving job.\n    - Do not change `timeout-minutes`, job ids, `lint`'s `needs` list, or the `orchestrate-poll` matrix.\n    - Verify with `python3 tests/test_ci_job_split_contract.py`, `python3 tests/test_ci_wires_every_test_file.py`, `tests/test_ci_inventory_parity_order_contract.py` (if it reads ci.yml) and actionlint/yamllint on ci.yml.\n    - Add a `changelog.d/<issue>-ci-rebalance-promote-stall-review.md` fragment naming the moved steps.\n  replaces_acceptance_criterion: \"see the run's step timings\" is replaced by a repository-derived ranking of step cost (test count, file size, subprocess use)\n  equivalence_argument: The goal is to get `tests-promote-stall-and-review` well clear of its 20-minute timeout without changing what the tests do or how the gate is named. Moving the steps with the most and heaviest tests to the job with the fewest steps does that. If the estimate turns out wrong, the next `budget-watch` run on `main` reports actual durations again and opens a new `ai:ci-budget` issue.\n  reversibility: The steps move unchanged and keep their names, so a human can move any of them back, or on to another job, by cutting and pasting the YAML block. No test, timeout or required check name changes.",
+  "fingerprint": "8debe650fcfe3f796b6aefd9720b0299e05c3056e18dbf7042435dd1ec57c284",
+  "lineage": {
+    "issue_number": 7576,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39041311337",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39041311337",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7576"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261017144329_605958f98e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7576,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39041311337"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7576",
+  "timestamps": {
+    "created_at": "2026-10-17T14:43:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

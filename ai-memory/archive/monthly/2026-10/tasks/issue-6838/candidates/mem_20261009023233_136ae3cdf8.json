@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: This issue's body needs a trusted exact-path `files_touched` grant before `/approved`, or implement will hit the same `guard=automation-path` rejection. A plan comment does not count. Which automation paths should a trusted OWNER, MEMBER or COLLABORATOR add to this issue's body?\nChoices:\nA) Only `.github/workflows/plan.yml` and `scripts/orchestrate_poll_process.sh`. The existing `--emit-automation-grant` / `--check-automation-paths` CLI of `scripts/files_touched_scope_guard.py` is reused unchanged, with the plan's file list fed in as the staged-file input. Tests, `README.md`, `agents.md` and a `changelog.d/` fragment are not automation paths and need no grant. (RECOMMENDED)\nB) Same as A, plus `scripts/files_touched_scope_guard.py`, to add a dedicated plan-file-list mode to the guard instead of reusing the staged-file mode.\nC) Same as B, plus `scripts/stage_workflow_support.sh`, in case the guard script must be added to a support-staging list that the plan or poller jobs do not already stage.\nQ2: What should `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` (default off) do in each state?\nChoices:\nA) Off: exactly today's behaviour, with no new hold anywhere. On: before plan.yml's auto-approval and both poller `auto_approve` branches (managed at `orchestrate_poll_process.sh:14709`, standalone at `:18121`) post `/approved`, compare the plan's automation paths against the issue's trusted exact grant. If any path is ungranted, withhold `/approved` and report those paths. If every path is granted, or the plan lists no automation paths, approve as today. (RECOMMENDED)\nB) As literally written. Off: withhold auto-`/approved` for every plan that lists any automation path, with no grant check, while ordinary plans auto-approve as today. On: approve when every listed automation path is granted, and deny and report the ungranted ones. **Note:** with B, auto-approval of most coding-workflows plans stops by default as soon as this merges, because most of them touch `scripts/`.\nC) Same as A, but the flag gates only plan.yml. The two poller stall-recovery branches always apply the grant check.\nQ3: When auto-approval is withheld, how should the issue be left so it stays observable and can recover?\nChoices:\nA) Keep `ai:awaiting-approval`. Post one deduplicated issue comment, from the pipeline login with a stable marker, listing the ungranted paths and saying a trusted author must add them to the body's `files_touched`. Log `AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=automation_path_ungranted outcome=defer`, send one Telegram WARNING, and have both poller `auto_approve` branches skip with a `STALL_SKIP ... reason=automation_path_ungranted` line instead of posting `/approved`. Human `/approved` stays possible, and the commit-time guard still applies. (RECOMMENDED)\nB) Same as A, but also apply `ai:scope-blocked`, so the unblock judge picks the issue up as it did for #6804.\nC) Withhold silently: only the log line, with no comment, label or alert.",
+  "fingerprint": "2a1d84cdb10929e440af212a8c65d81055205f078e504aa8b4f110af6fd16927",
+  "lineage": {
+    "issue_number": 6838,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37874571560",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37874571560",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009023233_136ae3cdf8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6838,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37874571560"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6838 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T02:32:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

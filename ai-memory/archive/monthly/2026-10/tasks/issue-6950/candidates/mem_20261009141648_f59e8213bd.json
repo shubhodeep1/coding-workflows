@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The default-branch snapshot already has the fix. `tests/test_orchestrate_poll_process.py:6403` is `test_security_pass_cap_converts_low_keep_fixing_to_advisory`, and lines 6424 and 6336 expect the text `converted to advisory follow-up`. That matches `scripts/orchestrate_poll_process.sh:7067`, which writes that note, and line 7078, which logs `SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED`. Nothing in the snapshot still expects \"converted to fail\". Both failing CI runs were on PR #6947 heads (`8092a3209de7` and `80c267bc97de`), not on `main`, so the PR branch has a stale copy and syncing `main` into it fixes the failure. The pipeline should not push to a `claude/*` interactive branch from this issue (option B). Option C would guess at a failure there is no evidence for.\nQ2: The issue's evidence covers only the `orchestrate-poll` shard. Nothing in the issue, the repository or the GitHub facts shows which test failed in `tests-hooks-and-orchestrator`. Covering it would mean guessing from the PR diff, which is out of scope, so it is left to its own triage issue or a rerun after the sync.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none; both decisions are lettered. Planner guidance for Q1/A follows.)\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - tests/test_orchestrate_poll_process.py:6263-6336 and 6403-6483\n    - scripts/orchestrate_poll_process.sh:7047-7104\n  steps:\n    - Confirm that `test_security_pass_cap_converts_low_keep_fixing_to_advisory` on the default branch asserts advisory conversion (`accept_with_followup` with the `converted to advisory follow-up` note), not `failed` or `converted to fail`.\n    - If confirmed, make no code change. Report the issue as already fixed on the default branch, and note that PR #6947 picks the fix up by syncing `main`.\n    - Only if the default-branch test still expects `failed` or `converted to fail`: change that test's assertions and comment to the advisory behaviour, and leave the high/critical/unrated fail-closed path in the script untouched.\n  replaces_acceptance_criterion: none\n  equivalence_argument: n/a\n  reversibility: If a human wants the PR branch fixed directly, they can sync `main` into `claude/elegant-mendel-5pli2i-heal-scope-test-subjects` or rerun CI after the sync. No default-branch state changes.\n\nSETUP REQUIRED:\n(none)",
+  "fingerprint": "e1c96bcf171d76a95279a1366797b7c4ca4eb44a8eee19516950c8be5fb063aa",
+  "lineage": {
+    "issue_number": 6950,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37942166126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37942166126",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6950"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009141648_f59e8213bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6950,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37942166126"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6950",
+  "timestamps": {
+    "created_at": "2026-10-09T14:16:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

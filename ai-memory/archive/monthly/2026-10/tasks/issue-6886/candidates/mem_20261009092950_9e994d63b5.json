@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: B\n\nRATIONALE:\nQ1: Target the default branch `main`. According to GitHub, PR #6576 (`ai/issue-6573` at `58ac3922e434`) is still open and unmerged, and the triage says it does not change `tests/test_orchestrate_poll_process.py` or `scripts/orchestrate_poll_process.sh`. So a failing poller test is most likely also failing on `main`, and fixing it there unblocks every PR, #6576 included. The implementer works from its own checkout and its sandbox has no network access, so it cannot fetch the PR head. That rules out option C, and option B has no evidence behind it.\nQ2: A bounded set of repeat runs is cheap. The selected group runs in about 5 minutes on 4 workers (`.github/workflows/ci.yml` comment, lines 1278-1281), well inside the 60-minute budget. Repeats are the only way to catch an intermittent failure without guessing at a cause. If no run fails, it behaves like A: no code change. Option C's speculative hardening is out of scope.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml lines 1304-1333 (test list: top-level `test_*` functions in tests/test_orchestrate_poll_process.py, sorted, minus `test_implementation_failed_*`)\n    - .github/workflows/ci.yml lines 1390-1398 (group `NR % 4 == 3`, then shard `NR % 4 == 1` within the group; job-index 3 of job-total 4, CI_POLL_TEST_SHARDS=4)\n  steps:\n    - Rebuild /tmp/orchestrate_poll_remaining_tests.txt on the `main` checkout using the same AST snippet as ci.yml lines 1307-1333.\n    - Select group 3 with `awk -v n=3 -v total=4 'NR % total == n'`. Run every test in that group, not only shard 1, because `main` may have a different test list from PR head 58ac3922 and so a different shard boundary. Use `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py <names...>`.\n    - Look for `FAIL` / `TEST_CASE_EVENT ... status=fail` lines. If a test fails, fix the root cause in its assertion or fixture. Change `scripts/orchestrate_poll_process.sh` only if the failing test shows a real poller defect. Do not change the aggregate `lint` gate or the sharding logic.\n  replaces_acceptance_criterion: \"rerun that named test at this PR head\" becomes \"run the CI group-3 test set on `main`\"\n  equivalence_argument: The PR does not change the module under test, so `main` runs the same test code. Running the whole group covers shard 1 even if the shard boundaries moved.\n  reversibility: If a person later shows the failure exists only on the PR branch, the fix can be cherry-picked or the PR rebased. A test-only fix on `main` is safe to revert.\n\nQ2:\n  strategy: reframe\n  inputs:\n    - The group-3 test list from Q1\n  steps:\n    - If the first run of group 3 passes, run the same list 2 more times, 3 runs at most. Run once with 4 parallel shards, as CI does, because parallel load is the likely timing difference.\n    - If any run fails, fix that test, or the poller if the test shows a real defect. Then rerun the failing test until it passes 3 times in a row.\n    - If all 3 runs pass, make no code change. The final summary lists the tests run and says the failure did not reproduce in 3 runs. The existing no-op handling then closes the issue, which is the same outcome as A.\n  replaces_acceptance_criterion: \"fix only if the failure reproduces\" becomes \"fix only if any of up to 3 runs fails\"\n  equivalence_argument: This keeps the triage rule of no speculative changes, and still gives an intermittent failure a bounded chance to show up.\n  reversibility: Nothing changes unless a run fails, so there is nothing to undo.",
+  "fingerprint": "14df078c64ea9499fe78468296c981dfda7178950968a331ed921f0b5272f736",
+  "lineage": {
+    "issue_number": 6886,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37910616645",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37910616645",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6886"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009092950_9e994d63b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6886,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37910616645"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6886",
+  "timestamps": {
+    "created_at": "2026-10-09T09:29:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:4071-4072 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: `test_security_pass_audit_input_rejection_is_not_reported_as_engine_outage` uses `@pytest.mark.parametrize(\"input_phase\", [...])` with a required `input_phase` argument, but CI runs the module through `main()`, which calls each test as `func()` with no arguments.\n  WHY: The test raises `missing 1 required positional argument: 'input_phase'` (shard 3), and `test_custom_runner_tests_need_no_pytest_arguments` (line 25113) fails in shard 2, which fails `orchestrate-poll` and the aggregate `lint` check. All three reviewers rated it BLOCKER, which is mapped to critical. Fix: remove the decorator and parameter and loop over the four phases inside the test body.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:4071-4072 | severity=BLOCKER | confidence=5\n  PROBLEM: The test takes a required `input_phase` argument through `parametrize`. CI runs this module through `main()`, which calls each `test_*` as `func()` with no arguments (module comments at lines 18602-18604 and 19536-19538; call at line 24846). The guard `test_custom_runner_tests_need_no_pytest_arguments` (line 25113) fails on any test that needs an argument.\n  WHY: The new test raises `missing 1 required positional argument: 'input_phase'` in shard 3, and the guard test fails in shard 2. Either failure makes `orchestrate-poll` fail, which fails the aggregate `lint` check. Fix: remove the decorator and the parameter, and loop over the four phases inside the test body, as the tests at lines 18626 and 19550 do.\n- All other checklist sections reported NONE. The poller change maps only the four pre-model phases (`oversized-scope`, `diff-scope`, `prior-findings`, `waived-findings`) to `audit_input_rejected`, and `reason=engine_unavailable` is kept for every other phase. There is no linked issue, and the PR description's deliverables are all in the diff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:4071-4072 | severity=BLOCKER | confidence=5\n  PROBLEM: The new test `test_security_pass_audit_input_rejection_is_not_reported_as_engine_outage` uses `@pytest.mark.parametrize` with an `input_phase` parameter, but it is executed by a custom runner that calls test functions without arguments.\n  WHY: The test raises `TypeError: missing 1 required positional argument: 'input_phase'` because the custom runner calls `func()`. This breaks the CI build.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:4071-4072, 25113-25125, 25928-25959 | severity=BLOCKER | confidence=5\n  PROBLEM: `test_security_pass_audit_input_rejection_is_not_reported_as_engine_outage` is declared with `@pytest.mark.parametrize(\"input_phase\", [...])` and a required `input_phase: str` parameter. The custom runner `main()` at lines 25928-25959 iterates `globals()` for `test_*` callables and calls each as `func()` with no arguments. The convention is documented at lines 18602-18604 and enforced by `test_custom_runner_tests_need_no_pytest_arguments` at line 25113 through `inspect.signature(func).bind()`.\n  WHY: `parametrize` is never expanded under the bare custom runner, so the call raises `TypeError: missing 1 required positional argument: 'input_phase'`. The CI log shows shard 3 reporting `FAIL test_security_pass_audit_input_rejection_is_not_reported_as_engine_outage` and shard 2 reporting `FAIL test_custom_runner_tests_need_no_pytest_arguments`. Both propagate to `orchestrate-poll (1)` and the aggregate `lint` check-run. Fix: rewrite it as a single argument-free function that loops over `[\"oversized-scope\", \"diff-scope\", \"prior-findings\", \"waived-findings\"]`, as `test_judge_resume_from_unauthorized_author_is_ignored` does at line 18626.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0d87e3d3f648c628a2c54b1fce3c3f77e7e225caabd50dee7be0b371bcdc3f31",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7728,
+    "run_id": "39377950763",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39377950763",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020062127_56e2468d82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7728,
+    "run_id": "39377950763"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T06:21:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

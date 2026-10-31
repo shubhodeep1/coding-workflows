@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings)\"\n  expected_change_site: `.github/workflows/ci.yml` \u2014 selection of steps moved from `tests-release-and-log-analysis`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/ci.yml:910-914` and `.github/workflows/ci.yml:1907-1912` say the pick is an estimate and not measured, `changelog.d/8278-release-job-steps-moved.md` line 9 cites an earlier run's 326-second measurement (run 36382913289) rather than run 40750326439, `MovedRelease8278StepsContractTest` verifies placement but not selection against the run's step timings (severity MAJOR)\n- requirement: \"into the CI job with the most headroom\"\n  expected_change_site: `.github/workflows/ci.yml` \u2014 destination-job selection for the moved steps\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/ci.yml:910-914` and `1907-1912` disclose the selection was not measured, `.github/workflows/ci.yml:915-920` and `1929-1930` assign the steps to `tests-promote-stall-and-review` and `tests-hooks-and-orchestrator`, `changelog.d/8278-release-job-steps-moved.md` line 9 bases the destination on recorded budget-watch history (#7677, #8179, #8245) rather than a headroom comparison in run 40750326439 (severity MAJOR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml` \u2014 selection of steps moved from `tests-release-and-log-analysis`\n  Evidence of absence: The comments at `.github/workflows/ci.yml:910-914` (renderer coverage gate) and `.github/workflows/ci.yml:1907-1912` (promote cycle step) both state \"The pick is an estimate, not measured\" and \"so they were not timed\". The changelog at `changelog.d/8278-release-job-steps-moved.md` line 9 cites an earlier run's 326-second measurement (run 36382913289), not step timings from run 40750326439. The `MovedRelease8278StepsContractTest` class (introduced in the PR) verifies placement (owning job, no matrix guard, module paths, post-setup ordering) but not selection against the run's step timings. The \"see the run's step timings\" guidance from the issue is not honored; the implementation picks from recorded history.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"into the CI job with the most headroom\"\n  Expected change site: `.github/workflows/ci.yml` \u2014 destination-job selection for the moved steps\n  Evidence of absence: The changelog at `changelog.d/8278-release-job-steps-moved.md` line 9 explains the destination choice used \"the most recorded room\" and earlier budget-watch history (#7677, #8179, #8245). The workflow comments at `.github/workflows/ci.yml:910-914` and `1907-1912` disclose the selection was not measured. Neither the workflow nor the changelog establishes which existing job had the most headroom in run 40750326439; the headroom ranking is reconstructed from prior budget-watch issues rather than measured from the run that triggered this issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cMove its slowest steps (see the run's step timings).\u201d\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis`.\n  Evidence of absence: The workflow comments at lines 910\u2013914 and 1907\u20131912 say the selection is an estimate, not measured from run 40750326439. The promote-cycle step cites a measurement from a different run; no moved-step selection uses the requested run\u2019s step timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Move the selected steps \u201cinto the CI job with the most headroom.\u201d\n  Expected change site: `.github/workflows/ci.yml`, destination-job selection for the moved steps.\n  Evidence of absence: The steps are assigned to `tests-promote-stall-and-review` and `tests-hooks-and-orchestrator` at lines 915\u2013920 and 1929\u20131930. The changelog at line 9 says the destinations were chosen from recorded history and estimates, not a comparison of job headroom in run 40750326439.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "33edd00649c84a2415578511f1a823421db9045381301eba98045ad409dcd9ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8284,
+    "run_id": "40796976190",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40796976190",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029015846_70ee496760",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8284,
+    "run_id": "40796976190"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T01:58:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

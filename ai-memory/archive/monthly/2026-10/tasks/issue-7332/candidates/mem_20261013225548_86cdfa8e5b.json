@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The failing test, `tests/test_issue_7251_dependency_wait.py`, is not in this checkout of the default branch. It exists only on PR #7259's head branch `ai/issue-7257`, which per GitHub Facts is open, unmerged and at 32fdcf079adc. So the fix has to land on that branch. Option B would create a second copy of the file that collides with PR #7259 when it merges. Option C would drop a known, narrow fix for a test-harness bug. `scripts/resolve_integration_ref.sh` (lines 36-44) already accepts a `Target branch:` line in the issue body, plain or bold, so a line naming `ai/issue-7257` routes clarify, plan and implement to that PR's branch. No new mechanism is needed.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Q1 is a lettered decision. Notes for the planner and implementer:\n- The issue body must carry exactly one header line, `Target branch: ai/issue-7257`, above the first `---`, so the resolver routes to that branch rather than `main`. If no trusted writer adds the line, planning must stop with the existing `BLOCKED: integration branch mismatch` or check-triage branch-guard path. It must not plan on `main`.\n- Scope: edit only `tests/test_issue_7251_dependency_wait.py`. In the `FAKE_GH` stub (around lines 32-33), write one physical log line per invocation by flattening or escaping newlines in `\"$*\"`. One way is to replace `\\n` with a space via `printf '%s\\n' \"${*//$'\\n'/ }\"`; another is `tr '\\n' ' '` on the arguments before appending.\n- Keep the one-call assertion at about line 157 and the production dependency gate as they are.\n- Verify with `python3 -m pytest tests/test_issue_7251_dependency_wait.py` on `ai/issue-7257`.\n- Reversibility: the change is a single test-stub commit on the PR branch. If PR #7259 is abandoned, the commit goes with it, and nothing on `main` changes.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "7162b0067cf8145496fb3f9106af78ded203ab72300370fcef1df37946207013",
+  "lineage": {
+    "issue_number": 7332,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38480004532",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38480004532",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7332"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261013225548_86cdfa8e5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7332,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38480004532"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7332",
+  "timestamps": {
+    "created_at": "2026-10-13T22:55:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

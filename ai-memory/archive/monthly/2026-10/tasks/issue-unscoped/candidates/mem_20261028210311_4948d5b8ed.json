@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation to tests-release-and-log-analysis\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml:2172-2173 and changelog.d/8279-heal-job-steps-to-release.md state that step timings were not readable and the steps were selected by test and subprocess counts, not measured, so the moved steps were not identified from the run's step timings. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT with confidence 2 and said it was not reporting it as a gap. google_gemini-3_1-flash-lite and openai_gpt-6-luna rated it MAJOR with confidence 5. The highest severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP (the reviewer said it was not reporting this as a gap, then gave the entry):\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  Expected change site: `.github/workflows/ci.yml`\n  Evidence of absence: the step timings of run 40750326439 are not available in this environment, so no measured selection is possible.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR moved four test steps from `tests-heal-plan-and-validation` to `tests-release-and-log-analysis` without using the run's step timings. Both the `.github/workflows/ci.yml` comments (lines 2172-2173) and `changelog.d/8279-heal-job-steps-to-release.md` state \"step timings were not readable when this was planned\". The steps were chosen by estimated cost (test/subprocess counts).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation to tests-release-and-log-analysis.\n  Evidence of absence: .github/workflows/ci.yml:2172-2173 states the run's step timings were not readable and the steps were selected by test and subprocess counts, not measured. The changelog confirms this. The moved steps were not identified using the run's step timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a8c7b08812bc51d82a46b62a14f090eec70150fa9cf30565a2125797c9b3e5af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8283,
+    "run_id": "40765216399",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40765216399",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028210311_4948d5b8ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8283,
+    "run_id": "40765216399"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T21:03:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The failing tests and the code they cover exist only on PR #6654's head. The facts show branch `ai/issue-6634` exists at a63f8a8f874b, and `tests/test_gh_api_retry.py` is not on the default branch, so a fix based on `main` has nothing to edit. Option B is circular: #6654 cannot merge while `CI / lint` is red, so \"after it merges\" never arrives. Option C throws away the triage lineage that was filed on purpose, and nothing guarantees #6654's own autofix loop will pick these failures up. The fix lands on `ai/issue-6634`. It changes only the four test files and leaves the CI gate and the retry and rate-limit behaviour alone.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - Target branch: `ai/issue-6634` (PR #6654 head, a63f8a8f874b)\n    - tests/test_clarify_respond_standalone.py (`test_every_later_step_waits_for_the_gate`)\n    - tests/test_phase_skip_gate_telemetry_contract.py (`test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fallback`)\n    - tests/test_security_audit_workflow_contract.py (the resolver test's fake `gh`)\n    - tests/test_gh_api_retry.py (the three wait tests that build reset epochs from the module-level `NOW`)\n  steps:\n    - Base the work on `ai/issue-6634`, not the default branch. This issue body has no `Integration branch:` / `Target branch:` line, so `scripts/resolve_integration_ref.sh` will not route it there by itself. The plan must state the target explicitly (`Target branch: ai/issue-6634`) so implement checks out that branch and opens its PR against it.\n    - In `test_every_later_step_waits_for_the_gate`, exempt only the \"Bootstrap GitHub API retry helper\" step, the prerequisite step that runs before the metadata gate. Every later step must still have the gate `if:`.\n    - In the phase-skip contract test, replace the old `gh api \"repos/.../issues/${TRACKING_NUM}\"` substring assertion with the `gh_api_retry --optional` form the workflow now uses.\n    - Make the resolver test's fake `gh` skip a leading `-i` flag when it reads the endpoint. When `-i` is present it should return headers plus a body in the shape the helper parses.\n    - In `tests/test_gh_api_retry.py`, compute each wait test's reset epoch from a controlled clock at execution time, not at import, so the time the suite takes cannot expire the fixture.\n    - Re-run the four affected CI test groups. Do not touch `scripts/gh_helpers.sh`, `scripts/resolve_integration_ref.sh`, any workflow YAML, or the `lint` aggregate.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Each assertion keeps its intent (gate ordering, use of the cached payload, endpoint routing, the bucket-matched wait) and now matches the migrated helper's shape.\n  reversibility: These are commits to one PR branch and touch only tests. Reverting them, or closing the fix PR, restores the current state, and #6654's own review loop still applies.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None.",
+  "fingerprint": "705335e2593b3e887be9f88cc629bf658981f33658087434aec37ce1c136c2db",
+  "lineage": {
+    "issue_number": 7055,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38036542844",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38036542844",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7055"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261010081305_9b1c116856",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7055,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38036542844"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7055",
+  "timestamps": {
+    "created_at": "2026-10-10T08:13:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

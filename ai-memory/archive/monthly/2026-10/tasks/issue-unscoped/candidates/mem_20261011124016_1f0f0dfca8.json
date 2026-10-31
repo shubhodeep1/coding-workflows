@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:3312-3318 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: If replacement-issue creation fails after the PR is closed, `set -e` exits before the judge writes the failure outputs, leaving the PR closed without a replacement issue or human alert.\n  WHY: The workflow skips the judge-decision alert because the judge failed and suppresses generic failure alerts for a closed PR; severity varied between BLOCKER and MAJOR, so the highest severity is used.\n- README.md:2387-2388 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: Two consecutive rows for the report-authentication setting give contradictory guidance about whether phase reports are included when authentication enforcement is enabled.\n  WHY: Operators or tooling relying on the stale row may misconfigure enforcement and lose phase reports; severity varied between MAJOR and NIT, so the highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh; close_and_reissue case, gh_retry gh issue create command | severity=BLOCKER | confidence=[4]\n  PROBLEM: If replacement-issue creation fails after the PR is closed, the judge script crashes due to `set -e`.\n  WHY: The workflow suppresses the failure alert when `PR_CLOSED=true`, leaving the PR closed without a replacement issue or operator alert.\n- README.md; Lines 2387-2388 (the WORKFLOW_HEAL_REPORT_AUTH variable table rows) | severity=MAJOR | confidence=[4]\n  PROBLEM: The variable table contains two consecutive, contradictory rows for WORKFLOW_HEAL_REPORT_AUTH regarding whether phase reports are included when authentication enforcement is enabled.\n  WHY: This creates ambiguity for operators configuring the pipeline, which may lead to incorrect authentication settings and silently dropped phase reports.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh; line 3312: `NEW_URL=\"$(gh_retry gh issue create \u2026)\"` | severity=BLOCKER | confidence=[5]\n  PROBLEM: The `close_and_reissue` branch issues `gh issue create` without an error-handling wrapper, so failure terminates the script before the judge outcome outputs are written.\n  WHY: The PR is already closed, the judge-decision alert requires success, and failure handlers suppress alerts for a closed PR, leaving no replacement issue or human page.\n- README.md; lines 2387-2388 | severity=MAJOR | confidence=[4]\n  PROBLEM: Two consecutive rows for the same `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` variable carry contradictory semantics.\n  WHY: Operators or tooling relying on the stale row may believe phase reports are exempt under enforcement, while intake skips unauthenticated phase reports.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh; .github/workflows/review_autofix.yml; `scripts/review_rb_judge.sh:2913-2916, 3312-3318`; `.github/workflows/review_autofix.yml:6711, 6875-6877, 6981` | severity=MAJOR | confidence=[5]\n  PROBLEM: A replacement-issue creation failure after the judge closes the PR bypasses the new human alert.\n  WHY: The judge exits before writing `judge_reissue_created=false`; the judge-decision alert requires success, and the failure handler suppresses the generic Telegram alert when the PR is closed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge.sh; 2914 (PR close), 3312-3316 (issue create), 3330-3332 (outputs) | severity=BLOCKER | confidence=[5]\n  PROBLEM: If replacement-issue creation fails after `close_and_reissue` closes the PR, `set -euo pipefail` terminates the script before the outputs are written.\n  WHY: The judge-decision alert requires success and does not run on failure; the PR remains closed without a replacement issue or human page.\n- README.md; 2387-2388 | severity=NIT | confidence=[5]\n  PROBLEM: Two consecutive rows for `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` contain contradictory text; line 2387 says phase reports are exempt, while line 2388 says they are included.\n  WHY: Operators may believe phase reports stay exempt under enforcement, but intake skips unauthenticated phase reports; the duplicate row also breaks tooling that keys the table by variable name.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_rb_judge.sh; line 19 (`set -euo pipefail`) and lines 3312-3318 (`NEW_URL=\"$(gh_retry gh issue create ...)\"` / `RB_REISSUE_CREATED=\"true\"`), with the output writes at lines 3330-3332; interacting with .github/workflows/review_autofix.yml lines 6711 (alert step `if: success() && ...`), 6875-6877 (failure handler sets `PR_CLOSED=true` when the PR reads `closed`/`merged`), and 6888/6922/6941/6981 (all failure-alert steps gated on `env.PR_CLOSED != 'true'`). | severity=MAJOR | confidence=[5]\n  PROBLEM: A failed replacement-issue creation exits the judge before it can emit the failure outputs needed to page a human.\n  WHY: The judge-decision alert requires success, and the failure handler suppresses alerts after detecting the PR is closed, making the replacement-issue alert unreachable on this failure path.\n- README.md; lines 2387-2388 (variable table, `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH`) | severity=NIT | confidence=[5]\n  PROBLEM: The table carries two consecutive rows for the same variable with contradictory semantics.\n  WHY: An operator following the stale row may believe phase reports stay exempt under enforcement, but intake skips unauthenticated phase reports; the duplicate row also breaks tooling that keys the table by variable name.\n- scripts/orchestrate_poll_process.sh; location: `_standalone_conflict_count_attempt`, the `attempts=$((attempts + 1))` block (last run diff) | HARDENING_RISK_SCORE=1\n  PROBLEM: If the marker PATCH/POST write fails after the in-memory count reaches the stuck-alert threshold, the alert fires but the persisted marker still says `alerted=0`, so the next sweep re-alerts.\n  WHY: The proposed fix is to capture the write exit status and only set `alerted=1` in the echoed body when the write succeeds, or re-derive `alerted` from the stored marker before sending.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5cc16cdfa236a6d817ab29967c4ccffcdca3e6f876cd4b27b3b204271a553bdb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7156,
+    "run_id": "38136371232",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38136371232",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261011124016_1f0f0dfca8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7156,
+    "run_id": "38136371232"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-11T12:40:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

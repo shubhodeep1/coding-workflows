@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue improve?\nChoices:\n- A: A specific workflow phase (clarify, plan, implement, review/autofix, orchestrate, validate). Please name it and describe the problem. (RECOMMENDED)\n- B: A specific script, prompt or helper. Please give its path and the behaviour you want changed.\n- C: Documentation (README, agents.md, docs/). Please say which section and what is missing or wrong.\n- D: Something else. Please describe the target and the current problem.\nQ2: What does \"better\" mean here?\nChoices:\n- A: Fix a bug or failure. Please link the failing run, issue or PR, or describe what you saw. (RECOMMENDED)\n- B: Lower cost or shorter run time (fewer model or API calls, faster CI).\n- C: Add new behaviour or a new feature. Please describe it.\n- D: Make it more reliable or clearer to operate (alerts, logs, recovery).\nQ3: How will we know the change is done?\nChoices:\n- A: You give a concrete result to check, such as a test that should pass, a log line that should appear or an error that should stop. (RECOMMENDED)\n- B: No specific check. The planner chooses a reasonable measure once Q1 and Q2 are answered.",
+  "fingerprint": "515b28909140371910fdb49bede24b54ad3a795990059e1372549878b67b509d",
+  "lineage": {
+    "issue_number": 7703,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39348768160",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39348768160",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261020004217_9891e032c7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7703,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39348768160"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7703 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-20T00:42:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

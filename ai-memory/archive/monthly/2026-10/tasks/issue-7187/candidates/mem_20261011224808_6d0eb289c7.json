@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this issue get routed to PR #7044's branch (`ai/issue-6769`)?\nChoices:\nA) Edit this issue's body so that `- Integration branch: ai/issue-6769` is on a line by itself, then post `/reclarify`. Planning and implementation then check out `ai/issue-6769` and run the investigation the issue asks for. (RECOMMENDED)\nB) Run the investigation on the default branch: reproduce orchestrate-poll group 3, shard 0 there and fix it only if it fails there too. A fix on the default branch reaches PR #7044 only after that PR syncs with it.\nC) Do no code work. Re-run the failing CI on PR #7044 and close this issue if the check passes.",
+  "fingerprint": "008e367e06bbc8a79773a31bd6796e6c8abf0658cfe0458fea26b48ae418170e",
+  "lineage": {
+    "issue_number": 7187,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38181482702",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38181482702",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261011224808_6d0eb289c7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7187,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38181482702"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7187 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-11T22:48:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

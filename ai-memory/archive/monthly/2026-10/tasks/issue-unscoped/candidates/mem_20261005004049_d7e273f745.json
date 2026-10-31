@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:1296\u20131303 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The malformed-command fallback searches for contiguous `git`, so it misses Bash-compatible spellings such as `g''it`.\n  WHY: If a later unmatched quote makes parsing fail, the fallback misses the disguised command and allows a push to proceed without confirmation, bypassing the merged-PR guard.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py:1296 | severity=high | confidence=4\n  PROBLEM: The fallback regex only matches contiguous literal `git`, missing shell-escaped command names such as `g''it`.\n  WHY: When malformed later input makes parsing fail, the fallback misses the disguised command and allows a push to proceed without confirmation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:1296-1302 | severity=high | confidence=4\n  PROBLEM: The malformed-command fallback only matches contiguous `git`, so Bash-compatible spellings such as `g''it` bypass it.\n  WHY: An unmatched quote later in the command makes parsing fail; the fallback misses the disguised `git push` and allows the push to proceed without confirmation.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:1296\u20131303 | severity=high | confidence=5\n  PROBLEM: The malformed-command fallback detects `git` only as contiguous text and misses Bash-compatible `g''it`.\n  WHY: When parsing fails on a later unmatched quote, the fallback misses the disguised push command and allows it to bypass the merged-PR guard.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py:1296-1302 | severity=high | confidence=4\n  PROBLEM: The fallback regex does not match shell-escaped spellings such as `g''it` that Bash joins into the command name `git`.\n  WHY: If a later unmatched quote causes parsing to fail, the fallback misses the push command and allows it to proceed despite the merged-PR guard.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "8165b7631c0e983062ec3103d5b508bf109ffd0acd0cfcf78924581c569c3107",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6250,
+    "run_id": "37246870801",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37246870801",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005004049_d7e273f745",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6250,
+    "run_id": "37246870801"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T00:40:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

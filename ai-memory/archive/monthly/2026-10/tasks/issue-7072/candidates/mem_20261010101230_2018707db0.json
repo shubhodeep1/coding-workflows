@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the one-time follow-up run, and how is \"one-time\" enforced?\nChoices:\n- A: As a new job inside `.github/workflows/ci.yml`, limited to `push` on `main`. **Note:** the job-split contract (`tests/test_ci_job_split_contract.py`) would force this job into `lint`'s `needs`, which changes the aggregate gate the issue says to keep intact.\n- B: As a new dedicated workflow file, run on `push` to `main` plus `workflow_dispatch`. It checks for a durable marker comment (for example `<!-- ai:pr6576-shard-followup:v1 -->`, written by the pipeline account) and skips once the marker exists. It gets a `single-use` entry in `docs/scripts-pending-removal.md` whose removal trigger is \"marker posted\". (RECOMMENDED)\n- C: No new automation. Read the existing CI results (PR #7067's required `orchestrate-poll` groups and the `main` push CI), record them in the postmortem, and close this gap as already satisfied. **Note:** if you pick C, Q2 and Q3 do not apply.\nQ2: How should the follow-up get evidence about the original failure?\nChoices:\n- A: First fetch the log through the Actions API: find the failed `CI` run on head branch `ai/issue-6573` and its `orchestrate-poll` job, then pull the failing test names from the `FAIL` / `TEST_CASE_EVENT ... \"status\":\"fail\"` lines and rerun only those tests on current `main`. If the log has expired or can't be found, fall back to running all four `orchestrate-poll` groups at #6576's recorded head SHA. (RECOMMENDED)\n- B: Only fetch and archive the failing job log. Rerun nothing.\n- C: Only rerun the full `orchestrate-poll` partition at #6576's recorded head SHA. Skip the log fetch.\nQ3: Where should the full result go, and what should happen if a failure reproduces?\nChoices:\n- A: Post the full result (run links, failing tests, pass/fail per group) as the marker comment on this issue, and upload the logs as a workflow artifact. If a test still fails on current `main`, open one standalone pipeline issue with the failing test names and a log excerpt, so the normal clarify \u2192 plan \u2192 implement flow fixes it. A failure that happens only at #6576's old head and not on `main` is recorded, with no fix filed. (RECOMMENDED)\n- B: Do everything in A, and also have the workflow open a PR that appends the results to `docs/postmortems/2026-10-10-pr-6576-orchestrate-poll-shard-1.md`.\n- C: Only a job summary and an artifact. No issue comment and no follow-up issue.",
+  "fingerprint": "8e1a3cce134f0b63306b690d8c881304826730541a10e6df1ab3afbb0514dbce",
+  "lineage": {
+    "issue_number": 7072,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38043835731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38043835731",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261010101230_2018707db0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7072,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38043835731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7072 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-10T10:12:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

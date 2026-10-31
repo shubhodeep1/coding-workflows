@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_integration_judge_scope_guard.py:128-130 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The test name retains the \"protected\" qualifier although the parametrization also covers non-protected paths.\n  WHY: No runtime failure is reported, but the name could mislead a future maintainer into weakening or removing unprotected-path coverage.\n- scripts/orchestrate_poll_process.sh:8959-8960 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The log key protected_path_provenance is emitted for rejections of all conflicted paths, including non-protected files.\n  WHY: Monitoring keyed on protected_path_provenance may misclassify application-file rejections as protected-path events.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_integration_judge_scope_guard.py:128-130 | severity=NIT | confidence=2\n  PROBLEM: The test name retains the \"protected\" qualifier even though the verifier no longer has a protected/unprotected split and the test is now parametrized over True, False, and (\"path\", \"src/app.py\").\n  WHY: No runtime failure. Risk is a future maintainer reading the test name and reintroducing the protected-only skip, thinking non-protected paths are not covered by this test.\n- scripts/orchestrate_poll_process.sh:8959-8960 | severity=NIT | confidence=3\n  PROBLEM: The log key protected_path_provenance is now emitted for rejections of all conflicted paths including non-protected files like src/app.py.\n  WHY: No runtime failure. The behavior is intentional per the comment \"Keep this reason token for consumers.\" Risk is operational: monitoring keyed on protected_path_provenance now misclassifies application-file rejections as protected-path events. The test at line 268 encodes this log key as the assertion target.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_integration_judge_scope_guard.py: 128 (parametrize block) and 130 (test name test_protected_conflict_rejects_invented_content_or_mode) | severity=NIT | confidence=2\n  PROBLEM: The test name retains the \"protected\" qualifier but the parametrize now includes non-protected paths: `[True, False, (\"path\", \"src/app.py\")]`. False maps to conflict.txt and (\"path\", \"src/app.py\") maps to src/app.py, neither of which match the four PROTECTED_* patterns in lines 8808-8819. A reader who only looks at the name will believe the test only covers protected paths, but it now also enforces rejections for unprotected source files.\n  WHY: Not a runtime bug today \u2014 assertions still pass. The risk is a future maintainer reading the name, expecting protected-only coverage, and reintroducing a protected-only check at line 8880-8887 or weakening the unprotected parametrization without noticing. Minimally renaming to test_all_conflicts_rejects_invented_content_or_mode would make the broadened scope self-documenting.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "4976ef3020889c08d32ede3ea105da576d5710560484125a97e21c363e39e7d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6485,
+    "run_id": "37429088699",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37429088699",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006080328_d4c8d3b32f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6485,
+    "run_id": "37429088699"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T08:03:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

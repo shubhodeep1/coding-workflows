@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: In `implement.yml`, the support checkout falls back to `ref: main` (lines 975-983) when the `SCRIPT_REF` checkout fails. `implement_heal_preflight.sh` then reaches line 85, where `support_head` does not equal `expected_head` (`SCRIPT_REF` is `github.sha` in this repo). It refuses with the generic reason `unavailable`, along with six other unrelated checks at lines 58-85. This mismatch path is the code-proven defect: the failure gives no diagnosis. B gives each refusal its own reason and logs the refs and SHAs (the A part), and adds a dedicated `support_ref_fallback` reason, all without loosening any check. C is ruled out because it asks for data nobody can supply. The GITHUB FACTS only show #6778 as closed (not_planned).\nQ2: `files_touched_scope_guard.py` (`extract_files_touched`, line 121) only recognises a `files_touched:` line that stands alone. The inline form `files_touched: - a - b` shown in this issue's context would therefore read as \"no allowlist\", and the automation-path guard would reject the change again. Rewriting the body as a multiline block is harmless if it is already multiline and required if it is not. B relies on an assumption we cannot check, and C repeats the reissue that has already happened once.\nQ3: The specification says \"Implement only\" these two files. Any extra path, including a changelog fragment, would also have to appear in the allowlist the judge wrote. The smallest scope that satisfies both the guard and the spec is A.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/implement_heal_preflight.sh (lines 58-85: identity, GraphQL, verify, support-dir, rev-parse, expected-ref and HEAD-mismatch refusals, all currently `refuse unavailable`)\n    - .github/workflows/implement.yml lines 952-983 (`SCRIPT_REF` = `github.sha` in this repo, `stable` in consumer repos; the fallback checks out `main` into `.codex-workflow-src`)\n  steps:\n    - Replace each `refuse unavailable` at lines 58-85 with its own reason token, for example `identity_unavailable`, `issue_read_unavailable`, `scope_verify_failed`, `support_missing`, `support_head_unreadable`, `support_ref_invalid` and `support_head_mismatch`. Keep `refuse` and its marker, comment and `ai:needs-human` latch unchanged.\n    - Before refusing on a mismatch, emit one log line with `expected_ref=`, `expected_head=` and `support_head=`. These values are SHAs and ref names only, never paths or tokens.\n    - When `expected_ref` is a 40-hex SHA, `refs/heads/main` exists in the support checkout and resolves to `support_head`, refuse with `support_ref_fallback` instead of `support_head_mismatch`. The checkout must still be refused.\n    - In tests/test_implement_heal_preflight.py, cover: the success path, where a `HEAL_ROUTE=true` scope file and trusted dir are written; each fail-closed reason, where `SKIP_IMPLEMENT=true` and the refusal marker are written; the main-fallback case, which must produce `support_ref_fallback`; and the existing `stable` tag-versus-branch case, which must still pass.\n  replaces_acceptance_criterion: none\n  equivalence_argument: These changes only add diagnosis. Identity, edit status, scope and exact-checkout verification all stay mandatory and fail closed.\n  reversibility: The reason tokens are new strings inside an existing marker, so reverting the commit restores the generic `unavailable`.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- (none; Q2:A needs one manual step: before `/approved`, the pipeline account or an OWNER/MEMBER/COLLABORATOR must make sure this issue's body has `files_touched:` on its own line, followed by `- scripts/implement_heal_preflight.sh` and `- tests/test_implement_heal_preflight.py` on separate lines. Until then, the automation-path guard will reject `scripts/implement_heal_preflight.sh` as it did for #6778.)",
+  "fingerprint": "9b8f74a559066e51d471454025c4af4c4958ba62ef74c07474873052a5fd57d1",
+  "lineage": {
+    "issue_number": 6788,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37817688111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37817688111",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6788"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008174425_953924705b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6788,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37817688111"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6788",
+  "timestamps": {
+    "created_at": "2026-10-08T17:44:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:1042-1048 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: In `_heal_plan_declares_no_file_changes`, the lead-in line is replaced by the text after its first colon (or by \"\" when there is no colon), so a filename on the lead-in line is never checked.\n  WHY: A section such as \"## Files likely to change README.md\" followed by \"None.\" is approved, implement then edits a file outside the frozen heal scope, and the commit guard refuses it (approve-then-refuse). Severity disagreement: sonnet-5_5 rated NIT (confidence 3), minimax and glm rated MAJOR (confidence 4); the highest is used.\n- scripts/files_touched_scope_guard.py:1057-1060 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `_names_bare_file` only detects names in the curated `_PLAN_GRANT_BARE_FILE_RE` list and dot-led tokens, so extensionless names such as README, CHANGELOG, CONTRIBUTING, OWNERS, VERSION and Caddyfile are not detected.\n  WHY: A plan such as \"None. Also update README.\" is approved as no-change, then the commit guard refuses the edit.\n- scripts/files_touched_scope_guard.py:1033 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `_HEAL_PLAN_PATHLIKE_RE` caps the extension at `[A-Za-z][A-Za-z0-9]{0,9}`, so longer extensions such as `app.webmanifest` are not detected.\n  WHY: A plan saying \"None. Also edit app.webmanifest.\" is approved as no-change, then the commit guard refuses the edit.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:`_heal_plan_declares_no_file_changes` lead-in loop | severity=NIT | confidence=3\n  PROBLEM: The lead-in line is checked only for the text after its first colon, and a line with no colon is dropped entirely, so a filename on the lead-in line is not caught.\n  WHY: \"Files likely to change in README.md: None.\" passes, and implement then edits a file outside the frozen heal scope; the commit guard still refuses it.\n- scripts/files_touched_scope_guard.py:`_names_bare_file` and `_HEAL_PLAN_PATHLIKE_RE` | severity=NIT | confidence=2\n  PROBLEM: Extensionless names outside the curated list (README, CHANGELOG, OWNERS, Caddyfile) and extensions longer than 10 characters (app.webmanifest) are not detected.\n  WHY: \"None. Also update README.\" is approved as no-change, with the same approve-then-refuse outcome.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:1033 | severity=NIT | confidence=3\n  PROBLEM: The `_HEAL_PLAN_PATHLIKE_RE` extension pattern `\\.[A-Za-z][A-Za-z0-9]{0,9}\\b` misses longer extensions such as `.webmanifest`.\n  WHY: A heal plan that says \"None.\" but updates `app.webmanifest` is auto-approved, which could allow an edit outside the frozen heal scope.\n- scripts/files_touched_scope_guard.py:1057-1060 | severity=NIT | confidence=3\n  PROBLEM: `_names_bare_file` misses common extensionless filenames (README, CHANGELOG, CONTRIBUTING, OWNERS, VERSION, Caddyfile, Earthfile).\n  WHY: A heal plan that says \"None.\" but updates one of these files is auto-approved, which could allow an unauthorized edit outside the frozen heal scope.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/files_touched_scope_guard.py:1042-1048 | severity=MAJOR | confidence=4\n  PROBLEM: When a Files section's lead-in line has no colon, `_HEAL_PLAN_LEADIN_REST_RE` does not match and the whole line is replaced with \"\", so a filename on it (e.g. \"## Files likely to change README.md\" followed by \"None.\") is never checked.\n  WHY: This violates the documented invariant that no line carries a filename-shaped token. The gate approves, implement edits the named file, and the commit guard refuses it.\n- scripts/files_touched_scope_guard.py:1057-1059 and 742-744 | severity=NIT | confidence=4\n  PROBLEM: `_names_bare_file` only matches the curated `_PLAN_GRANT_BARE_FILE_RE` list plus dot-led tokens, so README, CHANGELOG, CONTRIBUTING, AUTHORS, INSTALL, VERSION and OWNERS are missed.\n  WHY: \"None. Also update README.\" passes every check, giving the same approve-then-refuse failure. README is the most reachable case.\n- scripts/files_touched_scope_guard.py:1033 | severity=NIT | confidence=3\n  PROBLEM: The extension segment of `_HEAL_PLAN_PATHLIKE_RE` is capped at 10 characters after the leading letter, and a pure dotfile token like `.webmanifest` is also missed.\n  WHY: \"None. Also update app.webmanifest.\" or \"None. Touch .webmanifest only.\" is approved, giving the same approve-then-refuse outcome with a lower likelihood.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:1043-1048 | severity=MAJOR | confidence=4\n  PROBLEM: A lead-in line without a colon is replaced with an empty string, so a filename on the lead-in line itself is never checked. A colon-bearing lead-in that names a file before the colon is also missed, since only the post-colon rest is kept.\n  WHY: \"## Files likely to change README.md\" followed by \"None.\" is approved with `heal_scope_plan_no_changes`, and implement's commit-time scope guard then refuses the out-of-scope edit (approve-then-refuse).\n- scripts/files_touched_scope_guard.py:1033 and 1057-1059 | severity=NIT | confidence=3\n  PROBLEM: `_HEAL_PLAN_PATHLIKE_RE` misses extensions of 11 or more characters (`app.webmanifest`), and `_names_bare_file` misses extensionless names outside `_PLAN_GRANT_BARE_FILE_RE` (README, CHANGELOG, CONTRIBUTING, OWNERS, VERSION, Caddyfile, Earthfile).\n  WHY: \"None. Also edit app.webmanifest.\" or \"None. Also update README.\" is approved, then the commit guard refuses the edit, the same class as the earlier `.env`/`.npmrc` autofix rounds.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e04eb3b8e235df297a239db016643f370e956abb7021f9166681f7c7eba0be30",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8319,
+    "run_id": "40846731425",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40846731425",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029101814_ed15b758b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8319,
+    "run_id": "40846731425"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T10:18:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

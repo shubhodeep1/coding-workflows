@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: Consumers already have an hourly scheduled job in `workflow-templates/ai-review.yml` (line 21\u201323, cron `17 * * * *`). It runs alongside the `review` job: the `security-hold-sweep` job (lines 68\u201389) checks out trusted `stable` support and reuses the `GH_PAT || github.token` fallback. So consumer outage handling needs no new cron. The probe can be a sibling scheduled job, and this repo uses the existing `*/30` sweep in `review_autofix_sweep.yml` (line 67). Option A would leave consumer PRs stuck after a credit outage until a human acts, which is the manual recovery this issue exists to remove. Option C pushes the same work into a later issue.\nQ2: The workflow-heal outage path the issue mentions does not exist, so the closest existing mechanism is the per-repo labelled tracker issue with a body marker. That pattern is already used by `AI Security Audit Tracker` (`ai:security-audit`), `AI Workflow Weekly Retro` (`ai:retro`) and `ai:operator-step`. A tracker in each repo is the only option that lets each repo's own sweep or scheduled job check whether an outage is open (needed by Q1:B). It also keeps an auditable, idempotent record of which PRs and labels the resume has already handled. Option B cannot pause a consumer's sweep. Option C keeps no state GitHub can read.\nQ3: If the codex/OpenCode fallback succeeds, the run produced a correct result. Pausing review dispatches would then cost throughput for nothing, which goes against the issue's intent (\"capacity event, not a PR failure\"). One deduplicated capacity alert plus a \"recovered\" alert gives the operator the signal. The full outage state opens only when the fallback also fails on a provider error, and that failure is then classified as `provider_unavailable` (no cap count, no block label).\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. All three decisions are lettered. Notes the planner should treat as binding with them:\nQ1 (B):\n  - Classification (`provider_unavailable` reason, cap exemption, no `ai:review-blocked`, no per-PR heal report) lives in the shared `review_autofix.yml` failure path and in `scripts/workflow_failure_heal.py`, so every repo gets it through `@stable`.\n  - This repo: add the probe/pause/resume step to the existing `review_autofix_sweep.yml` (`*/30`), before its dispatch steps. While a tracker is open, the step skips review dispatches.\n  - Consumers: add a scheduled job to `workflow-templates/ai-review.yml`, gated on `github.event_name == 'schedule'` and a new repo variable that defaults to enabled (for example `PROVIDER_OUTAGE_RESUME_ENABLED`, read as `!= 'false'`). Model it on `security-hold-sweep`: trusted `stable` support checkout, `persist-credentials: false`, least-privilege `permissions:`, and `OPENROUTER_API_KEY` passed only to the probe step. It re-dispatches through `ai-review.yml` (`workflow_dispatch`, PR-named run), like `SECURITY_HOLD_SWEEP`.\n  - The release re-run in step 3.4 applies only in this repo and only behind an opt-in repo variable that defaults to off. When it is off, the step reports that the re-run was skipped.\n  - No new standalone script that someone has to run by hand. New helper logic goes into a staged `scripts/` helper called from those existing scheduled jobs, with a `docs/scripts-pending-removal.md` entry if it qualifies as long-running.\nQ2 (A):\n  - The `ai:provider-outage` label is added to `.github/ai/label_contract.v1.json`.\n  - Tracker title is fixed (for example `AI Provider Outage`). The body marker is `<!-- ai:provider-outage:v1 provider=<openrouter|claude-pool> status=<http status> -->`.\n  - The tracker is trusted only when authored by the pipeline's own GH_PAT login (fail closed otherwise).\n  - Find an existing open tracker by label before creating one, so at most one is open at a time. On a create race, keep the lowest-numbered tracker and close any duplicates.\n  - Resume bookkeeping is a body marker listing the PRs it re-dispatched and the labels it removed. Labels the outage applied are marked by a `<!-- ai:provider-outage-label:v1 pr=<n> -->` comment written when the label is applied (or, better, the label is never applied at all, per change 1). The resume never removes `ai:review-blocked` without that marker.\n  - Exclude `ai:provider-outage` issues from clarification in `internal-clarify.yml`, `clarify.yml` and the consumer wrapper, keeping the predicates in step (`tests/test_phase_wrapper_predicate_contract.py`).\n  - Opening and closing the tracker each send exactly one Telegram alert. The opening alert names the provider and HTTP status, and refers to the key only by its secret name, never its value.\nQ3 (A):\n  - The capacity alert for `all_gated` is deduplicated by its own marker kind (`provider=claude-pool`) and cleared on the next non-gated Claude success.\n  - An `all_gated` run whose fallback also fails on a provider error opens the full outage tracker.\n\nThere is no ESCALATION and no SETUP REQUIRED. The probe reuses the existing `OPENROUTER_API_KEY` secret, and the new repo variables all have safe defaults.",
+  "fingerprint": "bde117066d8e45440a07e223758f2dc986d6622a4d289a25ac5290236b628dc8",
+  "lineage": {
+    "issue_number": 6633,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618539409",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618539409",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6633"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007121556_23d9346021",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6633,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618539409"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6633",
+  "timestamps": {
+    "created_at": "2026-10-07T12:15:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

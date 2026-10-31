@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Reviewers now get the unattended system instructions plus one line telling them to read the checkout's own agents.md / AGENTS.md when a diff needs it.\" The over-cap warning should name the new path variable.\n  expected_change_site: scripts/review_run_reviewers.sh line ~3287 (the `::warning::` for reviewer-prompt overshoot)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports that scripts/review_run_reviewers.sh:3287 already reads `... or shrink the reviewer static context (${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}) / memory / semble context.`, so the gap was addressed in the LAST RUN DIFF (SEVERITY: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Reviewers now get the unattended system instructions plus one line telling them to read the checkout's own agents.md / AGENTS.md when a diff needs it.\" The over-cap warning should name the new path variable.\n  Expected change site: scripts/review_run_reviewers.sh line ~3287 (the `::warning::` for reviewer-prompt overshoot).\n  Evidence of absence: The line at scripts/review_run_reviewers.sh:3287 already reads `... or shrink the reviewer static context (${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}) / memory / semble context.` (verified via `read`), so the gemini-3.1-flash-lite task gap from pass 1 was addressed in the LAST RUN DIFF.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_run_reviewers.sh:1144-1160 | confidence=4\n  PROBLEM: Reviewer states it verified the pass-1 claim (continuing with an invalid reviewer static-context path) is invalid, not a defect. The fallback keeps `REVIEWER_STATIC_CONTEXT_PATH=\"${PWD}/pre_assembled_static.txt}` and only the new warning (1158-1160) fires. The TOCTOU symlink-swap claim also fails.\n  WHY: No path reads a failed reviewer copy, and `RUNTIME_DIR` is runner-owned with no attacker-controlled writer. Reported for the record; no change requested.\n- scripts/review_run_reviewers.sh:2641-2642\n  PROBLEM: Embed-budget prefix size now measures `REVIEWER_STATIC_CONTEXT_PATH`. Reviewer says this is intended and consistent with the assembler at 3230. Verified consistent, no defect.\n  WHY: Both use the identical resolved path, so the budget matches the actual prompt.\n- scripts/review_run_reviewers.sh:1158-1160\n  PROBLEM: The new `source=shared` warning is an improvement. The earlier `[ -r ]` + exit-1 hardening idea was correctly rejected, because failing closed would disable the documented fallback. No change; no defect.\n  WHY: Both the reviewer copy check and the shared fallback are covered.\n- scripts/reviewer_failback_chains.json:23-25\n  PROBLEM: Verified compliant. The `qwen/qwen3.7-plus -> qwen/qwen3.6-plus` chain stays after the roster removal, per the PR's declared intent. No defect.\n  WHY: No renamed or removed identifier breaks a caller; live-roster consumers derive the roster from the workflow YAML.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fe812e2695bb3b8fcf63c62540e0a752e604ffd271c4b062dc2c4d2b560a3e47",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8194,
+    "run_id": "40282592624",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40282592624",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026073537_463af3e0bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8194,
+    "run_id": "40282592624"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T07:35:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

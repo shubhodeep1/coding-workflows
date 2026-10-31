@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Option A fixes the cause without weakening the guard. Each side's live hook should already match its template copy: `tests/test_claude_template_live_parity.py` checks this in CI. When that holds and Git merges the template with no conflict, the live hook's merged content comes from Git alone, with no model involved. The model never reads or writes the live hook, so the exclusion in `scripts/review_untrusted_workspace.py:120-122` stays as it is. The change reuses the existing manifest union-merge step in `scripts/review_conflict_prepare.sh:223-381`, so it extends a current mechanism rather than adding a new one. Options B and C ship no fix. The issue says this failure is deterministic and needs a fix that removes the cause plus a regression test, so B and C don't meet it.\nQ2: The exclusion exists so that content written by the model never reaches a hook that runs on the host. Option B would let it through after transfer. If the template copy is also conflicted, the safe and expected result is to fail closed with `sandbox_path_host_only`, as the code does today.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/review_conflict_prepare.sh (manifest union-merge step, lines 223-381; kill-switch pattern at line 264; \"unmerged paths remain\" handling at line 342; manifest-only commit at line 374)\n    - scripts/review_untrusted_workspace.py:120-122 (exclusion of the live hook; leave unchanged)\n    - .claude/hooks/pr_merge_status_guard.py and workflow-templates/.claude/hooks/pr_merge_status_guard.py (the live/template pair; must stay byte-identical)\n    - tests/test_pr_merge_status_guard.py, tests/test_claude_template_live_parity.py (run in .github/workflows/ci.yml:468-476)\n    - New kill switch `CONFLICT_HOOK_TEMPLATE_SYNC_ENABLED`, default `true`. A repo-wide search found no existing use of this name.\n  steps:\n    - Add a step to scripts/review_conflict_prepare.sh after the manifest union-merge step and before the resolver allowlist is finalised. It applies only when `.claude/hooks/pr_merge_status_guard.py` is unmerged and `${CONFLICT_HOOK_TEMPLATE_SYNC_ENABLED:-true}` is `true`.\n    - Check that the template path `workflow-templates/.claude/hooks/pr_merge_status_guard.py` is not unmerged, i.e. Git merged it cleanly. If it is unmerged, fail closed as today (Q2 = A).\n    - Check that for each index stage of the live hook that exists (1, 2, 3), its blob equals the template's blob at the matching tree (merge base, HEAD, MERGE_HEAD). Compare with `git rev-parse <rev>:<path>`. If any check fails, fail closed as today. The base-stage check makes the merged template equal what a 3-way merge of the live hook would give.\n    - When every check passes, copy the merged template blob over the live hook with the template's file mode, run `git add` on the live path, and remove it from the resolver allowlist. If it was the only unmerged path, reuse the manifest step's no-resolver commit path. On integration-sync branches, commit only after the integration fingerprint check passes, as the manifest step does at lines 281 and 731-741. Otherwise the remaining paths go to the resolver.\n    - Log one line with a stable prefix in the existing manifest-step style, for example `Hook template sync: resolved .claude/hooks/pr_merge_status_guard.py from cleanly merged template` / `... unhandled reason=<disabled|template_conflicted|parity_mismatch>`. When unhandled, leave the current `sandbox_path_host_only` handling in scripts/review_conflict_resolve.sh unchanged.\n    - Add a regression test in the style of the existing review_conflict_prepare tests. Build a scratch repo where the base and both branches change the live hook and its template identically, with non-overlapping edits. The live hook then conflicts while the template merges cleanly, which is the PR #6549 shape. Assert that preparation resolves and stages the live hook with no resolver run. Add negative cases: template conflicted, live differs from template on one side, and kill switch false. Each must still end in the fail-closed path. Run the test against the current head (it fails) and with the fix (it passes), and record both results in the PR.\n    - Document `CONFLICT_HOOK_TEMPLATE_SYNC_ENABLED` next to `CONFLICT_MANIFEST_UNION_ENABLED` in agents.md and the README variable table, and add a changelog.d fragment.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: The live hook's merged content equals Git's own clean 3-way merge of byte-identical copies, so no model-written content reaches the host-run hook. Every other case keeps the current fail-closed behaviour.\n  reversibility: Set `CONFLICT_HOOK_TEMPLATE_SYNC_ENABLED=false` to restore today's behaviour exactly, or revert the step. It changes nothing outside the guarded case.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None. The only new variable is `CONFLICT_HOOK_TEMPLATE_SYNC_ENABLED`, which defaults to `true` inside the helper, so the workflow doesn't need to export it.\n\n---\nActions taken: I checked the hook exclusion (`scripts/review_untrusted_workspace.py:120-122`), the manifest union-merge step (`scripts/review_conflict_prepare.sh:223-381`), and that the proposed kill-switch name isn't already used.\nAssumptions: PR #6549 most likely conflicts because both sides changed the live/template pair; the intake evidence doesn't confirm this. The checks in the plan make the step fail closed whenever that assumption is wrong.\nMissing context: I did not see the merge stages for PR #6549's hook conflict.",
+  "fingerprint": "c2c740e42276dc046a9acb9fba4a12e7cead2707eb499832996646c972138b81",
+  "lineage": {
+    "issue_number": 6764,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37775280615",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37775280615",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6764"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008122116_2079a57703",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6764,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37775280615"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6764",
+  "timestamps": {
+    "created_at": "2026-10-08T12:21:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

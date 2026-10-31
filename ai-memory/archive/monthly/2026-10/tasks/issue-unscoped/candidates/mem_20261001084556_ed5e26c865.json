@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_claude_fixer_nonblocking.py:lines 1100-1107 (the demoted.append after the disproof check) | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The demoted record retains references to the original `entry` and `rejecters` lists, so a future mutation before the append could silently alter the recorded data.\n  WHY: There is no current failure path because neither list is mutated before the append, and the disproof check receives safe copies.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_claude_fixer_nonblocking.py:lines 1100-1107 (the demoted.append after the disproof check) | severity=NIT | confidence=2\n  PROBLEM: The demoted record is built from a `demotion_candidate` dict whose `entry` and `rejecters` values are the original list references, not copies. The per-reviewer block mutation between the disproof-check gate and `demoted.append({**demotion_candidate, \"moved\": moved})` does not currently mutate `entry` or `rejecters`, so there is no runtime bug today. The `{**demotion_candidate, ...}` unpacks shallow copies of the dict keys but the list values are still the same references.\n  WHY: No current failure path exists because `entry` and `rejecters` are not mutated between the candidate construction and the append. The risk is a future code reordering that inserts a mutation of either list before the append, which would silently capture already-mutated data in the demoted record. The disproof check itself receives safe copies (`list(entry)`, `list(rejecters)`) so that path is correct.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "89a9692e286a22370532646c02d97743ba6f12d9174090b669599d0a427fc102",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 5605,
+    "run_id": "36832092673",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "36832092673",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261001084556_ed5e26c865",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 5605,
+    "run_id": "36832092673"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-01T08:45:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

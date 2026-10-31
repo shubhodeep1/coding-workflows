@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:line ~4947 (base checkout) / ~4963 (after PR hunk insertions at line 2586) | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The partial-finalize timeout-extraction step runs `python3 -c` without `PYTHONSAFEPATH=1` while the working directory is the PR checkout.\n  WHY: A PR-controlled `yaml.py` could execute with the review job's API key and Git credentials when imported by this pre-isolation Python call.\n- scripts/review_run_reviewers.sh:line 60 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `WATCHDOG_HELPERS=\"${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh\"` retains the `:-scripts` fallback after the rest of the file removes relative-path fallbacks.\n  WHY: The current guard makes this harmless at runtime, but a future guard change or reordering could reintroduce relative-path behavior.\n- agents.md:the diff hunk around the \"AGENTS.md precedence\" -> \"local agents-file precedence\" rewrite inside the orchestrate.yml / orchestrate_clarify_respond.yml description paragraph. | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The last run includes an unrelated documentation wording change in a PR intended to ship Python isolation work.\n  WHY: The change widens the PR's review scope and could surprise operators reading `agents.md` about the isolation contract.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run Python import probes and other PR-tree preflight work in a credential-free sandbox with the PR tree treated as data\" and \"make every check that runs before isolation and executes Python or another interpreter while sitting in the PR checkout ignore the PR's files\"\n  expected_change_site: .github/workflows/review_autofix.yml, near the partial-finalize timeout-extraction step at ~line 4947\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: `.github/workflows/review_autofix.yml` has a `python3 -c` call at line 4947 that imports `yaml` and reads a PR-checkout workflow file; the PR diff does not touch that call.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:line ~4947 (base checkout) / ~4963 (after PR hunk insertions at line 2586) | severity=MAJOR | confidence=4\n  PROBLEM: The partial-finalize timeout-extraction step invokes `python3 -c` without `PYTHONSAFEPATH=1` while its working directory is the PR checkout.\n  WHY: A malicious PR author could add a `yaml.py` to the checkout and achieve arbitrary code execution with the review job's API key and Git credentials during the partial-finalize validation path.\n- scripts/review_run_reviewers.sh:line 60 | severity=NIT | confidence=2\n  PROBLEM: The `WATCHDOG_HELPERS=\"${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh\"` assignment retains a `:-scripts` default after the last_run_diff removes relative-path fallbacks elsewhere in the file.\n  WHY: The guard makes it harmless at runtime today, but a future edit that removes or reorders the guard could reintroduce relative-path behavior.\n- TASK_GAP\n  Requirement: \"Run Python import probes and other PR-tree preflight work in a credential-free sandbox with the PR tree treated as data\" and \"make every check that runs before isolation and executes Python or another interpreter while sitting in the PR checkout ignore the PR's files\" (from linked issue)\n  Expected change site: .github/workflows/review_autofix.yml, near the partial-finalize timeout-extraction step at ~line 4947\n  Evidence of absence: The PR diff covers two hunks in review_autofix.yml (the safe-path guard step and the resume_env_file heredoc). The `python3 -c` call at line 4947 that imports `yaml` and reads a PR-checkout workflow file is not touched. The original issue's auto-decision AD-1 chose \"Fix the root cause only: make every check that runs before isolation and executes Python while sitting in the PR checkout ignore the PR's files\" \u2014 this call is a pre-isolation Python invocation in the PR checkout that the PR does not protect.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:the diff hunk around the \"AGENTS.md precedence\" -> \"local agents-file precedence\" rewrite inside the orchestrate.yml / orchestrate_clarify_respond.yml description paragraph. | severity=NIT | confidence=3\n  PROBLEM: The last run perpetuates an unrelated documentation wording change that does not describe the Python isolation work the PR exists to ship.\n  WHY: Bundling scope-creep edits with a security fix makes the diff harder to review and risks surprising operators who read agents.md to understand the isolation contract.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "894df350774ec4720796383c8db7745fab4d279e5812d14776938208631306e2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6259,
+    "run_id": "37271092863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37271092863",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005065609_deebb1ef91",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6259,
+    "run_id": "37271092863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T06:56:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

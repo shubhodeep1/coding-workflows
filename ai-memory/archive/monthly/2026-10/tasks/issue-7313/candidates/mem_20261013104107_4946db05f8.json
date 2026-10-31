@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7313,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7313\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7315\",\"pr_number\":7315,\"branch\":\"ai/issue-7313\",\"run_id\":\"38382364465\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38382364465\",\"changed_files\":[\"agents.d/7126-noop-force-merge-trusted-evidence.md\",\"changelog.d/7126-noop-force-merge-trusted-evidence.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_noop_suspicious_recovery.py\"]}",
+  "fingerprint": "39f4b8e91de91eb59e7783200361779de3a317cbd5a718e5d16ae9565173a6fd",
+  "lineage": {
+    "issue_number": 7313,
+    "parent_ids": [],
+    "pr_number": 7315,
+    "run_id": "38382364465",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38382364465",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7315"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261013104107_4946db05f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7313,
+    "level": "run",
+    "pr_number": 7315,
+    "run_id": "38382364465"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7313: https://github.com/shubhodeep1/coding-workflows/pull/7315",
+  "timestamps": {
+    "created_at": "2026-10-13T10:41:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

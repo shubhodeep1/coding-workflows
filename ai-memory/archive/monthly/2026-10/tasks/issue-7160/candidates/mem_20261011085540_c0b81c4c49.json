@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Pick A. It closes the hole using data the workflow already has, with one `/user` read. The vulnerable branch is the `closed_unmerged` arm at `.github/workflows/issue_pr_status.yml:555-556`. Today it closes every issue that `extract_repo_scoped_issue_refs_from_text` or the closing references pull out of a same-repository PR (lines 360-381). Requiring all three of a same-repository head, an exact `ai/issue-<n>` head branch, and a PR author equal to the `GH_PAT` account stops an outside PR author from closing unrelated issues. Pipeline-created implementation PRs still close as before when they are abandoned.\n\nB is rejected because anyone who can push to the repository can create an `ai/issue-<n>` branch, so it is not a real binding. C would stop closing the issues of every PR opened before the change and adds a new marker contract. D changes behaviour that the stall and unblock machinery and the `ai:closed` lineage rely on.\n\nEXECUTION PLAN (required for any non-letter decision):\n(Not required: Q1 is a lettered decision. The implementation notes below are the binding interpretation of A.)\nQ1:\n  inputs:\n    - `.github/workflows/issue_pr_status.yml`, step \"Update linked issue labels when PR closes\" (env at lines 190-200, branch-issue parse at line 374, completion check at lines 554-571).\n  steps:\n    - Add to that step's `env:` `PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}` and `PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}`. These come from the event payload, so they cost no API call.\n    - Only when `PR_MERGED != true`, resolve the `GH_PAT` login once with `gh_retry gh api user --jq .login`. Cache it for the loop and fail closed if it is empty or the call errors.\n    - In the `PR_MERGED != true` arm, set `target_merge_reason=closed_unmerged` only when all four hold:\n      - `PR_HEAD_REPO == REPOSITORY`;\n      - `BRANCH_ISSUE_NUMBER == issue_number`, using the existing anchored `^ai/issue-([0-9]+)([-/].*)?$` parse;\n      - the login was resolved;\n      - `PR_AUTHOR_LOGIN` equals it.\n    - For every other issue on an unmerged close, `continue` before line 571. The issue's labels and state stay unchanged and it is not added to `LINEAGE_FINALIZE_ISSUE_NUMBERS`. Log the skip with a fixed reason token (`unbound_issue`, `foreign_head`, `author_mismatch` or `identity_unavailable`) and the issue/PR numbers, without printing PR text.\n    - Leave the merged-PR arms (lines 557-565) exactly as they are. Tracking-issue skipping (lines 531-534) also stays as is.\n    - Add a contract test covering: a bound pipeline PR is closed; an unrelated referenced issue on an unmerged close is untouched; a non-pipeline author is rejected; a fork or other-repo head is rejected; an unavailable identity is rejected. Each rejected issue must also be kept out of lineage finalization.\n    - Write a changelog fragment under `changelog.d/`. Write an `agents.d/` fragment that states the new unmerged-close binding rule.\n  reversibility: Changing a single predicate in the workflow restores the old behaviour. Issues this change leaves open are still covered by the poller's stall and unblock sweeps, so a wrong skip only delays a close.\n\nThe question shows a single lettered decision (A), so no ESCALATION or SETUP REQUIRED section applies.",
+  "fingerprint": "a2296fe2d728bee7aed57c486e7348db527e8ae61ff11cc176d5d02a6a1bfe04",
+  "lineage": {
+    "issue_number": 7160,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38125862386",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38125862386",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7160"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261011085540_c0b81c4c49",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7160,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38125862386"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7160",
+  "timestamps": {
+    "created_at": "2026-10-11T08:55:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

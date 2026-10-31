@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_post_editor_summary.sh:197-202 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The \"nothing committed\" sentinel regex `^- (none|commit skipped)([[:space:]]|$)` also matches a real committed-path line such as `- none notes.md`, because the commit step writes `- <path>` per file (scripts/review_commit_changes.sh:664-670, `printf -- '- %s\\n'`), so the script cannot tell the `- none` sentinel apart from such a path.\n  WHY: With a `not-edited` summary and a `sandbox-excluded path` bullet, the script appends the non-retryable `review_editor_sandbox_path_excluded` marker even though a file was committed, and the gate cap can block that head on the next dispatch; severity disagreement: google_gemini-3_1-flash-lite rated MAJOR (mapped to high), while minimax_minimax-m3, openai_gpt-6-luna and z-ai_glm-5_3-flash rated NIT (z-ai_glm-5_3-flash calls the trigger \"contrived but demonstrable\"); highest used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING (not a finding): scripts/review_autofix_step_post_editor_summary.sh line 202, `grep -q -v -E '^[[:space:]]*$|^- (none|commit skipped)([[:space:]]|$)'`\n  PROBLEM: The sentinel pattern also matches a committed-path line for a file whose name starts with \"none \" or \"commit skipped \" (`printf -- '- %s\\n'` in scripts/review_commit_changes.sh:668).\n  WHY: The reviewer judged the required preconditions too unlikely to report this as a defect; suggested fix is to match only the exact sentinel shapes `'^[[:space:]]*$|^- none$|^- none \\(edits withheld for safety: .*\\)$|^- commit skipped \\(.*\\)$'` (1 line changed). HARDENING_RISK_SCORE: 1\n- NOTE: The reviewer did not report the zero-byte-file concern because the changelog, the agents.d fragment and test_placeholder_committed_files_count_as_nothing_committed deliberately treat an empty file as nothing committed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_post_editor_summary.sh:197 | severity=MAJOR | confidence=4\n  PROBLEM: The regex for identifying an empty commit (grep -v -E '^[[:space:]]*$|^- (none|commit skipped)([[:space:]]|$)' ) incorrectly matches files named \"none...\" or \"commit skipped...\".\n  WHY: If a PR commits \"none notes.md\" and the editor summary reports \"not-edited\" with a \"sandbox-excluded path\" finding, the script wrongly writes the failure marker and can block a head that had a valid committed fix.\n- HARDENING: scripts/review_autofix_step_post_editor_summary.sh:196\n  PROBLEM: If COMMITTED_FILES_FILE is empty, the \"nothing committed\" grep check might behave unexpectedly depending on whether the file exists and is readable.\n  WHY: The suggested fix is `[ -s \"${COMMITTED_FILES_FILE}\" ] && [ -r \"${COMMITTED_FILES_FILE}\" ] && ! grep ...`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_autofix_step_post_editor_summary.sh:line ~201 \u2014 `! grep -q -v -E '^[[:space:]]*$|^- (none|commit skipped)([[:space:]]|$)' \"${COMMITTED_FILES_FILE}\"` | severity=NIT | confidence=4\n  PROBLEM: The sentinel regex matches any committed-path line that starts with `none ` (e.g. `none notes.md`, `none file.py`), so `- none notes.md` is classified as a \"nothing committed\" placeholder.\n  WHY: With a contradictory \"not-edited\" claim and a `sandbox-excluded path` bullet, the step silently treats the line as `- none`, appends the non-retryable marker, and routes the run through the gate cap on the next dispatch.\n- HARDENING: scripts/review_autofix_step_post_editor_summary.sh positive-evidence guard around line 201 (`sandbox_excluded_nothing_committed` block)\n  PROBLEM: An empty `COMMITTED_FILES_FILE` is classified as \"nothing committed\", although the issue spec says unset or missing means \"unknown, no marker\".\n  WHY: The suggested fix is to add `-s \"${COMMITTED_FILES_FILE}\"` to the condition and to drop the empty-string case from the parametrize list of `test_placeholder_committed_files_count_as_nothing_committed` in `tests/test_review_editor_sandbox_excluded_escalation.py` (~1 line of shell plus 1 test line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_post_editor_summary.sh:201-202 | severity=NIT | confidence=4\n  PROBLEM: The committed-file check treats any manifest line beginning `- none ` as a no-commit sentinel, while the commit script records committed paths as `- <path>`, so a committed file named `none notes.md` passes the check.\n  WHY: If the summary says `not-edited` and also reports a `sandbox-excluded path` finding, this false no-commit result appends the non-retryable marker, and the next dispatch caps that head as though the editor made no change.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_autofix_step_post_editor_summary.sh:lines 201-202 (`grep -q -v -E '^[[:space:]]*$|^- (none|commit skipped)([[:space:]]|$)' \"${COMMITTED_FILES_FILE}\"`) | severity=NIT | confidence=4\n  PROBLEM: Committed paths are written as one `- <path>` line per file (scripts/review_commit_changes.sh:664-670, `printf -- '- %s\\n'`), so `- none notes.md` matches the sentinel regex and `sandbox_excluded_nothing_committed` is set to 1 even though a file was committed.\n  WHY: The grep cannot tell `- none` (the marker written at review_commit_changes.sh:151/529) from a path that starts with `none `, so a non-retryable `review_editor_sandbox_path_excluded` marker can block a head that did receive a committed edit; the reviewer calls the trigger contrived but demonstrable.\n- HARDENING: scripts/review_autofix_step_post_editor_summary.sh lines 201-202 (COMMITTED_FILES_FILE evidence check)\n  PROBLEM: A zero-byte COMMITTED_FILES_FILE counts as \"nothing committed\", while an unset or missing file is treated as unknown with no marker; the commit step never intentionally writes an empty file.\n  WHY: The suggested fix is to add `-s \"${COMMITTED_FILES_FILE}\"`, plus a `None` committed case in tests/test_review_editor_sandbox_excluded_escalation.py (estimated 1 line changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "96407682e8652944e947fbadfbc72776a98e78d65df97ed6c8463598b3a1ba69",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8326,
+    "run_id": "40827483727",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40827483727",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029064259_069c9638b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8326,
+    "run_id": "40827483727"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T06:42:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

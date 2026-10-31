@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:Line 28386 (Gate D integration) | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Gate D can skip verifying that the named required CI check passed when `AUTO_MERGE_REQUIRED_CI_CHECK` is unset in consumer repositories.\n  WHY: The reviewer reports that `orchestrate_poll.yml` does not export this variable, so the named-check requirement resolves to none and a PR may be merged before its required CI completes or if it fails.\n- scripts/orchestrate_poll_process.sh:Various | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Head commit SHA validation is inconsistent: some paths require a 40-character lowercase hexadecimal SHA while others only check for null or empty values.\n  WHY: Invalid SHA strings may be accepted by some paths and rejected by others, leading to unexpected merge behavior.\n- scripts/orchestrate_poll_process.sh:Various | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Different merge paths use inconsistent variable names for the head commit SHA.\n  WHY: This is not a functional bug, but the inconsistency increases the risk of maintenance bugs during future refactoring.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cA head whose required CI (`lint`) is queued, still running, or not yet registered\u201d must not pass Gate D.\n  expected_change_site: `.github/workflows/orchestrate_poll.yml`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: `orchestrate_poll.yml` does not export `AUTO_MERGE_REQUIRED_CI_CHECK` or `AUTO_MERGE_WAIT_WORKFLOWS`; the poller workflow file is not modified by this PR; the agents.md fragment documents that `orchestrate_poll.yml` does not forward `AUTO_MERGE_REQUIRED_CI_CHECK`, so consumers have no named-check requirement.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:Line 28386 (Gate D integration) | confidence=5\n  PROBLEM: The implementation of Gate D relies on AUTO_MERGE_REQUIRED_CI_CHECK to identify the required CI check (e.g., \"lint\"). Since this variable is not exported in orchestrate_poll.yml, the check will resolve to none in consumer repositories, causing _pr_wait_for_required_checks to skip verifying that the named CI check has passed.\n  WHY: PRs may be force-merged before required CI completes or if it fails, violating the requirement to prevent premature merges.\n- scripts/orchestrate_poll_process.sh:Various | confidence=3\n  PROBLEM: The head binding check uses inconsistent SHA format validation. Some paths use a regex check [[ \"${N_HEAD_SHA}\" =~ ^[0-9a-f]{40}$ ]], while other paths throughout the script rely on checking for null or empty strings.\n  WHY: Inconsistent behavior where some checks might permit invalid SHA strings while others reject them, leading to unexpected merge behavior.\n- scripts/orchestrate_poll_process.sh:Various | confidence=4\n  PROBLEM: Inconsistent variable names for the head commit SHA are used across the different merge paths (e.g., N_HEAD_SHA, _pw_head_sha, _rtm_head_sha, _rb_merge_sha).\n  WHY: While not a functional bug, this inconsistency significantly increases the risk of maintenance bugs when refactoring these paths in the future.\n- Requirement: \u201cA head whose required CI (lint) is queued, still running, or not yet registered\u201d must not pass Gate D.\n  Expected change site: .github/workflows/orchestrate_poll.yml\n  Evidence of absence: orchestrate_poll.yml does not export AUTO_MERGE_REQUIRED_CI_CHECK or AUTO_MERGE_WAIT_WORKFLOWS. For consumer repositories, the check will not wait properly, leading to potential premature merges.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"A head whose required CI (`lint`) is queued, still running, or not yet registered\" must not pass Gate D.\n  Expected change site: `.github/workflows/orchestrate_poll.yml` (forward `AUTO_MERGE_REQUIRED_CI_CHECK` / `AUTO_MERGE_WAIT_WORKFLOWS` into the poller)\n  Evidence of absence: The poller workflow file is not modified by this PR; the agents.md fragment explicitly documents the consumer-repo limitation: \"orchestrate_poll.yml does not forward `AUTO_MERGE_REQUIRED_CI_CHECK`, so in consumers no named check is required there.\" The implementer's editor summary (entry[1] in the PR comments, wrapped in the inlined UNTRUSTED fence) records this as `TASK_GAP_DEFERRED: wiring the variables needs a workflow change`. So in consumer repos `_pr_auto_merge_required_ci_check_name` resolves to `none`, the named CI check requirement is off, and `_pr_head_ci_runs_pending` may not bind the consumer's actual CI workflow name to the head \u2014 a check can register and pass while the consumer's CI workflow run is still queued, allowing `gh pr merge --auto --match-head-commit` to land before CI finishes on an unprotected base.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"A head whose required CI (`lint`) is queued, still running, or not yet registered\" must not pass Gate D in consumer repositories.\n  Expected change site: `.github/workflows/orchestrate_poll.yml`\n  Evidence of absence: The workflow does not export `AUTO_MERGE_REQUIRED_CI_CHECK` or `AUTO_MERGE_WAIT_WORKFLOWS`. However, this is out of scope for the current PR's `files_touched` grant, the behavior is not a regression (consumers had no named-check requirement before), and the editor documented the limitation. The in-repo poller already defaults the named check to `lint` for `main`/`stable`/`orchestrator/project-*` bases via the helper.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6158ec3b560432368d6c38c6fc4fecb143bb2f3886e903ad80b9cf84ba9cca21",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7315,
+    "run_id": "38388509125",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38388509125",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013113729_265da9969c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7315,
+    "run_id": "38388509125"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T11:37:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

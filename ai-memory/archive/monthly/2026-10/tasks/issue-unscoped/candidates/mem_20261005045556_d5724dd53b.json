@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_audit_plans_command.py:29-30 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The root `.claude/commands/audit-plans.md` and workflow-template copy differ, causing the byte-for-byte parity assertion to fail.\n  WHY: The parity test fails, causing `tests-hooks-and-orchestrator` and the aggregate `lint` check to fail; reviewers classified this as BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The root `.claude/commands/audit-plans.md` must be synced with `workflow-templates/.claude/commands/audit-plans.md` so the byte-for-byte parity test passes.\n  expected_change_site: .claude/commands/audit-plans.md\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: `tests/test_audit_plans_command.py:29-30` asserts the files are byte-identical; neither command file appears in PR CHANGED FILES; the root copy has pre-retirement wording while the template copy has post-retirement wording; `.claude/commands/` is excluded from the editor transfer allowlist.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/audit-plans.md | severity=BLOCKER | confidence=5\n  PROBLEM: The root copy at `.claude/commands/audit-plans.md` was not updated in lockstep with the workflow-template copy, so the byte-for-byte parity assertion fails.\n  WHY: CI run 37258084636 shows `test_template_parity` failing, causing the `tests-hooks-and-orchestrator` CI job and aggregate lint check to fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_audit_plans_command.py:lines 29-30 | severity=BLOCKER | confidence=5\n  PROBLEM: The root `.claude/commands/audit-plans.md` command and its workflow-template copy differ, causing the byte-for-byte parity assertion to fail.\n  WHY: The parity check fails at CI time, causing `tests-hooks-and-orchestrator` and aggregate `lint` to fail, preventing merge.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_audit_plans_command.py:29-30, byte-for-byte parity assertion | severity=BLOCKER | confidence=5\n  PROBLEM: The root `audit-plans.md` command and its workflow-template copy differ.\n  WHY: `test_template_parity` fails, causing `tests-hooks-and-orchestrator` and the aggregate `lint` check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The root `.claude/commands/audit-plans.md` was not updated to match the template wording changes in this PR.\n  Expected change site: `.claude/commands/audit-plans.md`\n  Evidence of absence: CI failure in `tests-hooks-and-orchestrator` (`test_audit_plans_command.py::test_template_parity`) remains unresolved; `.claude/commands/` is excluded from the editor transfer allowlist (`scripts/review_untrusted_workspace.py:34-44`); the editor cannot deliver the fix from its workspace and it requires a direct commit to the root command file outside the review/autofix editor path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: The PR description under \"Tests (G4)\" states: \"test_audit_plans_command::test_template_parity also fails on main.\"\n  Expected change site: .claude/commands/audit-plans.md (sync from workflow-templates/.claude/commands/audit-plans.md)\n  Evidence of absence: Neither .claude/commands/audit-plans.md nor workflow-templates/.claude/commands/audit-plans.md appears in PR CHANGED FILES; the root copy still has the pre-retirement wording while the template copy has the post-retirement \"legacy\" wording; no diff hunk in this PR brings them into parity; the `lint` required check is red on the PR head SHA 431945b.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "76a7f89738bf4852253adebbcdf558b35b1c6ff7f0c6e914a24c1f87593914bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37262156569",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37262156569",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005045556_d5724dd53b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37262156569"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T04:55:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

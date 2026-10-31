@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automatically reject judge changes outside verified conflict or repair paths.\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh`, in `_integration_judge_verify_scope`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: The verifier records conflicted paths in baseline_dir/conflicted.z and removes only those paths when comparing baseline_tree against post_tree (scripts/orchestrate_poll_process.sh:8809-8822); the protected-path provenance check (scripts/orchestrate_poll_process.sh:8839-8893) restricts every line in the resolution to appear in side 2 or side 3 of the conflict metadata, never in a separately verified \"repair path\" allowlist; no source or allowlist for separately verified repair paths is defined. Severity disagreement: major and nit; using the highest severity.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Automatically reject judge changes outside verified conflict or repair paths.\"\n  Expected change site: scripts/orchestrate_poll_process.sh \u2014 _integration_judge_verify_scope (the protected-path branch at scripts/orchestrate_poll_process.sh:8843-8893) and the prompt instructions at scripts/orchestrate_poll_process.sh:8682-8685.\n  Evidence of absence: The verifier records conflicted paths in baseline_dir/conflicted.z and removes only those paths when comparing baseline_tree against post_tree (scripts/orchestrate_poll_process.sh:8809-8822). The protected-path provenance check (scripts/orchestrate_poll_process.sh:8839-8893) restricts every line in the resolution to appear in side 2 or side 3 of the conflict metadata, never in a separately verified \"repair path\" allowlist. The judge prompt reinforces the same one-sided contract: \"Changes to other paths, or lines in conflicted .github/workflows/ or .github/actions/ files that come from neither side, reject the resolution without a push.\" No code path exists that would let a known-good non-conflict path be edited by the judge and accepted, so the implementation covers \"verified conflict paths\" but leaves \"or repair paths\" unaddressed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAutomatically reject judge changes outside verified conflict or repair paths.\u201d\n  Expected change site: `scripts/orchestrate_poll_process.sh`, in `invoke_judge_for_integration_conflict` and `_integration_judge_verify_scope`.\n  Evidence of absence: The PR captures and authorizes conflicted paths, then rejects staged changes outside them. It defines no source or allowlist for separately verified repair paths, so the requested repair-path category is not implemented.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Automatically reject judge changes outside verified conflict or repair paths.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`, in `_integration_judge_verify_scope`\n  Evidence of absence: The scope verifier records only conflicted paths in `conflicted.z` and rejects every change outside those paths. It defines no source or allowlist for separately verified repair paths. The editor deferred this gap: \"The judge has no verified non-conflict repair-path source. Allowing one without verification would weaken the scope guard.\" This is a reasonable deferral \u2014 the current judge flow has no verified repair-path mechanism \u2014 but the implementation covers only conflict paths, not the \"conflict or repair paths\" category named in the recommendation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: \"Automatically reject judge changes outside verified conflict or repair paths.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, in _integration_judge_verify_scope\n  Evidence of absence: The verifier captures only conflicted paths in conflicted.z and rejects all tree differences outside them. No allowlist or source for separately verified \"repair paths\" is defined. However, the integration-conflict judge flow has no verified repair-path source \u2014 the judge only resolves merge conflicts, and the editor's PR comments document that adding an unverified repair-path allowlist would weaken the guard. The recommendation's \"repair paths\" category does not apply to this judge flow, so restricting to conflict paths is the correct safe default.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "48a9b95e0f0cc1c0b8269ef1eae2ea07f54464f25bf612802e46ba8dbc339cf1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6261,
+    "run_id": "37255057643",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37255057643",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005031334_26d88d68bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6261,
+    "run_id": "37255057643"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T03:13:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

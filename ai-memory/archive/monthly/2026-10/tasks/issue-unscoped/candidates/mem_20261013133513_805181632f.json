@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_claude_engine_utility_roles.py:422 | severity=critical | confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The contract assertion expects two `AI_ENGINE_ACTIVATION_VERIFY` mappings, but the workflow now contains three.\n  WHY: The test fails with `assert 3 == 2`, leaving the CI check red.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Rerun the two failing contract tests; do not relax their assertions.\" The approved scope aligns the sweep env with the full poller so the workflow contract test passes.\n  expected_change_site: tests/test_claude_engine_utility_roles.py:422\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The PR diff and the last-run diff change only `.github/workflows/orchestrate_poll.yml` and the changelog. The last autofix run edited other tests and the broker, but not this assertion. CI still shows the failure.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_claude_engine_utility_roles.py:422 | severity=critical | confidence=5\n  PROBLEM: This PR adds the mapping at `.github/workflows/orchestrate_poll.yml:1132`, in the standalone sweep step. The file now has three occurrences, at lines 799, 950 and 1132. The test still pins the count at two.\n  WHY: The `tests-hooks-and-orchestrator` job on this head fails with `assert 3 == 2` at this line, and the PR's CI stays red. The workflow change is what issue #7318 asks for, because the sweep step must match the full poller. The stale pin should be raised to 3 rather than the workflow edit dropped. Raising it keeps the assertion strict and relaxes nothing. `tests/**` is inside the issue's `files_touched` grant.\n\n- Requirement: \"Rerun the two failing contract tests; do not relax their assertions.\" The approved scope aligns the sweep env with the full poller so the workflow contract test passes.\n  Expected change site: tests/test_claude_engine_utility_roles.py:422, updating the expected count from 2 to 3.\n  Evidence of absence: The PR diff and the last-run diff change only `.github/workflows/orchestrate_poll.yml` and the changelog. The last autofix run edited other tests and the broker, but not this assertion. CI still shows the failure.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_claude_engine_utility_roles.py:422 | severity=critical | confidence=5\n  PROBLEM: The hard-coded count assertion was not updated after this PR added a third occurrence of `AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}` to the standalone sweep step at `.github/workflows/orchestrate_poll.yml:1132`. The two pre-existing occurrences live at `.github/workflows/orchestrate_poll.yml:799` and `.github/workflows/orchestrate_poll.yml:950`. The `files_touched:` allowlist in issue #7318 already covers `tests/**`, so updating the assertion is in-scope.\n  WHY: `tests-hooks-and-orchestrator` fails the contract test `test_activation_verify_job_adds_no_permissions_and_poller_resolves_the_role` with `assert 3 == 2` at `tests/test_claude_engine_utility_roles.py:422` (run 38403493985, log_tail confirms), leaving the PR's CI check red and defeating the whole purpose of the fix.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_claude_engine_utility_roles.py:422 | severity=critical | confidence=5\n  PROBLEM: The contract assertion was not updated for the additional mapping.\n  WHY: The `test_activation_verify_job_adds_no_permissions_and_poller_resolves_the_role` test fails with `assert 3 == 2`, leaving the CI check red.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2e34ebd49a8b96e7508b2755d0862b99dd42d63dfd073fc8d1d631afd4e01d5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7319,
+    "run_id": "38403494688",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38403494688",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261013133513_805181632f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7319,
+    "run_id": "38403494688"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-13T13:35:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

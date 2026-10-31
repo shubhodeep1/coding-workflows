@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:657 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `\"[Orchestrator] E2E \"*` pattern classifies ordinary orchestrator projects whose titles begin with `[Orchestrator] E2E ` as smoke fixtures.\n  WHY: Matching projects are added to `SMOKE_FIXTURE_TRACKING_NUMS`, causing their project alerts, including CRITICAL alerts, to be silently suppressed.\n- scripts/orchestrate_poll_process.sh:657 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `\"[Orchestrator] [E2E \"*` pattern classifies ordinary orchestrator projects whose titles begin with `[Orchestrator] [E2E ` as smoke fixtures.\n  WHY: Matching projects are added to `SMOKE_FIXTURE_TRACKING_NUMS`, causing their project-scoped Telegram alerts to be suppressed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description and README 12e: \"Real projects are unaffected. ... The release workflows already silence their own sends with ALERT_MSG_LEVEL=SILENT, which the scheduled poller does not inherit; project #7017 (release run 38010697715) paged CRITICAL when the gate closed its fixture PR while a poll was processing it.\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh:657` and `tests/test_smoke_alert_silencing_contract.py::test_poller_does_not_treat_real_projects_as_smoke`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The added title `[Orchestrator] Add [E2E tests] for payments` (last run) places the word \"Add\" between the orchestrator prefix and `[E2E`, so it matches none of the three anchored patterns \u2014 it exercises no false-positive path. There is no assertion covering `[Orchestrator] E2E tests for checkout` (would false-positive on the third pattern), nor `[Orchestrator] [E2E tests] for payments` without \"Add\" (would false-positive on the second pattern).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:657 | severity=high | confidence=4\n  PROBLEM: The case pattern \"[Orchestrator] E2E \"*) in tracking_issue_is_smoke_fixture classifies any orchestrator project whose title starts with E2E as a smoke fixture.\n  WHY: The poller builds SMOKE_FIXTURE_TRACKING_NUMS from all tracking issues matching this function. When a real project matches, its TRACKING_NUM enters the silenced set. tg_notify returns without sending, and the five guarded tg_send_msg sites skip their sends. The project still processes through the state machine, but no operator receives its alerts.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:657 | severity=high | confidence=4\n  PROBLEM: The regex `\"[Orchestrator] E2E \"*` is too broad and incorrectly classifies ordinary E2E test projects as smoke fixtures, silencing their alerts.\n  WHY: A real project with a title such as `[Orchestrator] E2E tests for checkout` will match this pattern and be incorrectly identified as a smoke fixture, causing its CRITICAL alerts to be silenced.\n- tests/test_smoke_alert_silencing_contract.py:around line 411\n  HARDENING_SUGGESTION: Add `\"[Orchestrator] [E2E tests] for payments\"` (without \"Add\") to the `for title in (...)` loop in `test_poller_does_not_treat_real_projects_as_smoke`, to explicitly verify that this fixture-like pattern is not incorrectly caught if the intent is to only catch the actual fixture titles.\n  HARDENING_RISK_SCORE: 1\n  Estimated lines changed: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:line 657, the `case \"${title}\"` arm `\"[Orchestrator] E2E \"*)` | severity=high | confidence=5\n  PROBLEM: The third anchored pattern `\"[Orchestrator] E2E \"*` matches any orchestrator tracking issue whose model-written `project_title` starts with `E2E ` (after the orchestrator prefix).\n  WHY: When it returns 0 for a real orchestrator project, its CRITICAL alerts are silently dropped.\n- scripts/orchestrate_poll_process.sh:line 657, the `case \"${title}\"` arm `\"[Orchestrator] [E2E \"*)` | severity=high | confidence=4\n  PROBLEM: The second anchored pattern `\"[Orchestrator] [E2E \"*` matches an orchestrator tracking issue whose user-written title (after the `[Orchestrator] ` prefix) starts with `[E2E ` directly.\n  WHY: The title arm returns 0, the tracking issue is added to `SMOKE_FIXTURE_TRACKING_NUMS`, and `_smoke_fixture_alert_silenced` suppresses the project-scoped Telegram sends.\n- TASK_GAP\n  Requirement: PR description and README 12e: \"Real projects are unaffected. ... The release workflows already silence their own sends with ALERT_MSG_LEVEL=SILENT, which the scheduled poller does not inherit; project #7017 (release run 38010697715) paged CRITICAL when the gate closed its fixture PR while a poll was processing it.\" The corresponding `tests/test_smoke_alert_silencing_contract.py::test_poller_does_not_treat_real_projects_as_smoke` is supposed to pin this.\n  Expected change site: The `case` arm at `scripts/orchestrate_poll_process.sh:657` plus the assertion list in `tests/test_smoke_alert_silencing_contract.py::test_poller_does_not_treat_real_projects_as_smoke` (the loop that lists real-project titles that must not be silenced).\n  Evidence of absence: The added title `[Orchestrator] Add [E2E tests] for payments` (last run) places the word \"Add\" between the orchestrator prefix and `[E2E`, so it matches none of the three anchored patterns \u2014 it exercises no false-positive path. There is no assertion covering `[Orchestrator] E2E tests for checkout` (would false-positive on the third pattern), nor `[Orchestrator] [E2E tests] for payments` without \"Add\" (would false-positive on the second pattern). The test name advertises the guarantee, but the assertions do not actually pin it. If the contract were tight, the missing cases would surface the false-positive patterns above as test failures; today they would pass with the bug intact.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:657, case pattern `\"[Orchestrator] E2E \"*` | severity=high | confidence=5\n  PROBLEM: The detector classifies every orchestrator project whose title begins with `[Orchestrator] E2E ` as a smoke fixture.\n  WHY: An ordinary project titled `E2E tests for checkout` therefore matches this pattern, is added to `SMOKE_FIXTURE_TRACKING_NUMS`, and has its project alerts, including CRITICAL alerts, suppressed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "1877d78b81d25f4dcb773a0888043aaf80fa08060129f56828e47636c069d185",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7031,
+    "run_id": "38031959667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38031959667",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261010073542_b91264491e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7031,
+    "run_id": "38031959667"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-10T07:35:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

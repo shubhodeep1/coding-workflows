@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:2192-2194 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The header comment of the `# BEGIN validation owner routing` block still says an invalid `VALIDATION_HARNESS_HEAL_ENABLED` value turns owner routing off, but `validation_owner_enabled()` now warns and returns 0, so routing stays on.\n  WHY: An operator reading the only description of the kill-switch contract would expect routing to be off when it stays on. All reviewers rated this NIT. Gemini cited the range as lines 2179-2184.\n- scripts/validate_process.sh:2211-2226 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `VALIDATION_OWNER_SWITCH_WARNED` \"warn once\" guard is lost when `validation_owner_enabled` first runs inside a `$(...)` command substitution, such as `validation_owner_comment_marker` at line 2745. The `invalid_switch` warning is then printed again by the next direct call, such as `write_result_files` at line 2784.\n  WHY: A subshell assignment does not propagate to the parent shell, so the warning is duplicated within one run. Other reviewers raised the same mechanism only as a hardening suggestion, not as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/validate_process.sh:2192-2194 (header comment) vs validation_owner_enabled (~2211-2226) | severity=NIT | confidence=5\n  PROBLEM: The comment still says an invalid `VALIDATION_HARNESS_HEAL_ENABLED` value turns owner routing off, but the code now warns and keeps routing on.\n  WHY: Nothing fails at runtime, but the comment misdescribes the switch contract.\n- HARDENING_SUGGESTIONS: scripts/validate_process.sh `validation_owner_enabled` / `VALIDATION_OWNER_SWITCH_WARNED` (~2221-2224). The warned flag is lost in `$(...)` subshells, so the warning repeats. Suggested fix: use a sentinel file under `RUNTIME_DIR`. About 3-4 lines. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validate_process.sh:2179-2184 (# BEGIN validation owner routing header comment) | severity=NIT | confidence=5\n  PROBLEM: The header comment says an invalid `VALIDATION_HARNESS_HEAL_ENABLED` value turns owner routing off.\n  WHY: The code now warns and stays enabled (return 0), so the comment may mislead operators.\n- HARDENING_SUGGESTIONS: scripts/validate_process.sh `validation_owner_enabled()` / `VALIDATION_OWNER_SWITCH_WARNED` (2221-2224). The warning guard is lost in subshells, which can spam the log. Suggested fix: resolve the switch once into `_VALIDATION_OWNER_ENABLED`. About 8 lines. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validate_process.sh:2211-2226, 2495-2498, 2745, 2784 | severity=NIT | confidence=5\n  PROBLEM: The \"warn once\" guard is lost when the first `validation_owner_enabled` call happens inside a command substitution, because a subshell assignment to `VALIDATION_OWNER_SWITCH_WARNED` does not propagate to the parent shell.\n  WHY: In `fail_validate_codex_phase` the line 2745 substitution warns in a subshell, then `write_result_files` at line 2784 (via `validation_owner_merge_fields`) prints the same `invalid_switch` warning again.\n- scripts/validate_process.sh:2192-2194 vs 2211-2226 | severity=NIT | confidence=5\n  PROBLEM: The header comment still says anything else is off with a warning, but the code now warns and leaves routing ON, matching the poller at `scripts/orchestrate_poll_process.sh:2467-2474`.\n  WHY: A declared-vs-effective gap on the kill switch. An operator setting `VALIDATION_HARNESS_HEAL_ENABLED=1` or `0` would expect routing off but get it on.\n- HARDENING_SUGGESTIONS:\n  - scripts/validate_process.sh `validation_owner_load_bounced`, lines 2301-2308. Under `set -euo pipefail`, a jq failure empties the bounce-fingerprint file, but the `validation_harness_bounced_loaded` sentinel is still written unconditionally. The failed parse is memoised and never retried. Suggested fix: skip the sentinel and clear the file when the parse fails. About 4 lines.\n  - scripts/validate_process.sh `validation_owner_enabled` (2211-2226) / `validation_owner_comment_marker` (2495-2498). The switch is re-parsed on every call and the warned state does not survive a command substitution. Suggested fix: compute `VALIDATION_OWNER_ENABLED` once at block load. About 8 lines.\n  - HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validate_process.sh:2192-2194; validation_owner_enabled() at 2211-2225 | severity=NIT | confidence=5\n  PROBLEM: The documented switch contract says invalid values disable owner routing, but the function warns and returns success, leaving routing enabled.\n  WHY: An operator setting `VALIDATION_HARNESS_HEAL_ENABLED=1` expecting off behavior still gets failure classification and owner-routing fields.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/validate_process.sh:2192-2194 (header comment of `# BEGIN validation owner routing`) | severity=NIT | confidence=5\n  PROBLEM: The header comment says \"anything else is off with a warning\", but `validation_owner_enabled()` (2211-2226) now warns once and returns 0, leaving routing on.\n  WHY: There is no runtime failure, since the code matches the poller (`scripts/orchestrate_poll_process.sh:2467-2474`) and the new test. An operator reading the comment would still conclude `VALIDATION_HARNESS_HEAL_ENABLED=1` disables routing.\n- HARDENING_SUGGESTIONS: scripts/validate_process.sh `validation_owner_enabled()` (2211-2226), called from `validation_owner_comment_marker()` (line 2497) and `validation_owner_ruled_out_block()` (line 2540). The `VALIDATION_OWNER_SWITCH_WARNED` flag is lost in `$(...)` subshells, so the warning repeats. Suggested fix: a file-based sentinel via `validation_owner_runtime_file validation_owner_switch_warned`. About 3 lines. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "40a0c69991467842a9e84ea2f8cc95a42cb1c1025b202eec641315b8eaafb2e4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7959,
+    "run_id": "39957783022",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39957783022",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023133636_67385a784d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7959,
+    "run_id": "39957783022"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T13:36:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
