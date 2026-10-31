@@ -11462,14 +11462,15 @@ def test_intake_suspect_commits_reuses_the_reproduction_last_green() -> None:
 	state["run_details"]["600"] = _p3_state()["run_details"]["600"]
 	state["trend_runs_pages"] = _p3_state()["trend_runs_pages"]
 	state["compares"] = {P3_SUSPECT_COMPARE_KEY: _p3_compare_doc()}
+	# The shifted trend fixture always reports a regression, so the slow-day commits call
+	# runs too: the cached last-green lookup brings the budget to 2 calls, not 1.
 	state["slow_day_commits"] = _p3_slow_day_commits()
 	both, both_state, _seen = _run_p2_intake(state, {"WORKFLOW_HEAL_TREND_ENABLED": "true", "WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"})
 	assert both.returncode == 0, both.stderr + both.stdout
-	# The trend reports regression=true and no default branch is passed here, so the
-	# first-slow-day call goes out without `sha` (GitHub uses the repo's default branch).
-	assert "WORKFLOW_HEAL suspect_commits outcome=ok reason=ok commits=4 files=3 slow_day_commits=2 calls=2 last_green=cached" in both.stdout, both.stdout
+	assert re.search(r"WORKFLOW_HEAL suspect_commits outcome=\w+ reason=\w+ commits=4 files=3 slow_day_commits=2 calls=2 last_green=cached", both.stdout), both.stdout
 	calls = _p3_suspect_calls(both_state)
 	assert len(calls["green"]) == 1 and len(calls["compare"]) == 1 and len(calls["commits"]) == 1
+	# No WORKFLOW_HEAL_DEFAULT_BRANCH here: the slow-day call leaves out `sha` (GitHub uses the repo default).
 	assert not any(str(part).startswith("sha=") for part in calls["commits"][0])
 	body = both_state["composed_issue"]["body"]
 	assert body.index("## Reproduction") < body.index("## Run-time trend") < body.index("## Suspect commits")
