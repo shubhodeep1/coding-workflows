@@ -5024,7 +5024,8 @@ def test_nothing_to_implement_close_keeps_the_resume_otherwise(tmp_path: Path, c
 	result, state = _judge(tmp_path, item, comments=comments, issues=MERGED_FIXUP, **env)
 	assert "op=nothing_to_implement" not in result.stdout, result.stdout
 	assert "fixup=50 outcome=followup" in result.stdout, result.stdout + result.stderr
-	assert any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
+	resume = "/approved" if case == "newer_plan" else "/answer"
+	assert any(comment["body"].startswith(resume) for comment in state["comments"]), state["comments"]
 	assert not _closed_completed(state)
 
 
