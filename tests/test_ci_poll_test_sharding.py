@@ -986,6 +986,7 @@ MERGE_TRAIN_SMALL_MODULES = (
 	"tests/test_gh_retry_permanent_auth_failures.py",
 	"tests/test_gh_api_retry.py",
 	"tests/test_gh_api_retry_py.py",
+	"tests/test_gh_retry_final_stderr_redaction.py",
 )
 MERGE_TRAIN_AWK_RE = re.compile(
 	r"""awk -v n="\$\{mt_shard\}" -v total="\$\{mt_shards\}" '(?P<expr>[^']+)'"""

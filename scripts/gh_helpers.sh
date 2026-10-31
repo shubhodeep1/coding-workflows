@@ -164,6 +164,39 @@ _gh_actions_escape()
 }
 
 # ---------------------------------------------------------------
+# _gh_final_stderr_excerpt — print a bounded excerpt of a stderr
+# capture file for the final-failure line of gh_retry,
+# gh_retry_to_file and gh_api_json_to_file (SEC-001, follow-up to
+# issue #8095).
+#
+# Those paths used to `cat` the raw stderr after their `failed
+# after N attempts` annotation: unbounded, and a line starting
+# with `::` was read as a workflow command. Callers now wrap this
+# helper's output in _gh_actions_escape and print it as a single
+# `::warning::  stderr: ...` line.
+#
+#   * at most the first 2048 bytes are printed;
+#   * NUL bytes are stripped so the caller's $(...) does not make
+#     bash print an unescaped "ignored null byte" warning;
+#   * the fixed suffix " [truncated]" is appended when cut.
+#
+# Logging only: always returns 0 (fail-open). The cap is a local
+# literal on purpose, not an env var or global.
+# ---------------------------------------------------------------
+_gh_final_stderr_excerpt()
+{
+	local _gfse_file="$1"
+	local _gfse_cap=2048
+	local _gfse_bytes
+	_gfse_bytes="$({ wc -c < "${_gfse_file}"; } 2>/dev/null | tr -d '[:space:]' || true)"
+	head -c "${_gfse_cap}" "${_gfse_file}" 2>/dev/null | tr -d '\000' || true
+	if [[ "${_gfse_bytes}" =~ ^[0-9]+$ ]] && [ "${_gfse_bytes}" -gt "${_gfse_cap}" ]; then
+		printf '%s' ' [truncated]'
+	fi
+	return 0
+}
+
+# ---------------------------------------------------------------
 # _is_gh_permanent_failure — detect deterministic, non-retryable
 # failures that no amount of retrying will fix.
 #
@@ -1235,7 +1268,7 @@ gh_retry()
 	fi
 	echo "::error::gh command failed after ${max_attempts} attempts: $(_gh_cmd_log_summary "$@")" >&2
 	if [ -s "${stderr_file}" ]; then
-		cat "${stderr_file}" >&2
+		echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${stderr_file}")")" >&2
 	fi
 	rm -f "${stderr_file}" "${stdout_file}"
 	return 1
@@ -1318,7 +1351,7 @@ gh_retry_to_file()
 
 	echo "::error::gh command failed after ${max_attempts} attempts: $(_gh_cmd_log_summary "$@")" >&2
 	if [ -s "${stderr_file}" ]; then
-		cat "${stderr_file}" >&2
+		echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${stderr_file}")")" >&2
 	fi
 	rm -f "${stderr_file}" "${attempt_file}"
 	: > "${outfile}" 2>/dev/null || true
@@ -1441,7 +1474,7 @@ gh_api_json_to_file()
 
 	echo "::error::gh api failed to return valid JSON after ${max_attempts} attempts: $(_gh_cmd_log_summary "$@")" >&2
 	if [ -s "${stderr_file}" ]; then
-		cat "${stderr_file}" >&2
+		echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${stderr_file}")")" >&2
 	fi
 	rm -f "${stderr_file}"
 	: > "${outfile}"
