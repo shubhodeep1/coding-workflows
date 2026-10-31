@@ -435,6 +435,20 @@ HEAL_RG_CONTEXT_TOKENS = ("HEAL_COUNTERFACTUAL", "HEAL_REGRESSION", "PLAN_SELF_C
 HEAL_RG_SKIP_PREFIXES = ("HEAL_REGRESSION:", "HEAL_COUNTERFACTUAL:", "STATUS:", "PLAN_SELF_CHECK:")
 HEAL_RG_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 HEAL_RG_PATH_RE = re.compile(r"^[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*/?$")
+# A file extension starts with a letter, so prose numbers such as 2.5x or v1.2
+# are not read as file names.
+HEAL_RG_EXT_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]*$")
+# Companion paths the heal scope always grants (tests/**, changelog.d/*.md,
+# agents.d/*.md): listing them next to the failing workflow does not make a
+# timeout-only plan any less budget-only.
+HEAL_RG_COMPANION_PATH_RE = re.compile(r"^(?:tests/\S+|changelog\.d/[^/\s]+\.md|agents\.d/[^/\s]+\.md)$")
+# Required plan sections that describe the change rather than make it
+# (prompts/mode-plan.txt items 4a, 4b, 5, 6). Identifiers named there (for
+# example GITHUB_TOKEN in a security note) do not count as another change.
+HEAL_RG_CONTEXT_HEADING_RE = re.compile(
+	r"^[ ]{0,3}(#{1,6})[ \t]+(?:\d+[a-z]?[.)][ \t]+)?(?:decisions|security[ \t]+considerations|risks\b[^\n]*|testing\b[^\n]*)[ \t]*:?[ \t]*$",
+	re.IGNORECASE)
+HEAL_RG_PLACEHOLDER_RE = re.compile(r"^<[^<>]*>$")
 
 
 def normalize_heal_trend_flag(value: str | None) -> bool:
@@ -489,9 +503,9 @@ def _heal_regression_trend(issue_body: str) -> tuple[bool, str | None]:
 def _heal_regression_target_ok(token: str) -> bool:
 	if HEAL_RG_SHA_RE.match(token):
 		return True
-	if not HEAL_RG_PATH_RE.match(token) or token.startswith("/") or ".." in token.split("/"):
+	if not HEAL_RG_PATH_RE.match(token) or token.startswith("/") or token.endswith("/") or ".." in token.split("/"):
 		return False
-	return "/" in token or re.search(r"\.[A-Za-z0-9]+$", token) is not None
+	return "/" in token or HEAL_RG_EXT_RE.search(token) is not None
 
 
 def _heal_regression_line(lines: list[str]) -> dict:
@@ -519,7 +533,9 @@ def _heal_regression_line(lines: list[str]) -> dict:
 		return outcome
 	not_match = HEAL_RG_NOT_RE.match(value)
 	if not_match:
-		if not not_match.group(1).strip():
+		reason = not_match.group(1).strip()
+		# The template placeholder "<reason>" copied literally is no reason.
+		if not reason or HEAL_RG_PLACEHOLDER_RE.match(reason):
 			outcome["detail"] = "empty"
 			return outcome
 		outcome.update(form="not_regression", detail="not_regression")
@@ -551,11 +567,19 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 	naming an identifier does not count, so such a plan is held; naming any
 	other identifier makes the plan not budget-only. A human /approved still
 	releases a held plan.
+
+	Two further assumptions keep ordinary plans from escaping the hold:
+	companion bullets the heal scope always grants (tests/**, changelog.d/*.md,
+	agents.d/*.md) are ignored in the Files section, which must still name the
+	failing workflow at least once; and identifiers inside the Decisions,
+	Security considerations, Risks and Testing sections are context, not
+	another change (knobs named there still count).
 	"""
 	files: list[str] = []
-	other: list[str] = []
+	other: list[tuple[str, bool]] = []
 	files_level = 0
 	files_done = False
+	context_level = 0
 	for line in _unfenced_lines(lines):
 		heading = HEAL_CF_ANY_HEADING_RE.match(line)
 		if heading:
@@ -563,19 +587,31 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 			files_match = HEAL_RG_FILES_HEADING_RE.match(line)
 			if files_match and not files_done and not files_level:
 				files_level = len(files_match.group(1))
+				context_level = 0
 				continue
 			if files_level and level <= files_level:
 				files_level = 0
 				files_done = True
-			other.append(line)
+			if context_level and level <= context_level:
+				context_level = 0
+			context_match = HEAL_RG_CONTEXT_HEADING_RE.match(line)
+			if context_match and not context_level:
+				context_level = len(context_match.group(1))
+			other.append((line, bool(context_level)))
 			continue
 		if files_level:
 			bullet = BULLET_RE.match(line)
 			if bullet:
 				ticked = re.search(r"`([^`]+)`", bullet.group(1))
-				files.append((ticked.group(1) if ticked else bullet.group(1).split()[0]).strip())
+				if ticked:
+					files.append(ticked.group(1).strip())
+				else:
+					words = bullet.group(1).split()
+					pathlike = [word for word in words if "/" in word or HEAL_RG_EXT_RE.search(word)]
+					files.append((pathlike[0] if pathlike else words[0]).strip())
 			continue
-		other.append(line)
+		other.append((line, bool(context_level)))
+	files = [path for path in files if not HEAL_RG_COMPANION_PATH_RE.match(path)]
 	if not files:
 		return False
 	names = []
@@ -590,11 +626,13 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 	elif len(set(names)) != 1:
 		return False
 	knob_seen = False
-	for line in other:
+	for line, in_context in other:
 		if line.strip().startswith(HEAL_RG_SKIP_PREFIXES):
 			continue
 		if HEAL_RG_KNOB_RE.search(line):
 			knob_seen = True
+		if in_context:
+			continue
 		for ident in HEAL_RG_IDENT_RE.findall(line):
 			if ident not in HEAL_RG_CONTEXT_TOKENS and HEAL_RG_KNOB_RE.fullmatch(ident) is None:
 				return False

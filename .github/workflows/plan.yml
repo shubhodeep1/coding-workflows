@@ -3001,7 +3001,8 @@ jobs:
               source scripts/tg_helpers.sh >/dev/null 2>&1 || true
             fi
             if type tg_send_msg >/dev/null 2>&1; then
-              tg_send_msg "Heal plan auto-approval withheld for issue #${ISSUE_NUMBER}: counterfactual ${heal_cf_result} (${heal_cf_reason})."$'\n'"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" "WARNING" >/dev/null 2>&1 || true
+              heal_cf_gate_word="counterfactual"; [ "${heal_cf_result}" = "REGRESSION" ] && heal_cf_gate_word="regression"
+              tg_send_msg "Heal plan auto-approval withheld for issue #${ISSUE_NUMBER}: ${heal_cf_gate_word} ${heal_cf_result} (${heal_cf_reason})."$'\n'"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" "WARNING" >/dev/null 2>&1 || true
             fi
             return 0
           }
@@ -3079,7 +3080,7 @@ jobs:
                 # Heal regression gate (Refs #8434): with WORKFLOW_HEAL_TREND_ENABLED=true and regression=true in the
                 # issue's ## Run-time trend, partial_delivery.py heal-regression holds a plan without a HEAL_REGRESSION
                 # line (regression_line_missing) or one that only raises a timeout/budget (budget_only_plan). Errors hold.
-                if [ "$(printf '%s' "${WORKFLOW_HEAL_TREND_ENABLED:-false}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "true" ]; then
+                if [ "$(printf '%s' "${WORKFLOW_HEAL_TREND_ENABLED:-false}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" = "true" ]; then
                   heal_rg_body_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/heal_rg_body.XXXXXX")"
                   if printf '%s' "${CURRENT_ISSUE_JSON}" | jq -r '.body // "" | if type == "string" then . else error("body") end' > "${heal_rg_body_file}" 2>/dev/null \
                     && [ -f scripts/partial_delivery.py ] && heal_cf_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/partial_delivery.py heal-regression \
@@ -3097,7 +3098,11 @@ jobs:
                     {
                       echo "### Automatic plan approval held (heal regression)"
                       echo ""
-                      echo "The run-time trend shows a regression this workflow-heal plan does not address (reason \`${heal_cf_reason}\`), so no automatic \`/approved\` was posted."
+                      if [ "${heal_cf_reason}" = "heal_regression_check_unavailable" ]; then
+                        echo "The heal regression check could not run, so no automatic \`/approved\` was posted."
+                      else
+                        echo "The run-time trend shows a regression this workflow-heal plan does not address (reason \`${heal_cf_reason}\`), so no automatic \`/approved\` was posted."
+                      fi
                       echo "A maintainer can review the plan and reply \`/approved\`, or \`/reclarify\`."
                     } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
                     heal_counterfactual_plan_hold || true

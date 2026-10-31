@@ -754,6 +754,38 @@ def test_regression_invalid_lines_are_missing() -> None:
 	assert "<!--" not in shown and "#12" not in shown and "@user" not in shown
 
 
+def test_regression_budget_only_ignores_companion_files_and_context_sections() -> None:
+	# Review findings: the always-granted tests/changelog/agents companions and a
+	# routine security note naming GITHUB_TOKEN must not lift the budget-only hold.
+	files = _BUDGET_FILES + ["changelog.d/x.md", "tests/test_ci_timeout.py", "agents.d/x.md"]
+	plan = _rg_plan("HEAL_REGRESSION: not a regression: load grew", files=files, body=_BUDGET_BODY)
+	plan = plan.replace("## Counterfactual check", "## Decisions\n\n### D1 — keep GH_PAT\n- Chosen: x\n\n"
+		"## Security considerations\n- `GITHUB_TOKEN` permissions unchanged.\n\n## Risks and edge cases\n- GITHUB_OUTPUT unchanged.\n\n"
+		"## Counterfactual check")
+	result = _rg(plan)
+	assert (result["decision"], result["reason"]) == ("hold", "budget_only_plan"), result
+	# Companions alone (no failing workflow) are not budget-only.
+	alone = _rg(_rg_plan("HEAL_REGRESSION: not a regression: x", files=["changelog.d/x.md"], body=_BUDGET_BODY))
+	assert alone["reason"] == "not_a_regression", alone
+	# An identifier in a change-describing section still counts as another change.
+	other = _rg(_rg_plan("HEAL_REGRESSION: not a regression: x", files=files, body=_BUDGET_BODY + " Set `CACHE_KEY_PREFIX`."))
+	assert other["reason"] == "not_a_regression", other
+	# A Files bullet without backticks is read by its path-like word.
+	prose = _rg_plan("HEAL_REGRESSION: abc1234", files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		"- `.github/workflows/ci.yml`", "- edit .github/workflows/ci.yml for the timeout")
+	assert _rg(prose)["reason"] == "budget_only_plan"
+
+
+def test_regression_line_rejects_directories_prose_numbers_and_placeholders() -> None:
+	for line in ("HEAL_REGRESSION: scripts/", "HEAL_REGRESSION: runs are 2.5x slower since v1.2",
+		"HEAL_REGRESSION: 0.1"):
+		result = _rg(_rg_plan(line))
+		assert (result["reason"], result["detail"]) == ("regression_line_missing", "invalid_target"), (line, result)
+	placeholder = _rg(_rg_plan("HEAL_REGRESSION: not a regression: <reason>"))
+	assert (placeholder["reason"], placeholder["detail"]) == ("regression_line_missing", "empty"), placeholder
+	assert _rg(_rg_plan("HEAL_REGRESSION: scripts/a.sh"))["reason"] == "regression_named"
+
+
 # Step plans name src/app.py so the automation-path gate does not defer them.
 _STEP_FILES = ["src/app.py"]
 _STEP_BODY = "Fix the slow loop in `src/app.py`."
