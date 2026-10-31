@@ -3975,8 +3975,8 @@ _FAILURE_SHAPE_API_RE = re.compile(
 	r"HTTP [45][0-9][0-9]|API rate limit|gh: .*(Not Found|Bad credentials)|GH_API_RETRY .*outcome=gave_up",
 	re.IGNORECASE,
 )
-_FAILURE_SHAPE_RAW_CRASH_RE = re.compile(r"exit code 13[4-9]", re.IGNORECASE)
-_FAILURE_SHAPE_RAW_API_RE = re.compile(r"HTTP [45][0-9][0-9]", re.IGNORECASE)
+_FAILURE_SHAPE_RAW_CRASH_RE = re.compile(r"exit code 13[4-9](?!\d)", re.IGNORECASE)
+_FAILURE_SHAPE_RAW_API_RE = re.compile(r"HTTP [45][0-9][0-9](?!\d)", re.IGNORECASE)
 
 
 def classify_failure_shape(

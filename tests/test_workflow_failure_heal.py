@@ -10858,3 +10858,6 @@ def test_classify_failure_shape_numeric_alternatives_through_error_signature() -
 	assert heal.classify_failure_shape("job stalled", raw_error_text=exit_log) == "stall"
 	assert heal.classify_failure_shape("api rate limit", raw_error_text=exit_log) == "crash"
 	assert heal.classify_failure_shape("x", raw_error_text=123) == "other"  # type: ignore[arg-type]
+	# A longer digit run must not match on its prefix.
+	assert heal.classify_failure_shape("x", raw_error_text="exit code 1370") == "other"
+	assert heal.classify_failure_shape("x", raw_error_text="HTTP 4040 from upstream") == "other"
