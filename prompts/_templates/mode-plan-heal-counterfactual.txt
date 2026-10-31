@@ -68,5 +68,5 @@ plan for a human. The counterfactual result does not change the `STATUS:` or
 
 Automatic approval of this plan depends on this line: only PASS, or PARTIAL
 with every listed job deferred, can be approved without a human.
-`REPRODUCIBLE` can be approved automatically only while reproduction checks
-are on, and the heal editor then re-runs the listed tests before the PR opens.
+The one exception: `REPRODUCIBLE` can be approved automatically, but only
+while reproduction checks are on, and the heal editor then re-runs the listed tests before the PR opens.

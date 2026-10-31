@@ -19,13 +19,14 @@ usage or I/O errors):
   pr-section --plan-file F --issue N
   pr-body-status --body-file F --issue N
   remaining-comment --body-file F --issue N --pr P
-  heal-counterfactual --plan-file F [--gate-flag V]
+  heal-counterfactual --plan-file F [--gate-flag V] [--reproduce-flag V]
 
 ``heal-counterfactual`` (issue #8249) reads the single
 ``HEAL_COUNTERFACTUAL:`` line a workflow-heal plan ends its
 ``## Counterfactual check`` with and decides whether the plan may be
 auto-approved. ``plan.yml`` and the poller's ``_plan_auto_approval_gate``
-both call it, so the two callers cannot drift apart. A ``PARTIAL`` line
+both call it, so the two callers cannot drift apart (except on
+``REPRODUCIBLE``: the poller passes no reproduce flag, so it holds). A ``PARTIAL`` line
 lists the jobs that would still fail; each must appear in a bullet of the
 plan's ``## Deferred scope`` section (read with ``parse_plan``), otherwise
 the result is ``FAIL``. Every other outcome than ``PASS`` or a fully
@@ -363,7 +364,7 @@ def parse_heal_counterfactual(text: str, gate_flag: str | None = "true", reprodu
 
 	Returns ``{gate, flag_invalid, result, decision, reason, line, jobs,
 	unmatched_jobs}``. ``result`` is the effective value (one of PASS,
-	PARTIAL, FAIL, UNVERIFIED, missing); only PASS and a fully deferred
+	PARTIAL, FAIL, UNVERIFIED, REPRODUCIBLE, missing); only PASS and a fully deferred
 	PARTIAL approve. With the gate off the decision is ``approve`` and the
 	reason ``gate_disabled``, but the result is still reported for logs.
 
