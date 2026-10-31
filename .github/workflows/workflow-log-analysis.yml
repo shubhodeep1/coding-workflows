@@ -714,7 +714,32 @@ jobs:
               echo "Weekly retro comment refreshed (#${existing_comment_id}) on issue #${TRACKER_NUMBER}."
               exit 0
             fi
-            echo "::warning::Failed to refresh weekly retro comment #${existing_comment_id}; will try posting a new comment."
+            # Reconfirm GET: runs only on this PATCH-failure path (BUG-005). GitHub
+            # may apply a PATCH and lose the response, so POSTing blindly would
+            # leave a duplicate marker comment. Reads audited per §14: the
+            # week-scoped issues/<n>/comments?since= list read above runs before
+            # the PATCH, so it cannot show whether the PATCH landed, and the
+            # tracker `gh issue list` read returns no comment bodies. At most one
+            # extra bounded GET per weekly run, only when the PATCH fails.
+            TRACKER_COMMENT_RECONFIRM_JSON="${RETRO_RUNTIME_DIR}/tracker-comment-reconfirm.json"
+            TRACKER_COMMENT_RECONFIRM_ERR="${RETRO_RUNTIME_DIR}/tracker-comment-reconfirm.err"
+            if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" > "${TRACKER_COMMENT_RECONFIRM_JSON}" 2> "${TRACKER_COMMENT_RECONFIRM_ERR}"; then
+              if ! tracker_reconfirm_body="$(jq -r '.body // ""' "${TRACKER_COMMENT_RECONFIRM_JSON}" 2>/dev/null)"; then
+                echo "::warning::Failed to refresh weekly retro comment #${existing_comment_id} on issue #${TRACKER_NUMBER} and could not reconfirm it; not posting a duplicate."
+                exit 1
+              fi
+              if [ "${tracker_reconfirm_body}" = "$(cat "${TRACKER_COMMENT_FILE}")" ]; then
+                echo "Weekly retro comment refreshed (#${existing_comment_id}) on issue #${TRACKER_NUMBER}."
+                exit 0
+              fi
+              echo "::warning::Weekly retro comment #${existing_comment_id} exists on issue #${TRACKER_NUMBER} in ${GITHUB_REPOSITORY} but was not refreshed; not posting a duplicate (next week's run refreshes it)."
+              exit 0
+            elif grep -qE 'HTTP 404' "${TRACKER_COMMENT_RECONFIRM_ERR}"; then
+              echo "::warning::Failed to refresh weekly retro comment #${existing_comment_id}; reconfirm shows it is gone (HTTP 404), posting a new comment."
+            else
+              echo "::warning::Failed to refresh weekly retro comment #${existing_comment_id} on issue #${TRACKER_NUMBER} and could not reconfirm it; not posting a duplicate."
+              exit 1
+            fi
           fi
 
           gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${TRACKER_NUMBER}/comments" --input "${TRACKER_COMMENT_PAYLOAD}" >/dev/null

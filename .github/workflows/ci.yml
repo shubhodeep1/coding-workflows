@@ -1215,6 +1215,7 @@ jobs:
             tests/test_verify_integration_fingerprints_partial_removal.py
             tests/test_verify_integration_fingerprints_post_capture_reintroduction.py
             tests/test_workflow_retro_fanout.py
+            tests/test_retro_comment_patch_reconfirm.py
             tests/test_workflow_support_ref_follows_pin.py
           )
           rm -f /tmp/wiring_part1_collect.log /tmp/wiring_part1_modules.txt /tmp/wiring_part1_tests.txt \
@@ -1694,6 +1695,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_security_pass.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_head_binding.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_enable_auto_merge_cdpath.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_draft_skip.py
 
       # Moved from orchestrate-poll (2), which took 19m28s of its 20 minutes on
