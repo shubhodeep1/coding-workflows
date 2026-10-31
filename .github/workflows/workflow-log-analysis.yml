@@ -734,7 +734,7 @@ jobs:
               fi
               echo "::warning::Weekly retro comment #${existing_comment_id} exists on issue #${TRACKER_NUMBER} in ${GITHUB_REPOSITORY} but was not refreshed; not posting a duplicate (next week's run refreshes it)."
               exit 0
-            elif grep -qiE 'HTTP 404|Not Found' "${TRACKER_COMMENT_RECONFIRM_ERR}"; then
+            elif grep -qE 'HTTP 404' "${TRACKER_COMMENT_RECONFIRM_ERR}"; then
               echo "::warning::Failed to refresh weekly retro comment #${existing_comment_id}; reconfirm shows it is gone (HTTP 404), posting a new comment."
             else
               echo "::warning::Failed to refresh weekly retro comment #${existing_comment_id} on issue #${TRACKER_NUMBER} and could not reconfirm it; not posting a duplicate."

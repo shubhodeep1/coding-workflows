@@ -386,7 +386,7 @@ PY
 			fi
 			echo "::warning::retro-fanout: retro comment #${existing_comment_id} exists on ${target_repo} but was not refreshed; not posting a duplicate."
 			return 1
-		elif grep -qiE 'HTTP 404|Not Found' "${comment_reconfirm_err}"; then
+		elif grep -qE 'HTTP 404' "${comment_reconfirm_err}"; then
 			echo "::warning::retro-fanout: failed to refresh retro comment #${existing_comment_id} on ${target_repo}; reconfirm shows it is gone (HTTP 404), posting a new comment."
 		else
 			echo "::warning::retro-fanout: failed to refresh retro comment #${existing_comment_id} on ${target_repo} and could not reconfirm it; not posting a duplicate."

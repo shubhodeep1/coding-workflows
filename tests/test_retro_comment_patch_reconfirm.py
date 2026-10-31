@@ -288,7 +288,7 @@ def _assert_post_only_after_reconfirm(block: str, patch_line: str, get_line: str
 	# The only POST must sit after the reconfirm GET.
 	assert block.count("-X POST") == 1
 	between = block[get_index:post_index]
-	assert "HTTP 404|Not Found" in between
+	assert "grep -qE 'HTTP 404'" in between
 	assert "not posting a duplicate" in between
 	comment_region = block[patch_index:get_index]
 	assert "only on this PATCH-failure path" in comment_region
