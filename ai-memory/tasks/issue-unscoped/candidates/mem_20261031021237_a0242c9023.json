@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_unblock_judge.py:538-545 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: Whitespace-only hunk (`@@ -536,13 +536,13 @@`) in test_rejection_snapshot_provenance_and_subset rewrites continuation lines 539-541 and 545 from one tab plus alignment spaces to bare tabs, and it is unrelated to #8470.\n  WHY: It violates the minimal-change rule (\u00a79) and adds noise to the diff and blame. Earlier editor restores never reached HEAD. Both reviewers rated it NIT, so low is the nearest scale value.\n- .github/workflows/unblock_judge.yml:174 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The \"Judge the blocked item\" env block does not forward `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` to scripts/unblock_judge.sh.\n  WHY: Setting the repository variable to `false` has no effect, so the documented kill switch cannot be used in Actions and the script default `true` always applies. Reviewers rated it MAJOR, which maps to high here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`) so operators can toggle the behaviour, with a new README row.\n  expected_change_site: .github/workflows/unblock_judge.yml \"Judge the blocked item\" env block (next to line 174), plus an assertion in tests/test_unblock_judge.py mirroring the one for `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR changes no workflow file, grep of .github/workflows finds no match for the variable, and tests check forwarding only for UNBLOCK_HEAL_ALREADY_FIXED_ENABLED. Severity MAJOR. minimax_minimax-m3 and z-ai_glm-5_3-flash treated this as an explicitly deferred item, not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_unblock_judge.py:539-541,545 | severity=NIT | confidence=5\n  PROBLEM: Whitespace-only rewrite of four continuation lines from one tab plus alignment spaces to bare tabs, unrelated to #8470. The hunk is `@@ -536,13 +536,13 @@` in test_rejection_snapshot_provenance_and_subset.\n  WHY: It breaks the minimal-change rule (\u00a79) and adds noise to the diff and blame. The fix is to restore one tab plus 20 spaces on lines 539-541 and one tab plus 25 spaces on line 545.\n- .github/workflows/unblock_judge.yml:174 (env block of \"Judge the blocked item\") | severity=MAJOR | confidence=4\n  PROBLEM: scripts/unblock_judge.sh reads `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` in `unblock_nothing_to_implement_close`, but the workflow never passes it.\n  WHY: The repository variable has no effect, so the documented kill switch cannot be used in Actions.\n- TASK_GAP: Requirement: Kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`), with a new README row.\n  Expected change site: .github/workflows/unblock_judge.yml \"Judge the blocked item\" env block next to line 174, plus a test in tests/test_unblock_judge.py.\n  Evidence of absence: pr_changed_files.txt lists no workflow file, grep finds no match, and no test checks the forwarding.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/unblock_judge.yml:\"Judge the blocked item\" step env block | severity=MAJOR | confidence=5\n  PROBLEM: The new kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` is not forwarded to the unblock_judge.sh environment.\n  WHY: The repository Actions variable has no effect, so the operator cannot toggle the feature off as documented.\n- TASK_GAP: Requirement: Implement the kill switch `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` (default `true`), documented in the README, including forwarding it in the workflow.\n  Expected change site: .github/workflows/unblock_judge.yml \"Judge the blocked item\" env block, plus a test assertion in tests/test_unblock_judge.py mirroring UNBLOCK_HEAL_ALREADY_FIXED_ENABLED.\n  Evidence of absence: The PR changes no workflow file, grep finds no workflow-side usage, and no test verifies forwarding. The deferral is acknowledged in the PR description, but the requirement is unfulfilled in the codebase.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: Provide the `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED` kill switch so operators can restore resume behavior.\n  Expected change site: .github/workflows/unblock_judge.yml \"Judge the blocked item\" env block, and its workflow contract assertion in tests/test_unblock_judge.py.\n  Evidence of absence: The workflow passes `UNBLOCK_HEAL_ALREADY_FIXED_ENABLED` but not `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED`, and the tests check only the former's forwarding. The README says a repository variable alone does not reach the script.\n  SEVERITY: MAJOR | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_unblock_judge.py:538-545 | severity=NIT | confidence=5\n  PROBLEM: The unrelated whitespace-only hunk (`@@ -536,13 +536,13 @@`) is still on HEAD. Lines 539-541 and 545 are tab-only where the base has one tab plus 20 or 25 alignment spaces. Four editor summaries claimed a restore that never landed, and runs 41151388923 and 41155739204 ended with \"Editor changes lost\".\n  WHY: There is no runtime failure. It keeps an out-of-scope reformatting hunk in the PR diff and blame, and the editor loop is not converging on it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d3770c84fcd1467e6a958f728ce3a07070dbfb28c2ee4185cbaf23a57270a4a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8488,
+    "run_id": "41158034273",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41158034273",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031021237_a0242c9023",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8488,
+    "run_id": "41158034273"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T02:12:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
