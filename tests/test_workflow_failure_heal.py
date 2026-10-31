@@ -11285,7 +11285,8 @@ def test_parse_suspect_compare_fixture_lists_8192_and_pipeline_files() -> None:
 	# A dropped malformed entry is not reported as an unlisted newer commit.
 	dropped = heal.parse_suspect_compare({"status": "ahead", "total_commits": 4, "commits": [{"sha": "nothex"}] + many["commits"][:3]})
 	assert dropped["commits_page_truncated"] is False and dropped["commits_returned"] == 4 and len(dropped["commits"]) == 3
-	assert "GitHub listed only" not in heal.render_suspect_commits_section(dropped, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
+	dropped_section = heal.render_suspect_commits_section(dropped, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
+	assert "GitHub listed only" not in dropped_section and "newest" not in dropped_section
 	# Hostile or malformed input never raises.
 	for bad in (None, [], "x", {"commits": []}, {"status": 1}):
 		assert heal.parse_suspect_compare(bad)["reason"] == "malformed"
@@ -11456,11 +11457,15 @@ def test_intake_suspect_commits_reuses_the_reproduction_last_green() -> None:
 	state["run_details"]["600"] = _p3_state()["run_details"]["600"]
 	state["trend_runs_pages"] = _p3_state()["trend_runs_pages"]
 	state["compares"] = {P3_SUSPECT_COMPARE_KEY: _p3_compare_doc()}
+	state["slow_day_commits"] = _p3_slow_day_commits()
 	both, both_state, _seen = _run_p2_intake(state, {"WORKFLOW_HEAL_TREND_ENABLED": "true", "WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"})
 	assert both.returncode == 0, both.stderr + both.stdout
-	assert re.search(r"WORKFLOW_HEAL suspect_commits outcome=\w+ reason=\w+ commits=4 files=3 slow_day_commits=0 calls=1 last_green=cached", both.stdout), both.stdout
+	# The trend reports regression=true and no default branch is passed here, so the
+	# first-slow-day call goes out without `sha` (GitHub uses the repo's default branch).
+	assert "WORKFLOW_HEAL suspect_commits outcome=ok reason=ok commits=4 files=3 slow_day_commits=2 calls=2 last_green=cached" in both.stdout, both.stdout
 	calls = _p3_suspect_calls(both_state)
-	assert len(calls["green"]) == 1 and len(calls["compare"]) == 1 and not calls["commits"]
+	assert len(calls["green"]) == 1 and len(calls["compare"]) == 1 and len(calls["commits"]) == 1
+	assert not any(str(part).startswith("sha=") for part in calls["commits"][0])
 	body = both_state["composed_issue"]["body"]
 	assert body.index("## Reproduction") < body.index("## Run-time trend") < body.index("## Suspect commits")
 
