@@ -19,17 +19,27 @@ usage or I/O errors):
   pr-section --plan-file F --issue N
   pr-body-status --body-file F --issue N
   remaining-comment --body-file F --issue N --pr P
-  heal-counterfactual --plan-file F [--gate-flag V]
+  heal-counterfactual --plan-file F [--gate-flag V] [--reproduce-flag V]
 
 ``heal-counterfactual`` (issue #8249) reads the single
 ``HEAL_COUNTERFACTUAL:`` line a workflow-heal plan ends its
 ``## Counterfactual check`` with and decides whether the plan may be
 auto-approved. ``plan.yml`` and the poller's ``_plan_auto_approval_gate``
-both call it, so the two callers cannot drift apart. A ``PARTIAL`` line
+both call it, so the two callers cannot drift apart (except on
+``REPRODUCIBLE``: the poller passes no reproduce flag, so it holds). A ``PARTIAL`` line
 lists the jobs that would still fail; each must appear in a bullet of the
 plan's ``## Deferred scope`` section (read with ``parse_plan``), otherwise
 the result is ``FAIL``. Every other outcome than ``PASS`` or a fully
 deferred ``PARTIAL`` holds.
+
+A ``REPRODUCIBLE: <test ids>`` line (issue #8512, P2 of
+``docs/plans/heal-evidence-reproduction-and-trends-plan.md``) lists pytest
+node ids that the heal intake reproduced. With ``WORKFLOW_HEAL_REPRODUCE_ENABLED``
+(or ``--reproduce-flag``) exactly ``true`` the decision is
+``approve_pending_repro``: plan.yml approves with ``[repro-required]`` and the
+heal editor re-runs the tests before the PR opens. Off or unset (default),
+the plan holds with ``reproduction_disabled``. An empty or invalid id list
+holds as ``reproducible_test_list_invalid``.
 
 Standard library only; run as ``python3 -I -B``.
 """
@@ -38,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 
@@ -56,7 +67,7 @@ PR_SECTION_HEADING = "### Deferred scope (not delivered by this PR)"
 # At most 3 leading spaces (as FENCE_RE): a line indented by 4+ spaces or a tab
 # is a Markdown indented code block, so an example there is not the marker.
 HEAL_CF_LINE_RE = re.compile(r"^[ ]{0,3}HEAL_COUNTERFACTUAL:[ \t]*(.*?)[ \t]*$")
-HEAL_CF_VALUE_RE = re.compile(r"^(PASS|PARTIAL|FAIL|UNVERIFIED)(?:[ \t]*(:)[ \t]*(.*))?$")
+HEAL_CF_VALUE_RE = re.compile(r"^(PASS|PARTIAL|FAIL|UNVERIFIED|REPRODUCIBLE)(?:[ \t]*(:)[ \t]*(.*))?$")
 # The line counts only inside a "## Counterfactual check" section (to the next
 # heading of the same or a shallower level). Only a level-2 heading opens it,
 # as the prompt requires; a deeper "### Counterfactual check" holds.
@@ -67,6 +78,15 @@ HEAL_CF_ANY_HEADING_RE = re.compile(r"^[ ]{0,3}(#{1,6})(?:[ \t]|$)")
 HEAL_CF_MAX_JOBS = 20
 HEAL_CF_MAX_JOB_CHARS = 200
 HEAL_CF_MAX_LINE_CHARS = 300
+# REPRODUCIBLE test ids (issue #8512). Same grammar as cmd_tests in
+# scripts/heal_isolated_implement.sh (PATH_RE / NAME_RE, 1-50 ids), so an id
+# list the plan gate accepts is one the heal editor can read. Keep in sync.
+# The gate is stricter on one point: the path must be tests/<path>.py, the
+# only shape the intake writes (_HEAL_REPRO_TEST_ID_RE in
+# scripts/workflow_failure_heal.py), so a non-test file such as README.md holds.
+HEAL_CF_REPRO_MAX_TESTS = 50
+HEAL_CF_REPRO_PATH_RE = re.compile(r"^[A-Za-z0-9_./+-]+$")
+HEAL_CF_REPRO_NAME_RE = re.compile(r"^[^\s`<>]+$")
 
 # Same rule as scripts/auto_decisions.py ISSUE_REF_RE: a word joiner after
 # "#" keeps "#<digits>" from referencing or auto-closing an issue.
@@ -217,6 +237,53 @@ def normalize_heal_counterfactual_flag(value: str | None) -> tuple[bool, bool]:
 	return True, True
 
 
+def normalize_heal_reproduce_flag(value: str | None) -> bool:
+	"""Return True only for WORKFLOW_HEAL_REPRODUCE_ENABLED=true (any case).
+
+	Unset, empty and every other value mean off, as in
+	scripts/heal_isolated_implement.sh.
+	"""
+	return str(value or "").strip().lower() == "true"
+
+
+def _heal_counterfactual_repro_tests(detail: str) -> list[str] | None:
+	"""Parse a REPRODUCIBLE test-id list; None when it is empty or invalid.
+
+	Mirrors cmd_tests in scripts/heal_isolated_implement.sh: ids split on
+	whitespace and on commas outside [...] (parametrized ids stay whole), one
+	pair of surrounding backticks is dropped, empty pieces are skipped.
+	"""
+	pieces: list[str] = []
+	for word in str(detail or "").split():
+		depth, start = 0, 0
+		for index, char in enumerate(word):
+			if char == "[":
+				depth += 1
+			elif char == "]" and depth:
+				depth -= 1
+			elif char == "," and not depth:
+				pieces.append(word[start:index])
+				start = index + 1
+		pieces.append(word[start:])
+	ids: list[str] = []
+	for raw in pieces:
+		if raw.startswith("`") and raw.endswith("`") and len(raw) > 2:
+			raw = raw[1:-1]
+		if raw:
+			ids.append(raw)
+	if not 1 <= len(ids) <= HEAL_CF_REPRO_MAX_TESTS:
+		return None
+	for item in ids:
+		path, sep, name = item.partition("::")
+		if not HEAL_CF_REPRO_PATH_RE.match(path) or path.startswith("/") or ".." in path.split("/"):
+			return None
+		if not (path.startswith("tests/") and path.endswith(".py") and len(path) > len("tests/.py")):
+			return None
+		if sep and not HEAL_CF_REPRO_NAME_RE.match(name):
+			return None
+	return ids
+
+
 def _heal_counterfactual_display(text: str) -> str:
 	return sanitize_item(text)[:HEAL_CF_MAX_LINE_CHARS]
 
@@ -268,6 +335,12 @@ def _evaluate_heal_counterfactual(text: str, lines: list[str]) -> dict:
 			return outcome
 		outcome.update(result=verb, reason=verb.lower())
 		return outcome
+	if verb == "REPRODUCIBLE":
+		if not colon or _heal_counterfactual_repro_tests(detail) is None:
+			outcome.update(result="FAIL", reason="reproducible_test_list_invalid")
+			return outcome
+		outcome.update(result="REPRODUCIBLE", reason="reproducible")
+		return outcome
 	# PARTIAL: a comma-separated list of the jobs that would still fail.
 	names = [name.strip() for name in detail.split(",")] if detail else []
 	outcome["jobs"] = [_heal_counterfactual_display(name) for name in names[:HEAL_CF_MAX_JOBS] if name]
@@ -291,20 +364,29 @@ def _evaluate_heal_counterfactual(text: str, lines: list[str]) -> dict:
 	return outcome
 
 
-def parse_heal_counterfactual(text: str, gate_flag: str | None = "true") -> dict:
+def parse_heal_counterfactual(text: str, gate_flag: str | None = "true", reproduce_flag: str | None = None) -> dict:
 	"""Decide a workflow-heal plan's auto-approval from its counterfactual line.
 
 	Returns ``{gate, flag_invalid, result, decision, reason, line, jobs,
 	unmatched_jobs}``. ``result`` is the effective value (one of PASS,
-	PARTIAL, FAIL, UNVERIFIED, missing); only PASS and a fully deferred
+	PARTIAL, FAIL, UNVERIFIED, REPRODUCIBLE, missing); only PASS and a fully deferred
 	PARTIAL approve. With the gate off the decision is ``approve`` and the
 	reason ``gate_disabled``, but the result is still reported for logs.
+
+	A valid ``REPRODUCIBLE`` line gives the decision ``approve_pending_repro``
+	when ``reproduce_flag`` is ``true``; otherwise it holds with the reason
+	``reproduction_disabled``. The gate-off override still wins.
 	"""
 	gate_on, flag_invalid = normalize_heal_counterfactual_flag(gate_flag)
 	lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
 	outcome = _evaluate_heal_counterfactual(str(text or ""), lines)
 	decision = "approve" if outcome["result"] in ("PASS", "PARTIAL") else "hold"
 	reason = outcome["reason"]
+	if outcome["result"] == "REPRODUCIBLE":
+		if normalize_heal_reproduce_flag(reproduce_flag):
+			decision = "approve_pending_repro"
+		else:
+			decision, reason = "hold", "reproduction_disabled"
 	if not gate_on:
 		decision, reason = "approve", "gate_disabled"
 	return {
@@ -392,6 +474,9 @@ def build_parser() -> argparse.ArgumentParser:
 	counterfactual = sub.add_parser("heal-counterfactual")
 	counterfactual.add_argument("--plan-file", required=True)
 	counterfactual.add_argument("--gate-flag", default="true")
+	# Optional: plan.yml passes WORKFLOW_HEAL_REPRODUCE_ENABLED through env so
+	# an older parser never sees an unknown argument.
+	counterfactual.add_argument("--reproduce-flag", default=None)
 	return parser
 
 
@@ -415,7 +500,9 @@ def main(argv: list[str] | None = None) -> int:
 				return 0
 			sys.stdout.write(render_remaining_comment(result["items"], args.issue, args.pr))
 		elif args.command == "heal-counterfactual":
-			print(json.dumps(parse_heal_counterfactual(_read(args.plan_file), args.gate_flag)))
+			reproduce_flag = (args.reproduce_flag if args.reproduce_flag is not None
+				else os.environ.get("WORKFLOW_HEAL_REPRODUCE_ENABLED", "false"))
+			print(json.dumps(parse_heal_counterfactual(_read(args.plan_file), args.gate_flag, reproduce_flag)))
 	except OSError as exc:
 		print(f"partial_delivery: cannot read input: {exc.__class__.__name__}", file=sys.stderr)
 		return 2

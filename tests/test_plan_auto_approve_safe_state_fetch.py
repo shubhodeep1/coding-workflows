@@ -71,7 +71,11 @@ def test_auto_approve_step_preserves_outputs_and_comment_payload() -> None:
 	assert 'if [ "${CURRENT_STATE}" = "closed" ]; then' in block
 	assert 'echo "auto_approved=true" >> "$GITHUB_OUTPUT"' in block
 	assert 'gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" \\' in block
-	assert "-f body=$'/approved [auto-approved-by-plan]\\n\\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'" in block
+	# Issue #8512: the first line gains " [repro-required]" only on the REPRODUCIBLE path;
+	# with the tag empty the body is unchanged.
+	assert ("-f body=\"/approved [auto-approved-by-plan]${heal_cf_approval_tag}\""
+		"$'\\n\\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'") in block
+	assert 'heal_cf_approval_tag=""' in block
 	assert 'echo "AUTO_IMPLEMENT_ON_CLEAR_PLAN disabled; skipping auto-approval comment."' in block
 
 
