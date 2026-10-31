@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8530,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8530\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8537\",\"pr_number\":8537,\"branch\":\"ai/issue-8530\",\"run_id\":\"41189878366\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41189878366\",\"changed_files\":[\"README.md\",\"agents.d/8530-unblock-fixup-delivered-close.md\",\"changelog.d/8530-unblock-fixup-delivered-close.md\",\"scripts/unblock_actions.py\",\"scripts/unblock_judge.sh\",\"tests/test_unblock_judge.py\"]}",
+  "fingerprint": "7bb117d30c8119a4d1a8230ac847540ce5b5a7690b871d2a0881ef458e5c36c2",
+  "lineage": {
+    "issue_number": 8530,
+    "parent_ids": [],
+    "pr_number": 8537,
+    "run_id": "41189878366",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41189878366",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8537"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261031103803_3c0799fe83",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8530,
+    "level": "run",
+    "pr_number": 8537,
+    "run_id": "41189878366"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8530: https://github.com/shubhodeep1/coding-workflows/pull/8537",
+  "timestamps": {
+    "created_at": "2026-10-31T10:38:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
