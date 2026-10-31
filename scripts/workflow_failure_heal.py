@@ -6796,11 +6796,14 @@ def parse_suspect_compare(compare: Any) -> dict[str, Any]:
 	deduplicated in order, at most SUSPECT_FILES_MAX. The compare response has
 	no per-commit file list, so no file is attributed to a single commit.
 	``reason`` is ``malformed`` when ``compare`` is not a dict or its ``status``
-	is not a string, else ``ok``.
+	is not a string, else ``ok``. ``commits_page_truncated`` is True when the
+	response listed fewer commits than ``total_commits`` (GitHub returns only
+	the oldest page of a long range); the kept tail is then not the newest part
+	of the range, and ``commits_returned`` says how many were listed.
 	"""
 	result: dict[str, Any] = {
 		"commits": [], "files": [], "pipeline_files": [], "total_commits": 0,
-		"commits_truncated": False, "pipeline_files_truncated": False, "reason": "malformed",
+		"commits_truncated": False, "commits_page_truncated": False, "pipeline_files_truncated": False, "reason": "malformed",
 	}
 	if not isinstance(compare, dict) or not isinstance(compare.get("status"), str):
 		return result
@@ -6812,6 +6815,10 @@ def parse_suspect_compare(compare: Any) -> dict[str, Any]:
 	result["commits"] = parsed[-SUSPECT_COMMITS_MAX:]
 	result["total_commits"] = total
 	result["commits_truncated"] = total > len(result["commits"])
+	# An unpaginated compare returns only the oldest page of a long range, so
+	# its tail is then not the newest part of the range.
+	result["commits_page_truncated"] = total > len(parsed)
+	result["commits_returned"] = len(parsed)
 	raw_files = compare.get("files") if isinstance(compare.get("files"), list) else []
 	files = [entry for entry in (_suspect_file_entry(item) for item in raw_files[:SUSPECT_COMPARE_FILES_MAX]) if entry is not None]
 	result["files"] = files
@@ -6884,6 +6891,9 @@ def render_suspect_commits_section(
 	green = green_sha[:7] if isinstance(green_sha, str) and _SUSPECT_SHA_RE.fullmatch(green_sha) else "unknown"
 	failing = failing_sha[:7] if isinstance(failing_sha, str) and _SUSPECT_SHA_RE.fullmatch(failing_sha) else "unknown"
 	shown = f", newest {len(commits)} shown" if total > len(commits) else ""
+	returned = doc.get("commits_returned")
+	if doc.get("commits_page_truncated") is True and isinstance(returned, int) and not isinstance(returned, bool):
+		shown = f", GitHub listed only the oldest {max(0, returned)}; the last {len(commits)} of those shown, the newest are not listed"
 	lines = [
 		"## Suspect commits",
 		"",
@@ -6982,8 +6992,12 @@ def suspect_commits(
 		green = last_green
 		summary["last_green"] = "cached"
 	else:
+		if not before:
+			# Without the failing run's creation time the lookup is unbounded and
+			# could pick a green run newer than the failure.
+			return finish("partial", "no_last_green")
 		try:
-			green = last_green_run(repo, workflow_id, branch, failing_sha=failing, before=before or None, run_gh=counted, timeout=timeout)
+			green = last_green_run(repo, workflow_id, branch, failing_sha=failing, before=before, run_gh=counted, timeout=timeout)
 		except Exception:  # noqa: BLE001 - fail open, never block the intake
 			green = _last_green_result("request_failed")
 		summary["last_green"] = "fetched" if counter["calls"] else "none"
@@ -7004,6 +7018,9 @@ def suspect_commits(
 	parsed = parse_suspect_compare(compare_doc)
 	if parsed["reason"] != "ok":
 		return finish("partial", "malformed")
+	if isinstance(compare_doc, dict) and compare_doc.get("status") == "behind":
+		# The baseline is newer than the failing SHA: it is not a last-green baseline.
+		return finish("partial", "no_last_green")
 	reason = "ok"
 	regressed, slow_day = parse_trend_regression_line(trend_text)
 	slow_rows: list[dict[str, Any]] | None = None
@@ -7050,7 +7067,7 @@ def compose_issue_body(
 	evidence_pack: str | None = None,
 	reproduction: str | None = None,
 	trend: str | None = None,
-	suspect_commits: str | None = None,
+	suspect_commits_section: str | None = None,
 ) -> str:
 	"""Compose the heal issue body (upstream or consumer-side).
 
@@ -7073,7 +7090,7 @@ def compose_issue_body(
 	reproduction, before the diagnosis, and is neutralized and checked the
 	same way. ``None`` or empty adds nothing.
 
-	``suspect_commits`` (optional, rendered by
+	``suspect_commits_section`` (optional, rendered by
 	:func:`render_suspect_commits_section`) follows the trend, before the
 	diagnosis, and is neutralized and checked the same way. ``None`` or empty
 	adds nothing.
@@ -7176,8 +7193,8 @@ def compose_issue_body(
 	if trend and trend.strip():
 		parts.append(neutralize_untrusted_routing(sanitize_text(trend))[0].strip())
 		parts.append("")
-	if suspect_commits and suspect_commits.strip():
-		parts.append(neutralize_untrusted_routing(sanitize_text(suspect_commits))[0].strip())
+	if suspect_commits_section and suspect_commits_section.strip():
+		parts.append(neutralize_untrusted_routing(sanitize_text(suspect_commits_section))[0].strip())
 		parts.append("")
 	parts.append("---")
 	parts.append("")
@@ -9668,7 +9685,15 @@ def _cmd_suspect_commits(args: argparse.Namespace) -> int:
 		Path(args.out).write_text(section, encoding="utf-8")
 		Path(args.files_out).write_text(json.dumps(files, sort_keys=True) + "\n" if files else "", encoding="utf-8")
 	except OSError:
-		summary.update({"outcome": "partial", "reason": "helper_failed"})
+		# helper_failed is reported alone: drop the counts and the section.
+		summary = {
+			"outcome": "partial", "reason": "helper_failed", "commits": 0, "pipeline_files": 0,
+			"slow_day_commits": 0, "calls": 0, "last_green": "none",
+		}
+		try:
+			Path(args.out).write_text("", encoding="utf-8")
+		except OSError:
+			pass
 	print(json.dumps(summary, sort_keys=True))
 	return 0
 
@@ -9739,7 +9764,7 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		evidence_pack=evidence_pack or None,
 		reproduction=reproduction or None,
 		trend=trend or None,
-		suspect_commits=suspect_commits_text or None,
+		suspect_commits_section=suspect_commits_text or None,
 	)
 	reason = validate_heal_issue_body_routing(body, target_branch=args.target_branch or None, integration_branch=args.integration_branch or None)
 	if reason:

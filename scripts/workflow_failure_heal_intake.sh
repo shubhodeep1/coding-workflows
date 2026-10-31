@@ -3099,8 +3099,11 @@ _heal_run_reproduction()
 	if [ -n "${repro_workflow_id}" ] && [ -n "${repro_before}" ]; then
 		repro_green_json="$(python3 "${HEAL_PY}" last-green-run --repo "${SELF_REPO}" --workflow-id "${repro_workflow_id}" \
 			--branch "${HEAD_BRANCH:-}" --failing-sha "${HEAD_SHA}" --before "${repro_before}" 2>/dev/null)" || repro_green_json=""
-		jq -n --arg repo "${SELF_REPO}" --arg workflow_id "${repro_workflow_id}" --arg branch "${HEAD_BRANCH:-}" --arg failing_sha "${HEAD_SHA}" --arg result "${repro_green_json}" \
-			'{repo: $repo, workflow_id: $workflow_id, branch: $branch, failing_sha: $failing_sha, result: (($result | fromjson?) // null)}' > "${HEAL_LAST_GREEN_CACHE_FILE}" 2>/dev/null || true
+		# The cache only serves the suspect-commits step, so it is written only behind its switch.
+		if [ "${TREND_ENABLED}" = true ]; then
+			jq -n --arg repo "${SELF_REPO}" --arg workflow_id "${repro_workflow_id}" --arg branch "${HEAD_BRANCH:-}" --arg failing_sha "${HEAD_SHA}" --arg result "${repro_green_json}" \
+				'{repo: $repo, workflow_id: $workflow_id, branch: $branch, failing_sha: $failing_sha, result: (($result | fromjson?) // null)}' > "${HEAL_LAST_GREEN_CACHE_FILE}" 2>/dev/null || true
+		fi
 		repro_green_reason="$(jq -r '.reason // ""' <<< "${repro_green_json}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
 		repro_green_sha="$(jq -r '.head_sha // ""' <<< "${repro_green_json}" 2>/dev/null || true)"
 		[ -n "${repro_green_reason}" ] || repro_green_reason="request_failed"
@@ -3331,7 +3334,12 @@ _heal_build_suspect_commits()
 	[[ "${suspect_workflow_id}" =~ ^[1-9][0-9]{0,19}$ ]] || suspect_workflow_id=""
 	[[ "${suspect_before}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || suspect_before=""
 	suspect_branch="$(printf '%s' "${HEAD_BRANCH:-}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
-	suspect_default_branch="$(printf '%s' "${PROVENANCE_DEFAULT_BRANCH:-}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+	# PROVENANCE_DEFAULT_BRANCH is this repository's default branch: pass it only
+	# when SOURCE_REPO is this repository (as the reproduction and divergence
+	# steps do), else the helper reports partial/default_branch_unavailable.
+	if [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
+		suspect_default_branch="$(printf '%s' "${PROVENANCE_DEFAULT_BRANCH:-}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+	fi
 	# Reuse the reproduction step's last-green lookup only when every key matches.
 	if [ -n "${suspect_workflow_id}" ] && [ -s "${HEAL_LAST_GREEN_CACHE_FILE}" ] \
 		&& jq -e --arg repo "${SOURCE_REPO,,}" --arg workflow_id "${suspect_workflow_id}" --arg branch "${HEAD_BRANCH:-}" --arg sha "${HEAD_SHA:-}" \
@@ -3356,6 +3364,11 @@ _heal_build_suspect_commits()
 	case "${suspect_outcome}" in ok|partial|skipped) ;; *) suspect_outcome="partial" ;; esac
 	suspect_reason="$(jq -r '.reason // ""' <<< "${suspect_json}" | tr -cd 'a-z_' | head -c 40)"
 	[ -n "${suspect_reason}" ] || suspect_reason="malformed"
+	if [ "${suspect_reason}" = helper_failed ]; then
+		# The helper could not write its outputs: log the short form and attach nothing.
+		log "suspect_commits outcome=partial reason=helper_failed"
+		return 0
+	fi
 	suspect_commits_n="$(jq -r '(.commits // 0) | tostring' <<< "${suspect_json}" 2>/dev/null | tr -cd '0-9' | head -c 3 || true)"
 	suspect_files_n="$(jq -r '(.pipeline_files // 0) | tostring' <<< "${suspect_json}" 2>/dev/null | tr -cd '0-9' | head -c 3 || true)"
 	suspect_slow_n="$(jq -r '(.slow_day_commits // 0) | tostring' <<< "${suspect_json}" 2>/dev/null | tr -cd '0-9' | head -c 3 || true)"

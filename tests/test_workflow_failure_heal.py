@@ -11276,6 +11276,12 @@ def test_parse_suspect_compare_fixture_lists_8192_and_pipeline_files() -> None:
 	assert len(capped["commits"]) == 15 and capped["commits"][0]["pr"] == 16 and capped["commits"][-1]["pr"] == 30
 	assert capped["commits_truncated"] is True and len(capped["pipeline_files"]) == 20 and capped["pipeline_files_truncated"] is True
 	assert "newest 15 shown" in heal.render_suspect_commits_section(capped, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
+	# A long range: GitHub listed only the oldest 20 of 400, so the tail is not called "newest".
+	paged = heal.parse_suspect_compare({**many, "total_commits": 400, "commits": many["commits"][:20]})
+	assert paged["commits_page_truncated"] is True and paged["commits_returned"] == 20
+	paged_section = heal.render_suspect_commits_section(paged, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
+	assert "newest 15 shown" not in paged_section and "GitHub listed only the oldest 20; the last 15 of those shown" in paged_section
+	assert capped["commits_page_truncated"] is False
 	# Hostile or malformed input never raises.
 	for bad in (None, [], "x", {"commits": []}, {"status": 1}):
 		assert heal.parse_suspect_compare(bad)["reason"] == "malformed"
@@ -11307,7 +11313,7 @@ def test_suspect_section_escapes_markers_and_passes_body_validation() -> None:
 	body = heal.compose_issue_body(
 		payload=heal.validate_payload(_p1_payload()), diagnosis=DIAG_WORKFLOW_DEFECT, fp="f" * 16, gen=1, root="f" * 16,
 		classification="workflow-defect", target_branch=None, max_depth=heal.DEFAULT_MAX_LINEAGE_DEPTH,
-		intake_run_url="https://github.com/x/y/actions/runs/1", run_summaries=[], suspect_commits=section,
+		intake_run_url="https://github.com/x/y/actions/runs/1", run_summaries=[], suspect_commits_section=section,
 	)
 	assert "## Suspect commits" in body and heal.validate_heal_issue_body_routing(body, target_branch=None, integration_branch=None) == ""
 	without = heal.compose_issue_body(
@@ -11318,7 +11324,7 @@ def test_suspect_section_escapes_markers_and_passes_body_validation() -> None:
 	assert without == heal.compose_issue_body(
 		payload=heal.validate_payload(_p1_payload()), diagnosis=DIAG_WORKFLOW_DEFECT, fp="f" * 16, gen=1, root="f" * 16,
 		classification="workflow-defect", target_branch=None, max_depth=heal.DEFAULT_MAX_LINEAGE_DEPTH,
-		intake_run_url="https://github.com/x/y/actions/runs/1", run_summaries=[], suspect_commits="",
+		intake_run_url="https://github.com/x/y/actions/runs/1", run_summaries=[], suspect_commits_section="",
 	)
 
 
@@ -11387,6 +11393,15 @@ def test_suspect_commits_fails_open() -> None:
 		raise OSError("gh missing")
 
 	summary, section, _files = heal.suspect_commits(**_p3_suspect_kwargs(), run_gh=boom)
+	assert (summary["outcome"], summary["reason"], section) == ("partial", "no_last_green", "")
+	# No failing-run creation time: no unbounded last-green lookup, no call.
+	calls.clear()
+	summary, section, _files = heal.suspect_commits(**_p3_suspect_kwargs(before=""), run_gh=_p3_suspect_runner(calls))
+	assert (summary["outcome"], summary["reason"], summary["calls"], section) == ("partial", "no_last_green", 0, "") and calls == []
+	# A baseline newer than the failing SHA (compare status "behind") is not a last-green baseline.
+	calls.clear()
+	behind = {**_p3_compare_doc(), "status": "behind", "ahead_by": 0, "total_commits": 0, "commits": []}
+	summary, section, _files = heal.suspect_commits(**_p3_suspect_kwargs(), run_gh=_p3_suspect_runner(calls, compare=behind))
 	assert (summary["outcome"], summary["reason"], section) == ("partial", "no_last_green", "")
 
 
@@ -11476,6 +11491,9 @@ def test_suspect_commits_intake_wiring() -> None:
 	assert runner.count('python3 "${HEAL_PY}" suspect-commits') == 1
 	assert '[ "${TREND_ENABLED}" = true ] || return 0' in runner
 	assert "GH_RETRY_MAX_ATTEMPTS=1" in runner
+	# The intake's own default branch is passed only for its own repository.
+	assert '[ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]' in runner
+	assert 'if [ "${suspect_reason}" = helper_failed ]; then' in runner
 	reproduction = script.split("\n_heal_run_reproduction()\n{", 1)[1].split("\n}\n", 1)[0]
 	assert reproduction.count('python3 "${HEAL_PY}" last-green-run') == 1 and '"${HEAL_LAST_GREEN_CACHE_FILE}"' in reproduction
 	assert 'suspect_commits_args=(--suspect-commits-file "${SUSPECT_COMMITS_FILE}")' in script
