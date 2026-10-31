@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:3103-3109 | severity=high | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The checklist template is appended raw via `cat` after the only render pass, so `{{REFERENCE_SEVERITY_CLASSIFICATION}}` (prompts/review-reviewer-checklist.txt:100) stays unhydrated in every reviewer prompt, and `assemble_reviewer_prompt` (scripts/review_run_reviewers.sh:3234-3276) never re-renders it.\n  WHY: With `REVIEW_REVIEWER_CHECKLIST_ENABLED=true`, reviewers get the literal placeholder and no severity-classification rubric. The source rated this MAJOR, which is mapped here to high. The other four reviewers reported no findings, and sonnet-5_5 said it saw this placeholder in the reviewer checklist and left it out as outside the PR's changed files and scope.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The reviewer checklist scaffolding should be rendered like every other prompt scaffold, so the reference placeholder in the checklist template is hydrated before it reaches reviewers.\n  expected_change_site: `append_reviewer_checklist_block` in scripts/review_run_reviewers.sh, plus a hydration assertion in tests/test_review_semble_contract.py `_render_reviewer_prompt_with_checklist` (tests/test_review_semble_contract.py:52-98)\n  confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: `append_reviewer_checklist_block` (scripts/review_run_reviewers.sh:3103-3109) is a bare `cat`, the body render at scripts/review_run_reviewers.sh:3057 precedes the checklist append, no `SEVERITY_CLASSIFICATION` handling exists in review_run_reviewers.sh, and the live reviewer bundle ends with the literal placeholder.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_run_reviewers.sh:3103-3109 | severity=MAJOR | confidence=high\n  PROBLEM: The checklist template is appended raw via `cat \"${REVIEWER_CHECKLIST_PROMPT_TEMPLATE}\"` after the only render pass has run. `assemble_reviewer_prompt` (scripts/review_run_reviewers.sh:3274) never re-renders it, so prompts/review-reviewer-checklist.txt:100 ends with the literal `{{REFERENCE_SEVERITY_CLASSIFICATION}}`.\n  WHY: With `REVIEW_REVIEWER_CHECKLIST_ENABLED=true`, reviewers get the unhydrated token and no severity rubric, although the checklist tells them to classify severity (prompts/review-reviewer-checklist.txt:89-91).\n- TASK_GAP:\n  Requirement: The reviewer checklist scaffolding should be rendered like every other prompt scaffold, so the reference placeholder in the checklist template is hydrated before it reaches reviewers.\n  Expected change site: `append_reviewer_checklist_block` in scripts/review_run_reviewers.sh, plus a hydration assertion covered by tests/test_review_semble_contract.py `_render_reviewer_prompt_with_checklist` (tests/test_review_semble_contract.py:52-98)\n  Evidence of absence: No diff hunk renders or hydrates the checklist template. `append_reviewer_checklist_block` (scripts/review_run_reviewers.sh:3103-3109) is a bare `cat`, the body render at scripts/review_run_reviewers.sh:3057 precedes the append, and no `SEVERITY_CLASSIFICATION` handling exists in review_run_reviewers.sh.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: high\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5c7d2cefe7e1739fd06db172109b5ad42f4d629d7e873ba52eb5cbd807e08597",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41172882638",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41172882638",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031054326_7d280ca015",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41172882638"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-31T05:43:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
