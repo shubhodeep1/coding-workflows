@@ -1020,6 +1020,19 @@ _resolver_prepush_test_gate()
     echo "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=mode_off" >&2
     return 0
   fi
+  # Repair loop (issue #8427, P3): only with PERSIST_REPAIR_LOOP_ENABLED=true
+  # (default false). The 1..5 turn cap (default 3) comes from the gate step's
+  # persist-config, so the clamp lives in one place. With the switch off the
+  # gate argv, the single repair and every output are unchanged.
+  local gate_persist_on=false gate_max_turns=1 gate_turn=0 gate_cur=1 gate_stop="" gate_last=""
+  local gate_eff=0 gate_prev_eff="" gate_pr_n=0 gate_acc_on=false gate_acc_in="" gate_acc_count=0
+  local gate_acc_state=none gate_acc_extra=0 gate_accept_args=()
+  if [ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ]; then
+    read -r gate_persist_on gate_max_turns < <(bash "${gate_step}" persist-config 2>/dev/null) || true
+    if [ "${gate_persist_on}" != true ] || ! [[ "${gate_max_turns}" =~ ^[1-5]$ ]]; then
+      gate_persist_on=false gate_max_turns=1
+    fi
+  fi
   # Step budget: the resolver step has `timeout-minutes: 170` and SECONDS
   # counts from this script's start. Keep 20 minutes for the commit and the
   # EXIT-trap dispatch, and skip any gate stage that would not finish before
@@ -1039,6 +1052,34 @@ _resolver_prepush_test_gate()
     return 0
   fi
   mkdir -p "${gate_dir}" 2>/dev/null || return 0
+  # Done-check (repair loop only), obtained here in this token-bearing step and
+  # never inside the credential-free gate: reuse the review step's
+  # prepush_gate/acceptance.json (0 API calls), else one fetch-plan (at most one
+  # comments read plus the cached identity read; fail-open, always writes --out).
+  # Only tests.txt / baseline_fail.txt reach the gate container.
+  if [ "${gate_persist_on}" = true ]; then
+    if [ -f "${RUNTIME_DIR}/prepush_gate/acceptance.json" ] && [ ! -L "${RUNTIME_DIR}/prepush_gate/acceptance.json" ]; then
+      gate_acc_in="${RUNTIME_DIR}/prepush_gate/acceptance.json"
+    elif [ -f "${gate_support}/acceptance_check.py" ] && [ ! -L "${gate_support}/acceptance_check.py" ] \
+      && [ $(( gate_budget_end - SECONDS )) -ge $(( gate_wall + 630 + 120 )) ]; then
+      rm -f -- "${gate_dir}/acceptance.json"
+      GH_TOKEN="${GH_TOKEN:-${GH_PAT:-}}" PYTHONDONTWRITEBYTECODE=1 timeout --kill-after=10s 120 python3 -I -B "${gate_support}/acceptance_check.py" fetch-plan \
+        --repo "${GITHUB_REPOSITORY:-}" --pr "${PR_NUMBER:-}" --head-ref "${HEAD_REF:-${PR_HEAD_REF:-${TARGET_BRANCH:-${GITHUB_HEAD_REF:-}}}}" \
+        --out "${gate_dir}/acceptance.json" >/dev/null || true
+      if [ -f "${gate_dir}/acceptance.json" ] && [ ! -L "${gate_dir}/acceptance.json" ]; then
+        gate_acc_in="${gate_dir}/acceptance.json"
+      fi
+    fi
+    if [ -n "${gate_acc_in}" ]; then
+      rm -f -- "${gate_dir}/tests.txt" "${gate_dir}/baseline_fail.txt"
+      gate_acc_count="$(bash "${gate_step}" acceptance-files "${gate_acc_in}" "${gate_dir}")" || gate_acc_count=0
+      if [[ "${gate_acc_count}" =~ ^[0-9]+$ ]] && [ "${gate_acc_count}" -gt 0 ] && [ -s "${gate_dir}/tests.txt" ]; then
+        gate_acc_on=true
+        gate_accept_args=(--tests-file "${gate_dir}/tests.txt")
+        [ ! -s "${gate_dir}/baseline_fail.txt" ] || gate_accept_args+=(--expect-baseline-fail-file "${gate_dir}/baseline_fail.txt")
+      fi
+    fi
+  fi
   gate_base="$(git rev-parse HEAD 2>/dev/null || true)"
   # A full prepare also builds the dependency venv with pytest, without which
   # pytest suites are only ever "unverified". It stays inside the 630 s
@@ -1068,12 +1109,52 @@ _resolver_prepush_test_gate()
     gate_venv_args+=(--node-modules "${gate_root}/source/node_modules")
   fi
   bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
-    --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true
+    --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} ${gate_accept_args[@]+"${gate_accept_args[@]}"} \
+    --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true
   read -r gate_status gate_pr gate_inh < "${gate_dir}/run1.status" || true
-  if [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ] \
-    && [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall + 630 )) ]; then
-    gate_repair="skipped (step time budget)"
-  elif [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ]; then
+  # Switch off: one pass (run1, at most one repair, run2). Switch on: the same
+  # order as review_prepush_test_gate_persist_loop; repair while
+  # pr_caused + extra_unmet is above zero, strictly drops after the first turn,
+  # stays under the turn cap and one attempt plus one gate run fits the budget.
+  # Each turn's revert point is its own `git write-tree`, so earlier staged
+  # repairs survive a reverted later turn. Runs top out at run6 (cap 5).
+  while :; do
+    if [ "${gate_persist_on}" = true ]; then
+      gate_acc_state=none gate_acc_extra=0
+      if [ "${gate_acc_on}" = true ]; then
+        read -r gate_acc_state gate_acc_extra < <(bash "${gate_step}" acceptance-score "${gate_acc_in}" "${gate_dir}/run${gate_cur}/result.json") || true
+        case "${gate_acc_state}" in met|unmet|not_run|none) ;; *) gate_acc_state=none ;; esac
+        [[ "${gate_acc_extra}" =~ ^[0-9]{1,6}$ ]] || gate_acc_extra=0
+      fi
+      gate_pr_n="${gate_pr:-0}"
+      [[ "${gate_pr_n}" =~ ^[0-9]{1,6}$ ]] || gate_pr_n=0
+      gate_eff=$(( 10#${gate_pr_n} + 10#${gate_acc_extra} ))
+      if [ "${gate_mode}" != repair ]; then
+        gate_stop=report_mode
+        [ "${gate_eff}" -le 0 ] || gate_last="not run (report mode)"
+      elif [ "${gate_eff}" -le 0 ]; then
+        gate_stop=clean
+        [ "${gate_acc_state}" != met ] || gate_stop=met
+      elif [ -n "${gate_prev_eff}" ] && [ "${gate_eff}" -ge "${gate_prev_eff}" ]; then
+        gate_stop=no_progress
+      elif [ "${gate_turn}" -ge "${gate_max_turns}" ]; then
+        gate_stop=max_turns
+      elif [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall + 630 )) ]; then
+        echo "PREPUSH_TEST_GATE phase=resolver outcome=repair_skipped reason=step_budget" >&2
+        gate_stop=budget gate_last="skipped (step time budget)"
+      fi
+      [ -z "${gate_stop}" ] || break
+    elif [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ] \
+      && [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall + 630 )) ]; then
+      gate_repair="skipped (step time budget)"
+      break
+    elif ! { [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ]; }; then
+      if [ "${gate_status}" = fail ] && [ "${gate_mode}" = report ]; then
+        gate_repair="not run (report mode)"
+      fi
+      break
+    fi
+    gate_check_args=() gate_rc=0
     gate_allow="${gate_dir}/allow.txt"
     gate_prompt="${gate_dir}/repair-prompt.txt"
     gate_touched="${gate_dir}/repair-touched.txt"
@@ -1081,10 +1162,13 @@ _resolver_prepush_test_gate()
     # The conflicted set, not the whole merge diff: base-side files the merge
     # brought in must stay outside the repair's extra allowed paths.
     sed '/^$/d' "${CONFLICTED_PATHS_FILE:-/nonexistent}" > "${gate_dir}/changed.txt" 2>/dev/null || : > "${gate_dir}/changed.txt"
-    bash "${gate_step}" allow-list "${PWD}" "${gate_dir}/changed.txt" "${gate_dir}/run1/result.json" "${gate_allow}" 2>/dev/null || : > "${gate_allow}"
+    bash "${gate_step}" allow-list "${PWD}" "${gate_dir}/changed.txt" "${gate_dir}/run${gate_cur}/result.json" "${gate_allow}" 2>/dev/null || : > "${gate_allow}"
     # The complete merge index (the resolution) is the repair's revert point.
     gate_index_tree="$(git write-tree 2>/dev/null || true)"
-    if [ -n "${gate_index_tree}" ] && [ -s "${gate_allow}" ] && bash "${gate_step}" repair-prompt "${gate_dir}/run1/result.json" "${gate_prompt}" "${gate_allow}" 2>/dev/null; then
+    # PREPUSH_TEST_GATE_PROMPT_DONE_CHECK=true only with a done-check (repair
+    # loop on): its unmet targets join the prompt inside the UNTRUSTED fence.
+    if [ -n "${gate_index_tree}" ] && [ -s "${gate_allow}" ] && PREPUSH_TEST_GATE_PROMPT_DONE_CHECK="${gate_acc_on}" \
+      bash "${gate_step}" repair-prompt "${gate_dir}/run${gate_cur}/result.json" "${gate_prompt}" "${gate_allow}" 2>/dev/null; then
       printf '\nThis tree is a completed merge resolution. Fix only the failures above, only in allow-list files; keep every conflict resolution as it is.\n' >> "${gate_prompt}"
       git ls-files --others --exclude-standard 2>/dev/null | sort -u > "${gate_pre_untracked}"
       local _effective_prompt_file="${gate_prompt}" tmp_output
@@ -1151,19 +1235,39 @@ _resolver_prepush_test_gate()
         gate_path="${gate_repair#*(}"
         echo "PREPUSH_TEST_GATE phase=resolver outcome=repair_reverted reason=$(printf '%s' "${gate_path%)}" | tr -dc 'a-z_0-9')" >&2
       fi
+      if [ "${gate_persist_on}" = true ] && [ "${gate_repair}" != ran ]; then
+        # A repair that is not plain `ran` (reverted, skipped, no edits) ends the loop.
+        gate_last="${gate_repair}"
+        case "${gate_repair}" in reverted*) gate_stop=reverted ;; *) gate_stop=skipped ;; esac
+        break
+      fi
+      [ "${gate_persist_on}" != true ] || gate_turn=$((gate_turn + 1))
       if [ "${gate_repair}" = ran ] && [ $(( gate_budget_end - SECONDS )) -lt "${gate_wall}" ]; then
         gate_repair="ran (re-run skipped: step time budget)"
+        gate_last="re-run skipped: step time budget" gate_stop=budget
       fi
       if [ "${gate_repair}" = ran ]; then
+        gate_prev_eff="${gate_eff}"
+        gate_cur=$((gate_cur + 1))
         bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
-          --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} --out "${gate_dir}/run2" > "${gate_dir}/run2.status" || true
-        read -r gate_status gate_pr gate_inh < "${gate_dir}/run2.status" || true
+          --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} ${gate_accept_args[@]+"${gate_accept_args[@]}"} \
+          --out "${gate_dir}/run${gate_cur}" > "${gate_dir}/run${gate_cur}.status" || true
+        read -r gate_status gate_pr gate_inh < "${gate_dir}/run${gate_cur}.status" || true
       fi
     else
       gate_repair="skipped (no index tree, allow-list or repair prompt)"
+      gate_last="${gate_repair}" gate_stop=skipped
     fi
-  elif [ "${gate_status}" = fail ] && [ "${gate_mode}" = report ]; then
-    gate_repair="not run (report mode)"
+    [ "${gate_persist_on}" = true ] && [ -z "${gate_stop}" ] || break
+  done
+  if [ "${gate_persist_on}" = true ]; then
+    if [ "${gate_turn}" -gt 0 ]; then
+      gate_repair="ran x${gate_turn}"
+      [ -z "${gate_last}" ] || gate_repair="${gate_repair}; ${gate_last}"
+    elif [ -n "${gate_last}" ]; then
+      gate_repair="${gate_last}"
+    fi
+    echo "PERSIST repair_loop outcome=${gate_status:-unverified} turns=${gate_turn} stop=${gate_stop} acceptance=${gate_acc_state}" >&2
   fi
   if [ -n "${gate_root}" ]; then
     REVIEW_SANDBOX_ROOT="${gate_root}" bash "${gate_sandbox_sh}" cleanup >/dev/null 2>&1 || true

@@ -898,7 +898,7 @@ def test_declared_host_only_path_closes_and_reissues_the_pr(tmp_path):
 	assert create < comment < close < source_close
 	assert "ai:unblock-provenance:v1 source_pr=7" in "\n".join(calls)
 	bodies = (tmp_path / "gh_calls.bodies").read_text()
-	assert f"<!-- ai:host-only-conflict-reissue:v1 pr=7 issue=901 head=" in bodies and "as #901" in bodies
+	assert "<!-- ai:host-only-conflict-reissue:v1 pr=7 issue=901 head=" in bodies and "as #901" in bodies
 
 
 @needs_jq
@@ -1147,7 +1147,11 @@ if [ "$1" = run ]; then
 	done
 	n=$(( $(cat "__WORK__/count" 2>/dev/null || echo 0) + 1 ))
 	echo "$n" > "__WORK__/count"
-	if [ "$n" = 1 ]; then cp "__WORK__/fail.json" "$results/result.json"; else cp "__WORK__/pass.json" "$results/result.json"; fi
+	if [ -f "__WORK__/queue/last.json" ]; then
+		src="__WORK__/queue/$n.json"
+		[ -f "$src" ] || src="__WORK__/queue/last.json"
+		cp "$src" "$results/result.json"
+	elif [ "$n" = 1 ]; then cp "__WORK__/fail.json" "$results/result.json"; else cp "__WORK__/pass.json" "$results/result.json"; fi
 fi
 exit 0
 '''
@@ -1158,10 +1162,18 @@ def _gate_result(status: str, failures: list) -> str:
 		"inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1})
 
 
-def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: int = 0, full_prepare: bool = True) -> tuple:
+def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: int = 0, full_prepare: bool = True,
+		queue: list | None = None, extra_env: dict | None = None, seed_acceptance: bool = False,
+		copy_acceptance_helper: bool = False) -> tuple:
 	root = SCRIPT.parent.parent
 	work = tmp_path / "work"
-	work.mkdir()
+	work.mkdir(parents=True)
+	if queue:
+		# docker serves the queued results in order, repeating the last one.
+		(work / "queue").mkdir()
+		for index, payload in enumerate(queue, start=1):
+			(work / "queue" / f"{index}.json").write_text(json.dumps(payload), encoding="utf-8")
+		(work / "queue" / "last.json").write_text(json.dumps(queue[-1]), encoding="utf-8")
 	failure = [{"test": "tests/test_a.py", "file": "tests/test_a.py", "names": ["test_x"], "tail": "AssertionError"}]
 	(work / "fail.json").write_text(_gate_result("fail", failure), encoding="utf-8")
 	(work / "pass.json").write_text(_gate_result("pass", []), encoding="utf-8")
@@ -1183,6 +1195,9 @@ def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: 
 	for name in ("review_autofix_step_prepush_test_gate.sh", "prepush_test_gate_run.sh", "review_untrusted_workspace.py", "check_resolver_diff.sh"):
 		shutil.copy2(root / "scripts" / name, support / name)
 	shutil.copy2(root / "workflow-templates/.claude/hooks/prepush_affected_tests.py", support / "prepush_affected_tests.py")
+	if copy_acceptance_helper:
+		for name in ("acceptance_check.py", "partial_delivery.py", "targeted_file_context.py", "attempt_journal.py", "gh_api_retry.py"):
+			shutil.copy2(root / "scripts" / name, support / name)
 	prompts = tmp_path / "prompts"
 	prompts.mkdir()
 	shutil.copy2(root / "prompts/mode-implement-repair-tests.txt", prompts / "mode-implement-repair-tests.txt")
@@ -1204,6 +1219,9 @@ def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: 
 	runtime.mkdir()
 	conflicted = runtime / "conflicted_paths.txt"
 	conflicted.write_text("a.py\n", encoding="utf-8")
+	if seed_acceptance:
+		(runtime / "prepush_gate").mkdir()
+		(runtime / "prepush_gate" / "acceptance.json").write_text(json.dumps(_DONE_CHECK), encoding="utf-8")
 	text = SCRIPT.read_text(encoding="utf-8")
 	start = text.index("_resolver_prepush_test_gate()\n{")
 	function = text[start:text.index("\n}\n", start) + 3]
@@ -1219,6 +1237,9 @@ echo COMMITTED
 	env.update(PATH=f"{bin_dir}{os.pathsep}{env.get('PATH', '')}", SUPPORT_SCRIPTS_DIR=str(support), SUPPORT_PROMPTS_DIR=str(prompts),
 		RUNTIME_DIR=str(runtime), RUNNER_TEMP=str(tmp_path), CONFLICTED_PATHS_FILE=str(conflicted), GITHUB_WORKSPACE=str(repo),
 		GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+	for key in ("PERSIST_REPAIR_LOOP_ENABLED", "PERSIST_REPAIR_MAX_TURNS"):
+		env.pop(key, None)
+	env.update(extra_env or {})
 	proc = subprocess.run(["bash", "-c", harness], cwd=repo, env=env, capture_output=True, text=True, timeout=180)
 	assert "COMMITTED" in proc.stdout, proc.stderr
 	return proc, work, repo, env
@@ -1263,6 +1284,187 @@ def test_resolver_gate_is_skipped_when_no_gate_run_fits_the_step_budget(tmp_path
 	assert not (work / "count").exists() and not (work / "attempts").exists()
 	assert "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=step_budget" in proc.stderr
 	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"
+
+
+# --- resolver repair loop (issue #8427, P3 follow-up) -------------------------------------
+
+_DONE_CHECK = {"schema": "acceptance.v1", "state": "valid", "source": "plan", "errors": [], "checks": [],
+	"tests": [{"path": "tests/test_a.py", "name": "", "red_on_base": False}], "post_merge": None, "post_merge_none": "library only"}
+
+_FAKE_GH = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "__WORK__/gh.log"
+case "$*" in
+	*" user"|"api user") printf '{"login": "pipeline-bot"}\n' ;;
+	*comments*) cat "__WORK__/comments.json" ;;
+	*) printf '{}\n' ;;
+esac
+exit 0
+'''
+
+
+def _fail_n(count: int) -> dict:
+	return json.loads(_gate_result("fail", [{"test": f"tests/test_a.py#{n}", "file": "tests/test_a.py", "names": ["test_x"],
+		"tail": "AssertionError"} for n in range(count)]))
+
+
+_PASS = json.loads(_gate_result("pass", []))
+
+
+def _counter_edit(tmp_path: Path, extra: str = "") -> str:
+	# Each repair turn writes a different fix, so every turn touches the file.
+	return f'n=$(wc -l < "{tmp_path / "work" / "attempts"}" | tr -d " "); printf \'fix%s\\n\' "$n" > tests/test_a.py{extra}'
+
+
+def _attempts(work: Path) -> int:
+	path = work / "attempts"
+	return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+
+
+def _docker_run_lines(work: Path) -> list[str]:
+	return [line for line in (work / "docker.log").read_text(encoding="utf-8").splitlines() if line.startswith("run ")]
+
+
+def _loop_env(**extra: str) -> dict:
+	return {"PERSIST_REPAIR_LOOP_ENABLED": "true", **extra}
+
+
+def _normalised_docker_argv(tmp_path: Path, work: Path) -> list[str]:
+	lines = _docker_run_lines(work)
+	lines = [re.sub(r"prepush-gate-[A-Za-z0-9_]+-[0-9]+", "prepush-gate-<RUN>-<PID>", line.replace(str(tmp_path), "<TMP>")) for line in lines]
+	return [re.sub(r"[0-9a-f]{40}", "<SHA>", re.sub(r"\.[A-Za-z0-9]{6,}(?=[/,\s]|$)", ".<RND>", line)) for line in lines]
+
+
+@pytest.mark.parametrize("switch", [None, "false"])
+def test_resolver_loop_off_changes_nothing(tmp_path: Path, switch: str | None) -> None:
+	runs = {}
+	for name, seed in (("plain", False), ("seeded", True)):
+		base = tmp_path / name
+		base.mkdir()
+		extra = {} if switch is None else {"PERSIST_REPAIR_LOOP_ENABLED": switch}
+		proc, work, repo, env = _run_resolver_gate_fixture(base, "printf 'fixed\\n' > tests/test_a.py", extra_env=extra,
+			seed_acceptance=seed, copy_acceptance_helper=seed)
+		docker = (work / "docker.log").read_text(encoding="utf-8")
+		assert "/inputs" not in docker and "--tests-file" not in docker
+		assert _attempts(work) == 1
+		assert (work / "count").read_text(encoding="utf-8").strip() == "2"
+		assert "PERSIST repair_loop" not in proc.stderr
+		final = [line for line in proc.stderr.splitlines() if line.startswith("PREPUSH_TEST_GATE phase=resolver outcome=")]
+		assert final == ["PREPUSH_TEST_GATE phase=resolver outcome=pass failures=0 inherited=0 mode=repair repair=ran"]
+		assert not (base / "runtime" / "acceptance_result.json").exists()
+		assert not (base / "runtime" / "prepush_gate_resolver" / "tests.txt").exists()
+		assert "DONE-CHECK" not in (work / "prompt").read_text(encoding="utf-8")
+		runs[name] = (_normalised_docker_argv(base, work), final)
+	assert runs["plain"] == runs["seeded"]
+
+
+def test_resolver_loop_repairs_while_failures_drop(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(3), _fail_n(1), _PASS],
+		extra_env=_loop_env())
+	assert _attempts(work) == 2 and len(_docker_run_lines(work)) == 3
+	assert "PERSIST repair_loop outcome=pass turns=2 stop=clean acceptance=none" in proc.stderr
+	assert "phase=resolver outcome=pass failures=0 inherited=0 mode=repair repair=ran_x2" in proc.stderr
+	assert (tmp_path / "runtime" / "prepush_gate_resolver" / "run3" / "result.json").is_file()
+	committed = subprocess.run(["git", "show", "HEAD:tests/test_a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout
+	assert committed == "fix2\n"
+
+
+def test_resolver_loop_stops_without_progress(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(2), _fail_n(2)],
+		extra_env=_loop_env())
+	assert _attempts(work) == 1 and len(_docker_run_lines(work)) == 2
+	assert "PERSIST repair_loop outcome=fail turns=1 stop=no_progress acceptance=none" in proc.stderr
+	assert "repair=ran_x1" in proc.stderr
+
+
+def test_resolver_loop_stops_at_turn_cap(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path),
+		queue=[_fail_n(3), _fail_n(2), _fail_n(1)], extra_env=_loop_env(PERSIST_REPAIR_MAX_TURNS="2"))
+	assert _attempts(work) == 2 and len(_docker_run_lines(work)) == 3
+	assert "PERSIST repair_loop outcome=fail turns=2 stop=max_turns acceptance=none" in proc.stderr
+
+
+def test_resolver_loop_clamps_the_turn_cap_to_five(tmp_path: Path) -> None:
+	queue = [_fail_n(9 - n) for n in range(8)]
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=queue,
+		extra_env=_loop_env(PERSIST_REPAIR_MAX_TURNS="9"))
+	assert _attempts(work) == 5 and len(_docker_run_lines(work)) == 6
+	assert "turns=5 stop=max_turns" in proc.stderr
+	assert (tmp_path / "runtime" / "prepush_gate_resolver" / "run6.status").is_file()
+
+
+def test_resolver_loop_reverted_repair_ends_loop(tmp_path: Path) -> None:
+	edit = _counter_edit(tmp_path, '; if [ "$n" = 2 ]; then printf "bad\\n" > outside.py; fi')
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, edit, queue=[_fail_n(3), _fail_n(1), _PASS],
+		extra_env=_loop_env())
+	assert _attempts(work) == 2 and len(_docker_run_lines(work)) == 2
+	assert "outcome=repair_reverted reason=check_resolver_diff" in proc.stderr
+	assert "PERSIST repair_loop outcome=fail turns=1 stop=reverted acceptance=none" in proc.stderr
+	assert "repair=ran_x1;_reverted_check_resolver_diff" in proc.stderr
+	def show(path: str) -> str:
+		return subprocess.run(["git", "show", f"HEAD:{path}"], cwd=repo, capture_output=True, text=True, env=env).stdout
+
+	assert show("tests/test_a.py") == "fix1\n" and show("outside.py") == "keep\n" and show("a.py") == "x = 2\n"
+	assert (repo / "outside.py").read_text(encoding="utf-8") == "keep\n"
+
+
+def test_resolver_loop_passes_done_check_tests_file(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(1), _PASS],
+		extra_env=_loop_env(), seed_acceptance=True, copy_acceptance_helper=True)
+	runs = _docker_run_lines(work)
+	assert len(runs) == 2 and all("--tests-file /inputs/tests.txt" in line for line in runs)
+	result = json.loads((tmp_path / "runtime" / "acceptance_result.json").read_text(encoding="utf-8"))
+	assert result["schema"] == "acceptance_result.v1"
+	assert "PERSIST repair_loop outcome=pass turns=1 stop=clean acceptance=not_run" in proc.stderr
+	assert (tmp_path / "runtime" / "prepush_gate_resolver" / "tests.txt").read_text(encoding="utf-8") == "tests/test_a.py\n"
+	# No fetch: the review step's acceptance.json is reused.
+	assert not (tmp_path / "runtime" / "prepush_gate_resolver" / "acceptance.json").exists()
+
+
+def test_resolver_loop_unmet_target_reaches_the_fenced_prompt(tmp_path: Path) -> None:
+	unmet = dict(_fail_n(1), acceptance={"tests/test_a.py": {"head": "fail", "base": "not_run"}})
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[unmet, _PASS],
+		extra_env=_loop_env(), seed_acceptance=True, copy_acceptance_helper=True)
+	prompt = (work / "prompt").read_text(encoding="utf-8")
+	assert "=== BEGIN UNTRUSTED DONE-CHECK STATUS" in prompt
+	assert "UNTRUSTED_DATA: tests/test_a.py: unmet" in prompt
+
+
+def test_resolver_loop_fetches_the_done_check_once_when_none_is_staged(tmp_path: Path) -> None:
+	sys_path = str(SCRIPT.parent)
+	import sys
+	if sys_path not in sys.path:
+		sys.path.insert(0, sys_path)
+	import acceptance_check
+	body = "Implementation Plan\n" + acceptance_check.marker_line(_DONE_CHECK) + "\n<!-- ai:plan-proposal:v1 -->"
+	gh_work = tmp_path / "gh_work"
+	gh_work.mkdir()
+	(gh_work / "comments.json").write_text(json.dumps([{"user": {"login": "pipeline-bot"}, "created_at": "2026-10-02T00:00:00Z",
+		"body": body}]), encoding="utf-8")
+	gh_bin = tmp_path / "ghbin"
+	gh_bin.mkdir()
+	(gh_bin / "gh").write_text(_FAKE_GH.replace("__WORK__", str(gh_work)), encoding="utf-8")
+	(gh_bin / "gh").chmod(0o755)
+	# The fixture's fake docker lives in tmp_path/bin; keep it first.
+	env_path = os.pathsep.join((str(tmp_path / "bin"), str(gh_bin), os.environ.get("PATH", "")))
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, _counter_edit(tmp_path), queue=[_fail_n(1), _PASS],
+		extra_env=_loop_env(PATH=env_path, GITHUB_REPOSITORY="o/r", PR_NUMBER="12", HEAD_REF="ai/issue-7", GH_TOKEN="x"),
+		copy_acceptance_helper=True)
+	calls = (gh_work / "gh.log").read_text(encoding="utf-8").splitlines()
+	assert len(calls) <= 2 and sum("comments" in call for call in calls) == 1
+	fetched = json.loads((tmp_path / "runtime" / "prepush_gate_resolver" / "acceptance.json").read_text(encoding="utf-8"))
+	assert fetched["state"] == "valid"
+	assert all("--tests-file /inputs/tests.txt" in line for line in _docker_run_lines(work))
+
+
+def test_resolver_loop_contract_stays_in_the_gate_function() -> None:
+	body = _gate_function_body()
+	assert '[ "${PERSIST_REPAIR_LOOP_ENABLED:-false}" = true ]' in body
+	assert 'bash "${gate_step}" persist-config' in body
+	assert 'bash "${gate_step}" acceptance-files' in body and 'bash "${gate_step}" acceptance-score' in body
+	assert 'PREPUSH_TEST_GATE_PROMPT_DONE_CHECK="${gate_acc_on}"' in body
+	assert "PERSIST repair_loop outcome=" in body
+	# The fetch is the trusted support copy, isolated, and never runs inside the gate.
+	assert '"${gate_support}/acceptance_check.py" fetch-plan' in body and "python3 -I -B" in body
 
 
 # ── --test-repair (#8210, plan phase P5) ─────────────────────────────

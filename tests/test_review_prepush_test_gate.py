@@ -931,3 +931,125 @@ def test_acceptance_label_creates_and_retries_after_a_failed_post(tmp_path):
 	calls = _gh_calls(log)
 	assert len(calls) == 3 and "-X POST" in calls[0] and calls[1] == "label create ai:acceptance-unmet" and "-X POST" in calls[2], proc.stderr
 	assert "PERSIST acceptance_label outcome=added" in proc.stderr
+
+
+# --- Resolver repair loop entry points (issue #8427, P3 follow-up) -----------------------
+
+def _step_cli(tmp_path: Path, env: dict[str, str], *args: str) -> subprocess.CompletedProcess:
+	return subprocess.run(["bash", str(tmp_path / "support" / "scripts" / STEP_SCRIPT.name), *args], cwd=tmp_path, env=env,
+		capture_output=True, text=True, timeout=60)
+
+
+@pytest.mark.parametrize("switch, turns, expected", [
+	(None, None, "false 3"),
+	("false", "2", "false 2"),
+	("true", None, "true 3"),
+	("true", "9", "true 5"),
+	("true", "0", "true 1"),
+	("true", "abc", "true 3"),
+])
+def test_persist_config_subcommand_clamps_the_turn_cap(tmp_path, switch, turns, expected):
+	repo, env = _setup(tmp_path, [PASS])
+	for key, value in (("PERSIST_REPAIR_LOOP_ENABLED", switch), ("PERSIST_REPAIR_MAX_TURNS", turns)):
+		env.pop(key, None)
+		if value is not None:
+			env[key] = value
+	proc = _step_cli(tmp_path, env, "persist-config")
+	assert proc.returncode == 0 and proc.stdout.strip() == expected, proc.stderr
+
+
+def _seed_done_check(tmp_path: Path, env: dict[str, str]) -> Path:
+	_with_fake_gh(tmp_path, env)
+	done = tmp_path / "acceptance.json"
+	done.write_text(json.dumps({"schema": "acceptance.v1", "state": "valid", "source": "plan", "errors": [], "checks": [],
+		"tests": [{"path": "tests/test_a.py", "name": "", "red_on_base": True}], "post_merge": None,
+		"post_merge_none": "library only"}), encoding="utf-8")
+	return done
+
+
+def test_acceptance_files_and_score_subcommands(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	done = _seed_done_check(tmp_path, env)
+	out = tmp_path / "out"
+	out.mkdir()
+	proc = _step_cli(tmp_path, env, "acceptance-files", str(done), str(out))
+	assert proc.returncode == 0 and proc.stdout.strip() == "1", proc.stderr
+	assert (out / "tests.txt").read_text(encoding="utf-8") == "tests/test_a.py\n"
+	assert (out / "baseline_fail.txt").read_text(encoding="utf-8") == "tests/test_a.py\n"
+	gate = tmp_path / "result.json"
+	gate.write_text(json.dumps(dict(PASS, acceptance={"tests/test_a.py": {"head": "fail", "base": "fail"}})), encoding="utf-8")
+	proc = _step_cli(tmp_path, env, "acceptance-score", str(done), str(gate))
+	assert proc.returncode == 0 and proc.stdout.strip() == "unmet 1", proc.stderr
+	scored = json.loads((tmp_path / "runtime" / "acceptance_result.json").read_text(encoding="utf-8"))
+	assert scored["state"] == "unmet" and scored["extra_unmet"] == 1
+	# Missing inputs are refused without a helper run.
+	assert _step_cli(tmp_path, env, "acceptance-files", str(tmp_path / "absent.json"), str(out)).returncode == 2
+	assert _step_cli(tmp_path, env, "acceptance-score", str(done), str(tmp_path / "absent.json")).stdout.strip() == "none 0"
+
+
+def test_acceptance_files_without_the_helper_logs_and_prints_zero(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	done = tmp_path / "acceptance.json"
+	done.write_text("{}", encoding="utf-8")
+	proc = _step_cli(tmp_path, env, "acceptance-files", str(done), str(tmp_path))
+	assert proc.returncode == 0 and proc.stdout.strip() == "0"
+	assert "PERSIST repair_loop outcome=skipped reason=helper_absent" in proc.stderr
+
+
+def test_repair_prompt_done_check_block_needs_the_explicit_opt_in(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL])
+	(tmp_path / "runtime" / "acceptance_result.json").write_text(json.dumps({"schema": "acceptance_result.v1", "state": "unmet",
+		"unmet_count": 1, "extra_unmet": 1, "acceptance": {"items": [{"kind": "test", "target": "tests/test_a.py", "status": "unmet"}]}}),
+		encoding="utf-8")
+	result = tmp_path / "result.json"
+	result.write_text(json.dumps(FAIL), encoding="utf-8")
+	texts = {}
+	for name, extra in (("off", {}), ("switch_only", {"PERSIST_REPAIR_LOOP_ENABLED": "true"}),
+			("opt_in_only", {"PREPUSH_TEST_GATE_PROMPT_DONE_CHECK": "true"}),
+			("both", {"PERSIST_REPAIR_LOOP_ENABLED": "true", "PREPUSH_TEST_GATE_PROMPT_DONE_CHECK": "true"})):
+		out = tmp_path / f"prompt_{name}.txt"
+		proc = _step_cli(tmp_path, dict(env, **extra), "repair-prompt", str(result), str(out))
+		assert proc.returncode == 0, proc.stderr
+		texts[name] = out.read_text(encoding="utf-8")
+	assert texts["off"] == texts["switch_only"] == texts["opt_in_only"]
+	assert "DONE-CHECK" not in texts["off"]
+	assert "=== BEGIN UNTRUSTED DONE-CHECK STATUS" in texts["both"]
+	assert "UNTRUSTED_DATA: tests/test_a.py: unmet" in texts["both"]
+
+
+REVIEW_COMMIT = REPO_ROOT / "scripts" / "review_commit_changes.sh"
+
+
+def _journal_block() -> str:
+	text = REVIEW_COMMIT.read_text(encoding="utf-8")
+	start = text.index("  # Attempt journal (issue #8428, P1)")
+	return text[start:text.index("  # Detect ledger-only commits", start)]
+
+
+@pytest.mark.parametrize("runs, expected", [((1, 2, 3), "run3"), ((1,), "run1"), ((1, 2), "run2"), ((1, 2, 3, 4, 5, 6), "run6")])
+def test_review_commit_journal_reads_the_newest_gate_run(tmp_path, runs, expected):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	(repo / "a.txt").write_text("1\n", encoding="utf-8")
+	_git(repo, "init", "-q")
+	_git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+	_git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "one")
+	(repo / "a.txt").write_text("2\n", encoding="utf-8")
+	_git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-am", "two")
+	support = tmp_path / "support"
+	support.mkdir()
+	argv_log = tmp_path / "journal_argv.txt"
+	(support / "attempt_journal.py").write_text(
+		"import sys\nopen(%r, 'w').write('\\n'.join(sys.argv[1:]) + '\\n')\n" % str(argv_log), encoding="utf-8")
+	runtime = tmp_path / "runtime"
+	for n in runs:
+		(runtime / "prepush_gate" / f"run{n}").mkdir(parents=True)
+		(runtime / "prepush_gate" / f"run{n}" / "result.json").write_text(json.dumps(PASS), encoding="utf-8")
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "GIT_", "PERSIST_", "SUPPORT_"))}
+	env.update({"PERSIST_JOURNAL_ENABLED": "true", "SUPPORT_SCRIPTS_DIR": str(support), "RUNTIME_DIR": str(runtime),
+		"GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "12", "HEAD_REF": "ai/issue-7", "GITHUB_WORKSPACE": str(repo)})
+	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + _journal_block() + "echo DONE\n"], cwd=repo, env=env,
+		capture_output=True, text=True, timeout=60)
+	assert "DONE" in proc.stdout, proc.stderr
+	argv = argv_log.read_text(encoding="utf-8").splitlines()
+	assert argv[argv.index("--gate-result") + 1] == str(runtime / "prepush_gate" / expected / "result.json")
