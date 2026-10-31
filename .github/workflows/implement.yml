@@ -2876,6 +2876,7 @@ jobs:
       - name: Build evidence pack
         if: env.PERSIST_EVIDENCE_PACK_ENABLED == 'true' && env.SKIP_IMPLEMENT != 'true'
         continue-on-error: true
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |

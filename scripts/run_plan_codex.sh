@@ -356,7 +356,7 @@ fi
 # context. Off, missing helper or empty pack: the prompt is unchanged.
 if [ "${PERSIST_EVIDENCE_PACK_ENABLED:-false}" = "true" ]; then
 	if [ -f scripts/evidence_pack.py ] && [ ! -L scripts/evidence_pack.py ]; then
-		PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/evidence_pack.py build --repo "${GITHUB_REPOSITORY:-}" \
+		PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -B scripts/evidence_pack.py build --repo "${GITHUB_REPOSITORY:-}" \
 			--text-file "${PLANNING_CONTEXT_FILE}" --repo-root . --out "${RUNTIME_DIR}/evidence_pack.txt" || true
 		if [ -s "${RUNTIME_DIR}/evidence_pack.txt" ]; then
 			{ echo; cat "${RUNTIME_DIR}/evidence_pack.txt"; } >> "${CODEX_PROMPT_FILE}"

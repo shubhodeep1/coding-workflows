@@ -181,7 +181,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
 - `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
-- `scripts/evidence_pack.py` — Build the fenced, scrubbed evidence pack (open PRs touching the plan's paths, recent default-branch history and runs) for the clarify, plan and implement prompts (issue #8427, default off).
+- `scripts/evidence_pack.py` — Build the fenced, scrubbed evidence pack (trusted open pull requests touching the paths in play, default-branch history, recent default-branch runs) for clarify, plan and implement prompts (issue #8427, default off).
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/plan_superseded_merged_pr.py` — Plan-phase check that closes a CI-repair issue (or a re-issue of one) whose pull request already merged with the failing check passing on its final head (issue #7216; log prefix `PLAN_SUPERSEDED_MERGED_PR`).
 - `scripts/plan_split_dispatch.sh` — Plan-phase hand-off that starts an orchestrator project (Claude engine) for a pipeline-authored plan listing more than 50 files, instead of holding it for `/approved` (Q151; log prefix `PLAN_SPLIT`).

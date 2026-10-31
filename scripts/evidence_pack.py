@@ -5,12 +5,12 @@ docs/plans/persistent-unattended-workflows-plan.md).
 Host-side helper that builds a short, fenced block of repository evidence for
 the clarify, plan and implement prompts:
 
-	OPEN PULL REQUESTS TOUCHING THESE PATHS  same-repo, trusted-author open PRs
-	                                         whose changed files overlap the paths
-	RECENT HISTORY                           per-path `git log` subjects of the
-	                                         default branch
-	DEFAULT BRANCH RUNS                      recent completed default-branch runs
-	                                         (workflow name, conclusion, created_at)
+    OPEN PULL REQUESTS TOUCHING THESE PATHS  same-repo, trusted-author open PRs
+                                             whose changed files overlap the paths
+    RECENT HISTORY                           per-path `git log` subjects of the
+                                             default branch
+    DEFAULT BRANCH RUNS                      recent completed default-branch runs
+                                             (workflow name, conclusion, created_at)
 
 Every line is third-party text (PR titles, commit subjects, workflow names,
 paths named by issue text), so the block is fenced
@@ -92,6 +92,9 @@ PR_PAGE = 50
 GRAPHQL_BATCH = 25
 GRAPHQL_MAX_QUERIES = 2
 RUNS_PAGE = 10
+# Advisory reads: one attempt each, so a build sends at most 4 requests and a
+# retry backoff or rate-limit wait never stalls the stage before the model runs.
+GH_MAX_ATTEMPTS = 1
 FREE_TEXT_CANDIDATES_MAX = 200
 FETCH_TIMEOUT_SECS = 60
 HISTORY_REF = "refs/persist/history"
@@ -166,8 +169,14 @@ def _git(root: Path, args: list[str], timeout: int = FETCH_TIMEOUT_SECS) -> subp
 		return None
 
 
-def safe_rel_path(value: Any, root: Path) -> str | None:
-	"""Relative path of an existing regular file inside root, or None."""
+def safe_rel_path(value: Any, root: Path, allow_missing: bool = False) -> str | None:
+	"""Relative path of a regular file inside root, or None.
+
+	allow_missing (trusted --paths-file / --plan-file entries only) also keeps a
+	path that does not exist yet, so a file the plan creates still reaches the
+	open-PR overlap check. Its existing parent must still resolve inside root,
+	and an existing entry must still be a regular file that is not a symlink.
+	"""
 	if not isinstance(value, str):
 		return None
 	value = value.strip()
@@ -184,6 +193,12 @@ def safe_rel_path(value: Any, root: Path) -> str | None:
 	try:
 		if candidate.is_symlink():
 			return None
+		if allow_missing and not os.path.lexists(candidate):
+			resolved = candidate.resolve(strict=False)
+			rel = resolved.relative_to(root)
+			if rel.parts and rel.parts[0] == ".git":
+				return None
+			return value
 		resolved = candidate.resolve(strict=True)
 		rel = resolved.relative_to(root)
 	except (OSError, ValueError, RuntimeError):
@@ -229,20 +244,21 @@ def collect_paths(paths_file: str | None, text_file: str | None, plan_file: str 
 	found: list[str] = []
 	seen: set[str] = set()
 
-	def add(candidate: Any) -> None:
+	def add(candidate: Any, allow_missing: bool = False) -> None:
 		if len(found) >= MAX_PATHS:
 			return
-		path = safe_rel_path(candidate, root)
+		path = safe_rel_path(candidate, root, allow_missing)
 		if path and path not in seen:
 			seen.add(path)
 			found.append(path)
 
+	# Trusted inputs: a planned new file is kept so open PRs adding it are found.
 	for line in _read_text(paths_file).splitlines():
-		add(line)
+		add(line, allow_missing=True)
 	plan_text = _read_text(plan_file)
 	if plan_text:
 		for path in _tfc.extract_paths_from_plan(_likely_section(plan_text)):
-			add(path)
+			add(path, allow_missing=True)
 	text = _read_text(text_file)
 	if text and len(found) < MAX_PATHS:
 		# Untrusted issue text: every candidate must also be a tracked file.
@@ -274,23 +290,21 @@ class Builder:
 	def __init__(self) -> None:
 		self.calls = 0
 		self.partial = False
+		self.reason = ""
 
 	def gh(self, args: list[str], idempotent: bool = False) -> bytes | None:
 		"""One logical gh api read through gh_api_retry (optional: honours the breaker)."""
-		self.calls += 1
 		try:
 			import gh_api_retry  # noqa: PLC0415
 		except Exception:  # noqa: BLE001
-			gh_api_retry = None
-			print("PERSIST evidence_pack outcome=partial calls=0 bytes=0 reason=gh_api_retry_unavailable", file=sys.stderr)
-		if gh_api_retry is not None:
-			result = gh_api_retry.call(args, idempotent=idempotent, optional=True)
-			return result.stdout if result.rc == 0 else None
-		try:
-			proc = subprocess.run(["gh", "api", *args], capture_output=True, check=False, timeout=120)
-		except (OSError, subprocess.SubprocessError):
+			# No raw fallback call: it would bypass the rate-limit breaker. The
+			# reason goes on the single final PERSIST line.
+			self.partial = True
+			self.reason = self.reason or "gh_api_retry_unavailable"
 			return None
-		return proc.stdout if proc.returncode == 0 else None
+		self.calls += 1
+		result = gh_api_retry.call(args, idempotent=idempotent, optional=True, max_attempts=GH_MAX_ATTEMPTS)
+		return result.stdout if result.rc == 0 else None
 
 	def _json(self, raw: bytes | None) -> Any:
 		if raw is None:
@@ -492,6 +506,7 @@ def cmd_build(args: argparse.Namespace, builder: Builder) -> None:
 		builder.partial = True
 		hist = ["(skipped: default branch unknown)"]
 		runs = ["(skipped: default branch unknown)"]
+	reason = reason or builder.reason
 	text = render([(SECTION_PRS, prs), (SECTION_HISTORY, hist), (SECTION_RUNS, runs)], cap)
 	_finish(args.out, text, "partial" if builder.partial else "ok", builder.calls, reason)
 

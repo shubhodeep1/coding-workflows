@@ -1442,6 +1442,7 @@ jobs:
       - name: Build evidence pack
         if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true') && env.PERSIST_EVIDENCE_PACK_ENABLED == 'true'
         continue-on-error: true
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

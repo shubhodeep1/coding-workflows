@@ -317,7 +317,61 @@ def test_collect_paths_rejects_unsafe_and_untracked(world):
 	assert ep.collect_paths(None, str(text), None, work) == ["a.py"]
 	paths = world["tmp"] / "unsafe.txt"
 	paths.write_text("../../etc/passwd\n-oProxyCommand\n.git/config\nlink.py\n./b.py\nmissing.py\n", encoding="utf-8")
-	assert ep.collect_paths(str(paths), None, None, work) == ["b.py"]
+	# Trusted --paths-file entries may name a file that does not exist yet.
+	assert ep.collect_paths(str(paths), None, None, work) == ["b.py", "missing.py"]
+
+
+def test_trusted_inputs_keep_planned_new_files_but_not_escapes(world):
+	work = world["work"]
+	outside = world["tmp"] / "outside"
+	outside.mkdir()
+	(work / "escape").symlink_to(outside)
+	(work / "dir").mkdir()
+	plan = world["tmp"] / "plan.txt"
+	plan.write_text("## Files likely to change\n- `scripts/new_helper.py`\n- `a.py`\n", encoding="utf-8")
+	assert ep.collect_paths(None, None, str(plan), work) == ["scripts/new_helper.py", "a.py"]
+	paths = world["tmp"] / "trusted.txt"
+	paths.write_text("escape/new.py\n.git/new\ndir\nnew/file.py\n", encoding="utf-8")
+	assert ep.collect_paths(str(paths), None, None, work) == ["new/file.py"]
+	# Untrusted issue text still needs a tracked file.
+	text = world["tmp"] / "issue.txt"
+	text.write_text("Touch `scripts/new_helper.py` and `a.py`.\n", encoding="utf-8")
+	assert ep.collect_paths(None, str(text), None, work) == ["a.py"]
+
+
+def test_planned_new_file_reaches_open_pr_overlap(world):
+	_write_state(world, [_pr(7, title="Adds the helper")], {"7": ["scripts/new_helper.py"]}, {"workflow_runs": []})
+	_proc, text = _build(world, paths=("scripts/new_helper.py",))
+	assert "Adds the helper -- scripts/new_helper.py" in text
+	assert "scripts/new_helper.py:\n  (no commits)" in text
+
+
+def test_missing_retry_helper_skips_calls_and_logs_once(world, tmp_path):
+	_standard_world(world)
+	lonely = tmp_path / "noretry"
+	lonely.mkdir()
+	for name in ("evidence_pack.py", "attempt_journal.py", "targeted_file_context.py"):
+		shutil.copy(REPO_ROOT / "scripts" / name, lonely / name)
+	proc, text = _build(world, script=lonely / "evidence_pack.py")
+	assert _calls(world) == []
+	lines = [line for line in proc.stderr.splitlines() if line.startswith("PERSIST evidence_pack")]
+	assert len(lines) == 1 and "outcome=partial calls=0" in lines[0] and "reason=gh_api_retry_unavailable" in lines[0]
+	assert "first change to a" in text
+
+
+def test_api_reads_are_bounded_to_one_attempt(monkeypatch):
+	seen = []
+
+	class _Result:
+		rc = 1
+		stdout = b""
+
+	import gh_api_retry  # noqa: PLC0415
+
+	monkeypatch.setattr(gh_api_retry, "call", lambda args, **kw: seen.append(kw) or _Result())
+	builder = ep.Builder()
+	assert builder.gh(["repos/o/r/pulls"]) is None
+	assert seen == [{"idempotent": False, "optional": True, "max_attempts": 1}] and builder.calls == 1
 
 
 def test_collect_paths_uses_last_files_section_of_plan(world):
