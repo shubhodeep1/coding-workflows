@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: rewrite `tests/e2e_smoke_canary.txt` to the three specified lines\n\nPlanning ref: `git rev-parse HEAD` = `18f9289c9210d97f956fd2e96c0347d9336f09ea`, branch `main` (resolved checkout ref `main`). The integration branch mismatch line reads `unknown`, not `true`, so planning goes ahead.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names exactly one file and gives its full new content, and the constraints forbid touching anything else. The plan rewrites that existing file in place. It adds no helpers, scripts, wiring or documentation, and there is nothing to defer. A full content replacement is the complete fix and costs nothing extra, so no reduction is needed (\u00a76: Correctness & safety > Speed).\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- None. This is a static content rewrite.\n- Current content, checked on the planning ref (two lines, each ending in a newline):\n  - `status: ok`\n  - `decompose-run: 40427433026`\n- New content, exactly three lines, each ending in a single `\\n`, with no trailing blank line, no CRLF and no trailing whitespace:\n  - `status: ok`\n  - `run_id: alt-41204472836`\n  - `updated-by: ai-pipeline`\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Replace the whole file instead of patching single lines\n- Chosen: Overwrite the file so it holds exactly the three specified lines, each ending in a newline.\n- Alternatives considered: Editing only the second line and appending a third.\n- Why: The issue requires the content to be \"exactly\" these lines. A full rewrite guarantees that, removes the old `decompose-run` line, and keeps the file's existing newline-terminated style.\n\n## Security considerations\n- No trust boundaries, endpoints, secrets or money state are involved.\n- The values are fixed literals from the issue, so no external input is parsed or run.\n- Abuse cases: none, because the file is a passive text canary.\n\n## Potential risks or edge cases\n- The trailing newline: the existing file ends each line with a newline, and the new file keeps that.\n- No conflicts were found between the issue and the codebase: the file exists at the named path.\n\n## Testing considerations\n- Check that `cat -A tests/e2e_smoke_canary.txt` prints exactly `status: ok$`, `run_id: alt-41204472836$`, `updated-by: ai-pipeline$`.\n- Check that `git diff --stat` shows only this one file changed.\n\n## Pre-execution self-check\n- The only file in the plan is the one the issue allows.\n- The content matches the issue word for word.\n- No other files, scripts or documentation are touched.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "7bb0fea4c17abd72c09f4abdd620b82594c41ffecef789530f9210208d898046",
+  "lineage": {
+    "issue_number": 8546,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41205383526",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41205383526",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8546"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261031133102_af8c7eebf7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8546,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41205383526"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8546",
+  "timestamps": {
+    "created_at": "2026-10-31T13:31:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
