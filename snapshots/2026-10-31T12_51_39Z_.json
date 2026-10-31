@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-30T17:45:06Z",
+  "tick_at": "2026-10-31T12:51:39Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 6
+    "tracking_issues": 8
   },
   "tracking_issues": [
     {
@@ -76,7 +76,7 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "47",
+      "integration_ahead_by": "55",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -96,8 +96,8 @@
       "wave_complete": false
     },
     {
-      "current_wave": 2,
-      "integration_ahead_by": "16",
+      "current_wave": 5,
+      "integration_ahead_by": "29",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -117,13 +117,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 3,
-      "integration_ahead_by": "14",
+      "current_wave": 9,
+      "integration_ahead_by": "30",
       "issue_counts": {
         "closed": 0,
-        "done": 2,
+        "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -135,6 +135,46 @@
       "status": "in-progress",
       "title": "[Orchestrator] Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)",
       "total_waves": 15,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 0,
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8504,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply validated recommendations from analysis/workflow-optimization-2026-09-26-2.md",
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 0,
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8531,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply recommendations from analysis/workflow-optimization-2026-09-26-3.md",
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
