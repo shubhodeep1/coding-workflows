@@ -15,13 +15,19 @@ Checks, in order:
 	0. any label ai:security-pass-failed or containing "security", or
 		ai:needs-human / ai:closed                       -> ignore
 	1. no trusted journal entries                         -> ignore journal_absent
-	2. newest entry is a `governor` entry                 -> ignore already_decided
+	2. newest entry is a `governor` escalation (outcome blocked)
+		-> ignore already_decided
 	3. oldest entry older than PERSIST_MAX_HOURS          -> escalate max_hours
-	4. rounds on the current approach >= PERSIST_MAX_ROUNDS (max_rounds), or
+		(a newest `governor` re-plan entry otherwise -> ignore already_decided)
+	4. rounds on the current approach >= PERSIST_MAX_ROUNDS and the newest
+		round failed (max_rounds), or
 		the newest PERSIST_REPLAN_AFTER_FAILED_ROUNDS rounds all failed
 		(failed_rounds), or the newest 2 rounds both failed with no progress
 		between them (no_progress)                       -> replan, or escalate
-		max_approaches:<trigger> once PERSIST_MAX_APPROACHES approaches exist
+		max_approaches:<trigger> once PERSIST_MAX_APPROACHES approaches exist;
+		a would-be re-plan of an issue labelled ai:done, ai:review-blocked or
+		ai:ready-to-merge (open PR; plan.yml skips planning) escalates
+		open_pr:<trigger> instead
 	5. newest round is a failed `postmerge` round with no newer `plan` entry
 		(P5 hand-off)                                     -> replan / escalate
 		postmerge_recurred
@@ -77,6 +83,8 @@ except Exception:  # noqa: BLE001 - fail open below
 
 SECURITY_LABEL = "ai:security-pass-failed"
 IGNORE_LABELS = ("ai:needs-human", "ai:closed")
+# Phases with an open implementation PR: plan.yml skips planning for them.
+OPEN_PR_LABELS = ("ai:done", "ai:review-blocked", "ai:ready-to-merge")
 ROUND_STAGES = ("implement", "review", "resolver", "postmerge")
 NO_PROGRESS_ROUNDS = 2
 ACTIONS = ("continue", "replan", "escalate", "ignore")
@@ -164,6 +172,10 @@ def ignored(labels: Any) -> str:
 	if "ai:closed" in names:
 		return "closed"
 	return ""
+
+
+def open_pr_label(labels: Any) -> bool:
+	return any(name in OPEN_PR_LABELS for name in _labels(labels))
 
 
 def _ordered(entries: Any) -> list[dict]:
@@ -296,15 +308,24 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 		return _result(ordered, "ignore", reason, limits)
 	if not ordered:
 		return _result(ordered, "ignore", "journal_absent", limits)
-	if ordered[-1].get("stage") == "governor":
+	newest_governor = ordered[-1].get("stage") == "governor"
+	# A newest governor escalation (outcome `blocked`) is final. A newest
+	# governor re-plan whose plan run never happened (plan.yml skipped it)
+	# still escalates once the time cap is reached, as the plan orders
+	# max_hours first.
+	if newest_governor and ordered[-1].get("outcome") == "blocked":
 		return _result(ordered, "ignore", "already_decided", limits)
 	oldest = parse_ts(ordered[0]["ts"])
 	if oldest is not None and (now - oldest).total_seconds() > limits["max_hours"] * 3600:
 		return _result(ordered, "escalate", "max_hours", limits)
+	if newest_governor:
+		return _result(ordered, "ignore", "already_decided", limits)
 	can_replan = approaches(ordered) < limits["max_approaches"]
 	items = rounds(ordered, current_approach(ordered))
 	trigger = ""
-	if len(items) >= limits["max_rounds"]:
+	# max_rounds counts every round, but only acts when the newest round
+	# failed, so a passing PR is never pulled back to planning.
+	if len(items) >= limits["max_rounds"] and failed(items[-1]):
 		trigger = "max_rounds"
 	elif trailing_failed(items) >= limits["replan_after"]:
 		trigger = "failed_rounds"
@@ -319,6 +340,10 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 			if not any(e.get("stage") == "plan" and e["ts"] > newest_round_ts for e in ordered):
 				trigger = "postmerge_recurred"
 	if trigger:
+		if can_replan and open_pr_label(labels):
+			# plan.yml skips planning while the issue's PR is open, so a
+			# re-plan here could never run; hand it to a person instead.
+			return _result(ordered, "escalate", f"open_pr:{trigger}", limits)
 		if can_replan:
 			return _result(ordered, "replan", trigger, limits)
 		return _result(ordered, "escalate", f"max_approaches:{trigger}", limits)

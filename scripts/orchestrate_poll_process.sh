@@ -19671,12 +19671,16 @@ persist_budget_govern_issue() {
   esac
   PERSIST_BUDGET_LAST_BASIS="${pbg_basis}"
   if [ "${pbg_action}" = "continue" ] || [ "${pbg_action}" = "ignore" ]; then
+    # Plan P6 "Done when": no journal logs as skipped.
+    [ "${pbg_reason}" = "journal_absent" ] && pbg_action="skipped"
     echo "PERSIST governor outcome=${pbg_action} reason=${pbg_reason} issue=${pbg_issue}" >&2
     rm -f "${pbg_comments_file}"
     return 0
   fi
-  # State flag (plan P6 "state flag"): this journal state was already acted on.
-  if [ -n "${pbg_basis}" ] && [ "${pbg_basis}" = "${pbg_prior}" ]; then
+  # State flag (plan P6 "state flag"): this journal state was already
+  # re-planned. Only re-plans store it, so a later escalation (max_hours
+  # after a re-plan that never ran) still acts.
+  if [ "${pbg_action}" = "replan" ] && [ -n "${pbg_basis}" ] && [ "${pbg_basis}" = "${pbg_prior}" ]; then
     echo "PERSIST governor outcome=skipped reason=already_decided issue=${pbg_issue}" >&2
     rm -f "${pbg_comments_file}"
     return 0
@@ -23110,6 +23114,9 @@ PY
           continue
           ;;
         escalate)
+          if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+            write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          fi
           continue
           ;;
       esac
@@ -30700,6 +30707,10 @@ fi
     # journal basis on the wave issue entry and the state comment is posted
     # with the stall changes below.
     PERSIST_BUDGET_STATE_CHANGED=false
+    # Stall-check view of the labels: issues the governor acted on this tick
+    # read as ai:needs-human so check-stalls leaves them alone until the next
+    # tick (a re-plan was just posted or an escalation just applied).
+    PERSIST_BUDGET_STALL_LABELS_JSON="${LABELS_JSON}"
     if _is_truthy "${PERSIST_BUDGET_ENABLED:-false}" && [ -f scripts/persist_budget.py ]; then
       _load_actions_runs_cached >/dev/null 2>&1 || true
       ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set 2>/dev/null || true)"
@@ -30709,9 +30720,20 @@ fi
           merged|closed|skipped|not_created) continue ;;
         esac
         _pb_labels="$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${_pb_issue}" '.[$n] // []' 2>/dev/null || echo '[]')"
+        # Dedicated-handler phases (DEDICATED_HANDLER_PHASES in
+        # orchestrate_lib.py) and human latches are owned elsewhere; the
+        # standalone loop skips the same phases before its hook.
+        if printf '%s' "${_pb_labels}" | jq -e 'any(.[]; (if type == "object" then .name else . end) | IN("ai:needs-human", "ai:claude-capacity-wait", "ai:split-to-project", "ai:blocked", "ai:implementation-failed", "ai:validating", "ai:validation-fixing", "ai:security-pass", "ai:security-pass-fixing", "ai:destructive-blocked", "ai:scope-blocked"))' >/dev/null 2>&1; then
+          echo "PERSIST governor outcome=skipped reason=dedicated_phase issue=${_pb_issue}" >&2
+          continue
+        fi
         _pb_comments="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${_pb_issue}" \
           'if (.[$n].comments_available == true) and ((.[$n].comments | type) == "array") then .[$n].comments else [] end' 2>/dev/null || echo '[]')"
         persist_budget_govern_issue "${_pb_issue}" "${_pb_comments}" "${_pb_labels}" "${_pb_prior}" managed < /dev/null
+        if [ "${PERSIST_BUDGET_LAST_ACTION}" = "replan" ] || [ "${PERSIST_BUDGET_LAST_ACTION}" = "escalate" ]; then
+          PERSIST_BUDGET_STALL_LABELS_JSON="$(printf '%s' "${PERSIST_BUDGET_STALL_LABELS_JSON}" | jq -c --arg n "${_pb_issue}" \
+            '.[$n] = ((.[$n] // []) + ["ai:needs-human"])' 2>/dev/null || printf '%s' "${PERSIST_BUDGET_STALL_LABELS_JSON}")"
+        fi
         if [ "${PERSIST_BUDGET_LAST_ACTION}" = "replan" ] && [ -n "${PERSIST_BUDGET_LAST_BASIS}" ]; then
           if jq --argjson wi "${WAVE_IDX}" --arg n "${_pb_issue}" --arg basis "${PERSIST_BUDGET_LAST_BASIS}" \
             '(.waves[$wi].issues[] | select((.github_issue | tostring) == $n)).persist_budget_basis = $basis' \
@@ -30732,7 +30754,7 @@ fi
     # ---------------------------------------------------------------
     _stall_check_args=(
       --state-file "${STATE_FILE}"
-      --labels-json "${LABELS_JSON}"
+      --labels-json "${PERSIST_BUDGET_STALL_LABELS_JSON:-${LABELS_JSON}}"
       --threshold-minutes "${STALL_THRESHOLD_MINUTES}"
       --max-recoveries "${MAX_STALL_RECOVERIES_PER_ISSUE}"
       --stall-judge-trigger-count "${STALL_JUDGE_TRIGGER_COUNT}"
