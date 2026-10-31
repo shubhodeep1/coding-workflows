@@ -10505,7 +10505,10 @@ def test_last_green_run_makes_one_get_and_fails_open() -> None:
 
 	ok = heal.last_green_run(SELF_REPO, P2_WORKFLOW_ID, "main", failing_sha=SHA_A, before="2026-10-27T09:40:12Z", run_gh=runner(_p2_green_runs()))
 	assert ok == {"run_id": 40800000001, "head_sha": P2_GREEN_SHA, "created_at": "2026-10-26T08:00:00Z", "reason": "ok"}
-	assert calls == [["gh", "api", "--method", "GET", f"repos/{SELF_REPO}/actions/workflows/{P2_WORKFLOW_ID}/runs", "-f", "status=success", "-f", "branch=main", "-F", "per_page=1"]]
+	assert calls == [["gh", "api", "--method", "GET", f"repos/{SELF_REPO}/actions/workflows/{P2_WORKFLOW_ID}/runs", "-f", "status=success", "-f", "branch=main", "-F", "per_page=1", "-f", "created=<2026-10-27T09:40:12Z"]]
+	calls.clear()
+	heal.last_green_run(SELF_REPO, P2_WORKFLOW_ID, "main", run_gh=runner(_p2_green_runs()))
+	assert calls and not any(part.startswith("created=") for part in calls[0])
 	calls.clear()
 	for repo, workflow_id, branch in ((SELF_REPO, "abc", "main"), ("not a repo", 1, "main"), (SELF_REPO, 1, "bad..branch"), (SELF_REPO, 0, "main"), (SELF_REPO, True, "main")):
 		assert heal.last_green_run(repo, workflow_id, branch, run_gh=runner(_p2_green_runs()))["reason"] == "invalid_input"
@@ -10625,6 +10628,7 @@ def test_intake_reproduction_reproduced_adds_section_with_one_extra_call() -> No
 	call = extra[0]
 	assert call[call.index("--method") + 1] == "GET" and f"repos/{SELF_REPO}/actions/workflows/{P2_WORKFLOW_ID}/runs" in call
 	assert {"status=success", "branch=main", "per_page=1"} <= set(call)
+	assert any(part.startswith("created=<") for part in call)
 	# Classification is unchanged for a non-transient verdict.
 	assert heal.parse_heal_markers(_p2_issue(on_state)["body"])["classification"] == "workflow-defect"
 

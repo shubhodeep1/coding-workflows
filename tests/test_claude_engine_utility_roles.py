@@ -334,7 +334,8 @@ def test_heal_intake_routes_through_the_selector_from_its_own_directory() -> Non
 	):
 		assert needle in text
 	assert "source scripts/ai_engine.sh" not in text
-	assert text.count("env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID") == 2
+	# Two diagnosis launchers plus the reproduction runner (_heal_run_reproduction, #8490).
+	assert text.count("env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID") == 3
 
 
 def test_activation_verify_routes_through_the_trusted_selector() -> None:
