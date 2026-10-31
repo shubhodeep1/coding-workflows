@@ -5,13 +5,25 @@
   "entry_id": "processed_command_8532_6541843057_approved",
   "issue_number": 8532,
   "metadata": {
+    "branch": "ai/issue-8532",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/wfopt-2026-09-26-3-smoke-child-count.md",
+      "tests/test_test_and_mark_stable_orchestrate_child_count.py"
+    ],
+    "issue_number": 8532,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8532",
+    "pr_number": 8536,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8536",
+    "run_attempt": "1",
+    "run_id": "41189940974",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41189940974"
   },
   "run_attempt": 1,
   "run_id": "41189940974",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-31T09:49:17Z",
+  "status": "completed",
+  "timestamp": "2026-10-31T10:26:07Z",
   "workflow": "implement"
 }
