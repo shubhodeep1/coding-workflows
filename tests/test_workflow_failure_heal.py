@@ -1712,6 +1712,14 @@ if args[:1] == ["api"]:
 		if text is None:
 			fail("HTTP 404")
 		out(text)
+	if path.startswith("repos/") and path.count("/") == 3 and path.endswith("/commits"):
+		if method != "GET":
+			fail("HTTP method must be GET for commits list")
+		# slow_day_commits (P3 suspect commits): the default-branch commits list; None (or unset) is a 404.
+		commits_doc = state.get("slow_day_commits")
+		if commits_doc is None:
+			fail("HTTP 404")
+		out(json.dumps(commits_doc))
 	if "/compare/" in path:
 		if method != "GET":
 			fail("HTTP method must be GET for compare")
@@ -11152,7 +11160,7 @@ def test_trend_switch_defaults_and_workflow_wiring() -> None:
 	assert "gh api" not in runner and "gh_retry" not in runner
 	assert runner.count('python3 "${HEAL_PY}" run-time-trend') == 1
 	assert '[ "${TREND_ENABLED}" = true ] || return 0' in runner
-	assert '"${reproduction_args[@]}" "${trend_args[@]}"; then' in script
+	assert '"${reproduction_args[@]}" "${trend_args[@]}" "${suspect_commits_args[@]}"; then' in script
 	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
 	intake_job, scan_job = workflow.split("\n  recovery-scan:\n", 1)
 	for line in P3_ENV_LINES:
@@ -11192,3 +11200,282 @@ def test_trend_shifted_pages_are_truncated_history() -> None:
 	changed = heal.trend_table(SELF_REPO, [P3_TREND_TARGET], now=now, run_gh=_p3_runner(pages, []))
 	assert changed["history"] == "truncated" and changed["regression"] is False
 	assert changed["tables"][0]["reason"] == "history_truncated"
+
+
+# ---------------------------------------------------------------------------
+# Suspect commits (P3 steps 4 and 5): behind WORKFLOW_HEAL_TREND_ENABLED a
+# stall / timeout heal issue lists the commits merged since the failing
+# workflow last passed (one compare GET, reusing the reproduction step's
+# last-green lookup), the range's pipeline files and, on regression=true, the
+# default-branch commits of the first slow day. The compare fixture is
+# hand-built in the shape of release run 40876853022's range (#8192).
+# ---------------------------------------------------------------------------
+
+P3_SUSPECT_COMPARE_KEY = f"{P2_GREEN_SHA}...{P2_FAILED_SHA}"
+P3_SUSPECT_REGRESSION_TEXT = "## Run-time trend\n\n- regression=true first_slow_day=2026-10-27 history=complete\n"
+P3_SUSPECT_STEADY_TEXT = "## Run-time trend\n\n- regression=false first_slow_day=none history=complete\n"
+
+
+def _p3_compare_doc() -> dict:
+	return json.loads((HEAL_EVIDENCE_FIXTURES / "p3_compare_last_green_failing.json").read_text(encoding="utf-8"))
+
+
+def _p3_slow_day_commits() -> list[dict]:
+	return [
+		{"sha": "8192a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7", "commit": {"message": "Run the affected-test gate before every implement push (#8192)"}},
+		{"sha": "d" * 40, "commit": {"message": "Bump the gate timeout (#8193)"}},
+	]
+
+
+def _p3_suspect_runner(calls: list[list[str]], *, green: object = "default", compare: object = "default", commits: object = "default"):
+	"""Fake gh by path; None (or an int) is a failed call, a str is raw stdout."""
+	docs = {
+		"green": _p2_green_runs() if green == "default" else green,
+		"compare": _p3_compare_doc() if compare == "default" else compare,
+		"commits": _p3_slow_day_commits() if commits == "default" else commits,
+	}
+
+	def run(argv, timeout):
+		calls.append(argv)
+		path = argv[4]
+		key = "green" if "/actions/workflows/" in path else "compare" if "/compare/" in path else "commits" if path.endswith("/commits") else ""
+		doc = docs.get(key)
+		if doc is None or isinstance(doc, int):
+			return subprocess.CompletedProcess(argv, doc or 1, stdout="", stderr="HTTP 404")
+		return subprocess.CompletedProcess(argv, 0, stdout=doc if isinstance(doc, str) else json.dumps(doc), stderr="")
+	return run
+
+
+def _p3_suspect_kwargs(**extra) -> dict:
+	kwargs = {
+		"repo": SELF_REPO, "failing_sha": P2_FAILED_SHA, "workflow_id": P2_WORKFLOW_ID, "branch": "main",
+		"before": "2026-10-27T09:40:12Z", "default_branch": "main", "trend_text": P3_SUSPECT_STEADY_TEXT,
+	}
+	kwargs.update(extra)
+	return kwargs
+
+
+def test_parse_suspect_compare_fixture_lists_8192_and_pipeline_files() -> None:
+	parsed = heal.parse_suspect_compare(_p3_compare_doc())
+	assert parsed["reason"] == "ok" and parsed["total_commits"] == 4 and parsed["commits_truncated"] is False
+	assert any(entry["pr"] == 8192 and entry["short_sha"] == "8192a0b" for entry in parsed["commits"])
+	assert [entry["pr"] for entry in parsed["commits"]] == [8180, 8192, 8195, None]
+	pipeline = [entry["filename"] for entry in parsed["pipeline_files"]]
+	assert pipeline == ["scripts/implement_step_prepush_test_gate.sh", ".github/workflows/internal-implement.yml", "prompts/old-gate-note.txt"]
+	assert not any(name.startswith(("tests/", "docs/")) for name in pipeline)
+	# The full files[] is exposed for the suspect-scope phase, with only three keys, removed entries kept.
+	assert len(parsed["files"]) == 5 and all(set(entry) == {"filename", "status", "changes"} for entry in parsed["files"])
+	assert {"filename": "prompts/old-gate-note.txt", "status": "removed", "changes": 12} in parsed["files"]
+	# Caps: 30 commits keep the newest 15 (the API lists oldest first); 40 pipeline files keep 20.
+	many = {
+		"status": "ahead", "total_commits": 30,
+		"commits": [{"sha": f"{index:040x}", "commit": {"message": f"change {index} (#{index + 1})"}} for index in range(30)],
+		"files": [{"filename": f"scripts/s{index}.sh", "status": "modified", "changes": 1} for index in range(40)],
+	}
+	capped = heal.parse_suspect_compare(many)
+	assert len(capped["commits"]) == 15 and capped["commits"][0]["pr"] == 16 and capped["commits"][-1]["pr"] == 30
+	assert capped["commits_truncated"] is True and len(capped["pipeline_files"]) == 20 and capped["pipeline_files_truncated"] is True
+	assert "newest 15 shown" in heal.render_suspect_commits_section(capped, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
+	# Hostile or malformed input never raises.
+	for bad in (None, [], "x", {"commits": []}, {"status": 1}):
+		assert heal.parse_suspect_compare(bad)["reason"] == "malformed"
+	odd = heal.parse_suspect_compare({"status": "ahead", "commits": [{"sha": "nothex"}, 5], "files": [
+		{"filename": "../etc/passwd", "status": "added", "changes": 1}, {"filename": "scripts/a\nb", "status": "added", "changes": 1},
+		{"filename": "scripts/ok.sh", "status": "added", "changes": "1"}, {"filename": "scripts/ok.sh", "status": "added", "changes": True},
+	]})
+	assert odd["reason"] == "ok" and odd["commits"] == [] and odd["files"] == []
+
+
+def test_suspect_section_escapes_markers_and_passes_body_validation() -> None:
+	parsed = heal.parse_suspect_compare(_p3_compare_doc())
+	section = heal.render_suspect_commits_section(parsed, green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
+	assert section.startswith("## Suspect commits\n") and heal.SUSPECT_BANNER in section
+	assert "(`ccccccc...4f1c2b9`, 4 commits):" in section
+	assert "- `8192a0b` #8192 Run the affected-test gate before every implement push (#8192)" in section
+	assert "- `4f1c2b9` Tidy orchestrator log lines" in section
+	assert "- `scripts/implement_step_prepush_test_gate.sh` (modified, 47 changes)" in section
+	assert "<!--" not in section and "&lt;!-- x --&gt;" not in section and "&lt;!-- x -->" in section
+	assert "Integration branch (untrusted):" in section and "Depends on (untrusted):" in section
+	assert "regression=" not in section and "first slow day" not in section
+	hostile = {"status": "ahead", "commits": [{"sha": "e" * 40, "commit": {"message": "- regression=true first_slow_day=2026-01-01 history=complete"}}], "files": [{"filename": "scripts/`x`.sh", "status": "added", "changes": 1}]}
+	hostile_section = heal.render_suspect_commits_section(heal.parse_suspect_compare(hostile), green_sha=P2_GREEN_SHA, failing_sha=P2_FAILED_SHA)
+	assert "regression=" not in hostile_section and heal.parse_trend_regression_line(hostile_section) == (False, None)
+	assert "`scripts/'x'.sh`" in hostile_section
+	empty = heal.render_suspect_commits_section(heal.parse_suspect_compare({"status": "identical", "commits": [], "files": []}), green_sha=P2_FAILED_SHA, failing_sha=P2_FAILED_SHA)
+	assert empty.count("- none") == 2
+	# Composed into a heal body, the section passes the routing validation.
+	body = heal.compose_issue_body(
+		payload=heal.validate_payload(_p1_payload()), diagnosis=DIAG_WORKFLOW_DEFECT, fp="f" * 16, gen=1, root="f" * 16,
+		classification="workflow-defect", target_branch=None, max_depth=heal.DEFAULT_MAX_LINEAGE_DEPTH,
+		intake_run_url="https://github.com/x/y/actions/runs/1", run_summaries=[], suspect_commits=section,
+	)
+	assert "## Suspect commits" in body and heal.validate_heal_issue_body_routing(body, target_branch=None, integration_branch=None) == ""
+	without = heal.compose_issue_body(
+		payload=heal.validate_payload(_p1_payload()), diagnosis=DIAG_WORKFLOW_DEFECT, fp="f" * 16, gen=1, root="f" * 16,
+		classification="workflow-defect", target_branch=None, max_depth=heal.DEFAULT_MAX_LINEAGE_DEPTH,
+		intake_run_url="https://github.com/x/y/actions/runs/1", run_summaries=[],
+	)
+	assert without == heal.compose_issue_body(
+		payload=heal.validate_payload(_p1_payload()), diagnosis=DIAG_WORKFLOW_DEFECT, fp="f" * 16, gen=1, root="f" * 16,
+		classification="workflow-defect", target_branch=None, max_depth=heal.DEFAULT_MAX_LINEAGE_DEPTH,
+		intake_run_url="https://github.com/x/y/actions/runs/1", run_summaries=[], suspect_commits="",
+	)
+
+
+def test_parse_trend_regression_line() -> None:
+	assert heal.parse_trend_regression_line(P3_SUSPECT_REGRESSION_TEXT) == (True, "2026-10-27")
+	assert heal.parse_trend_regression_line(P3_SUSPECT_STEADY_TEXT) == (False, None)
+	assert heal.parse_trend_regression_line("- regression=true first_slow_day=none history=complete") == (False, None)
+	assert heal.parse_trend_regression_line("- regression=true first_slow_day=2026-13-45 history=complete") == (False, None)
+	assert heal.parse_trend_regression_line(" - regression=true first_slow_day=2026-10-27 history=complete") == (False, None)
+	assert heal.parse_trend_regression_line(None) == (False, None) and heal.parse_trend_regression_line("") == (False, None)
+
+
+def test_suspect_commits_slow_day_call_only_on_regression_and_budget() -> None:
+	assert "Batching contract" in heal.suspect_commits.__doc__ and "GH_PAT_BUDGET" in heal.suspect_commits.__doc__
+	calls: list[list[str]] = []
+	summary, section, files = heal.suspect_commits(**_p3_suspect_kwargs(), run_gh=_p3_suspect_runner(calls))
+	assert summary == {"outcome": "ok", "reason": "ok", "commits": 4, "pipeline_files": 3, "slow_day_commits": 0, "calls": 2, "last_green": "fetched"}
+	assert len(calls) == 2 and not any(call[4].endswith("/commits") for call in calls)
+	assert calls[1] == ["gh", "api", "--method", "GET", f"repos/{SELF_REPO}/compare/{P3_SUSPECT_COMPARE_KEY}"]
+	assert "Default-branch commits" not in section and len(files) == 5
+	calls.clear()
+	summary, section, _files = heal.suspect_commits(**_p3_suspect_kwargs(trend_text=P3_SUSPECT_REGRESSION_TEXT), run_gh=_p3_suspect_runner(calls))
+	assert summary["outcome"] == "ok" and summary["calls"] == 3 and summary["slow_day_commits"] == 2 and len(calls) == 3
+	assert calls[2] == [
+		"gh", "api", "--method", "GET", f"repos/{SELF_REPO}/commits", "-f", "sha=main",
+		"-f", "since=2026-10-27T00:00:00Z", "-f", "until=2026-10-28T00:00:00Z", "-F", "per_page=50",
+	]
+	assert "Default-branch commits merged on the first slow day (2026-10-27):" in section and "#8193 Bump the gate timeout" in section
+	# A cached last-green result saves the lookup: 1 call, or 2 with the regression.
+	cached = heal.last_green_run(SELF_REPO, P2_WORKFLOW_ID, "main", run_gh=_p3_suspect_runner([]))
+	for text, expected in ((P3_SUSPECT_STEADY_TEXT, 1), (P3_SUSPECT_REGRESSION_TEXT, 2)):
+		calls.clear()
+		summary, _section, _files = heal.suspect_commits(**_p3_suspect_kwargs(trend_text=text), last_green=cached, run_gh=_p3_suspect_runner(calls))
+		assert summary["last_green"] == "cached" and summary["calls"] == expected == len(calls)
+		assert not any("/actions/workflows/" in call[4] for call in calls)
+	# No default branch: the slow-day call is skipped, the section stays.
+	calls.clear()
+	summary, section, _files = heal.suspect_commits(**_p3_suspect_kwargs(trend_text=P3_SUSPECT_REGRESSION_TEXT, default_branch=""), run_gh=_p3_suspect_runner(calls))
+	assert (summary["outcome"], summary["reason"], len(calls)) == ("partial", "default_branch_unavailable", 2) and section
+
+
+def test_suspect_commits_fails_open() -> None:
+	calls: list[list[str]] = []
+	for kwargs in ({"repo": "not a repo"}, {"failing_sha": "abc"}):
+		summary, section, files = heal.suspect_commits(**_p3_suspect_kwargs(**kwargs), run_gh=_p3_suspect_runner(calls))
+		assert (summary["outcome"], summary["reason"], summary["calls"], section, files) == ("skipped", "invalid_input", 0, "", [])
+	assert calls == []
+	cases = (
+		({"green": None}, "no_last_green", 1),
+		({"green": {"total_count": 0, "workflow_runs": []}}, "no_last_green", 1),
+		({"compare": None}, "compare_failed", 2),
+		({"compare": "not json"}, "malformed", 2),
+		({"compare": {"commits": []}}, "malformed", 2),
+	)
+	for runner_kwargs, reason, count in cases:
+		calls.clear()
+		summary, section, files = heal.suspect_commits(**_p3_suspect_kwargs(trend_text=P3_SUSPECT_REGRESSION_TEXT), run_gh=_p3_suspect_runner(calls, **runner_kwargs))
+		assert (summary["outcome"], summary["reason"], section, files) == ("partial", reason, "", []), runner_kwargs
+		assert len(calls) == count == summary["calls"]
+	calls.clear()
+	summary, section, files = heal.suspect_commits(**_p3_suspect_kwargs(trend_text=P3_SUSPECT_REGRESSION_TEXT), run_gh=_p3_suspect_runner(calls, commits=None))
+	assert (summary["outcome"], summary["reason"], len(calls)) == ("partial", "slow_day_commits_failed", 3)
+	assert "## Suspect commits" in section and "first slow day" not in section and files
+
+	def boom(argv, timeout):
+		raise OSError("gh missing")
+
+	summary, section, _files = heal.suspect_commits(**_p3_suspect_kwargs(), run_gh=boom)
+	assert (summary["outcome"], summary["reason"], section) == ("partial", "no_last_green", "")
+
+
+def _p3_suspect_state() -> dict:
+	state = _p3_state()
+	state["last_green_runs"] = _p2_green_runs()
+	state["compares"] = {P3_SUSPECT_COMPARE_KEY: _p3_compare_doc()}
+	state["slow_day_commits"] = _p3_slow_day_commits()
+	return state
+
+
+def _p3_suspect_calls(state: dict) -> dict[str, list[list[str]]]:
+	calls = _p1_api_calls(state)
+	return {
+		"trend": _p3_trend_calls(state),
+		"green": [call for call in calls if any("/actions/workflows/" in str(part) for part in call) and not any(str(part).startswith("page=") for part in call)],
+		"compare": [call for call in calls if any(str(part).endswith(f"/compare/{P3_SUSPECT_COMPARE_KEY}") for part in call)],
+		"commits": [call for call in calls if any(str(part) == f"repos/{SELF_REPO}/commits" for part in call)],
+	}
+
+
+def test_intake_suspect_commits_replay_lists_8192_within_budget() -> None:
+	result, state_after, _ = _run_p1_intake(_p3_suspect_state(), {"WORKFLOW_HEAL_TREND_ENABLED": "true", "WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL suspect_commits outcome=ok reason=ok commits=4 files=3 slow_day_commits=2 calls=3 last_green=fetched" in result.stdout
+	assert "body_validation_failed" not in result.stdout + result.stderr
+	body = state_after["composed_issue"]["body"]
+	assert body.index("## Run-time trend") < body.index("## Suspect commits") < body.index("The resolver rejects a missing integration branch")
+	section = body[body.index("## Suspect commits"):body.index("\n---\n", body.index("## Suspect commits"))]
+	assert "(#8192)" in section and "#8192 " in section and "`scripts/implement_step_prepush_test_gate.sh`" in section
+	assert "<!--" not in section and "Integration branch (untrusted):" in section
+	_doc, first_slow = _p3_shifted_runs_doc()
+	assert f"Default-branch commits merged on the first slow day ({first_slow}):" in section
+	calls = _p3_suspect_calls(state_after)
+	assert len(calls["green"]) == 1 and len(calls["compare"]) == 1 and len(calls["commits"]) == 1
+	assert f"since={first_slow}T00:00:00Z" in calls["commits"][0] and "sha=main" in calls["commits"][0] and "per_page=50" in calls["commits"][0]
+	assert sum(len(group) for group in calls.values()) <= 9
+	assert all(call[call.index("--method") + 1] == "GET" for group in calls.values() for call in group)
+
+
+def test_intake_suspect_commits_reuses_the_reproduction_last_green() -> None:
+	state = _p2_state()
+	state["run_details"]["600"] = _p3_state()["run_details"]["600"]
+	state["trend_runs_pages"] = _p3_state()["trend_runs_pages"]
+	state["compares"] = {P3_SUSPECT_COMPARE_KEY: _p3_compare_doc()}
+	both, both_state, _seen = _run_p2_intake(state, {"WORKFLOW_HEAL_TREND_ENABLED": "true", "WORKFLOW_HEAL_REPRODUCE_ENABLED": "true"})
+	assert both.returncode == 0, both.stderr + both.stdout
+	assert re.search(r"WORKFLOW_HEAL suspect_commits outcome=\w+ reason=\w+ commits=4 files=3 slow_day_commits=0 calls=1 last_green=cached", both.stdout), both.stdout
+	calls = _p3_suspect_calls(both_state)
+	assert len(calls["green"]) == 1 and len(calls["compare"]) == 1 and not calls["commits"]
+	body = both_state["composed_issue"]["body"]
+	assert body.index("## Reproduction") < body.index("## Run-time trend") < body.index("## Suspect commits")
+
+
+def test_intake_suspect_commits_skips_non_stall_shapes_without_calls() -> None:
+	state = _p3_suspect_state()
+	state["job_logs"][str(P1_FAILING_JOB_ID)] = JOB_LOG
+	result, state_after, _ = _run_p1_intake(state, {"WORKFLOW_HEAL_TREND_ENABLED": "true", "WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = re.search(r"WORKFLOW_HEAL suspect_commits outcome=skipped reason=shape_([a-z_]+) commits=0 files=0 slow_day_commits=0 calls=0 last_green=none", result.stdout)
+	assert match and match.group(1) not in heal.TREND_SHAPES, result.stdout
+	calls = _p3_suspect_calls(state_after)
+	assert not calls["compare"] and not calls["commits"] and not calls["green"]
+	assert "## Suspect commits" not in state_after["composed_issue"]["body"]
+
+
+def test_intake_suspect_commits_off_is_byte_identical() -> None:
+	env = {"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"}
+	unset_result, unset_state, _ = _run_p1_intake(_p3_suspect_state(), {**env, "WORKFLOW_HEAL_TREND_ENABLED": None})
+	off_result, off_state, _ = _run_p1_intake(_p3_suspect_state(), {**env, "WORKFLOW_HEAL_TREND_ENABLED": "false"})
+	for result, state in ((unset_result, unset_state), (off_result, off_state)):
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "suspect_commits" not in result.stdout and "## Suspect commits" not in state["composed_issue"]["body"]
+		calls = _p3_suspect_calls(state)
+		assert not calls["compare"] and not calls["commits"] and not calls["green"]
+	assert unset_state["composed_issue"]["body"] == off_state["composed_issue"]["body"]
+	assert _p1_api_calls(unset_state) == _p1_api_calls(off_state)
+	strip_run = lambda text: re.sub(r"/tmp/[^\s'\"]+|heal-[a-z0-9]+-[A-Za-z0-9_]+", "<tmp>", text)  # noqa: E731
+	assert strip_run(unset_result.stdout) == strip_run(off_result.stdout)
+
+
+def test_suspect_commits_intake_wiring() -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert script.index("\n_heal_build_run_time_trend ||") < script.index("\n_heal_build_suspect_commits ||") < script.index("# --- Run the diagnosis model")
+	runner = script.split("\n_heal_build_suspect_commits()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "gh api" not in runner and "gh_retry" not in runner
+	assert runner.count('python3 "${HEAL_PY}" suspect-commits') == 1
+	assert '[ "${TREND_ENABLED}" = true ] || return 0' in runner
+	assert "GH_RETRY_MAX_ATTEMPTS=1" in runner
+	reproduction = script.split("\n_heal_run_reproduction()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert reproduction.count('python3 "${HEAL_PY}" last-green-run') == 1 and '"${HEAL_LAST_GREEN_CACHE_FILE}"' in reproduction
+	assert 'suspect_commits_args=(--suspect-commits-file "${SUSPECT_COMMITS_FILE}")' in script

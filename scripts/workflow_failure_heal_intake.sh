@@ -141,6 +141,8 @@
 #   WORKFLOW_HEAL_TREND_ENABLED           default "false": only "true" adds `## Run-time trend` (per-UTC-day
 #                                         n / median / p90 of the last 7 days of successful runs) to
 #                                         stall / timeout heal issues
+#                                         and `## Suspect commits` (commits since the workflow's last
+#                                         green run, their pipeline files, first-slow-day commits)
 #   WORKFLOW_HEAL_TREND_REGRESSION_RATIO  latest-day median / earlier median that counts as a
 #                                         regression (default 1.5; outside 1.0 < r <= 10 gives 1.5)
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
@@ -340,6 +342,12 @@ REPRO_STATUS=""
 TREND_ENABLED="${WORKFLOW_HEAL_TREND_ENABLED:-false}"
 TREND_RATIO="${WORKFLOW_HEAL_TREND_REGRESSION_RATIO:-1.5}"
 TREND_FILE=""
+# Suspect commits (P3 steps 4 and 5): same switch. The compare files JSON is
+# the handoff for the later suspect-scope phase; the last-green cache lets the
+# suspect step reuse the reproduction step's lookup instead of a second call.
+SUSPECT_COMMITS_FILE=""
+SUSPECT_COMPARE_FILES_FILE=""
+HEAL_LAST_GREEN_CACHE_FILE="${RUNTIME_DIR}/last_green_run.json"
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
@@ -3091,6 +3099,8 @@ _heal_run_reproduction()
 	if [ -n "${repro_workflow_id}" ] && [ -n "${repro_before}" ]; then
 		repro_green_json="$(python3 "${HEAL_PY}" last-green-run --repo "${SELF_REPO}" --workflow-id "${repro_workflow_id}" \
 			--branch "${HEAD_BRANCH:-}" --failing-sha "${HEAD_SHA}" --before "${repro_before}" 2>/dev/null)" || repro_green_json=""
+		jq -n --arg repo "${SELF_REPO}" --arg workflow_id "${repro_workflow_id}" --arg branch "${HEAD_BRANCH:-}" --arg failing_sha "${HEAD_SHA}" --arg result "${repro_green_json}" \
+			'{repo: $repo, workflow_id: $workflow_id, branch: $branch, failing_sha: $failing_sha, result: (($result | fromjson?) // null)}' > "${HEAL_LAST_GREEN_CACHE_FILE}" 2>/dev/null || true
 		repro_green_reason="$(jq -r '.reason // ""' <<< "${repro_green_json}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
 		repro_green_sha="$(jq -r '.head_sha // ""' <<< "${repro_green_json}" 2>/dev/null || true)"
 		[ -n "${repro_green_reason}" ] || repro_green_reason="request_failed"
@@ -3250,12 +3260,118 @@ _heal_build_run_time_trend()
 	trend_history="complete"
 	[ "$(jq -r '.history == "truncated"' <<< "${trend_json}" 2>/dev/null)" != true ] || trend_history="truncated"
 	log "trend outcome=${trend_outcome} reason=${trend_reason} shape=${trend_shape:-unknown} workflows=${trend_workflows} pages=${trend_pages} regression=${trend_regression} history=${trend_history}"
+	printf '%s' "${trend_json}" > "${trend_dir}/summary.json" 2>/dev/null || true
 	if [ "${trend_outcome}" != skipped ] && [ -s "${trend_dir}/trend.md" ]; then
 		TREND_FILE="${trend_dir}/trend.md"
 	fi
 	return 0
 }
 _heal_build_run_time_trend || { TREND_FILE=""; log "trend outcome=partial reason=helper_failed"; }
+
+# --- Suspect commits (P3 steps 4 and 5, evidence only) ----------------------
+#
+# _heal_build_suspect_commits
+#   Behind WORKFLOW_HEAL_TREND_ENABLED (only the literal 'true'), renders the
+#   `## Suspect commits` section into SUSPECT_COMMITS_FILE through
+#   `workflow_failure_heal.py suspect-commits` for the shapes the trend step
+#   classified as stall / timeout (read from ${RUNTIME_DIR}/trend/summary.json,
+#   no recomputation). Evidence only: nothing here feeds the scope, the marker
+#   or the fingerprint. The parsed compare files[] land in
+#   SUSPECT_COMPARE_FILES_FILE for the later suspect-scope phase.
+#   Batching contract (CLAUDE.md §14): at most 3 single-attempt REST GETs per
+#   report, all inside the helper: the last-green lookup only when the
+#   reproduction step did not already make it for the same repo, workflow,
+#   branch and failing SHA (HEAL_LAST_GREEN_CACHE_FILE), one
+#   repos/<repo>/compare/<green>...<failing>, and one
+#   repos/<repo>/commits?sha=<default>&since=&until=&per_page=50 only when the
+#   trend line says regression=true. With the trend's at most 6 page reads,
+#   P3 makes at most 9 calls per report, counted in GH_PAT_BUDGET. None with
+#   the switch off or for other shapes.
+#   Fails open with one log line:
+#   `suspect_commits outcome=<ok|partial|skipped> reason=<token> commits=<n> files=<n> slow_day_commits=<n> calls=<n> last_green=<cached|fetched|none>`;
+#   a helper failure logs `suspect_commits outcome=partial reason=helper_failed`.
+_heal_build_suspect_commits()
+{
+	local suspect_dir="${RUNTIME_DIR}/suspect_commits"
+	local suspect_summary_file="${RUNTIME_DIR}/trend/summary.json"
+	local suspect_json="" suspect_shape="" suspect_run_id="" suspect_info_file="" suspect_workflow_id="" suspect_before=""
+	local suspect_branch="" suspect_default_branch="" suspect_trend_file="" suspect_outcome="" suspect_reason=""
+	local suspect_commits_n="" suspect_files_n="" suspect_slow_n="" suspect_calls="" suspect_last_green=""
+	local -a suspect_args=()
+	[ "${TREND_ENABLED}" = true ] || return 0
+	SUSPECT_COMMITS_FILE=""
+	SUSPECT_COMPARE_FILES_FILE=""
+	if [ -s "${suspect_summary_file}" ]; then
+		suspect_shape="$(jq -r '.shape // ""' "${suspect_summary_file}" 2>/dev/null | tr -cd 'a-z_' | head -c 20 || true)"
+	fi
+	[ -n "${suspect_shape}" ] || suspect_shape="unknown"
+	case "${suspect_shape}" in
+		stall|timeout) ;;
+		*)
+			log "suspect_commits outcome=skipped reason=shape_${suspect_shape} commits=0 files=0 slow_day_commits=0 calls=0 last_green=none"
+			return 0
+			;;
+	esac
+	rm -rf "${suspect_dir}"
+	mkdir -p "${suspect_dir}" || return 1
+	# The reported run at HEAD_SHA: its workflow id and creation time (saved run
+	# JSON, no call), selected the same way as _heal_run_reproduction.
+	if [ -s "${SUMMARIES_FILE:-}" ] && [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		while IFS= read -r suspect_run_id; do
+			[[ "${suspect_run_id}" =~ ^[0-9]+$ ]] || continue
+			suspect_info_file="${LOG_DIR}/run-${suspect_run_id}-info.json"
+			[ -s "${suspect_info_file}" ] || continue
+			if jq -e --arg sha "${HEAD_SHA}" '.head_sha == $sha' "${suspect_info_file}" >/dev/null 2>&1; then
+				suspect_workflow_id="$(jq -r '(.workflow_id // "") | tostring' "${suspect_info_file}" 2>/dev/null || true)"
+				suspect_before="$(jq -r '.created_at // ""' "${suspect_info_file}" 2>/dev/null || true)"
+				break
+			fi
+		done < <(jq -r '.[] | (.run_id // empty) | tostring' "${SUMMARIES_FILE}" 2>/dev/null)
+	fi
+	[[ "${suspect_workflow_id}" =~ ^[1-9][0-9]{0,19}$ ]] || suspect_workflow_id=""
+	[[ "${suspect_before}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || suspect_before=""
+	suspect_branch="$(printf '%s' "${HEAD_BRANCH:-}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+	suspect_default_branch="$(printf '%s' "${PROVENANCE_DEFAULT_BRANCH:-}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+	# Reuse the reproduction step's last-green lookup only when every key matches.
+	if [ -n "${suspect_workflow_id}" ] && [ -s "${HEAL_LAST_GREEN_CACHE_FILE}" ] \
+		&& jq -e --arg repo "${SOURCE_REPO,,}" --arg workflow_id "${suspect_workflow_id}" --arg branch "${HEAD_BRANCH:-}" --arg sha "${HEAD_SHA:-}" \
+			'((.repo // "") | ascii_downcase) == $repo and .workflow_id == $workflow_id and .branch == $branch and .failing_sha == $sha and (.result | type == "object")' \
+			"${HEAL_LAST_GREEN_CACHE_FILE}" >/dev/null 2>&1 \
+		&& jq -c '.result' "${HEAL_LAST_GREEN_CACHE_FILE}" > "${suspect_dir}/last_green.json" 2>/dev/null; then
+		suspect_args+=(--last-green-json "${suspect_dir}/last_green.json")
+	fi
+	suspect_trend_file="${RUNTIME_DIR}/trend/trend.md"
+	if [ -s "${suspect_trend_file}" ]; then
+		suspect_args+=(--trend-file "${suspect_trend_file}")
+	fi
+	if ! suspect_json="$(GH_RETRY_MAX_ATTEMPTS=1 python3 "${HEAL_PY}" suspect-commits --repo "${SOURCE_REPO}" \
+		--failing-sha "${HEAD_SHA:-}" --workflow-id "${suspect_workflow_id}" --branch "${suspect_branch}" \
+		--before "${suspect_before}" --default-branch "${suspect_default_branch}" \
+		--out "${suspect_dir}/section.md" --files-out "${suspect_dir}/compare_files.json" "${suspect_args[@]}" 2>/dev/null)" \
+		|| ! jq -e 'type == "object" and (.outcome | type == "string")' <<< "${suspect_json}" >/dev/null 2>&1; then
+		log "suspect_commits outcome=partial reason=helper_failed"
+		return 0
+	fi
+	suspect_outcome="$(jq -r '.outcome' <<< "${suspect_json}" | tr -cd 'a-z_' | head -c 20)"
+	case "${suspect_outcome}" in ok|partial|skipped) ;; *) suspect_outcome="partial" ;; esac
+	suspect_reason="$(jq -r '.reason // ""' <<< "${suspect_json}" | tr -cd 'a-z_' | head -c 40)"
+	[ -n "${suspect_reason}" ] || suspect_reason="malformed"
+	suspect_commits_n="$(jq -r '(.commits // 0) | tostring' <<< "${suspect_json}" 2>/dev/null | tr -cd '0-9' | head -c 3 || true)"
+	suspect_files_n="$(jq -r '(.pipeline_files // 0) | tostring' <<< "${suspect_json}" 2>/dev/null | tr -cd '0-9' | head -c 3 || true)"
+	suspect_slow_n="$(jq -r '(.slow_day_commits // 0) | tostring' <<< "${suspect_json}" 2>/dev/null | tr -cd '0-9' | head -c 3 || true)"
+	suspect_calls="$(jq -r '(.calls // 0) | tostring' <<< "${suspect_json}" 2>/dev/null | tr -cd '0-9' | head -c 3 || true)"
+	suspect_last_green="$(jq -r '.last_green // ""' <<< "${suspect_json}" 2>/dev/null | tr -cd 'a-z' | head -c 10 || true)"
+	case "${suspect_last_green}" in cached|fetched|none) ;; *) suspect_last_green="none" ;; esac
+	log "suspect_commits outcome=${suspect_outcome} reason=${suspect_reason} commits=${suspect_commits_n:-0} files=${suspect_files_n:-0} slow_day_commits=${suspect_slow_n:-0} calls=${suspect_calls:-0} last_green=${suspect_last_green}"
+	if [ "${suspect_outcome}" != skipped ] && [ -s "${suspect_dir}/section.md" ]; then
+		SUSPECT_COMMITS_FILE="${suspect_dir}/section.md"
+	fi
+	if [ -s "${suspect_dir}/compare_files.json" ]; then
+		SUSPECT_COMPARE_FILES_FILE="${suspect_dir}/compare_files.json"
+	fi
+	return 0
+}
+_heal_build_suspect_commits || { SUSPECT_COMMITS_FILE=""; log "suspect_commits outcome=partial reason=helper_failed"; }
 
 # --- Run the diagnosis model -----------------------------------------------
 
@@ -3758,6 +3874,11 @@ _open_issue()
 	if [ "${TREND_ENABLED}" = true ] && [ -s "${TREND_FILE:-}" ]; then
 		trend_args=(--trend-file "${TREND_FILE}")
 	fi
+	# Suspect commits (P3 steps 4 and 5): same rule, so a switch-off body is byte-identical.
+	local -a suspect_commits_args=()
+	if [ "${TREND_ENABLED}" = true ] && [ -s "${SUSPECT_COMMITS_FILE:-}" ]; then
+		suspect_commits_args=(--suspect-commits-file "${SUSPECT_COMMITS_FILE}")
+	fi
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${compose_payload_file}" \
 		--diagnosis-file "${DIAG_FILE}" \
@@ -3772,7 +3893,7 @@ _open_issue()
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
-		--body-out "${body_file}" "${evidence_pack_args[@]}" "${reproduction_args[@]}" "${trend_args[@]}"; then
+		--body-out "${body_file}" "${evidence_pack_args[@]}" "${reproduction_args[@]}" "${trend_args[@]}" "${suspect_commits_args[@]}"; then
 		log "error issue_compose_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
 		tg_send_msg "Workflow failure heal FAILED to compose a safe issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		return 1
