@@ -3094,6 +3094,7 @@ _heal_run_reproduction()
 			repro_rc=0
 			timeout --kill-after=30s "$((repro_wall * 60 + 300))" \
 				env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY \
+				-u WORKFLOW_HEAL_REPRODUCE_TIMEOUT_SECS \
 				GIT_TERMINAL_PROMPT=0 WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES="${repro_wall}" \
 				bash "${repro_helper}" --tests-file "${repro_tests_file}" \
 				--sha "${HEAD_SHA}" --baseline "${repro_green_sha}" --out "${repro_raw_file}" < /dev/null 1>&2 || repro_rc=$?
