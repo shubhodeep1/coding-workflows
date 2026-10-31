@@ -18,7 +18,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-import ai_labels
+import ai_labels  # noqa: E402
 
 
 CONTRACT_PATH = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
@@ -175,6 +175,7 @@ def _run_sync_labels(
 	dry_run: bool = False,
 	token: str | None = "test-token",
 	use_main: bool = False,
+	env: dict[str, str | None] | None = None,
 ) -> tuple[int, dict[str, object], str, list[dict[str, str]]]:
 	request_log: list[dict[str, str]] = []
 	stdout_lines: list[str] = []
@@ -197,7 +198,9 @@ def _run_sync_labels(
 		assert hasattr(response, "read")
 		return response
 
-	previous_env = _set_env({"GH_TOKEN": token, "GITHUB_TOKEN": None})
+	# RETIRED_LABEL_DRAIN_ENABLED is cleared by default so the ambient
+	# environment cannot change which retired-label path runs.
+	previous_env = _set_env({"GH_TOKEN": token, "GITHUB_TOKEN": None, "RETIRED_LABEL_DRAIN_ENABLED": None, **(env or {})})
 	original_print = ai_labels._print_json
 	original_urlopen = ai_labels.urllib.request.urlopen
 	try:

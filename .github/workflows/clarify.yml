@@ -469,6 +469,12 @@ jobs:
 
       - name: Stage workflow support files
         if: steps.refctx.outputs.label_missing_hold != 'true'
+        env:
+          # Kill switch for the one-source support bundle
+          # (docs/plans/remove-unattended-pipeline-stuck-states-plan.md P2a):
+          # `false` restores the legacy copy loop below and the bare
+          # scripts/ paths (SUPPORT_SCRIPTS_DIR stays unset).
+          SUPPORT_SCRIPTS_UNIFIED_ENABLED: ${{ vars.SUPPORT_SCRIPTS_UNIFIED_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -480,6 +486,21 @@ jobs:
           echo "CLARIFY_HOST_PYTHON_DIR=${CLARIFY_HOST_PYTHON_DIR}" >> "$GITHUB_ENV"
 
           _fetched_scripts=()
+          # One source for support scripts (P2a): stage_support_for_phase.sh
+          # verifies the support checkout, stages a bundle from that one commit
+          # under RUNNER_TEMP (SUPPORT_SCRIPTS_DIR) and never writes executables
+          # into the issue checkout, so a heal issue on `stable` cannot run
+          # stable's helpers under main's YAML (run 37406961564). Later steps
+          # call "${SUPPORT_SCRIPTS_DIR:-scripts}/<helper>".
+          support_unified="${SUPPORT_SCRIPTS_UNIFIED_ENABLED:-true}"
+          if [ "${support_unified}" = "true" ] && { [ ! -f .codex-workflow-src/scripts/stage_support_for_phase.sh ] || [ -L .codex-workflow-src/scripts/stage_support_for_phase.sh ]; }; then
+            echo "::warning::stage_support_for_phase.sh is not in ${wf_source}@${SCRIPT_REF}; using the legacy support staging."
+            support_unified="false"
+          fi
+          if [ "${support_unified}" = "true" ]; then
+            bash .codex-workflow-src/scripts/stage_support_for_phase.sh clarify --host-python-dir "${CLARIFY_HOST_PYTHON_DIR}"
+          else
+          # support-scripts-legacy:begin
           for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh check_triage_resolution.py codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -496,18 +517,6 @@ jobs:
             esac
             _fetched_scripts+=("${f}")
           done
-
-          # The image build context is fixed support code, never the issue checkout.
-          mkdir -p scripts/clarify_sandbox
-          sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"
-          if [ ! -f "${sandbox_src}" ] && [ -f ".codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile" ]; then
-            sandbox_src=".codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile"
-          fi
-          if [ ! -f "${sandbox_src}" ]; then
-            echo "::error::Missing clarification sandbox Dockerfile"
-            exit 1
-          fi
-          install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile
 
           # render_prompt.py is the Python backend of the render_prompt.sh
           # shim (issue #3043 refactor). main ships both, the shim needs the
@@ -547,6 +556,20 @@ jobs:
           else
             echo "::warning::Codex model catalog not found in ${SCRIPT_REF}/main; apply_patch may not be registered for non-built-in models"
           fi
+          # support-scripts-legacy:end
+          fi
+
+          # The image build context is fixed support code, never the issue checkout.
+          mkdir -p scripts/clarify_sandbox
+          sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"
+          if [ ! -f "${sandbox_src}" ] && [ -f ".codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile" ]; then
+            sandbox_src=".codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile"
+          fi
+          if [ ! -f "${sandbox_src}" ]; then
+            echo "::error::Missing clarification sandbox Dockerfile"
+            exit 1
+          fi
+          install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile
 
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -654,7 +677,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
@@ -761,7 +784,7 @@ jobs:
               # is reused below as pr_dependency.py's --trusted-login.
               _rel_login=""
               _rel_reason="identity_unavailable"
-              if _rel_login="$(source scripts/gh_helpers.sh && gh_retry gh api user --jq .login)" \
+              if _rel_login="$(source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" && gh_retry gh api user --jq .login)" \
                 && [[ "${_rel_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
                 if [ -n "${COMMENT_USER_LOGIN:-}" ] && [ "${_rel_login,,}" = "${COMMENT_USER_LOGIN,,}" ]; then
                   _rel_reason="verified"
@@ -773,7 +796,7 @@ jobs:
                 # One GET of the replay's source comment, only for a replay
                 # comment already verified to come from the GH_PAT login.
                 _rel_reason="replay_source_unverified"
-                if _rel_src_json="$(source scripts/gh_helpers.sh && gh_retry gh api "repos/${GITHUB_REPOSITORY:-}/issues/comments/${_rel_replay_source}")" \
+                if _rel_src_json="$(source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" && gh_retry gh api "repos/${GITHUB_REPOSITORY:-}/issues/comments/${_rel_replay_source}")" \
                   && printf '%s' "${_rel_src_json}" | jq -e --arg login "${_rel_login,,}" --arg expected "${_rel_expected}" \
                     --arg expected_partial "${_rel_expected_partial}" \
                     --arg suffix "/repos/${GITHUB_REPOSITORY:-}/issues/${ISSUE_NUMBER}" \
@@ -817,7 +840,7 @@ jobs:
             _cw_source="${BASH_REMATCH[1]}"
             _cw_reason="identity_unavailable"
             if [ -z "${_rel_login:-}" ]; then
-              _rel_login="$(source scripts/gh_helpers.sh && gh_retry gh api user --jq .login 2>/dev/null)" || _rel_login=""
+              _rel_login="$(source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" && gh_retry gh api user --jq .login 2>/dev/null)" || _rel_login=""
             fi
             if [[ "${_rel_login:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
               if [ -n "${COMMENT_USER_LOGIN:-}" ] && [ "${_rel_login,,}" = "${COMMENT_USER_LOGIN,,}" ]; then
@@ -830,7 +853,7 @@ jobs:
               # One GET of the source comment: it must be a /reclarify by an
               # OWNER/MEMBER/COLLABORATOR on this issue.
               _cw_reason="source_unverified"
-              if _cw_src_json="$(source scripts/gh_helpers.sh && gh_retry gh api "repos/${GITHUB_REPOSITORY:-}/issues/comments/${_cw_source}")" \
+              if _cw_src_json="$(source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" && gh_retry gh api "repos/${GITHUB_REPOSITORY:-}/issues/comments/${_cw_source}")" \
                 && printf '%s' "${_cw_src_json}" | jq -e --arg suffix "/repos/${GITHUB_REPOSITORY:-}/issues/${ISSUE_NUMBER}" \
                   '((.issue_url // "") | endswith($suffix)) and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ((.body // "") | ascii_downcase | startswith("/reclarify"))' >/dev/null 2>&1; then
                 _cw_reason="verified_source"
@@ -897,7 +920,7 @@ jobs:
             # candidate set; it releases this label once the fix merges.
             # An untrusted comment author (#7328) causes no label write.
             if [ "${COMMENT_ROUTE_TRUSTED}" = "true" ]; then
-              source scripts/gh_helpers.sh
+              source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"
               if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
                 echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
                 exit 1
@@ -925,7 +948,7 @@ jobs:
             # No label writes on a closed issue, an untrusted new issue or an
             # untrusted comment author (#7328).
             if [ "${IS_CLOSED}" != "true" ] && [ "${COMMENT_ROUTE_TRUSTED}" = "true" ] && { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
-              source scripts/gh_helpers.sh
+              source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"
               if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
                 echo "::error::Could not mark PR-dependent issue #${ISSUE_NUMBER} as waiting"
                 exit 1
@@ -1011,7 +1034,7 @@ jobs:
           SEMANTIC_CACHE_MAX_CANONICAL_CHARS: ${{ vars.SEMANTIC_CACHE_MAX_CANONICAL_CHARS || '50000' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Reuse the full comment snapshot for auto-decisions and the backup
           # loop guard; only the first 50 enter the clarify prompt.
@@ -1046,8 +1069,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh"
           # Add clarification label
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
           # Issue #7516: once routing passes again, a /reclarify after a
@@ -1113,8 +1136,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh"
           ensure_label_exists "ai:planning" "${{ github.repository }}"
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --add-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
@@ -1130,15 +1153,15 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          if ! bash -n scripts/memory_helpers.sh >/dev/null 2>&1 \
-            || ! grep -q 'memory_bootstrap' scripts/memory_helpers.sh; then
+          if ! bash -n "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" >/dev/null 2>&1 \
+            || ! grep -q 'memory_bootstrap' "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"; then
             echo "::warning::memory_helpers.sh unavailable; using fail-open stubs"
             memory_bootstrap(){ return 0; }
             memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
             memory_record_run_event(){ return 0; }
             memory_record_candidate(){ return 0; }
           else
-            source scripts/memory_helpers.sh 2>/dev/null || true
+            source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" 2>/dev/null || true
           fi
 
           if ! declare -F memory_retrieve >/dev/null 2>&1 \
@@ -1211,13 +1234,13 @@ jobs:
           set -euo pipefail
           # always() step: the job may have stopped before the runtime
           # workspace and support scripts were staged (#7516).
-          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -f scripts/semantic_cache.py ]; then
+          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semantic_cache.py" ]; then
             echo "::warning::Semantic cache lookup skipped: runtime workspace or support scripts missing (job stopped before setup)"
             echo "cache_hit=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           LOOKUP_JSON="${RUNTIME_DIR}/semantic_cache_lookup.json"
-          if python3 scripts/semantic_cache.py lookup \
+          if python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/semantic_cache.py" lookup \
             --phase "clarify" \
             --issue-number "${ISSUE_NUMBER}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
@@ -1247,7 +1270,7 @@ jobs:
         if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         run: |
           set -euo pipefail
-          source scripts/codex_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/codex_helpers.sh"
           # Centralised in scripts/write_codex_config.sh — see that
           # script's header for the apply_patch / trust / elevation
           # rationale.
@@ -1261,7 +1284,7 @@ jobs:
           set -euo pipefail
           # See scripts/build_static_context.sh for trimming rationale and
           # prompt-prefix caching motivation.
-          bash scripts/build_static_context.sh clarify ./pre_assembled_static.txt
+          bash "${SUPPORT_SCRIPTS_DIR:-scripts}/build_static_context.sh" clarify ./pre_assembled_static.txt
           STATIC_LINES="$(wc -l < ./pre_assembled_static.txt)"
           STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
@@ -1273,7 +1296,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" 2>/dev/null || true
           declare -F memory_bootstrap >/dev/null 2>&1 || memory_bootstrap(){ return 0; }
           memory_bootstrap --require memory_retrieve
           declare -F memory_retrieve >/dev/null 2>&1 || memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
@@ -1344,9 +1367,9 @@ jobs:
         run: |
           set -euo pipefail
           engine="codex"
-          if [ -f scripts/ai_engine.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh" ]; then
             # shellcheck disable=SC1091
-            source scripts/ai_engine.sh
+            source "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
             AI_ENGINE_LABELS="$(jq -c '[.labels[]?.name]' "${ISSUE_META_FILE}")"
             export AI_ENGINE_LABELS
             engine="$(ai_engine_for_role CLARIFY || echo codex)"
@@ -1405,13 +1428,13 @@ jobs:
           WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
           HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}
         run: |
-          if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then
+          if ! heal_route="$(python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py" heal-route --issue-json "${ISSUE_META_FILE}")"; then
             echo '::error::Heal route classification failed' >&2
             exit 1
           fi
           if [ "${heal_route}" = true ]; then
             echo 'HEAL_ROUTE=true' >> "${GITHUB_ENV}"
-            bash scripts/workflow_failure_heal_evidence.sh
+            WORKFLOW_HEAL_PY="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal_evidence.sh"
           fi
 
       # scripts/clarify_isolated_run.sh builds scripts/clarify_sandbox/Dockerfile
@@ -1433,11 +1456,11 @@ jobs:
           # The step body lives in scripts/clarify_base_image_preseed.sh (#7215),
           # which scripts/clarify_isolated_run.sh also runs before every build.
           # Best effort: a missing helper or any failure never blocks Run Codex.
-          if [ ! -f scripts/clarify_base_image_preseed.sh ] || [ -L scripts/clarify_base_image_preseed.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_base_image_preseed.sh" ] || [ -L "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_base_image_preseed.sh" ]; then
             echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=helper_missing"
             exit 0
           fi
-          bash scripts/clarify_base_image_preseed.sh scripts/clarify_sandbox/Dockerfile || true; exit 0
+          bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_base_image_preseed.sh" scripts/clarify_sandbox/Dockerfile || true; exit 0
 
       - name: Run Codex
         id: run_codex
@@ -1446,6 +1469,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED: ${{ vars.CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED || 'true' }}
           CLARIFY_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
@@ -1454,7 +1478,7 @@ jobs:
           # UTF-8 in the prompt cannot deterministically kill every
           # clarify retry.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 
           PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-clarify-inline.txt"
           cat > "${PROMPT_TEMPLATE_FILE}" <<'PROMPT'
@@ -1628,9 +1652,9 @@ jobs:
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
-            bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"
             echo
-            REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash scripts/render_prompt.sh prompts/header.txt
+            REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" prompts/header.txt
             echo
             echo "=== AI MEMORY CONTEXT ==="
             cat "${RUNTIME_DIR}/memory_context.txt"
@@ -1656,7 +1680,7 @@ jobs:
             echo "${clarify_engine_name} clarify attempt ${attempt}/${max_attempts}..."
             rc=0
             if [ "${CLARIFY_ENGINE}" = "claude" ]; then
-              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY || rc=$?
+              bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY || rc=$?
               if [ "${rc}" -eq 80 ]; then
                 # Claude capacity wait (issue #7370): never codex, no retries.
                 # Later output steps skip; the report step records the wait
@@ -1674,7 +1698,7 @@ jobs:
               fi
             fi
             if [ "${CLARIFY_ENGINE}" != "claude" ]; then
-              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || rc=$?
+              bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || rc=$?
             fi
             if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
@@ -1710,7 +1734,7 @@ jobs:
         run: |
           set -euo pipefail
           STORE_JSON="${RUNTIME_DIR}/semantic_cache_store.json"
-          if python3 scripts/semantic_cache.py store \
+          if python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/semantic_cache.py" store \
             --phase "clarify" \
             --issue-number "${ISSUE_NUMBER}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
@@ -1846,10 +1870,10 @@ jobs:
           BLOCKED_REASON: ${{ steps.parse_codex.outputs.blocked_reason }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          source scripts/label_helpers.sh
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh"
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
 
           ensure_label_exists "ai:blocked" "${{ github.repository }}"
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -1889,7 +1913,7 @@ jobs:
           CLARIFY_HUMAN_ANSWER_REQUESTED: ${{ steps.clarify_route.outputs.is_forced_reclarify }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Labels already set by "Set clarification phase label" step above.
           # After a human /reclarify the human answers: the trailing marker
@@ -1950,7 +1974,7 @@ jobs:
           AUTO_DECIDE_CLARIFICATION_COMMENT_ID: ${{ steps.post_questions.outputs.comment_id }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           if [ "${STANDALONE_AUTO_DECIDE_ENABLED}" = "false" ]; then
             echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=disabled"
@@ -1966,7 +1990,7 @@ jobs:
             exit 0
           fi
           AUTO_DECIDE_FILE="${RUNTIME_DIR}/auto_decisions.json"
-          if ! python3 scripts/auto_decisions.py parse --questions-file "${QUESTIONS_FILE}" > "${AUTO_DECIDE_FILE}"; then
+          if ! python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/auto_decisions.py" parse --questions-file "${QUESTIONS_FILE}" > "${AUTO_DECIDE_FILE}"; then
             echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=parse_failed"
             exit 0
           fi
@@ -1985,11 +2009,15 @@ jobs:
             exit 0
           fi
           AUTO_DECIDE_POST_LOG="${RUNTIME_DIR}/auto_decide_post.log"
+          # The poster cds to its own parent directory; from the support
+          # bundle that is not the checkout, so GIT_DIR keeps its memory
+          # dedup reading this repository's origin. Unset SUPPORT_SCRIPTS_DIR
+          # (kill switch) adds nothing and runs scripts/ as before.
           if ! CODEX_OUTPUT_FILE="${AUTO_DECIDE_ANSWERS_FILE}" \
             CLARIFICATION_COMMENT_ID="${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" \
             THREAD_HISTORY_FILE="${AUTO_DECIDE_THREAD_HISTORY_FILE}" \
             ISSUE_TITLE="${ISSUE_TITLE:-}" \
-            bash scripts/orchestrate_parse_and_post_answer.sh 2>&1 | tee "${AUTO_DECIDE_POST_LOG}"; then
+            env ${SUPPORT_SCRIPTS_DIR:+"GIT_DIR=${GITHUB_WORKSPACE}/.git"} bash "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_parse_and_post_answer.sh" 2>&1 | tee "${AUTO_DECIDE_POST_LOG}"; then
             echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=failed reason=answer_poster_failed"
             exit 0
           fi
@@ -1999,7 +2027,7 @@ jobs:
           fi
           echo "answered=true" >> "$GITHUB_OUTPUT"
           AUTO_DECIDE_RENDER_FILE="${RUNTIME_DIR}/auto_decisions_comment.json"
-          if ! python3 scripts/auto_decisions.py render --comments-file "${ISSUE_ALL_COMMENTS_FILE}" \
+          if ! python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/auto_decisions.py" render --comments-file "${ISSUE_ALL_COMMENTS_FILE}" \
             --decisions-file "${AUTO_DECIDE_FILE}" \
             --source "clarify comment ${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" > "${AUTO_DECIDE_RENDER_FILE}"; then
             echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered reason=ad_render_failed decisions=${AUTO_DECIDE_COUNT}"
@@ -2024,7 +2052,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" 2>/dev/null || true
           declare -F memory_record_candidate >/dev/null 2>&1 || memory_record_candidate(){ return 0; }
 
           DETAILS="$(head -c 12000 "${QUESTIONS_FILE}")"
@@ -2046,8 +2074,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          source scripts/label_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh"
           # Swap label from ai:clarification to ai:planning since no questions needed.
           ensure_label_exists "ai:planning" "${{ github.repository }}"
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -2066,7 +2094,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" 2>/dev/null || true
           declare -F memory_record_candidate >/dev/null 2>&1 || memory_record_candidate(){ return 0; }
 
           memory_record_candidate \
@@ -2090,7 +2118,7 @@ jobs:
           CLARIFY_AUTO_DECIDE_DELEGATED: ${{ steps.standalone_auto_decide.outputs.delegated || 'false' }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
 
           # Questions the standalone auto-decide step already answered need
           # no human: paging for them was the issue #6262 false alarm.
@@ -2129,7 +2157,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" 2>/dev/null || true
           declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
 
           OUTCOME="clear"
@@ -2162,7 +2190,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          source scripts/memory_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" 2>/dev/null || true
           declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
 
           FINAL_OUTCOME="failed"
@@ -2186,7 +2214,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
@@ -2257,11 +2285,11 @@ jobs:
           set -euo pipefail
           # The job may have failed before support staging (#7516); keep the
           # real error as the run's first error.
-          if [ ! -f scripts/tg_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
             echo "::warning::Telegram failure notification skipped: scripts/tg_helpers.sh not staged (job stopped before setup)"
             exit 0
           fi
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
@@ -2283,8 +2311,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
         run: |
-          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
-            source scripts/gh_helpers.sh
+          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ] && grep -q '^gh_pat_budget()' "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"; then
+            source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"
             gh_pat_budget end clarify clarify "${GH_PAT_BUDGET_FILE}"
           else
             echo 'GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown'

@@ -276,7 +276,7 @@ def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:
 def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	wf = _read(CLARIFY_WF)
 	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
-	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
+	assert 'bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
 	assert "codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do" in wf
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in wf
 	assert "--network none --read-only --cap-drop ALL --security-opt no-new-privileges" in runner
@@ -576,9 +576,12 @@ def test_engine_steps_resolve_the_role_and_guard_the_credential() -> None:
 def test_clarify_runs_claude_then_the_unchanged_codex_call() -> None:
 	wf = _read(REPO_ROOT / ".github" / "workflows" / "clarify.yml")
 	args = '"${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"'
-	assert wf.count("bash scripts/clarify_isolated_run.sh ") == 2
-	assert f"bash scripts/clarify_isolated_run.sh {args} claude CLARIFY || rc=$?" in wf
-	assert f"bash scripts/clarify_isolated_run.sh {args} || rc=$?" in wf
+	# clarify.yml runs the support bundle copy (stuck-states plan P2a).
+	runner = 'bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh"'
+	assert wf.count(runner + " ") == 2
+	assert "bash scripts/clarify_isolated_run.sh" not in wf
+	assert f"{runner} {args} claude CLARIFY || rc=$?" in wf
+	assert f"{runner} {args} || rc=$?" in wf
 	assert 'if [ "${rc}" -eq 75 ]; then' in wf
 	assert "CLARIFY_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}" in wf
 

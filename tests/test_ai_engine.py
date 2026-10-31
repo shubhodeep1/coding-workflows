@@ -739,6 +739,17 @@ def test_every_workflow_staging_ai_engine_also_stages_its_stall_guard() -> None:
 	assert {name for name, _ in staging_lists} >= {"plan.yml", "clarify.yml", "orchestrate_clarify_respond.yml", "implement.yml"}
 	missing = [name for name, names in staging_lists if "codex_stall_guard.sh" not in names]
 	assert not missing, f"stage codex_stall_guard.sh beside ai_engine.sh in: {missing}"
+	# A workflow that stages through stage_support_for_phase.sh (P2a, one
+	# source for support scripts) takes both from the helper's phase list.
+	phase_helper = (REPO_ROOT / "scripts" / "stage_support_for_phase.sh").read_text(encoding="utf-8")
+	for path in workflows:
+		for phase in re.findall(r"bash \S*stage_support_for_phase\.sh ([a-z_]+)", path.read_text(encoding="utf-8")):
+			block = re.search(r"^\t" + re.escape(phase) + r"\)\n(.*?)^\t\t;;", phase_helper, re.M | re.S)
+			assert block, f"{path.name}: stage_support_for_phase.sh has no {phase} case"
+			bundle_names = block.group(1).split()
+			assert "ai_engine.sh" in bundle_names and "codex_stall_guard.sh" in bundle_names, (
+				f"{path.name}: the {phase} bundle must stage codex_stall_guard.sh beside ai_engine.sh"
+			)
 
 
 def test_claude_home_helper_names_the_isolated_session_store(sandbox: dict) -> None:

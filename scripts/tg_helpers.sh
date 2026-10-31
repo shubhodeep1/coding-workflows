@@ -19,7 +19,14 @@ _TG_HELPERS_LOADED="true"
 
 # Source rate-limit helpers (provides curl_gh_api)
 # shellcheck source=gh_helpers.sh
-if [ -f "scripts/gh_helpers.sh" ]; then
+# A verified support bundle (SUPPORT_SCRIPTS_DIR, staged by
+# stage_workflow_support.sh / stage_support_for_phase.sh) wins over the
+# checkout's scripts/, which may come from another branch. Unset keeps the
+# cwd-relative lookup below.
+if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ] && [ ! -L "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"
+elif [ -f "scripts/gh_helpers.sh" ]; then
 	# shellcheck disable=SC1091
 	source scripts/gh_helpers.sh
 fi

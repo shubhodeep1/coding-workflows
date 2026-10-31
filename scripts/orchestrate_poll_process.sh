@@ -2897,6 +2897,25 @@ if ! [[ "${STALL_JUDGE_TRIGGER_COUNT}" =~ ^[0-9]+$ ]] || [ "${STALL_JUDGE_TRIGGE
   STALL_JUDGE_TRIGGER_COUNT="2"
 fi
 
+# Stuck-states P3b: failure-signature breaker + exhaustion escalation.
+# STALL_FINGERPRINT_BREAKER_ENABLED=true (default) trips a phase-failure label
+# when the same AI_FAILURE_FINGERPRINT_V1 (phase, fp) repeats
+# STALL_FINGERPRINT_REPEAT_MAX times in a row, and makes stall exhaustion
+# ("skip") label ai:needs-human and leave the issue open instead of closing
+# it. Setting it to false restores the legacy skip-and-close behaviour.
+STALL_FINGERPRINT_BREAKER_ENABLED="${STALL_FINGERPRINT_BREAKER_ENABLED:-true}"
+if is_truthy "${STALL_FINGERPRINT_BREAKER_ENABLED}"; then
+  STALL_FINGERPRINT_BREAKER_ENABLED="true"
+else
+  STALL_FINGERPRINT_BREAKER_ENABLED="false"
+fi
+# A value of 1 would trip on a single failure, so the floor is 2.
+STALL_FINGERPRINT_REPEAT_MAX="${STALL_FINGERPRINT_REPEAT_MAX:-2}"
+if ! [[ "${STALL_FINGERPRINT_REPEAT_MAX}" =~ ^[0-9]{1,4}$ ]] || [ "${STALL_FINGERPRINT_REPEAT_MAX}" -lt 2 ]; then
+  echo "::warning::STALL_FINGERPRINT_REPEAT_MAX must be an integer >= 2; defaulting to 2"
+  STALL_FINGERPRINT_REPEAT_MAX="2"
+fi
+
 ENABLE_STALL_JUDGE="${ENABLE_STALL_JUDGE:-true}"
 if is_truthy "${ENABLE_STALL_JUDGE}"; then
   ENABLE_STALL_JUDGE="true"
@@ -17824,19 +17843,19 @@ _extract_standalone_state_json_from_comments() {
     2>/dev/null || echo "")"
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
     return
   fi
 
   local extracted
   extracted="$(printf '%s' "${state_raw}" | sed -n "/^${STANDALONE_STATE_MARKER_OPEN}$/,/^${STANDALONE_STATE_MARKER_CLOSE}$/p" | sed '1d;$d')"
   if [ -z "${extracted}" ]; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
     return
   fi
 
   if ! echo "${extracted}" | jq -e . >/dev/null 2>&1; then
-    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+    echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
     return
   fi
 
@@ -17849,9 +17868,10 @@ _extract_standalone_state_json_from_comments() {
       phase_attempts: (if (.phase_attempts | type) == "object" then .phase_attempts else {} end),
       conflict_override_count: (if (.conflict_override_count | type) == "object" then .conflict_override_count else {} end),
       judge_escalate_streak: (if (.judge_escalate_streak | type) == "object" then .judge_escalate_streak else {} end),
+      failure_fingerprints: (if (.failure_fingerprints | type) == "array" then .failure_fingerprints[-5:] else [] end),
       updated_ts: ((.updated_ts // 0) | tonumber)
     }
-  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{}}'
+  ' 2>/dev/null || echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
 }
 
 # Fetch the issue comments once and return the latest standalone state
@@ -19344,6 +19364,38 @@ REISSUE_EOF
           STALL_RECOVERY_SHOULD_INCREMENT="true"
           return 0
         fi
+      fi
+
+      if [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ]; then
+        # Stuck-states P3b (G3): exhaustion never closes the issue or its
+        # linked PR. Label ai:needs-human, verify it, and leave the issue
+        # open for the unblock judge. An unverified label returns 1 so the
+        # attempt is not recorded and the next tick retries.
+        local _skip_limit="${MAX_STALL_RECOVERIES_PER_ISSUE}"
+        if [ "${phase}" = "ai:done" ]; then
+          _skip_limit="${MAX_STALL_RECOVERIES_DONE}"
+        fi
+        ensure_label_exists "ai:needs-human"
+        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:needs-human" >/dev/null 2>&1 || true
+        local _skip_escalated_labels
+        _skip_escalated_labels="$(get_issue_labels_json "${issue_num}")"
+        if ! has_label "${_skip_escalated_labels}" "ai:needs-human"; then
+          echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=managed phase=${phase} attempts=${recovery_count} limit=${_skip_limit} outcome=label_failed"
+          STALL_RECOVERY_EFFECTIVE_ACTION="skip_escalate_label_failed"
+          return 1
+        fi
+        echo "  Escalating issue #${issue_num} after ${recovery_count} recovery attempts (left open with ai:needs-human)."
+        post_tracking_comment "## ⏸️ Issue #${issue_num} escalated (stall recovery exhausted)
+
+- **Phase:** \`${phase}\`
+- **Stalled for:** ${stall_minutes} minutes
+- **Recovery attempts:** ${recovery_count} (limit ${_skip_limit})
+- **Local ID:** \`${local_id}\`
+
+The issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge will pick it up."
+        echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=managed phase=${phase} attempts=${recovery_count} limit=${_skip_limit} outcome=labelled"
+        tg_notify "Issue #${issue_num} escalated after ${recovery_count} stall recovery attempts (${stall_minutes}m in '${phase}'). Left open with ai:needs-human for the unblock judge."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+        return 0
       fi
 
       echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
@@ -22425,6 +22477,303 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
   done
 }
 
+# ---------------------------------------------------------------
+# Stuck-states P3b: failure-signature breaker
+# ---------------------------------------------------------------
+# Evaluates AI_FAILURE_FINGERPRINT_V1 markers (emitted by the plan/clarify
+# failure handlers) through `orchestrate_lib.py failure-fingerprint-breaker`.
+# Comment history is authoritative: only comments authored by the pipeline's
+# verified login (unblock_trusted_login) count, and the newest trusted
+# AI_FAILURE_FINGERPRINT_BREAKER_V1 comment is the consumption point.
+#
+# GitHub API cost (§14): zero calls when no cached comment carries a marker;
+# otherwise the per-tick cached `user` read from unblock_trusted_login, plus at
+# most one paginated comments read (_staged_support_comments_for_guard) when
+# the last-100 cache truncates a streak that is still building. Every failure
+# fails open to the legacy stall ladder (no trip is ever inferred).
+
+# Prints the evaluator's JSON for <comments_json> <login> <complete>.
+_failure_fingerprint_breaker_eval()
+{
+  local ffb_eval_comments="$1"
+  local ffb_eval_login="$2"
+  local ffb_eval_complete="$3"
+  local ffb_eval_file=""
+  local ffb_eval_result=""
+
+  if ! ffb_eval_file="$(mktemp "${TMPDIR:-/tmp}/ffb_comments.XXXXXX")"; then
+    printf '%s' '{"decision":"unavailable"}'
+    return 0
+  fi
+  printf '%s' "${ffb_eval_comments}" > "${ffb_eval_file}"
+  ffb_eval_result="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py failure-fingerprint-breaker \
+    --comments-file "${ffb_eval_file}" \
+    --trusted-login "${ffb_eval_login}" \
+    --repeat-max "${STALL_FINGERPRINT_REPEAT_MAX}" \
+    --comments-complete "${ffb_eval_complete}" 2>/dev/null || true)"
+  rm -f "${ffb_eval_file}"
+  if ! printf '%s' "${ffb_eval_result}" | jq -e 'type == "object" and ((.decision // null) | type) == "string"' >/dev/null 2>&1; then
+    ffb_eval_result='{"decision":"unavailable"}'
+  fi
+  printf '%s' "${ffb_eval_result}"
+}
+
+# _failure_fingerprint_breaker_check <issue_num> <cached_comments_json> <cache_available> <scope>
+# cache_available: "complete" (full history), "true" (last-100 cache) or
+# "false". Sets FFB_DECISION (trip|none|identity_unavailable|
+# history_unavailable|unavailable), FFB_LABEL, FFB_PHASE, FFB_FP, FFB_RUNS
+# (csv) and FFB_RECENT_JSON (last <=5 markers). Always returns 0.
+_failure_fingerprint_breaker_check()
+{
+  local issue_num="$1"
+  local cached_comments_json="${2:-[]}"
+  local cache_available="${3:-false}"
+  local ffb_scope="${4:-standalone}"
+  local ffb_login=""
+  local ffb_complete="false"
+  local ffb_count=""
+  local ffb_result=""
+  local ffb_full_comments=""
+
+  FFB_DECISION="none"
+  FFB_LABEL=""
+  FFB_PHASE=""
+  FFB_FP=""
+  FFB_RUNS=""
+  FFB_RECENT_JSON='[]'
+
+  [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ] || return 0
+  if ! printf '%s' "${cached_comments_json}" | jq -e 'type == "array" and any(.[]?; ((.body // "") | tostring | contains("AI_FAILURE_FINGERPRINT_V1")))' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  unblock_trusted_login >/dev/null
+  ffb_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -z "${ffb_login}" ]; then
+    FFB_DECISION="identity_unavailable"
+    return 0
+  fi
+
+  # Same completeness rule as _staged_support_comments_for_guard.
+  if [ "${cache_available}" = "complete" ]; then
+    ffb_complete="true"
+  elif [ "${cache_available}" = "true" ] \
+    && ffb_count="$(printf '%s' "${cached_comments_json}" | jq -er 'length' 2>/dev/null)" \
+    && [[ "${ffb_count}" =~ ^[0-9]+$ ]] && [ "${ffb_count}" -lt 100 ]; then
+    ffb_complete="true"
+  fi
+
+  ffb_result="$(_failure_fingerprint_breaker_eval "${cached_comments_json}" "${ffb_login}" "${ffb_complete}")"
+  if [ "$(printf '%s' "${ffb_result}" | jq -r '.decision' 2>/dev/null)" = "needs_full_history" ]; then
+    if ! ffb_full_comments="$(_staged_support_comments_for_guard "${issue_num}" "${cached_comments_json}" "false")"; then
+      FFB_DECISION="history_unavailable"
+      return 0
+    fi
+    ffb_result="$(_failure_fingerprint_breaker_eval "${ffb_full_comments}" "${ffb_login}" "true")"
+  fi
+
+  FFB_DECISION="$(printf '%s' "${ffb_result}" | jq -r '.decision // "unavailable"' 2>/dev/null || echo unavailable)"
+  case "${FFB_DECISION}" in
+    trip|none|identity_unavailable|unavailable) ;;
+    *) FFB_DECISION="unavailable" ;;
+  esac
+  FFB_RECENT_JSON="$(printf '%s' "${ffb_result}" | jq -c '(.recent // []) | if type == "array" then .[-5:] else [] end' 2>/dev/null || echo '[]')"
+  [ -n "${FFB_RECENT_JSON}" ] || FFB_RECENT_JSON='[]'
+  if [ "${FFB_DECISION}" = "trip" ]; then
+    FFB_PHASE="$(printf '%s' "${ffb_result}" | jq -r '.phase // ""' 2>/dev/null || true)"
+    FFB_FP="$(printf '%s' "${ffb_result}" | jq -r '.fp // ""' 2>/dev/null || true)"
+    FFB_LABEL="$(printf '%s' "${ffb_result}" | jq -r '.label // ""' 2>/dev/null || true)"
+    FFB_RUNS="$(printf '%s' "${ffb_result}" | jq -r '(.runs // []) | map(tostring) | join(",")' 2>/dev/null || true)"
+    # Defence in depth: the evaluator already validated these fields.
+    if ! [[ "${FFB_PHASE}" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
+      || ! [[ "${FFB_FP}" =~ ^[0-9a-f]{12}$ ]] \
+      || ! [[ "${FFB_RUNS}" =~ ^[1-9][0-9]{0,19}(,[1-9][0-9]{0,19})+$ ]]; then
+      FFB_DECISION="unavailable"
+    fi
+    case "${FFB_LABEL}" in
+      ai:plan-failed|ai:clarify-failed|ai:needs-human) ;;
+      *) FFB_DECISION="unavailable" ;;
+    esac
+    if [ "${FFB_DECISION}" != "trip" ]; then
+      FFB_LABEL=""
+      FFB_PHASE=""
+      FFB_FP=""
+      FFB_RUNS=""
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=unavailable reason=invalid_trip_payload" >&2
+    fi
+  fi
+  return 0
+}
+
+# _failure_fingerprint_breaker_apply <issue_num> <scope>
+# Adds FFB_LABEL, verifies it by re-reading labels (like escalate_human), and
+# posts the breaker comment that carries the consumption-point marker.
+# Returns 1 (no comment, no state change) when the label cannot be verified
+# or the breaker comment could not be posted and the label was rolled back,
+# so the next tick retries idempotently. Returns 2 when the label state is
+# unknown or still applied: the label read after the add failed, or the
+# comment failed and the rollback could not be verified (the issue stays
+# stopped; callers must not run the stall ladder on it this tick).
+_ffb_read_issue_labels()
+{
+  # Unlike get_issue_labels_json, a failed read is reported (rc=1) instead
+  # of being turned into "[]", which would read as "label absent".
+  local ffb_read_out=""
+  ffb_read_out="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/$1/labels" --jq '[.[].name]' 2>/dev/null)" || return 1
+  printf '%s' "${ffb_read_out}" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  printf '%s' "${ffb_read_out}"
+}
+
+_failure_fingerprint_breaker_apply()
+{
+  local issue_num="$1"
+  local ffb_scope="${2:-standalone}"
+  local ffb_labels_after=""
+  local ffb_runs_base=""
+  local ffb_rows=""
+  local ffb_body=""
+
+  ensure_label_exists "${FFB_LABEL}"
+  gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "${FFB_LABEL}" >/dev/null 2>&1 || true
+  if ! ffb_labels_after="$(_ffb_read_issue_labels "${issue_num}")"; then
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed label=${FFB_LABEL} reason=label_read_failed (label state unknown; ladder skipped this tick)"
+    return 2
+  fi
+  if ! has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
+    echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} label=${FFB_LABEL}"
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed label=${FFB_LABEL}"
+    return 1
+  fi
+
+  ffb_runs_base="$(_gh_url "actions/runs")"
+  ffb_rows="$(printf '%s' "${FFB_RECENT_JSON}" | jq -r --arg base "${ffb_runs_base}" '
+    .[]? | "| `\(.phase)` | `\(.fp)` | " + (if $base != "" then "[\(.run)](\($base)/\(.run))" else (.run | tostring) end) + " |"
+  ' 2>/dev/null || true)"
+  ffb_body="<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} -->
+## 🛑 Repeated failure detected: automatic retries stopped
+
+The \`${FFB_PHASE}\` phase failed with the same failure signature (\`${FFB_FP}\`) in runs ${FFB_RUNS//,/, }. Stall recovery will not retrigger it again; this issue now carries \`${FFB_LABEL}\`.
+
+| Phase | Fingerprint | Run |
+|---|---|---|
+${ffb_rows}
+
+The unblock judge will pick this up on its next scan."
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${ffb_body}" >/dev/null 2>&1; then
+    # The breaker comment is the only consumption point for the marker
+    # history. Without it, a later unblock-judge resume would re-trip on the
+    # same markers, so roll the label back (both callers only reach here
+    # when the issue did not carry it) and let the next tick retry. Return 2
+    # when the rollback cannot be verified, so callers do not run the legacy
+    # ladder on an issue that still carries the failure label.
+    gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "${FFB_LABEL}" >/dev/null 2>&1 || true
+    if ! ffb_labels_after="$(_ffb_read_issue_labels "${issue_num}")"; then
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=unverified (label read failed; breaker comment not posted)"
+      return 2
+    fi
+    if has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=failed (label applied; breaker comment not posted)"
+      return 2
+    fi
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=done (breaker comment not posted; next tick retries)"
+    return 1
+  fi
+  echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=tripped phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} label=${FFB_LABEL}"
+  tg_notify_issue "${issue_num}" "Failure-signature breaker tripped for issue #${issue_num}: phase '${FFB_PHASE}' failed with the same fingerprint ${FFB_FP} in runs ${FFB_RUNS}. Labelled ${FFB_LABEL} for the unblock judge." "WARNING"
+  return 0
+}
+
+# run_managed_failure_fingerprint_breaker: per-project managed loop pass.
+# Runs before check-stalls on every tick (inside the INVOKE_JUDGE_FOR_STUCK
+# != true block) over the current wave's open issues, reading comments only
+# from the batched _current_wave_details_json cache. On a trip it patches
+# LABELS_JSON so check-stalls sees the new label this tick and mirrors the
+# recent markers into the wave issue's failure_fingerprints. Sets
+# FFB_MANAGED_STATE_CHANGED=true when STATE_FILE was rewritten.
+run_managed_failure_fingerprint_breaker()
+{
+  local ffb_entry=""
+  local ffb_issue=""
+  local ffb_local_id=""
+  local ffb_comments=""
+  local ffb_issue_labels=""
+  local ffb_gate=""
+  local ffb_new_labels=""
+  local ffb_labels_map=""
+
+  FFB_MANAGED_STATE_CHANGED="false"
+  [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ] || return 0
+  [ -f "${STATE_FILE:-}" ] || return 0
+  [[ "${WAVE_IDX:-}" =~ ^[0-9]+$ ]] || return 0
+
+  while IFS= read -r ffb_entry; do
+    [ -n "${ffb_entry}" ] || continue
+    ffb_issue="$(printf '%s' "${ffb_entry}" | jq -r '.github_issue // empty' 2>/dev/null || true)"
+    ffb_local_id="$(printf '%s' "${ffb_entry}" | jq -r '.id // empty' 2>/dev/null || true)"
+    [[ "${ffb_issue}" =~ ^[0-9]+$ ]] || continue
+    if ! printf '%s' "${_current_wave_details_json:-}" | jq -e --arg n "${ffb_issue}" \
+      '(.[$n].comments_available == true) and ((.[$n].comments | type) == "array")' >/dev/null 2>&1; then
+      continue
+    fi
+    ffb_comments="$(printf '%s' "${_current_wave_details_json}" | jq -c --arg n "${ffb_issue}" '.[$n].comments' 2>/dev/null || echo '[]')"
+    if ! printf '%s' "${ffb_comments}" | jq -e 'any(.[]?; ((.body // "") | tostring | contains("AI_FAILURE_FINGERPRINT_V1")))' >/dev/null 2>&1; then
+      continue
+    fi
+    ffb_labels_map="${LABELS_JSON:-}"
+    [ -n "${ffb_labels_map}" ] || ffb_labels_map='{}'
+    ffb_issue_labels="$(printf '%s' "${ffb_labels_map}" | jq -c --arg n "${ffb_issue}" '.[$n] // [] | if type == "array" then . else [] end' 2>/dev/null || echo '[]')"
+    ffb_gate="$(PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, sys
+sys.path.insert(0, "scripts")
+from orchestrate_lib import DEDICATED_HANDLER_PHASES, TERMINAL_PHASES, determine_phase, stall_recovery_latch_label
+labels = json.loads(sys.argv[1])
+phase = determine_phase(labels)
+if phase in TERMINAL_PHASES or phase in DEDICATED_HANDLER_PHASES or stall_recovery_latch_label(labels):
+    print("skip")
+else:
+    print("eligible")
+' "${ffb_issue_labels}" 2>/dev/null || echo skip)"
+    [ "${ffb_gate}" = "eligible" ] || continue
+
+    _failure_fingerprint_breaker_check "${ffb_issue}" "${ffb_comments}" "true" "managed"
+    case "${FFB_DECISION}" in
+      trip)
+        # Managed wave issues get ai:needs-human (a dedicated-handler phase)
+        # instead of ai:plan-failed / ai:clarify-failed: those are
+        # TERMINAL_PHASES, which reconcile_wave_issue_status would record as
+        # a permanent "closed" wave status (the skip-and-close P3b removes).
+        FFB_LABEL="ai:needs-human"
+        local ffb_apply_rc=0
+        _failure_fingerprint_breaker_apply "${ffb_issue}" "managed" || ffb_apply_rc=$?
+        # rc=1: nothing applied; check-stalls sees the issue as before.
+        [ "${ffb_apply_rc}" -eq 1 ] && continue
+        # rc=0 and rc=2 (label applied or state unknown): patch the in-memory
+        # snapshot so check-stalls skips the issue this tick.
+        ffb_new_labels="$(printf '%s' "${ffb_issue_labels}" | jq -c --arg l "${FFB_LABEL}" 'if index($l) == null then . + [$l] else . end' 2>/dev/null || echo "${ffb_issue_labels}")"
+        LABELS_JSON="$(printf '%s' "${ffb_labels_map}" | jq -c --arg key "${ffb_issue}" --argjson labels "${ffb_new_labels}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
+        [ "${ffb_apply_rc}" -eq 0 ] || continue
+        if [ -n "${ffb_local_id}" ] \
+          && jq --argjson w "${WAVE_IDX}" --arg id "${ffb_local_id}" --argjson recent "${FFB_RECENT_JSON}" \
+            '(.waves[$w].issues[]? | select(.id == $id)) |= (.failure_fingerprints = $recent)' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" 2>/dev/null; then
+          mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          FFB_MANAGED_STATE_CHANGED="true"
+        else
+          rm -f "${STATE_FILE}.tmp"
+        fi
+        ;;
+      identity_unavailable|history_unavailable|unavailable)
+        echo "STALL_FINGERPRINT_BREAKER issue=${ffb_issue} scope=managed outcome=${FFB_DECISION}"
+        ;;
+    esac
+  done < <(jq -c --argjson w "${WAVE_IDX}" '
+    .waves[$w].issues[]?
+    | select(.github_issue != null)
+    | select(((.status // "") as $s | ["merged", "closed", "skipped", "not_created"] | index($s)) | not)
+  ' "${STATE_FILE}" 2>/dev/null || true)
+  return 0
+}
+
 run_standalone_stall_recovery() {
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
@@ -22799,6 +23148,48 @@ state["schema_version"] = 1
 print(json.dumps(state, separators=(",", ":")))
 PY
 )"
+
+    # Stuck-states P3b: failure-signature breaker. Runs before the
+    # capacity-wait and threshold checks so a phase that fails the same way
+    # twice is stopped on the next tick, even though a failing plan flips the
+    # issue back to ai:clarification and restarts the stall clock. The
+    # failure_fingerprints state key only mirrors the trusted comment
+    # history (observation only; never an input to a trip).
+    local _std_ffb_cache_available="false"
+    if [ "${_standalone_staged_support_cache_available}" = "complete" ]; then
+      _std_ffb_cache_available="complete"
+    elif [ "${_standalone_staged_support_cache_available}" = "true" ]; then
+      _std_ffb_cache_available="true"
+    fi
+    _failure_fingerprint_breaker_check "${issue_num}" "${comments_json}" "${_std_ffb_cache_available}" "standalone"
+    case "${FFB_DECISION}" in
+      trip)
+        local _std_ffb_apply_rc=0
+        _failure_fingerprint_breaker_apply "${issue_num}" "standalone" || _std_ffb_apply_rc=$?
+        if [ "${_std_ffb_apply_rc}" -eq 0 ]; then
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson recent "${FFB_RECENT_JSON}" --argjson now "$(date +%s)" '
+            .failure_fingerprints = $recent | .updated_ts = $now
+          ' 2>/dev/null || echo "${updated_state}")"
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+          continue
+        fi
+        # rc=2: the failure label is still on the issue; skip the ladder.
+        # rc=1: nothing applied; fall through so the legacy ladder still runs.
+        if [ "${_std_ffb_apply_rc}" -ne 1 ]; then
+          continue
+        fi
+        ;;
+      identity_unavailable|history_unavailable|unavailable)
+        echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=standalone outcome=${FFB_DECISION}"
+        ;;
+      *)
+        if [ "${FFB_RECENT_JSON}" != "[]" ]; then
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --argjson recent "${FFB_RECENT_JSON}" '
+            if (.failure_fingerprints // []) == $recent then . else .failure_fingerprints = $recent end
+          ' 2>/dev/null || echo "${updated_state}")"
+        fi
+        ;;
+    esac
 
     # ai:claude-capacity-wait (issue #7251) is owned by the capacity-wait
     # resume pass, like DEDICATED_HANDLER_PHASES in orchestrate_lib.py, so no
@@ -23748,13 +24139,66 @@ REISSUE_EOF
         if [ "${phase_attempts_count}" -gt "${_std_exhausted_attempts}" ]; then
           _std_exhausted_attempts="${phase_attempts_count}"
         fi
-        close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
-        ensure_label_exists "ai:closed"
-        gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:closed' 2>/dev/null || true
-        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time)." 2>/dev/null || true
-        tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue closed with ai:closed." "CRITICAL"
-        STALL_RECOVERY_SHOULD_INCREMENT="false"
-        took_action="true"
+        if [ "${STALL_FINGERPRINT_BREAKER_ENABLED}" = "true" ]; then
+          # Stuck-states P3b (G3): exhaustion never closes the issue or its
+          # linked PR. Label ai:needs-human, verify it, and leave the issue
+          # open for the unblock judge (unblock_scan BLOCK_LABELS).
+          local _std_exhausted_counter="phase_attempts"
+          if [ "${recovery_count}" -ge "${effective_max_recoveries}" ]; then
+            _std_exhausted_counter="stall_recovery_count"
+          fi
+          ensure_label_exists "ai:needs-human"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null 2>&1 || true
+          local _std_exhausted_labels
+          _std_exhausted_labels="$(get_issue_labels_json "${issue_num}")"
+          if has_label "${_std_exhausted_labels}" "ai:needs-human"; then
+            local _std_exhausted_history
+            _std_exhausted_history="$(printf '%s' "${updated_state}" | jq -r '
+              ((.failure_fingerprints // []) | if type == "array" then .[-5:] else [] end)[]?
+              | select(type == "object")
+              | select(((.phase // "") | tostring | test("^[a-z][a-z0-9-]{0,31}$"))
+                and ((.fp // "") | tostring | test("^[0-9a-f]{12}$"))
+                and ((.run // "") | tostring | test("^[1-9][0-9]{0,19}$")))
+              | "| `\(.phase)` | `\(.fp)` | \(.run) |"
+            ' 2>/dev/null || true)"
+            if [ -n "${_std_exhausted_history}" ]; then
+              _std_exhausted_history="| Phase | Fingerprint | Run |
+|---|---|---|
+${_std_exhausted_history}"
+            else
+              _std_exhausted_history="_No failure fingerprints recorded._"
+            fi
+            gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="## ⏸️ Stall recovery exhausted: escalated for the unblock judge
+
+Standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time).
+
+- **Phase:** \`${phase}\`
+- **Exhausted counter:** \`${_std_exhausted_counter}\` (stall_recovery_count=${recovery_count}, phase_attempts=${phase_attempts_count})
+- **Limit:** ${effective_max_recoveries}
+- **Stuck this time:** ${elapsed_minutes} minutes
+
+**Recent failure fingerprints:**
+
+${_std_exhausted_history}
+
+This issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge will pick it up." >/dev/null 2>&1 || true
+            echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=standalone phase=${phase} attempts=${_std_exhausted_attempts} limit=${effective_max_recoveries} counter=${_std_exhausted_counter} outcome=labelled"
+            tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue left open with ai:needs-human for the unblock judge." "CRITICAL"
+            took_action="true"
+          else
+            echo "STALL_EXHAUSTED_ESCALATED issue=${issue_num} scope=standalone phase=${phase} attempts=${_std_exhausted_attempts} limit=${effective_max_recoveries} outcome=label_failed"
+            took_action="false"
+          fi
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+        else
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
+          ensure_label_exists "ai:closed"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:closed' 2>/dev/null || true
+          gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time)." 2>/dev/null || true
+          tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue closed with ai:closed." "CRITICAL"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          took_action="true"
+        fi
         ;;
       dispatch_rb_judge)
         # Autonomous escape from ai:review-blocked: dispatch the
@@ -30382,6 +30826,9 @@ fi
     fi
 
     if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+    # Stuck-states P3b: failure-signature breaker for managed wave issues.
+    # Runs before check-stalls so a tripped label is visible this tick.
+    run_managed_failure_fingerprint_breaker
     # ---------------------------------------------------------------
     # Stall detection and self-healing
     # ---------------------------------------------------------------
@@ -30514,6 +30961,9 @@ fi
 
     STALL_STATE_CHANGED=false
     STALL_HEALING_CHANGED=false
+    if [ "${FFB_MANAGED_STATE_CHANGED:-false}" = "true" ]; then
+      STALL_STATE_CHANGED=true
+    fi
 
     if [ "${STALL_COUNT}" -gt 0 ]; then
       echo "Detected ${STALL_COUNT} stalled issue(s). Checking for active workflow runs..."
