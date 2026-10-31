@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When changing GitHub Actions workflows or their helper scripts, update or add targeted tests that assert the workflow contract; this repository has dedicated tests for areas such as untrusted-input handling, test-gate orchestration, and child-workflow counts. Include both workflow and script behavior where a change crosses that boundary.",
+  "fingerprint": "6234ca29988c132f36476abd656c767cadda2dacfdb845fd59d82068dc1dc37b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41208122962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41208122962",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8518",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8526",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8532",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8525",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8529",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8535",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8542"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261031140339_8756af4f5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow behavior changes are typically covered by focused contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-31T14:03:39Z",
+    "promoted_at": "2026-10-31T14:04:22Z",
+    "superseded_at": null
+  }
+}
