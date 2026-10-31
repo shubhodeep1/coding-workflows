@@ -1124,7 +1124,9 @@ gh_api_retry()
 		case "${_kind}" in
 			permanent)
 				_gh_api_retry_log permanent permanent "${_eff_bucket}" "${GH_API_RETRY_LAST_STATUS}" "${_attempt}" "${_max}" 0 "${_endpoint}"
-				cat "${_dir}/err" >&2 2>/dev/null || true
+				if [ -s "${_dir}/err" ]; then
+					echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${_dir}/err")")" >&2
+				fi
 				rm -rf "${_dir}"
 				return 2
 				;;
@@ -1155,7 +1157,9 @@ gh_api_retry()
 					if [ "${_max}" = "1" ] && [ "${_idem}" != "1" ]; then
 						echo "::notice::gh_api_retry: single attempt for non-idempotent create: $(_gh_actions_escape "${_endpoint}")" >&2
 					fi
-					cat "${_dir}/err" >&2 2>/dev/null || true
+					if [ -s "${_dir}/err" ]; then
+						echo "::warning::  stderr: $(_gh_actions_escape "$(_gh_final_stderr_excerpt "${_dir}/err")")" >&2
+					fi
 					rm -rf "${_dir}"
 					return 1
 				fi

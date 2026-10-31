@@ -221,3 +221,43 @@ def test_excerpt_helper_caps_at_exact_boundary(tmp_path: Path) -> None:
 		"rc=0",
 		"",
 	]
+
+
+# gh_api_retry (scripts/gh_helpers.sh) ends its permanent and give-up paths
+# with the same escaped, bounded line. ``gh`` is stubbed as a shell function
+# here, so no executable file is needed. It prints an ``-i`` style response
+# (status line, headers, body) and the hostile stderr.
+GH_API_RETRY_CASES = {
+	"transient_gave_up": ("502", 1, "GH_API_RETRY outcome=gave_up kind=transient"),
+	"permanent": ("422", 2, "GH_API_RETRY outcome=permanent kind=permanent"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(GH_API_RETRY_CASES))
+def test_gh_api_retry_final_stderr_is_single_escaped_bounded_line(tmp_path: Path, case: str) -> None:
+	status, expected_rc, log_prefix = GH_API_RETRY_CASES[case]
+	stderr_file = tmp_path / "hostile_stderr"
+	stderr_file.write_text(HOSTILE_STDERR.replace("HTTP 502", f"HTTP {status}"), encoding="utf-8")
+	env = _setup(tmp_path, b"")
+	env["FAKE_STATUS"] = status
+	env["FAKE_STDERR_FILE"] = str(stderr_file)
+	body = (
+		"gh() { printf 'HTTP/2.0 %s X\\r\\nContent-Type: application/json\\r\\n\\r\\n{\"message\":\"m\"}' "
+		"\"${FAKE_STATUS}\"; cat \"${FAKE_STDERR_FILE}\" >&2; return 1; }\n"
+		"gh_api_retry --idempotent repos/o/r/issues/1\n"
+		"echo \"rc=$?\"\n"
+	)
+	result = _run(tmp_path, env, body)
+
+	assert f"rc={expected_rc}" in result.stdout, result.stderr
+	_assert_no_foreign_workflow_commands(result.stderr)
+	_final_warning_lines(result.stderr, log_prefix)
+	warnings = [line for line in result.stderr.split("\n") if line.startswith(FINAL_WARNING_PREFIX)]
+	assert len(warnings) == 1, result.stderr
+	final = warnings[0]
+	assert final.endswith(TRUNCATED_SUFFIX), final[-80:]
+	assert "TAIL-MARKER" not in final
+	content = _decode(final[len(FINAL_WARNING_PREFIX):])[: -len(TRUNCATED_SUFFIX)]
+	assert len(content.encode("utf-8")) <= EXCERPT_CAP
+	assert "::set-output name=x::y" in content
+	assert sorted(p.name for p in (tmp_path / "tmpdir").iterdir()) == []
