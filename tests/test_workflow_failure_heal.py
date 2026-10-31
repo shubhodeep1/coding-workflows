@@ -10740,3 +10740,124 @@ def test_reproduction_switch_defaults_and_workflow_wiring() -> None:
 		assert workflow.count(line) == 2, line
 		assert intake_job.split("\n  intake:\n", 1)[1].count(line) == 1, line
 		assert scan_job.count(line) == 1, line
+
+
+# --- classify_failure_shape (P3 step 1 / D3) ---------------------------------
+
+
+@pytest.mark.parametrize(
+	("log", "expected"),
+	[
+		("::error::implement stalled: no activity for 30 minutes", "stall"),
+		("::error::codex implement timed out after 60 minutes", "timeout"),
+		("FAILED tests/test_x.py::test_a - AssertionError", "test_failure"),
+		("Traceback (most recent call last)", "crash"),
+		("::error::gh: Not Found (HTTP 404)", "api_error"),
+		("::error::something unexpected", "other"),
+	],
+)
+def test_classify_failure_shape_fixture_per_class(log: str, expected: str) -> None:
+	assert heal.classify_failure_shape(heal.error_signature(log)) == expected
+
+
+def test_classify_failure_shape_conclusion_and_failing_tests_inputs() -> None:
+	unrelated = heal.error_signature("::error::something unexpected")
+	assert heal.classify_failure_shape(unrelated, job_conclusion="timed_out") == "timeout"
+	assert heal.classify_failure_shape(unrelated, job_conclusion="  TIMED_OUT ") == "timeout"
+	assert heal.classify_failure_shape("no-error-lines", failing_tests_found=True) == "test_failure"
+	assert heal.classify_failure_shape("no-error-lines") == "other"
+	assert heal.classify_failure_shape("", job_conclusion="failure") == "other"
+
+
+@pytest.mark.parametrize(
+	("signature", "expected"),
+	[
+		("job stalled", "stall"),
+		("No activity for <n> minutes", "stall"),
+		("no visible progress since start", "stall"),
+		("step Timed Out", "timeout"),
+		("exceeded the wall-clock budget", "timeout"),
+		("network timeout", "timeout"),
+		("FAILED tests/test_a.py", "test_failure"),
+		("assertionerror: x", "test_failure"),
+		("not ok 3 - case", "test_failure"),
+		("Traceback (most recent call last)", "crash"),
+		("segmentation fault", "crash"),
+		("(core dumped)", "crash"),
+		("process completed with exit code 137", "crash"),
+		("jq: command not found", "crash"),
+		("line 3: foo: unbound variable", "crash"),
+		("HTTP 503 from upstream", "api_error"),
+		("api rate limit exceeded for installation", "api_error"),
+		("gh: resource Not Found", "api_error"),
+		("gh: Bad credentials", "api_error"),
+		("gh_api_retry op=x outcome=gave_up", "api_error"),
+		("process completed with exit code 1", "other"),
+		("http <n>", "other"),
+	],
+)
+def test_classify_failure_shape_every_alternative(signature: str, expected: str) -> None:
+	assert heal.classify_failure_shape(signature) == expected
+
+
+def test_classify_failure_shape_precedence() -> None:
+	assert heal.classify_failure_shape("implement stalled: timed out waiting") == "stall"
+	assert heal.classify_failure_shape("stalled", job_conclusion="timed_out") == "stall"
+	assert (
+		heal.classify_failure_shape(
+			"failed tests/test_a.py::test_b",
+			job_conclusion="timed_out",
+			failing_tests_found=True,
+		)
+		== "timeout"
+	)
+	assert heal.classify_failure_shape("traceback | failed tests/test_a.py") == "test_failure"
+	assert heal.classify_failure_shape("traceback", failing_tests_found=True) == "test_failure"
+	assert heal.classify_failure_shape("traceback | api rate limit") == "crash"
+
+
+def test_classify_failure_shape_robust_inputs() -> None:
+	assert heal.classify_failure_shape(None) == "other"  # type: ignore[arg-type]
+	assert heal.classify_failure_shape(123) == "other"  # type: ignore[arg-type]
+	assert heal.FAILURE_SHAPES == ("stall", "timeout", "test_failure", "crash", "api_error", "other")
+	for signature in ("stalled", "timeout", "failed x", "traceback", "http 404", "", None):
+		assert heal.classify_failure_shape(signature) in heal.FAILURE_SHAPES  # type: ignore[arg-type]
+
+
+def test_classify_failure_shape_has_no_caller_yet() -> None:
+	tree = ast.parse(LIB_PATH.read_text(encoding="utf-8"))
+	callers = [
+		node
+		for node in ast.walk(tree)
+		if isinstance(node, ast.Call)
+		and (
+			(isinstance(node.func, ast.Name) and node.func.id == "classify_failure_shape")
+			or (isinstance(node.func, ast.Attribute) and node.func.attr == "classify_failure_shape")
+		)
+	]
+	assert callers == []
+
+
+def test_classify_failure_shape_numeric_alternatives_through_error_signature() -> None:
+	# error_signature() turns digits into "<n>", so the numeric alternatives
+	# cannot fire on the signature alone; the raw error text carries them.
+	exit_log = "##[error]Process completed with exit code 137."
+	http_log = "::error::request failed: HTTP 503 from upstream"
+	exit_sig = heal.error_signature(exit_log)
+	http_sig = heal.error_signature(http_log)
+	assert "<n>" in exit_sig and "137" not in exit_sig
+	assert "<n>" in http_sig and "503" not in http_sig
+	assert heal.classify_failure_shape(exit_sig) == "other"
+	assert heal.classify_failure_shape(http_sig) == "other"
+	assert heal.classify_failure_shape(exit_sig, raw_error_text=exit_log) == "crash"
+	assert heal.classify_failure_shape(http_sig, raw_error_text=http_log) == "api_error"
+	# Raw text feeds only the two numeric alternatives, at their own positions.
+	assert heal.classify_failure_shape("no-error-lines", raw_error_text="Traceback (most recent call last)") == "other"
+	assert heal.classify_failure_shape("no-error-lines", raw_error_text="exit code 1") == "other"
+	assert heal.classify_failure_shape("no-error-lines", raw_error_text="HTTP 200 OK") == "other"
+	assert heal.classify_failure_shape("job stalled", raw_error_text=exit_log) == "stall"
+	assert heal.classify_failure_shape("api rate limit", raw_error_text=exit_log) == "crash"
+	assert heal.classify_failure_shape("x", raw_error_text=123) == "other"  # type: ignore[arg-type]
+	# A longer digit run must not match on its prefix.
+	assert heal.classify_failure_shape("x", raw_error_text="exit code 1370") == "other"
+	assert heal.classify_failure_shape("x", raw_error_text="HTTP 4040 from upstream") == "other"

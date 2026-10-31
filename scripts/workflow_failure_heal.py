@@ -3950,6 +3950,75 @@ def extract_failing_tests(text: str) -> dict[str, list[str]]:
 	return {"names": names, "files": files, "pairs": pairs}
 
 
+# Fixed failure classes for heal trends (P3) and root-cause grouping (P5, D3).
+FAILURE_SHAPES: tuple[str, ...] = ("stall", "timeout", "test_failure", "crash", "api_error", "other")
+
+# Case-insensitive on purpose: normalize_error_line() lowercases every line
+# error_signature() keeps, so case-sensitive "FAILED " / "AssertionError" /
+# "HTTP" / "GH_API_RETRY" could never match a real signature.
+# normalize_error_line() also turns every digit run into "<n>", so the numeric
+# alternatives ("exit code 13[4-9]", "HTTP [45][0-9][0-9]") only fire on
+# strings that still carry their digits. They are kept verbatim rather than
+# widened to "exit code <n>" / "http <n>", which would match every generic
+# "Process completed with exit code 1". So that a caller can still reach them,
+# classify_failure_shape() takes an optional ``raw_error_text`` (the failed
+# job's un-normalised error lines) and checks only these two digit-bearing
+# alternatives against it, at the crash / api_error positions.
+_FAILURE_SHAPE_STALL_RE = re.compile(r"stalled|no activity for|no visible progress", re.IGNORECASE)
+_FAILURE_SHAPE_TIMEOUT_RE = re.compile(r"timed out|exceeded .* budget|timeout", re.IGNORECASE)
+_FAILURE_SHAPE_TEST_RE = re.compile(r"FAILED |AssertionError|not ok ", re.IGNORECASE)
+_FAILURE_SHAPE_CRASH_RE = re.compile(
+	r"Traceback|Segmentation fault|core dumped|exit code 13[4-9]|command not found|unbound variable",
+	re.IGNORECASE,
+)
+_FAILURE_SHAPE_API_RE = re.compile(
+	r"HTTP [45][0-9][0-9]|API rate limit|gh: .*(Not Found|Bad credentials)|GH_API_RETRY .*outcome=gave_up",
+	re.IGNORECASE,
+)
+_FAILURE_SHAPE_RAW_CRASH_RE = re.compile(r"exit code 13[4-9](?!\d)", re.IGNORECASE)
+_FAILURE_SHAPE_RAW_API_RE = re.compile(r"HTTP [45][0-9][0-9](?!\d)", re.IGNORECASE)
+
+
+def classify_failure_shape(
+	signature: str,
+	*,
+	job_conclusion: str | None = None,
+	failing_tests_found: bool = False,
+	raw_error_text: str | None = None,
+) -> str:
+	"""Sort a heal failure into exactly one of FAILURE_SHAPES.
+
+	Inputs: the error_signature() output, the failed job's conclusion and
+	whether extract_failing_tests() found failing tests (a bool the caller
+	computes). The first match wins: stall, timeout (conclusion ``timed_out``
+	or signature), test_failure (failing tests found or signature), crash,
+	api_error, otherwise other.
+
+	``raw_error_text`` (optional) is the failed job's error lines before
+	normalisation. error_signature() turns digits into ``<n>``, so the
+	``exit code 13[4-9]`` and ``HTTP [45][0-9][0-9]`` alternatives are also
+	checked against it; every other alternative reads the signature only.
+
+	Pure: no I/O, no logging, no API calls. Nothing calls it yet (P3 step 1 /
+	D3); later phases wire it into the heal intake.
+	"""
+	sig = signature if isinstance(signature, str) else ""
+	conclusion = str(job_conclusion or "").strip().lower()
+	found = bool(failing_tests_found)
+	raw = raw_error_text if isinstance(raw_error_text, str) else ""
+	if _FAILURE_SHAPE_STALL_RE.search(sig):
+		return "stall"
+	if conclusion == "timed_out" or _FAILURE_SHAPE_TIMEOUT_RE.search(sig):
+		return "timeout"
+	if found or _FAILURE_SHAPE_TEST_RE.search(sig):
+		return "test_failure"
+	if _FAILURE_SHAPE_CRASH_RE.search(sig) or _FAILURE_SHAPE_RAW_CRASH_RE.search(raw):
+		return "crash"
+	if _FAILURE_SHAPE_API_RE.search(sig) or _FAILURE_SHAPE_RAW_API_RE.search(raw):
+		return "api_error"
+	return "other"
+
+
 def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str]:
 	"""Test files plus the subject each one covers, when that subject exists.
 
