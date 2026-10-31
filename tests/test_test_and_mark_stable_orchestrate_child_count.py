@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import stat
 import subprocess
 import tempfile
 import unittest
@@ -28,24 +27,26 @@ BLOCK_START = 'CHILDREN=""'
 BLOCK_END = 'echo "child_issues=${CHILDREN}" >> "$GITHUB_OUTPUT"'
 OLD_COUNT_LINE = "CHILD_COUNT=$(echo \"${CHILDREN}\" | tr ',' '\\n' | grep -c .)"
 
-# Stub `gh`: prints the next payload (the post-`--jq` result) from the
-# newline-separated STUB_GH_PAYLOADS file and logs each call.
-STUB_GH = """#!/usr/bin/env bash
-echo call >> "${STUB_GH_LOG}"
-n=$(wc -l < "${STUB_GH_LOG}" | tr -d ' ')
-sed -n "${n}p" "${STUB_GH_PAYLOADS}"
-"""
-
-STUB_SLEEP = """#!/usr/bin/env bash
-echo "sleep $*" >> "${STUB_SLEEP_LOG}"
-"""
-
-STUB_DATE = """#!/usr/bin/env bash
-if [ "${1:-}" = "+%s" ]; then
-	echo 1000
-	exit 0
-fi
-exec "${REAL_DATE}" "$@"
+# Stubs are shell functions in the script prelude, not PATH binaries, so the
+# test also runs where the temp dir is mounted noexec. The `gh` stub prints
+# the next payload (the post-`--jq` result) from the newline-separated
+# STUB_GH_PAYLOADS file and logs each call.
+STUB_FUNCTIONS = """gh() {
+	echo call >> "${STUB_GH_LOG}"
+	local n
+	n=$(wc -l < "${STUB_GH_LOG}" | tr -d ' ')
+	sed -n "${n}p" "${STUB_GH_PAYLOADS}"
+}
+sleep() {
+	echo "sleep $*" >> "${STUB_SLEEP_LOG}"
+}
+date() {
+	if [ "${1:-}" = "+%s" ]; then
+		echo 1000
+		return 0
+	fi
+	command date "$@"
+}
 """
 
 
@@ -103,12 +104,6 @@ class ChildCountBehaviourTests(unittest.TestCase):
 			block = _child_poll_block(_step_run())
 		tmp = Path(tempfile.mkdtemp())
 		self.addCleanup(shutil.rmtree, tmp, True)
-		bindir = tmp / "bin"
-		bindir.mkdir()
-		for name, body in (("gh", STUB_GH), ("sleep", STUB_SLEEP), ("date", STUB_DATE)):
-			path = bindir / name
-			path.write_text(body, encoding="utf-8")
-			path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 		(tmp / "payloads").write_text("\n".join(payloads) + "\n", encoding="utf-8")
 		(tmp / "output").write_text("", encoding="utf-8")
 		prelude = (
@@ -117,17 +112,16 @@ class ChildCountBehaviourTests(unittest.TestCase):
 			"DISPATCH_START_ISO=2026-01-01T00:00:00Z\n"
 			"TRACKING_NUMBER=100\n"
 			f"GITHUB_OUTPUT={tmp / 'output'}\n"
+			+ STUB_FUNCTIONS
 		)
 		script = tmp / "poll.sh"
 		script.write_text(prelude + block + 'echo "FINAL_COUNT=${CHILD_COUNT}"\n', encoding="utf-8")
 		env = dict(os.environ)
 		env.update(
 			{
-				"PATH": f"{bindir}{os.pathsep}{env.get('PATH', '')}",
 				"STUB_GH_LOG": str(tmp / "gh.log"),
 				"STUB_GH_PAYLOADS": str(tmp / "payloads"),
 				"STUB_SLEEP_LOG": str(tmp / "sleep.log"),
-				"REAL_DATE": shutil.which("date") or "/bin/date",
 			}
 		)
 		proc = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=60)
