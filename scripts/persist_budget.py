@@ -272,10 +272,10 @@ def _tok(value: Any) -> str:
 	return TOKEN_RE.sub("_", str(value))[:40]
 
 
-def summary(entries: list[dict], decision: dict, limits: dict) -> str:
+def summary(entries: list[dict], decision: dict, limits: dict, start: int = 0) -> str:
 	"""One paragraph of host-computed fields only (never `note` text)."""
 	approach = current_approach(entries)
-	items = rounds(entries, approach)
+	items = rounds(_ordered(entries)[start:], approach)
 	recent = ", ".join(f"{_tok(e.get('stage'))}={_tok(e.get('outcome'))}" for e in items[-3:]) or "none"
 	keys = []
 	for entry in _ordered(entries):
@@ -292,9 +292,9 @@ def summary(entries: list[dict], decision: dict, limits: dict) -> str:
 	)
 
 
-def _result(entries: list[dict], action: str, reason: str, limits: dict) -> dict:
+def _result(entries: list[dict], action: str, reason: str, limits: dict, start: int = 0) -> dict:
 	approach = current_approach(entries)
-	items = rounds(entries, approach)
+	items = rounds(_ordered(entries)[start:], approach)
 	decision = {
 		"action": action,
 		"reason": reason,
@@ -303,7 +303,7 @@ def _result(entries: list[dict], action: str, reason: str, limits: dict) -> dict
 		"rounds": len(items),
 		"failed_streak": trailing_failed(items),
 	}
-	decision["summary"] = summary(entries, decision, limits)
+	decision["summary"] = summary(entries, decision, limits, start)
 	return decision
 
 
@@ -331,11 +331,15 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 			start = index + 1
 	oldest = parse_ts(ordered[start]["ts"])
 	if oldest is not None and (now - oldest).total_seconds() > limits["max_hours"] * 3600:
-		return _result(ordered, "escalate", "max_hours", limits)
+		return _result(ordered, "escalate", "max_hours", limits, start)
 	if newest_governor:
-		return _result(ordered, "ignore", "already_decided", limits)
+		return _result(ordered, "ignore", "already_decided", limits, start)
 	can_replan = approaches(ordered) < limits["max_approaches"]
-	items = rounds(ordered, current_approach(ordered))
+	# Rounds count from the same point as the time window, so a resumed
+	# issue is not escalated again on its next round for rounds that were
+	# already counted (escalations are journalled with `--approach inherit`).
+	history = ordered[start:]
+	items = rounds(history, current_approach(ordered))
 	trigger = ""
 	# max_rounds counts every round, whatever its outcome (review rounds are
 	# journalled `ok` because each one is an autofix commit); only a PR that
@@ -349,7 +353,7 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 	):
 		trigger = "no_progress"
 	if not trigger:
-		all_rounds = [e for e in ordered if e.get("stage") in ROUND_STAGES]
+		all_rounds = [e for e in history if e.get("stage") in ROUND_STAGES]
 		if all_rounds and all_rounds[-1].get("stage") == "postmerge" and all_rounds[-1].get("outcome") == "fail":
 			newest_round_ts = all_rounds[-1]["ts"]
 			if not any(e.get("stage") == "plan" and e["ts"] > newest_round_ts for e in ordered):
@@ -358,11 +362,11 @@ def decide(entries: Any, now: datetime, labels: Any, limits: dict | None = None)
 		if can_replan and open_pr_label(labels):
 			# plan.yml skips planning while the issue's PR is open, so a
 			# re-plan here could never run; hand it to a person instead.
-			return _result(ordered, "escalate", f"open_pr:{trigger}", limits)
+			return _result(ordered, "escalate", f"open_pr:{trigger}", limits, start)
 		if can_replan:
-			return _result(ordered, "replan", trigger, limits)
-		return _result(ordered, "escalate", f"max_approaches:{trigger}", limits)
-	return _result(ordered, "continue", "within_budget", limits)
+			return _result(ordered, "replan", trigger, limits, start)
+		return _result(ordered, "escalate", f"max_approaches:{trigger}", limits, start)
+	return _result(ordered, "continue", "within_budget", limits, start)
 
 
 def _load_entries(args: argparse.Namespace) -> list[dict] | None:

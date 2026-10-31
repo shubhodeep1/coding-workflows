@@ -176,6 +176,21 @@ CASES = [
 		[], CAPS, "escalate", "max_hours",
 	),
 	(
+		"resumed_after_max_rounds_escalation_counts_rounds_afresh",
+		[_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(5)], _entry("governor", "blocked", minutes_ago=200), _entry("review", "ok", minutes_ago=100)],
+		["ai:done"], CAPS, "continue", "within_budget",
+	),
+	(
+		"resumed_after_failed_rounds_escalation_counts_failures_afresh",
+		[_plan(1, 900), _plan(2, 800), _plan(3, 700), *_fails(3, keys=KEYS[:3], approach=3), _entry("governor", "blocked", 3, 200), _entry("implement", "fail", 3, 100, failure_key=KEYS[3])],
+		[], CAPS, "continue", "within_budget",
+	),
+	(
+		"resumed_after_escalation_hits_max_rounds_again",
+		[_plan(), *[_entry("review", "ok", minutes_ago=300 - i) for i in range(5)], _entry("governor", "blocked", minutes_ago=200), *[_entry("review", "ok", minutes_ago=150 - i) for i in range(5)]],
+		[], CAPS, "replan", "max_rounds",
+	),
+	(
 		"governor_escalation_is_final_past_max_hours",
 		[_entry("plan", "ok", 1, 49 * 60), *_fails(3, keys=KEYS[:3]), _entry("governor", "blocked", minutes_ago=5)],
 		[], CAPS, "ignore", "already_decided",
