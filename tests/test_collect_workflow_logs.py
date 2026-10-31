@@ -1716,6 +1716,154 @@ def test_dedupe_structured_cost_telemetry_full_logs_handles_malformed_inputs():
 	assert collector._dedupe_structured_cost_telemetry_full_logs(None) == []
 
 
+_TIMESTAMP_SKEW_OPENROUTER_PAYLOAD = (
+	"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 "
+	"cache_enabled=true cache_breakpoint_enabled=false cache_breakpoint_fallback_retry=false "
+	"prompt_tokens=100 completion_tokens=25 total_tokens=125 "
+	"cache_creation_input_tokens=30 cache_read_input_tokens=40"
+)
+_TIMESTAMP_SKEW_QUERY_PAYLOAD = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
+
+
+def test_apply_cost_telemetry_from_full_logs_dedupes_parent_child_timestamp_skew():
+	parent_openrouter = "2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	parent_query = "2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD
+	child_openrouter = "2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	child_query = "2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD
+	run = {
+		"repository": "owner/repo",
+		"run_id": 415,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "review_autofix",
+	}
+	full_logs = [
+		{
+			"step_name": "review",
+			"content": "\n".join([parent_openrouter, parent_query, "wrapper detail"]) + "\n",
+		},
+		{
+			"step_name": "review/pass1",
+			"content": "\n".join([child_openrouter, child_query, "pass1 detail"]) + "\n",
+		},
+	]
+
+	deduped_full_logs = collector._dedupe_structured_cost_telemetry_full_logs(full_logs)
+	assert parent_openrouter not in deduped_full_logs[0]["content"]
+	assert parent_query not in deduped_full_logs[0]["content"]
+	assert "wrapper detail" in deduped_full_logs[0]["content"]
+	assert child_openrouter + "\n" in deduped_full_logs[1]["content"]
+	assert child_query + "\n" in deduped_full_logs[1]["content"]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	telemetry = run["cost_telemetry"]
+	assert telemetry["or_calls"] == 1
+	assert telemetry["or_prompt_tokens"] == 100
+	assert telemetry["or_completion_tokens"] == 25
+	assert telemetry["or_total_tokens"] == 125
+	assert telemetry["semble_query_calls"] == 1
+	assert telemetry["semble_query_bytes"] == 88
+
+
+def test_apply_cost_telemetry_from_full_logs_keeps_sibling_duplicates_with_timestamp_skew():
+	run = {
+		"repository": "owner/repo",
+		"run_id": 416,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "review_autofix",
+	}
+	full_logs = [
+		{
+			"step_name": "review/pass1",
+			"content": "\n".join(
+				[
+					"2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD,
+					"2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD,
+				]
+			) + "\n",
+		},
+		{
+			"step_name": "review/pass2",
+			"content": "\n".join(
+				[
+					"2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD,
+					"2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD,
+				]
+			) + "\n",
+		},
+	]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	telemetry = run["cost_telemetry"]
+	assert telemetry["or_calls"] == 2
+	assert telemetry["or_total_tokens"] == 250
+	assert telemetry["semble_query_calls"] == 2
+	assert telemetry["semble_query_bytes"] == 176
+
+
+def test_apply_cost_telemetry_from_full_logs_dedupes_parent_child_codex_usage_timestamp_skew():
+	parent_header = "2026-09-22T00:00:00.0000000Z tokens used"
+	parent_number = "2026-09-22T00:00:00.0000001Z 12,345"
+	child_header = "2026-09-22T00:00:00.0000050Z tokens used"
+	child_number = "2026-09-22T00:00:00.0000051Z 12,345"
+	run = {
+		"repository": "owner/repo",
+		"run_id": 417,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "implement",
+	}
+	full_logs = [
+		{"step_name": "review", "content": "\n".join([parent_header, parent_number, "wrapper detail"]) + "\n"},
+		{"step_name": "review/pass1", "content": "\n".join([child_header, child_number, "pass1 detail"]) + "\n"},
+	]
+
+	deduped_full_logs = collector._dedupe_structured_cost_telemetry_full_logs(full_logs)
+	assert parent_header not in deduped_full_logs[0]["content"]
+	assert child_header in deduped_full_logs[1]["content"]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	assert run["cost_telemetry"]["codex_tokens_used"] == 12345
+	assert run["cost_telemetry"]["codex_calls"] == 1
+
+
+def test_structured_cost_telemetry_line_key_only_strips_leading_timestamp():
+	assert (
+		collector._structured_cost_telemetry_line_key(
+			"2026-09-22T00:00:00.1234567Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD
+		)
+		== _TIMESTAMP_SKEW_QUERY_PAYLOAD
+	)
+	mid_line = "seen=2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	assert collector._structured_cost_telemetry_line_key(mid_line + "  \n") == mid_line
+	assert (
+		collector._strip_structured_cost_telemetry_key_timestamp("INFO: seen 2026-09-22T00:00:00Z later")
+		== "INFO: seen 2026-09-22T00:00:00Z later"
+	)
+
+	parent_line = "seen=2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	child_line = "seen=2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	run = {
+		"repository": "owner/repo",
+		"run_id": 418,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "review_autofix",
+	}
+	full_logs = [
+		{"step_name": "review", "content": parent_line + "\n"},
+		{"step_name": "review/pass1", "content": child_line + "\n"},
+	]
+	deduped_full_logs = collector._dedupe_structured_cost_telemetry_full_logs(full_logs)
+	assert deduped_full_logs[0]["content"] == parent_line + "\n"
+	assert deduped_full_logs[1]["content"] == child_line + "\n"
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	assert run["cost_telemetry"]["or_calls"] == 2
+	assert run["cost_telemetry"]["or_total_tokens"] == 250
+
+
 def test_fetch_run_log_archive_retries_transient_then_succeeds():
 	orig_gh_api_bytes = collector.gh_api_bytes
 	orig_sleep = collector.time.sleep
