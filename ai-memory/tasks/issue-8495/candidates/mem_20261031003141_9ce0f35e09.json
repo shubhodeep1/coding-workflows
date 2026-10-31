@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"[E2E Orchestrate Smoke 41149960627] Update two independent canary files\",\"issues\":[{\"id\":\"canary-a\",\"title\":\"[E2E Smoke 41149960627] Set tests/e2e_smoke_canary.txt to status ok + decompose-run 41149960627\",\"priority\":1},{\"id\":\"canary-b\",\"title\":\"[E2E Smoke 41149960627] Set tests/e2e_smoke_canary_b.txt to status ok + decompose-run 41149960627\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "a025642df5b5b33dc810d3257f1b6e3093484030c02a109ab896c1206818755f",
+  "lineage": {
+    "issue_number": 8495,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41150203629",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41150203629",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261031003141_9ce0f35e09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8495,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41150203629"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project '[E2E Orchestrate Smoke 41149960627] Update two independent canary files' into 2 issues (tracking #8495)",
+  "timestamps": {
+    "created_at": "2026-10-31T00:31:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
