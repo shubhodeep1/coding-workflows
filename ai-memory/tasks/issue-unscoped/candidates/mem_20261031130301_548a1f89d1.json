@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:1534-1627 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The dedup key now ignores the leading timestamp, so a parent-step line is dropped when any descendant step has a line with the same payload, whatever its time (`_structured_cost_telemetry_line_key` 1538-1552, `_strip_structured_cost_telemetry_key_timestamp` 1534, dedup loop in `_dedupe_structured_cost_telemetry_full_logs` 1604-1627).\n  WHY: A parent and child that emit independent events with byte-identical payloads would be undercounted. The reviewer rated it NIT, reported it for the record only, and said it is not a defect to fix, because it is the stated trade-off of the fix.\n- .github/workflows/test-and-mark-stable.yml:CHILD_COUNT computation | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: None found. The `jq` count plus the `case` guard handle empty and malformed input, and the new tests cover those paths.\n  WHY: This is a verification note only, rated NIT, with no action needed.\n- changelog.d/wfopt-2026-09-26-3-collector-timestamp-dedup.md:1-2 and changelog.d/wfopt-2026-09-26-3-smoke-child-count.md:1-2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: Two changelog fragments were added for one change set, against the documented one-fragment-per-PR convention. z-ai_glm-5_3-flash also noted that the names lack the owning issue number 8531.\n  WHY: There is no runtime failure, and `scripts/assemble_changelog.py` folds both fragments. All three reviewers rated it NIT, and anthropic_claude-sonnet-5_5 said it would not act on it. The confidence of 4 is the highest stated across the three reviewers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/collect_workflow_logs.py:1534-1627 | severity=NIT | confidence=2\n  PROBLEM: The dedup key ignores the leading timestamp, so a parent-step line is dropped when any descendant step has a line with the same payload (`_structured_cost_telemetry_line_key` 1538-1552, `_strip_structured_cost_telemetry_key_timestamp` 1534, dedup loop in `_dedupe_structured_cost_telemetry_full_logs` 1604-1627).\n  WHY: A parent and child that emit independent events with byte-identical payloads would be undercounted. This is the stated trade-off of the fix. Reported for the record only, not as a defect to fix.\n- .github/workflows/test-and-mark-stable.yml:CHILD_COUNT computation | severity=NIT | confidence=1\n  PROBLEM: None found. The `jq` count and the `case` guard cover empty and malformed input.\n  WHY: Verification note only, with no action needed.\n- changelog.d/wfopt-2026-09-26-3-collector-timestamp-dedup.md:1-2 and changelog.d/wfopt-2026-09-26-3-smoke-child-count.md:1-2 | severity=NIT | confidence=2\n  PROBLEM: Two changelog fragments were added for one change set.\n  WHY: No contract test enforces a single fragment, and each fragment covers an independent fix. It is a convention preference only and the reviewer would not act on it.\n- HARDENING: tests/test_test_and_mark_stable_orchestrate_child_count.py `_run` helper: the 60-second timeout is adequate because `sleep` and `date` are stubbed. No change is needed. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/wfopt-2026-09-26-3-collector-timestamp-dedup.md and changelog.d/wfopt-2026-09-26-3-smoke-child-count.md | severity=NIT | confidence=4\n  PROBLEM: The PR adds two changelog fragments instead of one, violating the documented one-fragment-per-PR convention (CLAUDE.md \u00a720.B).\n  WHY: There is no runtime failure, but it departs from the changelog assembly convention and risks future conflict resolution issues.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/wfopt-2026-09-26-3-collector-timestamp-dedup.md and changelog.d/wfopt-2026-09-26-3-smoke-child-count.md:1-2 | severity=NIT | confidence=4\n  PROBLEM: Two changelog fragments were added for one change set, against the convention \"Write one fragment per PR at changelog.d/<issue-or-pr>-<slug>.md\" (agents.md:4753-4754). The names also lack the owning issue number 8531 that the naming convention expects (agents.md:1995).\n  WHY: There is no runtime failure, because `scripts/assemble_changelog.py` folds both fragments. It is a documented-convention deviation only, so it stays a NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8c4d3b1c9850e2fa4d3a7bd53de811c773566ec9a3d952a9f6cac505e2a35131",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8539,
+    "run_id": "41202718390",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41202718390",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031130301_548a1f89d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8539,
+    "run_id": "41202718390"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T13:03:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
