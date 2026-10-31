@@ -833,6 +833,29 @@ def test_regression_unchanged_clause_is_a_mention_only() -> None:
 	assert only_unchanged["reason"] == "not_a_regression", only_unchanged
 
 
+
+def test_regression_budget_only_review_round_four_shapes() -> None:
+	# Review findings: a raised knob in an "unchanged" clause, a prose Files bullet
+	# without backticks, and a knob on the workflow's own Files bullet must hold.
+	line = "HEAL_REGRESSION: not a regression: load grew"
+	raised = _rg(_rg_plan(line, files=_BUDGET_FILES, body="Raise `PHASE_TIMEOUT` to 90 with no change to the job steps."))
+	assert (raised["decision"], raised["reason"]) == ("hold", "budget_only_plan"), raised
+	workflow_bullet = "- `.github/workflows/ci.yml`"
+	prose = _rg_plan(line, files=_BUDGET_FILES, body="Give the job more time.").replace(
+		workflow_bullet, workflow_bullet + "\n- Raise PHASE_TIMEOUT from 40 to 90")
+	assert _rg(prose)["reason"] == "budget_only_plan"
+	same_bullet = _rg_plan(line, files=_BUDGET_FILES, body="Give the job more time.").replace(
+		workflow_bullet, workflow_bullet + ": raise `timeout-minutes` from 30 to 60")
+	assert _rg(same_bullet)["reason"] == "budget_only_plan"
+	# Another identifier on the workflow's bullet is another change.
+	other = _rg_plan(line, files=_BUDGET_FILES, body=_BUDGET_BODY).replace(
+		workflow_bullet, workflow_bullet + ": set `CACHE_KEY_PREFIX` per job")
+	assert _rg(other)["reason"] == "not_a_regression"
+	# A single extensionless file is still a file, not plan text.
+	makefile = _rg(_rg_plan(line, files=_BUDGET_FILES + ["Makefile"], body=_BUDGET_BODY))
+	assert makefile["reason"] == "not_a_regression", makefile
+
+
 # Step plans name src/app.py so the automation-path gate does not defer them.
 _STEP_FILES = ["src/app.py"]
 _STEP_BODY = "Fix the slow loop in `src/app.py`."

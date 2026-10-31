@@ -449,15 +449,19 @@ HEAL_RG_CONTEXT_HEADING_RE = re.compile(
 	r"^[ ]{0,3}(#{1,6})[ \t]+(?:\d+[a-z]?[.)][ \t]+)?(?:decisions|security[ \t]+considerations|risks\b[^\n]*|testing\b[^\n]*)[ \t]*:?[ \t]*$",
 	re.IGNORECASE)
 HEAL_RG_PLACEHOLDER_RE = re.compile(r"^<[^<>]*>$")
-# A line that says an identifier stays as it is mentions it without changing
-# it, so its identifiers do not count as another change (knobs still count).
-# This can only add a hold; a human /approved still releases it.
+# A clause that says something stays as it is mentions it without changing it,
+# so neither its identifiers nor its knobs count, unless the same clause also
+# raises something (HEAL_RG_RAISE_RE): then its knobs still count.
 HEAL_RG_UNCHANGED_RE = re.compile(
 	r"\b(?:unchanged|untouched|as[- ]is|no[ \t]+change|do(?:es)?[ \t]+not[ \t]+(?:change|modify|touch)|don't[ \t]+(?:change|modify|touch))\b",
 	re.IGNORECASE)
 # The "unchanged" rule applies per clause, so "set X; leave PHASE_TIMEOUT
 # unchanged" still counts X as another change and does not count the knob.
 HEAL_RG_CLAUSE_SPLIT_RE = re.compile(r"[;,.]|\b(?:and|but|while)\b", re.IGNORECASE)
+# A change verb in an "unchanged" clause ("Raise PHASE_TIMEOUT to 90 with no
+# change to the job steps") means its knob is still being raised.
+HEAL_RG_RAISE_RE = re.compile(r"\b(?:raise[sd]?|raising|increase[sd]?|increasing|bump(?:s|ed)?|double[sd]?|extend(?:s|ed)?|lift(?:s|ed)?|set)\b",
+	re.IGNORECASE)
 
 
 def normalize_heal_trend_flag(value: str | None) -> bool:
@@ -589,9 +593,12 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 	naming a test file must not let a timeout-only plan escape the hold (a
 	real fix to it names what it changes, or a human /approved releases it).
 	A Files bullet is read by its first path-like token (backticked spans
-	first, then words); a bullet without one, or whose only token is a knob,
-	is read as plan text instead. Within a line, a clause that says something
-	stays unchanged is a mention: neither its knobs nor its identifiers count.
+	first, then words) and the rest of that bullet is read as plan text; a
+	bullet without one is a file only when it is a single non-knob token
+	(an extensionless name such as Makefile), otherwise it is read as plan
+	text. Within a line, a clause that says something stays unchanged is a
+	mention: its identifiers do not count, and its knobs count only when the
+	same clause also raises something (raise, increase, bump, set, ...).
 	"""
 	files: list[str] = []
 	other: list[tuple[str, bool]] = []
@@ -625,9 +632,15 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 				pathlike = [token for token in spans + words if "/" in token or HEAL_RG_EXT_RE.search(token)]
 				if pathlike:
 					files.append(pathlike[0])
+					# The rest of the bullet (a knob raised on the same line) is plan text.
+					other.append((bullet.group(1).replace(pathlike[0], " "), False))
 					continue
-				first = (spans or words or [""])[0]
-				if line[:1] not in (" ", "\t") and first and HEAL_RG_KNOB_RE.fullmatch(first) is None:
+				tokens = spans or words
+				first = (tokens or [""])[0]
+				# Only a single-token bullet ("- Makefile") is an extensionless file;
+				# a prose bullet ("- Raise PHASE_TIMEOUT to 90") is plan text.
+				if (line[:1] not in (" ", "\t") and len(tokens) == 1 and first
+					and HEAL_RG_KNOB_RE.fullmatch(first) is None):
 					files.append(first)
 					continue
 				# A sub-bullet or knob-only bullet describes the change: scan it.
@@ -654,6 +667,8 @@ def _heal_regression_budget_only(lines: list[str], workflow: str | None) -> bool
 			continue
 		for clause in HEAL_RG_CLAUSE_SPLIT_RE.split(line):
 			if HEAL_RG_UNCHANGED_RE.search(clause):
+				if HEAL_RG_RAISE_RE.search(clause) and HEAL_RG_KNOB_RE.search(clause):
+					knob_seen = True
 				continue
 			if HEAL_RG_KNOB_RE.search(clause):
 				knob_seen = True
