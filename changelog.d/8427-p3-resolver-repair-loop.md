@@ -1,0 +1,2 @@
+<!-- changelog: added -->
+- **The conflict resolver joins the repair loop behind `PERSIST_REPAIR_LOOP_ENABLED` (default off).** With the repo variable on, the resolver's pre-push test gate repeats its repair attempt while the failures the merge caused plus unmet done-check targets keep dropping, up to `PERSIST_REPAIR_MAX_TURNS` and the step's time budget, and runs the approved plan's done-check tests on every run. The review round's attempt journal now records the newest gate run (up to the sixth) instead of only the second. With the variable off nothing changes. Refs #8427.

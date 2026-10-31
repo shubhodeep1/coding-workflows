@@ -25,6 +25,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-judge.txt` — Role: judge. Goal: evaluate whether the project is progressing correctly after a wave of issues has been implemented and merged.
 - `prompts/mode-orchestrate-poll-judge.txt` — Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly.
 - `prompts/mode-orchestrate.txt` — Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph.
+- `prompts/mode-persist-journal-rules.txt` — Role: pre-push gate repair rules fragment. Goal: tell the repair turn to update a test to match a deliberate deletion instead of restoring the deleted code (attempt journal, issue #8428).
+- `prompts/mode-plan-acceptance.txt` — Role: planner. Goal: append a `## Acceptance` section with `ACCEPTANCE:` lines naming the tests, CI checks and post-merge workflow that show the change is delivered (issue #8427, default off).
 - `prompts/mode-plan-heal-counterfactual.txt` — Role: workflow-heal planner. Goal: append a `## Counterfactual check` with one `HEAL_COUNTERFACTUAL:` line to workflow-heal plans so plan auto-approval can tell whether the change would have made the failing run pass (issue #8249).
 - `prompts/mode-plan.txt` — Role: planning-phase auditor. Goal: emit a structured implementation plan or `BLOCKED:` line.
 - `prompts/mode-security-audit.txt` — Role: Chief Security Officer. Goal: emit a JSON-array security audit for default-branch scope.
@@ -107,6 +109,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Scripts
 
+- `scripts/acceptance_check.py` — Validate a plan's `ACCEPTANCE:` done-check against the repository, store it as the `AI_ACCEPTANCE_V1` plan-comment marker and render the PR body's `## Acceptance` section (issue #8427, default off).
 - `scripts/activation_verify.sh` — Grade merged work LIVE or DORMANT, post the verdict, open one issue for code gaps and record operator steps (port P4).
 - `scripts/ai_context_utils.py` — Python helper for ai context utils.
 - `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` in the isolated container (`claude_run` via `codex_isolated_exec.sh --engine claude`), and fall back to codex (D1).
@@ -121,6 +124,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/assemble_agents.py` — Fold per-PR agents.d fragments into agents.md / AGENTS.md (assemble at release and consumer sync, render for readers, check for CI).
 - `scripts/assemble_changelog.py` — Fold per-PR changelog.d fragments into CHANGELOG.md (Keep a Changelog or date-heading layout) and manage the .gitattributes union backstop.
 - `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
+- `scripts/attempt_journal.py` — Keep the per-issue attempt journal comment (AI_ATTEMPT_JOURNAL_V1): append stage outcomes and render the fenced journal for prompts and judges (issue #8428, default off).
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
 - `scripts/auto_decisions.py` — Parse RECOMMENDED clarify answers and keep the standalone auto-decisions (AD) comment and PR-body section (port P3).
 - `scripts/auto_release_stable.sh` — Dispatch the release gate when the stable branch is ahead of its tag.
@@ -177,10 +181,12 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
 - `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
+- `scripts/evidence_pack.py` — Build the fenced, scrubbed evidence pack (trusted open pull requests touching the paths in play, default-branch history, recent default-branch runs) for clarify, plan and implement prompts (issue #8427, default off).
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/plan_superseded_merged_pr.py` — Plan-phase check that closes a CI-repair issue (or a re-issue of one) whose pull request already merged with the failing check passing on its final head (issue #7216; log prefix `PLAN_SUPERSEDED_MERGED_PR`).
 - `scripts/plan_split_dispatch.sh` — Plan-phase hand-off that starts an orchestrator project (Claude engine) for a pipeline-authored plan listing more than 50 files, instead of holding it for `/approved` (Q151; log prefix `PLAN_SPLIT`).
 - `scripts/partial_delivery.py` — Parse an approved plan's `## Deferred scope` section, embed it in the implement PR body and render the remaining-items comment that keeps a partially delivered issue open (issue #7657; log prefix `PARTIAL_DELIVERY`); its `heal-counterfactual` subcommand decides a workflow-heal plan's auto-approval from its `HEAL_COUNTERFACTUAL` line (issue #8249).
+- `scripts/persist_postmerge_verify.py` — Check after merge: arm an `AI_POSTMERGE_VERIFY_V1` pending marker and `ai:verify-pending` on a merged standalone issue whose plan names a post-merge workflow, then grade the first completed run that contains the merge on poller ticks (issue #8427 P5, default off; log prefix `PERSIST`).
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-full.patch` — Fixture asset for phase-b-risk-tier-full.patch.

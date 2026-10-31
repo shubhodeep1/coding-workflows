@@ -29070,5 +29070,187 @@ def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
 	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in sweep
 
 
+# --- attempt journal in the stall judge (issue #8428, P1) ---------------------------
+
+def _persist_journal_body() -> str:
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import attempt_journal  # noqa: PLC0415
+	entry = attempt_journal.normalise_entry({"ts": "2026-10-30T10:00:00Z", "stage": "review", "run_id": "77", "attempt": "1",
+		"outcome": "fail", "note": "gate failed"})
+	return attempt_journal.build_comment([entry])
+
+
+def _run_persist_stall_context(tmp_path: Path, issue: str, comments_issue: str, comments_json: str, candidate_cache: str = "",
+		login_cache: str = "") -> tuple[subprocess.CompletedProcess, Path, Path]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	func = _extract_bash_function(script, "persist_journal_stall_context() {")
+	calls = tmp_path / "gh_calls.log"
+	out = tmp_path / "journal.txt"
+	harness = (
+		"set -uo pipefail\n"
+		f"gh_retry() {{ echo \"$*\" >> '{calls}'; echo pipeline-bot; }}\n"
+		f"PERSIST_JOURNAL_LOGIN_CACHE='{login_cache}'\n"
+		f"_candidate_details_json=\"$(cat '{tmp_path / 'cache.json'}')\"\n"
+		+ func +
+		f"persist_journal_stall_context \"$1\" \"$2\" \"$(cat '{tmp_path / 'comments.json'}')\" '{out}'\n"
+		"echo \"KEY=${PERSIST_JOURNAL_LAST_KEY}\"\n"
+	)
+	(tmp_path / "comments.json").write_text(comments_json, encoding="utf-8")
+	(tmp_path / "cache.json").write_text(candidate_cache, encoding="utf-8")
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+	env.update({"PERSIST_JOURNAL_ENABLED": "true", "PYTHONDONTWRITEBYTECODE": "1"})
+	proc = subprocess.run(["bash", "-c", harness, "persist", issue, comments_issue], cwd=REPO_ROOT, env=env,
+		capture_output=True, text=True, timeout=60)
+	return proc, out, calls
+
+
+def test_stall_judge_journal_standalone_reads_fetched_comments():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		comments = json.dumps([{"id": 5, "body": _persist_journal_body(), "user": {"login": "pipeline-bot"}}])
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "42", comments)
+		assert "KEY=review|77|1" in proc.stdout, proc.stderr
+		text = out.read_text(encoding="utf-8")
+		assert text.startswith("=== BEGIN UNTRUSTED ATTEMPT JOURNAL") and "UNTRUSTED_DATA: gate failed" in text
+		assert len(text.encode("utf-8")) <= 4096
+		# Only the once-per-tick identity read; no comments call.
+		assert calls.read_text(encoding="utf-8").splitlines() == ["gh api user --jq .login"]
+
+
+def test_stall_judge_journal_ignores_forged_author_and_reuses_login_cache():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		comments = json.dumps([{"id": 5, "body": _persist_journal_body(), "user": {"login": "mallory"}}])
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "42", comments, login_cache="pipeline-bot")
+		assert "KEY=\n" in proc.stdout and out.read_text(encoding="utf-8") == ""
+		assert not calls.exists()
+
+
+def test_stall_judge_journal_managed_item_uses_the_tick_cache():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		cache = json.dumps({"42": {"comments": [{"id": 5, "body": _persist_journal_body(), "user": {"login": "pipeline-bot"}}]}})
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "9", "[]", candidate_cache=cache, login_cache="pipeline-bot")
+		assert "KEY=review|77|1" in proc.stdout, proc.stderr
+		assert "UNTRUSTED_DATA: gate failed" in out.read_text(encoding="utf-8")
+		assert not calls.exists()
+
+
+def test_stall_judge_journal_cache_miss_is_null_without_api_call():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		proc, out, calls = _run_persist_stall_context(tmp_path, "42", "9", "[]", candidate_cache="{}")
+		assert "PERSIST journal outcome=skipped reason=comments_absent" in proc.stderr
+		assert out.read_text(encoding="utf-8") == "" and "KEY=\n" in proc.stdout
+		assert not calls.exists()
+
+
+def test_stall_judge_journal_is_switch_gated_and_keeps_the_cache_key_when_off():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(script, "invoke_stall_judge() {")
+	assert 'if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f scripts/attempt_journal.py ]; then' in body
+	legacy = """_judge_cache_key="$(printf '%s|%s|%s|%s|%s' "${issue_num}" "${head_sha:-}" "${phase}" "${_judge_last_conclusion}" "${_judge_recent_comments_hash}" | sha256sum"""
+	assert body.count(legacy) == 1
+	guarded = body.index('if [ -n "${_persist_journal_key}" ]; then')
+	assert guarded < body.index(legacy)
+	assert '"${_judge_recent_comments_hash}" "${_persist_journal_key}"' in body
+	assert 'if [ -n "${_persist_journal_file}" ]; then' in body and "--rawfile journal" in body
+	assert body.index("diagnostics_build_failed: true") < body.index("attempt_journal: (if $journal")
+	# The journal never triggers a new comments read inside the judge.
+	func = _extract_bash_function(script, "persist_journal_stall_context() {")
+	assert "/comments" not in func
+
+
+# --- check after merge in the poller tick (issue #8427, P5) ---------------------------
+
+_PPV_STUB_HELPER = """import json, sys
+args = sys.argv
+with open(args[args.index("--out") + 1], "w", encoding="utf-8") as fh:
+	json.dump({"replan": [12, "13; rm -rf /", 14], "processed": 3}, fh)
+"""
+
+
+def _run_persist_postmerge(tmp_path: Path, with_helper: bool = True, enabled: str = "true") -> tuple[subprocess.CompletedProcess, Path]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	func = _extract_bash_function(script, "run_persist_postmerge_verify() {")
+	calls = tmp_path / "calls.log"
+	work = tmp_path / "work"
+	(work / "runtime").mkdir(parents=True)
+	if with_helper:
+		(work / "scripts").mkdir()
+		(work / "scripts" / "persist_postmerge_verify.py").write_text(_PPV_STUB_HELPER, encoding="utf-8")
+	harness = (
+		"set -euo pipefail\n"
+		"GITHUB_REPOSITORY=owner/repo\n"
+		f"PERSIST_POSTMERGE_VERIFY_ENABLED='{enabled}'\n"
+		f"RUNTIME_DIR='{work / 'runtime'}'\n"
+		"_is_truthy() { case \"$(echo \"$1\" | tr '[:upper:]' '[:lower:]')\" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }\n"
+		f"gh_retry() {{ printf 'CALL %s\\n' \"$*\" >> '{calls}'; }}\n"
+		"phase_cap_can_dispatch() { [ \"$3\" != \"14\" ]; }\n"
+		f"phase_cap_note_dispatch() {{ echo \"NOTE $1\" >> '{calls}'; }}\n"
+		"tg_notify_issue() { :; }\n"
+		f"_load_actions_runs_cached() {{ echo RUNS_LOADED >> '{calls}'; printf '%s' '{{\"workflow_runs\":[]}}'; }}\n"
+		+ func +
+		"run_persist_postmerge_verify\n"
+		"echo TICK_CONTINUES\n"
+	)
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	proc = subprocess.run(["bash", "-c", harness], cwd=work, env=env, capture_output=True, text=True, timeout=60)
+	return proc, calls
+
+
+def test_persist_postmerge_replan_posts_one_bare_answer_and_defers_capped():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, calls = _run_persist_postmerge(Path(tmp))
+		assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout, proc.stderr
+		log = calls.read_text(encoding="utf-8")
+		assert log.count("CALL gh api repos/owner/repo/issues/12/comments -f body=/answer\n\n_Check after merge:") == 1
+		assert log.count("CALL ") == 1 and log.count("NOTE ai:planning") == 1 and log.count("RUNS_LOADED") == 1
+		assert "PERSIST postmerge outcome=deferred reason=phase_capped issue=14" in proc.stderr
+		assert "outcome=recurred reason=replan_dispatched issue=12" in proc.stderr
+		# Scratch files are removed.
+		assert list((Path(tmp) / "work" / "runtime").iterdir()) == []
+
+
+def test_persist_postmerge_switch_off_skips_the_runs_cache():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, calls = _run_persist_postmerge(Path(tmp), enabled="false")
+		assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout, proc.stderr
+		assert "RUNS_LOADED" not in calls.read_text(encoding="utf-8")
+
+
+def test_persist_postmerge_missing_helper_is_a_noop():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, calls = _run_persist_postmerge(Path(tmp), with_helper=False)
+		assert proc.returncode == 0 and "TICK_CONTINUES" in proc.stdout
+		assert "PERSIST postmerge outcome=skipped reason=helper_absent" in proc.stderr
+		assert not calls.exists()
+
+
+def test_persist_postmerge_runs_once_per_tick_on_idle_and_full_paths():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	call = '  run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"\n'
+	assert script.count(call) == 2
+	# Idle ticks: the unblock-scan sweep runs on every tick without a project,
+	# unlike the standalone-recovery sweep (ENABLE_STANDALONE_STALL_RECOVERY).
+	unblock = script.index('if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then')
+	unblock_end = script.index("  exit 0\nfi\n", unblock)
+	assert unblock < script.index(call, unblock) < unblock_end
+	assert 'prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"' in script[unblock:unblock_end]
+	sweep = script.index('if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then')
+	assert "run_persist_postmerge_verify" not in script[sweep:script.index("  exit 0\nfi\n", sweep)]
+	post_loop = script.index('if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then\n  run_standalone_stall_recovery\n')
+	assert script.index(call, post_loop) == post_loop + len('if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then\n  run_standalone_stall_recovery\n')
+	assert script.index("run_persist_postmerge_verify() {") < unblock
+	func = _extract_bash_function(script, "run_persist_postmerge_verify() {")
+	assert "_load_actions_runs_cached >" in func and 'phase_cap_can_dispatch "ai:planning" retrigger_plan' in func
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	unblock_step = workflow[workflow.index("      - name: Run unblock scan without active projects\n"):]
+	unblock_step = unblock_step[:unblock_step.index("\n      - name: ", 10)]
+	assert "validate_env" not in unblock_step and "standalone_recovery" not in unblock_step
+	assert " gh_api_retry.py persist_postmerge_verify.py acceptance_check.py " in workflow
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

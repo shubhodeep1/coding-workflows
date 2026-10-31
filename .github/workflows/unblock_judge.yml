@@ -33,6 +33,8 @@ env:
   # `core` install profile, which has no orchestrate-poll wrapper to resume
   # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
+  # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
+  PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
 
 jobs:
   unblock-judge:
