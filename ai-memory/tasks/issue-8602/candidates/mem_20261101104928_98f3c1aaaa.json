@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Both remaining items (the heal-filter fix and the btc_sweeper#248 Claude crash) are outside this heal issue's scope or have no evidence yet. How should this issue be finished?\nChoices:\n- A: This issue makes no more changes. A maintainer files an ordinary issue (not a heal issue) for the `scripts/workflow_failure_heal.py` filter fix and its tests in `tests/test_workflow_failure_heal.py`, then closes this heal issue. The crash is looked at when the next btc_sweeper clarify failure produces a new heal report that includes the `CLARIFY_ENGINE_ATTEMPT_FAILED \u2026 pool_outcome=\u2026 pool_reason=\u2026` line. (RECOMMENDED)\n- B: Keep this issue open with no new PR. Wait for an occurrence comment on this issue whose evidence includes the new `pool_outcome`/`pool_reason` line, then clarify again for the crash fix only. The filter fix still needs its own ordinary issue.\n  **Note:** if the crash fix turns out to need `scripts/clarify_isolated_run.sh`, it is also outside this scope and ends up as option A. The lineage is at generation 2 of a cap of 3.\n- C: An operator pastes the three `CLAUDE_POOL run role=CLARIFY \u2026 outcome=\u2026 reason=\u2026 exit_code=\u2026` lines and the Claude CLI stderr from the \"Run Codex\" step of btc_sweeper run 41287557900 now. The crash fix goes ahead in this issue only if it fits inside `.github/workflows/clarify.yml`, `tests/**` and `changelog.d/*.md`. Otherwise it is handled as in option A.",
+  "fingerprint": "318989f91aea45417761ac0fb1998eb48466c20effc2c9dda8b60de9f83d0c0b",
+  "lineage": {
+    "issue_number": 8602,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41298885358",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41298885358",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261101104928_98f3c1aaaa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8602,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41298885358"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8602 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-01T10:49:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
