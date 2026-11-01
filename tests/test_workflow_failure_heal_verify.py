@@ -67,7 +67,8 @@ if "/actions/workflows/" in route and route.endswith("/runs"):
 	if "runs" in fails:
 		fail()
 	name = route.split("/actions/workflows/", 1)[1].rsplit("/runs", 1)[0]
-	out({"workflow_runs": state.get("runs", {}).get(name, [])})
+	runs = state.get("runs", {}).get(name, [])
+	out({"workflow_runs": runs, "total_count": state.get("runs_total", {}).get(name, len(runs))})
 if "/compare/" in route:
 	if "compare" in fails:
 		fail()
@@ -85,7 +86,10 @@ if len(parts) >= 5 and parts[3] == "issues":
 if method == "PATCH" and number is not None:
 	if "reopen" in fails:
 		fail()
-	state.setdefault("reopened", []).append(number)
+	if "state=closed" in args:
+		state.setdefault("reclosed", []).append([number, [a for a in args if a.startswith("state")]])
+	else:
+		state.setdefault("reopened", []).append(number)
 	out("{}")
 if method == "POST" and route.endswith("/comments"):
 	if "comment" in fails:
@@ -395,6 +399,43 @@ def test_api_failures_fail_open_without_writes(tmp_path: Path, failure, reason) 
 	assert reason in result.stdout
 	assert state.get("comments") is None and state.get("reopened") is None and state.get("labels") is None
 	assert curl == []
+
+
+def test_truncated_runs_list_stays_pending(tmp_path: Path) -> None:
+	result, state, _ = _execute(tmp_path, _state([_closed(10)], runs=[_run(2, MERGE_SHA, "success", 10)],
+		runs_total={"ci.yml": 150}))
+	assert result.returncode == 0, result.stderr
+	assert "outcome=pending issue=10 reason=runs_truncated" in result.stdout
+	assert state.get("comments") is None and state.get("reopened") is None
+
+
+def test_start_rotates_with_run_number(tmp_path: Path) -> None:
+	closed = [_closed(10 + i, closed_offset=i) for i in range(5)]
+	result, _, _ = _execute(tmp_path, _state(closed, runs=[]), WORKFLOW_HEAL_VERIFY_MAX_PER_TICK="2",
+		GITHUB_RUN_NUMBER="1")
+	assert result.returncode == 0, result.stderr
+	assert "outcome=pending issue=12 reason=no_completed_run" in result.stdout
+	assert "outcome=pending issue=13 reason=no_completed_run" in result.stdout
+	assert "issue=10 reason=no_completed_run" not in result.stdout
+
+
+def test_comment_failure_after_reopen_closes_the_heal_again(tmp_path: Path) -> None:
+	result, state, curl = _execute(tmp_path, _state([_closed(10)], runs=[_run(2, MERGE_SHA, "failure", 10)],
+		jobs={"2": _jobs()}, fail=["comment"]))
+	assert result.returncode == 0, result.stderr
+	assert state["reopened"] == [10]
+	assert state["reclosed"] == [[10, ["state=closed", "state_reason=completed"]]]
+	assert "outcome=error issue=10 reason=comment_failed reclosed=true" in result.stdout
+	assert "outcome=recurred" not in result.stdout
+	assert state.get("labels") is None and curl == []
+
+
+def test_heal_without_a_recorded_step_is_skipped(tmp_path: Path) -> None:
+	result, state, _ = _execute(tmp_path, _state([_closed(10, body=_body(step="unknown step"))],
+		runs=[_run(2, MERGE_SHA, "failure", 10)], jobs={"2": _jobs()}))
+	assert result.returncode == 0, result.stderr
+	assert "outcome=skip issue=10 reason=step_unknown" in result.stdout
+	assert _rest_calls(state) == []
 
 
 # --- Workflow wiring and registry ------------------------------------------------

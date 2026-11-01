@@ -292,6 +292,11 @@ def cmd_select(list_file, out_file):
 			skip("workflow_unresolved")
 			continue
 		steps = sorted({step for name, step in runs if name == workflow_name and step and step != "unknown step"})
+		if not steps:
+			# No recorded failing step: a failed run could never match it, so an
+			# `inconclusive` marker would end verification without a real check.
+			skip("step_unknown")
+			continue
 		prior_recurred = 0
 		already = False
 		for comment in ((node.get("comments") or {}).get("nodes") or []):
@@ -459,6 +464,12 @@ _verify_one()
 		log "outcome=error issue=${number} reason=runs_failed"
 		return 0
 	fi
+	# The list is newest-first; a cut-off page can hide the oldest decisive run,
+	# and a verdict from a later run would be final. Wait instead (fail open).
+	if ! jq -e '(.total_count // 0) <= (.workflow_runs | length)' "${runs_file}" >/dev/null 2>&1; then
+		log "outcome=pending issue=${number} reason=runs_truncated"
+		return 0
+	fi
 
 	local picked_id="" picked_conclusion="" stopped=false
 	local run_id head_sha conclusion need status
@@ -579,9 +590,17 @@ _verify_one()
 	fi
 	local run_url="https://github.com/${SELF_REPO}/actions/runs/${picked_id}"
 	local heal_url="https://github.com/${SELF_REPO}/issues/${number}"
-	if ! _post_comment "${number}" "${comment_file}"; then
-		log "warn issue=${number} reason=comment_failed"
-		tg_send_msg "Workflow heal #${number} was reopened by post-merge verification, but its comment could not be posted."$'\n'"Run: ${run_url}"$'\n'"Heal: ${heal_url}" "WARNING" >/dev/null 2>&1 || true
+	if ! _post_comment "${number}" "${comment_file}" && ! _post_comment "${number}" "${comment_file}"; then
+		# Later ticks list closed heals only, so close the heal again (as
+		# completed) and let the next tick redo the whole check.
+		TOTAL_WRITES=$((TOTAL_WRITES + 1))
+		if gh_retry gh api --method PATCH "repos/${SELF_REPO}/issues/${number}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
+			log "outcome=error issue=${number} reason=comment_failed reclosed=true"
+		else
+			log "warn issue=${number} reason=comment_failed reclosed=false"
+			tg_send_msg "Workflow heal #${number} was reopened by post-merge verification, but its comment could not be posted."$'\n'"Run: ${run_url}"$'\n'"Heal: ${heal_url}" "WARNING" >/dev/null 2>&1 || true
+		fi
+		return 0
 	fi
 	local escalated=false
 	if [ "${prior_recurred}" -ge 1 ]; then
@@ -598,10 +617,16 @@ _verify_one()
 	return 0
 }
 
+# Heals that stay pending write nothing, so a fixed start would give the same
+# oldest heals every slot. Each run starts one window further (run number).
+RUN_NUMBER="$(_bounded_int "${GITHUB_RUN_NUMBER:-}" 0 0 1000000000)"
+START=0
+[ "${CANDIDATE_COUNT}" -gt 0 ] && START=$(((RUN_NUMBER * MAX_PER_TICK) % CANDIDATE_COUNT))
 index=0
 while [ "${index}" -lt "${CANDIDATE_COUNT}" ] && [ "${EXAMINED}" -lt "${MAX_PER_TICK}" ]; do
-	CAND_FILE="${RUNTIME_DIR}/candidate_${index}.json"
-	jq ".[${index}]" "${CANDIDATES_FILE}" > "${CAND_FILE}"
+	pos=$(((START + index) % CANDIDATE_COUNT))
+	CAND_FILE="${RUNTIME_DIR}/candidate_${pos}.json"
+	jq ".[${pos}]" "${CANDIDATES_FILE}" > "${CAND_FILE}"
 	index=$((index + 1))
 	EXAMINED=$((EXAMINED + 1))
 	_verify_one "${CAND_FILE}" || true

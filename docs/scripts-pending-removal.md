@@ -373,7 +373,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/workflow_failure_heal_verify.sh`
 
-- **Introduced in:** PR for #8583 (2026-11-01), Refs #8434
+- **Introduced in:** PR #8589 (2026-11-01), for #8583, Refs #8434
 - **Type:** long-running
 - **Removal trigger:** permanent — review annually. It is the post-merge check (plan P7) that reopens a heal issue whose fix did not hold; the `heal-verify` job of `.github/workflows/workflow-failure-heal-intake.yml` runs it hourly behind `WORKFLOW_HEAL_VERIFY_ENABLED`.
 - **Removal preflight checks:**
