@@ -163,6 +163,20 @@ jobs:
             echo "::warning::scripts/partial_delivery.py unavailable; partial-delivery PRs will leave their issues open without the remaining-items comment."
           fi
           _fetched_scripts+=("partial_delivery.py")
+          # Heal port (P6 step 2, Refs #8434): this repository only. Fetched
+          # without the main fallback so the script and its helper come from
+          # one ref, and kept out of _fetched_scripts so the consumer
+          # .gitignore is unchanged. A miss skips the heal port step.
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            HEAL_PORT_READY=1
+            for heal_port_file in heal_port_to_default.sh workflow_failure_heal.py; do
+              if ! fetch_from_ref_or_local "scripts/${heal_port_file}" "scripts/${heal_port_file}" "false"; then
+                echo "::warning::scripts/${heal_port_file} unavailable; the heal port step will skip."
+                HEAL_PORT_READY=0
+              fi
+            done
+            echo "HEAL_PORT_READY=${HEAL_PORT_READY}" >> "$GITHUB_ENV"
+          fi
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -786,6 +800,35 @@ jobs:
           # Export linked issue numbers and orchestrator classification for
           # downstream lineage, alerting, and cleanup steps.
           export_orchestrator_issue_classification
+
+      - name: Open heal port issue on the default branch
+        # P6 step 2 (decision D4) of docs/plans/heal-evidence-reproduction-and-trends-plan.md,
+        # Refs #8434: after a heal PR merges into stable, file one heal issue on
+        # the default branch when the same patch still applies there
+        # (scripts/heal_port_to_default.sh; WORKFLOW_HEAL port log key). Runs
+        # only in this repository, so consumer callers are unaffected; the
+        # script defaults its switch to false and always exits 0.
+        if: ${{ !cancelled() && github.event.pull_request.merged == true && github.repository == 'shubhodeep1/coding-workflows' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha || '' }}
+          PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -uo pipefail
+          if [ "${HEAL_PORT_READY:-0}" != "1" ] || [ ! -f scripts/heal_port_to_default.sh ]; then
+            echo "::warning::scripts/heal_port_to_default.sh is not staged; skipping the heal port check."
+            exit 0
+          fi
+          bash scripts/heal_port_to_default.sh
 
       - name: Expose the first linked issue
         # For the activation-verify job (port P4); LINKED_ISSUE_NUMBERS comes

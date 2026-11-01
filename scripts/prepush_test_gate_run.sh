@@ -22,7 +22,16 @@
 #   prepush_test_gate_run.sh --worktree DIR --module FILE --image IMAGE \
 #     --base SHA --out-dir DIR [--timeout-minutes N] [--deps-root DIR]... \
 #     [--venv DIR] [--shards N] [--large-file-tests N] [--node-modules DIR] \
-#     [--nested-node-modules-root DIR]
+#     [--nested-node-modules-root DIR] [--tests-file FILE]
+#
+# --tests-file runs an explicit list of test files (one `path[::name]` per
+# line) instead of the module's affected-test selection; failures are still
+# re-run on the merge-base. The file must be a regular file (no symlink) of
+# at most 256 KiB. It is copied into the private run root and mounted
+# read-only at /gate/tests.txt, and the module validates every line. A bad
+# file gives a synthetic tests_file_missing / tests_file_not_regular /
+# tests_file_unreadable / tests_file_too_large / tests_file_copy_failed result; it never falls back
+# to the selection.
 #
 # --nested-node-modules-root mounts each DIR/<project>/node_modules (the
 # nested Node projects that codex_isolated_exec.sh prepare --deps installs,
@@ -58,6 +67,8 @@ node_modules=""
 nested_nm_root=""
 shards=""
 large_file_tests=""
+tests_file=""
+tests_file_given=0
 
 gate_log()
 {
@@ -88,6 +99,7 @@ while [ "$#" -gt 0 ]; do
 		--nested-node-modules-root) nested_nm_root="${2:-}"; shift 2 ;;
 		--shards) shards="${2:-}"; shift 2 ;;
 		--large-file-tests) large_file_tests="${2:-}"; shift 2 ;;
+		--tests-file) [ "$#" -ge 2 ] || { synthetic_result usage_error; exit 0; }; tests_file="${2:-}"; tests_file_given=1; shift 2 ;;
 		*) gate_log "outcome=error reason=unknown_argument"; synthetic_result usage_error; exit 0 ;;
 	esac
 done
@@ -129,6 +141,32 @@ if [ ! -f "${module_real}" ] || [ -L "${module}" ]; then
 	synthetic_result module_not_regular
 	exit 0
 fi
+tests_file_real=""
+if [ "${tests_file_given}" -eq 1 ]; then
+	# An explicit test list never falls back to the affected-test selection.
+	if [ -z "${tests_file}" ]; then
+		synthetic_result usage_error
+		exit 0
+	fi
+	if [ -L "${tests_file}" ]; then
+		synthetic_result tests_file_not_regular
+		exit 0
+	fi
+	tests_file_real="$(realpath -e "${tests_file}" 2>/dev/null)" || { synthetic_result tests_file_missing; exit 0; }
+	if [ ! -f "${tests_file_real}" ]; then
+		synthetic_result tests_file_not_regular
+		exit 0
+	fi
+	tests_file_size="$(stat -c %s "${tests_file_real}" 2>/dev/null)" || tests_file_size=""
+	if ! [[ "${tests_file_size}" =~ ^[0-9]+$ ]]; then
+		synthetic_result tests_file_unreadable
+		exit 0
+	fi
+	if [ "${tests_file_size}" -gt 262144 ]; then
+		synthetic_result tests_file_too_large
+		exit 0
+	fi
+fi
 support="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ ! -f "${support}/review_untrusted_workspace.py" ]; then
 	synthetic_result support_missing
@@ -149,6 +187,12 @@ cleanup()
 trap cleanup EXIT
 mkdir -m 0700 "${root}/results" "${root}/baseline"
 mkdir -m 0755 "${root}/source"
+# Copy the test list into the private root: the content is frozen after
+# validation and caller path characters never reach the CSV --mount value.
+if [ -n "${tests_file_real}" ] && ! install -m 0444 "${tests_file_real}" "${root}/tests.txt" 2>/dev/null; then
+	synthetic_result tests_file_copy_failed
+	exit 0
+fi
 
 git_safe=(git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "${worktree_real}")
 merge_base="$("${git_safe[@]}" merge-base "${base}" HEAD 2>/dev/null)" || merge_base=""
@@ -247,6 +291,10 @@ if [ -n "${nested_nm_root}" ] && nested_real="$(realpath -e "${nested_nm_root}" 
 fi
 [ -z "${large_file_tests}" ] || extra_env+=(--env "PREPUSH_TEST_GATE_LARGE_FILE_TESTS=${large_file_tests}")
 [ -z "${shards}" ] || run_extra+=(--shards "${shards}")
+if [ -n "${tests_file_real}" ]; then
+	mounts+=(--mount "type=bind,src=${root}/tests.txt,dst=/gate/tests.txt,readonly")
+	run_extra+=(--tests-file /gate/tests.txt)
+fi
 
 wall=$(( timeout_minutes * 60 + 120 ))
 rc=0

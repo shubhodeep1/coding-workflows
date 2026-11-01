@@ -19,6 +19,10 @@ name: Workflow Failure Heal Intake
 #      only `recovery-scan`, which runs when there are any, joins the
 #      `workflow-failure-heal-intake` group. HEAL_SCOPE_RECOVERY_ENABLED=false
 #      turns the scan off.
+#      The same hourly schedule also runs the `heal-verify` job (P7, Refs
+#      #8434, scripts/workflow_failure_heal_verify.sh) when
+#      WORKFLOW_HEAL_VERIFY_ENABLED is 'true': it checks the first decisive run
+#      after a heal's fix merged and reopens the heal when the fix did not hold.
 #
 # scripts/workflow_failure_heal_intake.sh fetches the failed job logs, runs the
 # diagnosis model (prompts/mode-workflow-failure-heal.txt), de-duplicates by
@@ -98,8 +102,10 @@ jobs:
          github.event.workflow_run.head_branch == github.event.repository.default_branch)))
     runs-on: ubuntu-latest
     # 45 minutes of intake work plus up to HEAL_INTAKE_QUEUE_MAX_WAIT_SECONDS
-    # (80 minutes) waiting for its turn in the report queue.
-    timeout-minutes: 130
+    # (80 minutes) waiting for its turn in the report queue, plus up to 26
+    # minutes of reproduction (WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES, capped
+    # at 20 by the intake, and its 5.5-minute outer guard).
+    timeout-minutes: 156
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -131,6 +137,31 @@ jobs:
       # report, the workflows and scripts its linked runs used join the frozen
       # heal scope. 'false' turns that off and restores the previous scope.
       WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED: ${{ vars.WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED || 'true' }}
+      # Evidence pack (P1): 'true' adds the failed-run and linked-run step
+      # timelines to the heal issue body after the scope freeze; off by default.
+      WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED || 'false' }}
+      WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES || '12000' }}
+      # Reproduction (P2 step 4): 'true' re-runs the extracted failing tests in
+      # the gate sandbox (scripts/heal_reproduce.sh, from this checkout) against
+      # the last green run and adds `## Reproduction`; off by default.
+      WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
+      WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
+      # Run-time trend (P3): 'true' adds `## Run-time trend` (7 days of successful
+      # run durations per UTC day, at most 6 GETs) to stall / timeout heal issues;
+      # off by default. The ratio is the latest-day median that counts as a regression.
+      WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}
+      WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}
+      # Suspect-commit scope (P4): 'true' adds up to 8 files changed since the failing
+      # workflow's last green run (compare files[]) to the frozen heal scope; off by default.
+      WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED: ${{ vars.WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED || 'false' }}
+      # Cause grouping (P5 / D3): 'true' adds the `cause=` header line to new heal
+      # issues and records a cause match on a recent open heal issue (within
+      # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
+      WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED || 'false' }}
+      WORKFLOW_HEAL_CAUSE_GROUPING_DAYS: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_DAYS || '3' }}
+      # Code-ref routing (P6 step 1): 'true' routes the heal to the branch the failing
+      # child run's code came from (in-scope workflow only) and adds `Code ran from:`; off by default.
+      WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}
       # Non-retryable review/autofix failures (#6756): 'false' skips the PR
       # diagnosis; host-only stops then keep #6745's skip, others are healed.
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
@@ -404,6 +435,31 @@ jobs:
       HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
       # Linked-run scope paths (#8360); kept in step with the intake job's env.
       WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED: ${{ vars.WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED || 'true' }}
+      # Evidence pack (P1): 'true' adds the failed-run and linked-run step
+      # timelines to the heal issue body after the scope freeze; off by default.
+      WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED || 'false' }}
+      WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES || '12000' }}
+      # Reproduction (P2 step 4): 'true' re-runs the extracted failing tests in
+      # the gate sandbox (scripts/heal_reproduce.sh, from this checkout) against
+      # the last green run and adds `## Reproduction`; off by default.
+      WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
+      WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
+      # Run-time trend (P3): 'true' adds `## Run-time trend` (7 days of successful
+      # run durations per UTC day, at most 6 GETs) to stall / timeout heal issues;
+      # off by default. The ratio is the latest-day median that counts as a regression.
+      WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}
+      WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}
+      # Suspect-commit scope (P4): 'true' adds up to 8 files changed since the failing
+      # workflow's last green run (compare files[]) to the frozen heal scope; off by default.
+      WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED: ${{ vars.WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED || 'false' }}
+      # Cause grouping (P5 / D3): 'true' adds the `cause=` header line to new heal
+      # issues and records a cause match on a recent open heal issue (within
+      # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
+      WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED || 'false' }}
+      WORKFLOW_HEAL_CAUSE_GROUPING_DAYS: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_DAYS || '3' }}
+      # Code-ref routing (P6 step 1): 'true' routes the heal to the branch the failing
+      # child run's code came from (in-scope workflow only) and adds `Code ran from:`; off by default.
+      WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
       # Synced-file security findings (project #7604); kept in step with the
       # intake job's env (test_heal_scope_recovery_scan_workflow_wiring).
@@ -533,4 +589,67 @@ jobs:
             gh_pat_budget end workflow-failure-heal-intake recovery-scan "${GH_PAT_BUDGET_FILE}"
           else
             echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=recovery-scan remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+
+  heal-verify:
+    # Post-merge heal verification (P7, Refs #8434): on the hourly schedule,
+    # check that the first decisive run after a heal's fix merged no longer
+    # fails at the same step (scripts/workflow_failure_heal_verify.sh). Off
+    # unless WORKFLOW_HEAL_VERIFY_ENABLED is 'true'; it does not join the
+    # intake queue because it never files a heal issue.
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.WORKFLOW_HEAL_ENABLED != 'false' &&
+      vars.WORKFLOW_HEAL_VERIFY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_VERIFY_ENABLED: ${{ vars.WORKFLOW_HEAL_VERIFY_ENABLED || 'false' }}
+      WORKFLOW_HEAL_VERIFY_MAX_PER_TICK: ${{ vars.WORKFLOW_HEAL_VERIFY_MAX_PER_TICK || '3' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Record GH_PAT budget at heal-verify start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_verify
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=workflow-failure-heal-intake job=heal-verify remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+
+      - name: Run heal post-merge verification
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-verify" bash scripts/workflow_failure_heal_verify.sh
+
+      - name: Record GH_PAT budget at heal-verify end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_verify
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end workflow-failure-heal-intake heal-verify "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=heal-verify remaining=unknown reset=unknown used_in_job=unknown'
           fi

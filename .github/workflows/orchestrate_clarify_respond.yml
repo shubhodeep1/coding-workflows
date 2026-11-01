@@ -717,6 +717,8 @@ jobs:
 
           # Save context for prompt assembly
           printf '%s' "${ISSUE_BODY}" > "${RUNTIME_DIR}/issue_body.txt"
+          # P1 step 6: label names for heal detection, from the same payload (no new API call).
+          printf '%s' "${ISSUE_META}" | jq -c '[.labels[]? | (.name? // .) | strings]' > "${RUNTIME_DIR}/issue_labels.json" 2>/dev/null || echo '[]' > "${RUNTIME_DIR}/issue_labels.json"
           printf '%s' "${TRACKING_BODY}" > "${RUNTIME_DIR}/tracking_body.txt"
           printf '%s' "${CLARIFICATION_COMMENT}" > "${RUNTIME_DIR}/clarification_comment.txt"
 
@@ -828,6 +830,7 @@ jobs:
         run: |
           set -euo pipefail
           : > "${RUNTIME_DIR}/github_facts.txt"
+          : > "${RUNTIME_DIR}/heal_evidence_pack.txt"
           if [ ! -f scripts/clarify_github_facts.py ]; then
             echo "::notice::clarify_github_facts.py not staged; continuing without GitHub facts."
             exit 0
@@ -836,12 +839,19 @@ jobs:
           if [ -f .github/ai/consumer_repos.json ]; then
             CONSUMER_REPOS_ARGS=(--consumer-repos-file .github/ai/consumer_repos.json)
           fi
+          # P1 step 6: a heal issue's `## Evidence pack`, read from the body
+          # already fetched (no API call). Only when the staged script knows it.
+          HEAL_PACK_ARGS=()
+          if grep -q -- '--heal-evidence-pack-output' scripts/clarify_github_facts.py; then
+            HEAL_PACK_ARGS=(--issue-body-file "${RUNTIME_DIR}/issue_body.txt" --issue-labels-file "${RUNTIME_DIR}/issue_labels.json" --heal-evidence-pack-output "${RUNTIME_DIR}/heal_evidence_pack.txt")
+          fi
           python3 scripts/clarify_github_facts.py \
             --repo "${{ github.repository }}" \
             --issue-number "${ISSUE_NUMBER}" \
             --text-file "${RUNTIME_DIR}/issue_body.txt" \
             --text-file "${RUNTIME_DIR}/clarification_comment.txt" \
             "${CONSUMER_REPOS_ARGS[@]}" \
+            "${HEAL_PACK_ARGS[@]}" \
             --output "${RUNTIME_DIR}/github_facts.txt" \
             || echo "::warning::GitHub facts fetch failed (fail-open); continuing without them."
 
@@ -1078,6 +1088,11 @@ jobs:
               echo
               echo "=== GITHUB FACTS ==="
               cat "${RUNTIME_DIR}/github_facts.txt"
+            fi
+            if [ -s "${RUNTIME_DIR}/heal_evidence_pack.txt" ]; then
+              echo
+              echo "=== HEAL EVIDENCE PACK (UNTRUSTED) ==="
+              cat "${RUNTIME_DIR}/heal_evidence_pack.txt"
             fi
           } > "${CODEX_PROMPT_FILE}"
 
