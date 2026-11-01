@@ -7,7 +7,7 @@ The files come from GitHub's compare data, never from logs or the diagnosis. Rem
 | --- | --- |
 | Default | off (`WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED=false`) |
 | Files added to the scope | at most 8, ranked by lines changed |
-| Extra GitHub API calls | 2 per report (0 when suspect-commit data already exists); at most 9 with the trend |
+| Extra GitHub API calls | 2 per report (0 when suspect-commit data already exists); at most 9 with the trend when the compare succeeds |
 | Log line | `WORKFLOW_HEAL suspect_scope outcome=<added|none|partial|skipped> ...` |
 
 What this means for operators: nothing changes until the switch is on, and heal issues already filed keep their scope.
