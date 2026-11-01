@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (reviewer concluded no gap exists; requirement satisfied)\n  Requirement: Update the content of `tests/e2e_smoke_canary.txt` so it is exactly three lines: `status: ok`, `run_id: alt-40831286935`, and `updated-by: ai-pipeline`.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: Verified the file on disk at `tests/e2e_smoke_canary.txt` lines 1-3 contain exactly `status: ok`, `run_id: alt-40831286935`, `updated-by: ai-pipeline` with a trailing newline. Matches the canonical spec at `tests/e2e_smoke_canary_spec.txt` (with `__RUN_ID__` substituted to `alt-40831286935`). PR DIFF and LAST RUN DIFF both reflect this. The requirement is fully satisfied; no gap exists.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4847fc02ce52c0b51f42e7f6bc56df418564560c25063faa8d98b9523a415a3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41336996223",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41336996223",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101184217_6788a8b18f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41336996223"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T18:42:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
