@@ -381,3 +381,14 @@ Copy this block when adding a new entry:
   - `grep -rn workflow_failure_heal_verify .github/workflows scripts` returns no callers other than this file.
   - `tests/test_workflow_failure_heal_verify.py` (and its `ci.yml` entry), the `docs/INVENTORY.md` line and the `heal-verify` entry in `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` are removed in the same PR.
 - **Owner:** @shubhodeep1
+
+### `scripts/heal_port_to_default.sh`
+
+- **Introduced in:** PR #8636 (2026-11-01), for #8635, Refs #8434
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the post-merge port check (plan P6 step 2, decision D4) that files a heal issue on the default branch when a heal merged into `stable` still applies there; the "Open heal port issue on the default branch" step of `.github/workflows/issue_pr_status.yml` runs it, in this repository only, behind `WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED`.
+- **Removal preflight checks:**
+  - `grep -rn heal_port_to_default .github/workflows scripts` returns no callers other than this file (remove the `issue_pr_status.yml` step and its fetch block first).
+  - No open issue carries its port marker: `gh issue list -R shubhodeep1/coding-workflows -l ai:workflow-heal -s open --search 'in:body "Ported from heal:"' --json number --jq length` prints `0`.
+  - `tests/test_heal_port_to_default.py` (and its `ci.yml` entry) and the `heal-port` subcommand of `scripts/workflow_failure_heal.py` are removed in the same PR.
+- **Owner:** @shubhodeep1
