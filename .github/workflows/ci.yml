@@ -2879,7 +2879,9 @@ jobs:
           sf_now_ms() { date +%s%3N; }
           sf_step_start_ms="$(sf_now_ms)"
           case "${sf_step_start_ms}" in
-            ''|*[!0-9]*) sf_step_start_ms=0 ;;
+            ''|*[!0-9]*)
+              sf_step_start_ms=0
+              echo "::warning::CI_SUBTEST clock unavailable; heartbeat elapsed_ms values will read 0" ;;
           esac
           sf_pids=()
           for sf_i in "${!sf_modules[@]}"; do
@@ -2946,7 +2948,8 @@ jobs:
             esac
             echo "CI_SUBTEST_END subtest=${sf_module} elapsed_ms=${sf_elapsed_ms} rc=${sf_rc}"
             echo "::group::single-file module ${sf_module}"
-            cat "${sf_stem}.log" || true
+            # "| " prefix: PR-controlled test output cannot act as a workflow command.
+            { cat "${sf_stem}.log" 2>/dev/null || true; } | sed 's/^/| /'
             echo "::endgroup::"
             if [ "${sf_rc}" != "0" ]; then
               sf_failed+=("${sf_module}")

@@ -3044,7 +3044,7 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 		for n, module in enumerate(SINGLE_FILE_MODULES):
 			with self.subTest(module=module):
 				self.assertIn(f"CI_SUBTEST_END subtest={module} elapsed_ms={2500 + n} rc=0\n", result.stdout)
-				self.assertIn(f"::group::single-file module {module}\nok {n}\n::endgroup::", result.stdout)
+				self.assertIn(f"::group::single-file module {module}\n| ok {n}\n::endgroup::", result.stdout)
 
 	def test_failing_module_fails_the_step_with_prefixed_tail(self) -> None:
 		files = self.green()
@@ -3064,7 +3064,7 @@ class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
 		result = run_single_file_step_judge(self.run, files)
 		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 		module = SINGLE_FILE_MODULES[2]
-		self.assertRegex(result.stdout, rf"CI_SUBTEST_END subtest={re.escape(module)} elapsed_ms=-?\d+ rc=1\n")
+		self.assertRegex(result.stdout, rf"CI_SUBTEST_END subtest={re.escape(module)} elapsed_ms=\d+ rc=1\n")
 		self.assertIn(f"::error::single-file module tests failed: {module}\n", result.stdout)
 
 	def test_non_numeric_rc_counts_as_failure(self) -> None:
