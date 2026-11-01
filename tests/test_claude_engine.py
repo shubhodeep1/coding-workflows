@@ -690,3 +690,9 @@ def test_an_unusable_payload_means_no_labels(tmp_path: Path, content: str) -> No
 	event.write_text(content, encoding="utf-8")
 	assert ce.work_item_labels({"GITHUB_EVENT_PATH": str(event)}) == []
 	assert ce.work_item_labels({"GITHUB_EVENT_PATH": str(tmp_path / "absent.json")}) == []
+
+
+def test_format_reset_in_reads_now_for_a_reset_under_three_minutes_away() -> None:
+	assert ce._format_reset_in(60, 0) == "now"
+	assert ce._format_reset_in(180, 0) == "in 0.1h"
+	assert ce._format_reset_in(None, 0) is None

@@ -7,4 +7,4 @@ What this means for operators: one message tells you when each account frees up,
 
 ### For contributors
 
-`pool-health` JSON gains `next_usable_in` (`in 0.8h`, or empty) next to the unchanged `next_usable_at`. `pool_health` and `pool_usage_report` take an optional `now` (epoch seconds) so tests can pin the reference time.
+`pool-health` JSON gains `next_usable_in` (`in 0.8h`, `now` once that time has passed, or empty) next to the unchanged `next_usable_at`. `pool_health` and `pool_usage_report` take an optional `now` (epoch seconds) so tests can pin the reference time.

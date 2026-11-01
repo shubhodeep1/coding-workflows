@@ -813,12 +813,13 @@ def _format_reset(value: Any) -> str:
 
 def _format_reset_in(value: Any, now: float) -> str | None:
 	"""Hours from ``now`` to the epoch-seconds ``value``: ``in 1.3h``, ``now``
-	once the time has passed, ``None`` when the time is unknown."""
+	once the time has passed or is under 0.05h away, ``None`` when the time
+	is unknown."""
 	seconds = _int_or_none(value)
 	if seconds is None:
 		return None
-	hours_left = (seconds - now) / 3600
-	return f"in {hours_left:.1f}h" if hours_left > 0 else "now"
+	shown = round((seconds - now) / 3600, 1)
+	return f"in {shown:.1f}h" if shown > 0 else "now"
 
 
 def _reset_note(value: Any, now: float) -> str:
@@ -862,8 +863,8 @@ def pool_health(probes: list[dict[str, Any]], gate: float, now: float | None = N
 	ones too) with each window's utilization and hours until it resets, plus
 	the UTC reset time of every window at or above the gate.
 	``next_usable_at`` is the earliest UTC time a gated account is usable
-	again and ``next_usable_in`` the hours until then (``in 0.8h``), both
-	empty without one. ``now`` (epoch seconds, default the current time) is
+	again and ``next_usable_in`` the hours until then (``in 0.8h``, or
+	``now`` once that time has passed), both empty without one. ``now`` (epoch seconds, default the current time) is
 	the reference for the hours. ``text`` is empty when ``alert`` is false.
 	Never raises on a malformed record: a record without a name is reported
 	as ``?``.
