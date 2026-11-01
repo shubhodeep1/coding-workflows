@@ -2773,3 +2773,34 @@ def test_gate_missing_null_or_empty_previous_filename_adds_no_path(tmp_path: Pat
 		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
 		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
 	assert log_text.count("pulls/4075/files") == 1
+
+
+@pytest.mark.parametrize("own_path,queued", [("a.sh", True), ("null", False)])
+def test_gate_skips_non_object_and_null_filename_entries(tmp_path: Path, own_path: str, queued: bool) -> None:
+	"""A non-object entry no longer fails the whole files lookup (which made
+	the gate fail open), and a null or empty ``filename`` adds no ``null`` path."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_raw_files(fixtures, 4075, [
+		"junk",
+		{"filename": None},
+		{"filename": ""},
+		{"filename": "b.sh", "previous_filename": "a.sh"},
+	])
+	diff = tmp_path / "pr.diff"
+	diff.write_text(f"diff --git a/{own_path} b/{own_path}\n", encoding="utf-8")
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	if queued:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+		assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	else:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
+		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert log_text.count("pulls/4075/files") == 1
