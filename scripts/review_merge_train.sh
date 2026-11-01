@@ -211,6 +211,14 @@ MT_EVAL_SOURCE=""
 # printing form `_mt_pr_files` is kept for compatibility and still fills the
 # cache when it is called directly (not inside `$(...)`).
 #
+# A renamed file contributes both its new path (`filename`) and its old path
+# (`previous_filename`, when a non-empty string), matching the both-sides
+# parse in _mt_own_files_into. Otherwise a queued PR editing the old path of
+# an older PR's rename would not be seen as overlapping (fail-open).
+# An entry that is not an object, or whose filename is missing, empty or not
+# a string, contributes no path (it no longer fails the whole lookup or
+# yields a literal "null" path).
+#
 # API budget: one paginated `GET /pulls/{n}/files` per distinct PR per run.
 declare -A _MT_FILES_CACHE=()
 _mt_pr_files_into() {
@@ -219,7 +227,7 @@ _mt_pr_files_into() {
 		printf -v "${__mt_files_dest}" '%s' "${_MT_FILES_CACHE[${__mt_files_pr}]}"
 		return 0
 	fi
-	if ! __mt_files_out="$(gh_retry gh api --paginate "repos/${MT_REPO}/pulls/${__mt_files_pr}/files?per_page=100" --jq '.[].filename' 2>/dev/null)"; then
+	if ! __mt_files_out="$(gh_retry gh api --paginate "repos/${MT_REPO}/pulls/${__mt_files_pr}/files?per_page=100" --jq '.[] | select(type == "object") | (.filename | select(type == "string" and length > 0)), (.previous_filename | select(type == "string" and length > 0))' 2>/dev/null)"; then
 		return 1
 	fi
 	__mt_files_out="$(printf '%s\n' "${__mt_files_out}" | sed '/^$/d' | sort -u)"

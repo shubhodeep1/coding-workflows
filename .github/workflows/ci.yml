@@ -1133,7 +1133,7 @@ jobs:
       - name: Tracking issue comment cap tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py tests/test_tg_helpers_cleanup.py
 
       - name: Daily consumer health check tests
         run: |
@@ -1146,6 +1146,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py tests/test_validation_streaming_output.py
           # Scheduled validation (issue #7553): wrapper schedule, deterministic mode and failure sink.
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_scheduled_mode.py tests/test_validate_scheduled_sink.py
+          # Validate job cleanup steps when authorization or runtime setup fails.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_presetup_cleanup_contract.py
 
       # Moved from tests-release-and-log-analysis, which took 15m33s of its
       # 20 minutes on main (run 38663329196, budget-watch issue #7406). Step
