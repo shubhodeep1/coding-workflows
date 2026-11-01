@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/heal-suspect-scope.md:2 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The fragment says only P4 compare failures (failed, malformed or `behind`) write no handoff and can exceed 9 calls, but this list is incomplete: in scripts/workflow_failure_heal.py, heal_suspect_scope also returns finish(\"partial\", \"no_last_green\") with no handoff when the last-green lookup yields no usable baseline (`green.get(\"reason\") != \"ok\"`) and in the outer `helper_failed` except.\n  WHY: On those paths _heal_run_reproduction and _heal_build_suspect_commits find no matching SUSPECT_SCOPE_HANDOFF_FILE and repeat their own last-green lookups, so the call count can exceed 9 in ways the operator contract does not list; this is documentation drift, not a runtime failure (source severity NIT, mapped to low); minimal fix: \"when P4 finds no baseline, or its compare fails, is malformed or is `behind`\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"With the switch off, the marker is byte-identical.\"\n  expected_change_site: tests/test_workflow_failure_heal_scope_tests.py\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test `test_suspect_scope_switch_off_is_byte_identical_and_silent` verifies byte-identity in a minimal environment, but does not verify that markers generated from a full incident fixture remain byte-identical when the switch is off.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/heal-suspect-scope.md:line 2, the sentence the last run added: \"when the P4 compare fails, is malformed or is `behind`, no handoff is written and the reproduction and P3 steps repeat their own lookups, so that fail-open path can exceed 9.\" | severity=NIT | confidence=3\n  PROBLEM: The list of fail-open paths that write no handoff is incomplete. heal_suspect_scope in scripts/workflow_failure_heal.py also returns finish(\"partial\", \"no_last_green\") with no handoff in two more cases: when the last-green lookup yields no usable baseline after 1 GET (`green.get(\"reason\") != \"ok\"`), and in the outer `helper_failed` except. On both paths _heal_run_reproduction and _heal_build_suspect_commits repeat their own last-green lookups. The changelog row (\"at most 9 with the trend when the compare succeeds\") is accurate.\n  WHY: Nothing fails at runtime; this is documentation drift. An operator who sees `suspect_scope outcome=partial reason=no_last_green calls=1` next to a `suspect_commits` line with its own lookup would find an over-budget report that the documented cases do not explain. Minimal fix: \"when P4 finds no baseline, or its compare fails, is malformed or is `behind`\".\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"With the switch off, the marker is byte-identical.\"\n  Expected change site: tests/test_workflow_failure_heal_scope_tests.py\n  Evidence of absence: The test `test_suspect_scope_switch_off_is_byte_identical_and_silent` verifies byte-identity in a minimal environment, but does not verify that markers generated from a full incident fixture remain byte-identical when the switch is off.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8bf1acba60c1130080128d00840ba1d999784639134ffa7123283474bc10c68d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8597,
+    "run_id": "41293141071",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41293141071",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101094551_5e551b0eea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8597,
+    "run_id": "41293141071"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T09:45:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
