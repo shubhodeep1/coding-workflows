@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `981afbb0b0b4a6ed56c6fb0f3cd14873d4975504` on branch `main` (the checkout ref resolved to `main`). The integration branch mismatch line reads `unknown`, not `true`, so planning goes ahead.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one existing file and gives its exact contents, and it does not allow changes to any other file. No helper, script, workflow, scheduler hook or registry entry is needed. The full fix is a replacement of the file's contents, so there is no shorter option to weigh against it. This follows \u00a76 Core Priorities in `unattended_system_instructions.md` (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed): the fix is correct and complete with no extra scope.\n\n### Automation / wiring (\u00a720.E)\n- **New or existing code:** No new script. The change only edits an existing data file.\n- **Scheduler or PR-push entry point:** None.\n- **Long-running supervisor:** Not required.\n- **Database work:** None.\n- **Removal registry (`docs/scripts-pending-removal.md`):** No entry needed.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. Replace the whole file so it contains exactly these three lines, each ending in LF:\n```\nstatus: ok\nrun_id: alt-41256930545\nupdated-by: ai-pipeline\n```\nThe file currently holds two lines: `status: ok` and `decompose-run: 40427433026`. The `decompose-run` line is removed, so the new content does not keep any of the old file apart from `status: ok`.\n\n## Data structures affected\nOnly the plain-text canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Whole-file overwrite with a trailing newline\n- **Chosen:** Overwrite the file with exactly the three lines, each ending in LF, including the last one.\n- **Alternatives considered:** Edit the file line by line. Leave out the final newline.\n- **Why:** The issue asks for content that is \"exactly\" these lines. The current file ends each line with LF, so keeping that convention is the safest reading.\n\n## Security considerations\nNo trust boundary, endpoint or external input is involved, and no secrets are touched. The value `run_id: alt-41256930545` is a non-sensitive identifier.\n\n## Risks and edge cases\n- A test that reads the canary file might expect the old `decompose-run` key. A repo search before this plan found nothing that parses that key. The implementer should re-check this with a grep across `tests/`.\n- Watch for a missing final newline, trailing spaces or CRLF line endings.\n- No conflicts were found between the issue and the codebase: the file exists, as the issue says.\n\n## Testing considerations\n- Check the bytes with `cat -A tests/e2e_smoke_canary.txt`. The output must be exactly three lines, each ending in `$`.\n- Check that `git diff --stat` shows only this one file.\n\n## Pre-execution self-check\nThe scope is a single file. The target contents are fully specified and the format is confirmed. Nothing blocks implementation.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "fbbc0353fff64c6673d293695b6c0c4c0850a3a31cb6f7ba795e6597c162cdea",
+  "lineage": {
+    "issue_number": 8573,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41257405599",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41257405599",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8573"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261101003959_8b1aac42aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8573,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41257405599"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8573",
+  "timestamps": {
+    "created_at": "2026-11-01T00:39:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
