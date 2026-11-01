@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A reviewable change set (PR diff + changed files + linked issue + PR description) to evaluate.\n  expected_change_site: The pipeline step that assembles and passes the reviewer bundle (diff files, changed-files list, issue body, PR description) \u2014 e.g. the `review_autofix.yml` stage that constructs `PR_DIFF_FILE` / `PR_CHANGED_FILES_FILE` before invoking reviewers.\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: checkout contained only repo source/tests; no diff artifact, changed-files list, issue body, or PR description present in the reviewer bundle; linked-issue and PR-description sections were empty and `{{REFERENCE_SEVERITY_CLASSIFICATION}}` was left unexpanded. (Note: anthropic_claude-sonnet-5_5 states this pass received the full diff, changed-files list, linked issue and PR description, and calls this gap not real.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: A reviewable change set (PR diff + changed files + linked issue + PR description) to evaluate.\n  Expected change site: The pipeline step that assembles and passes the reviewer bundle (diff files, changed-files list, issue body, PR description) \u2014 e.g. the `review_autofix.yml` stage that constructs `PR_DIFF_FILE` / `PR_CHANGED_FILES_FILE` before invoking reviewers.\n  Evidence of absence: I inspected the checkout (`/home/runner/work/coding-workflows/coding-workflows` and its workspace twin) and found only repo source/tests; no diff artifact, changed-files list, issue body, or PR description was present in the reviewer bundle. The linked-issue and PR-description sections of my prompt were empty, and `{{REFERENCE_SEVERITY_CLASSIFICATION}}` was left unexpanded. All eight content lenses return NONE solely because there is nothing to inspect \u2014 not because the change set is clean.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: high\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f772c866a1d7c0091091401452ba9ecca47a52533370df9f6130091f291d4573",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41273381651",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41273381651",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101044208_e5602497a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41273381651"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T04:42:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
