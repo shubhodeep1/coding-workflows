@@ -11793,3 +11793,29 @@ def test_cause_grouping_switch_defaults_and_workflow_wiring() -> None:
 		assert workflow.count(line) == 2, line
 		assert intake_job.split("\n  intake:\n", 1)[1].count(line) == 1, line
 		assert scan_job.count(line) == 1, line
+
+
+def test_cause_grouping_review_fixes_escalation_recovery_window_and_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	# A phase failure that cause-matches its own heal issue still escalates.
+	assert ('[ "${SOURCE_KIND}" = "phase_failure" ] && { [ "${DUPLICATE_MATCH}" = "fingerprint" ] '
+		'|| [ "${DUPLICATE_MATCH}" = "cause" ]; }') in script
+	# The scope-recovery budget re-run drops the cause key and its window.
+	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
+	loop = recovery.split("local recovery_budget_args=()", 1)[1].split("done", 1)[0]
+	assert "--cause|--cause-window-days)" in loop and "recovery_arg_index=$((recovery_arg_index + 2))" in loop
+	# The window is clamped to 1..30, as documented; a bool is not a window.
+	fp, other = "1" * 64, "2" * 64
+	old = _p5_cause_issue(8376, fp=other, created=P5_NOW - timedelta(days=20))
+	assert heal.budget_decision([old], fp=fp, now=P5_NOW, cause=P5_CAUSE, cause_window_days=45)["match"] == "cause"
+	assert heal.budget_decision([old], fp=fp, now=P5_NOW, cause=P5_CAUSE, cause_window_days=True)["action"] == "open"
+	recent = _p5_cause_issue(8376, fp=other, created=P5_NOW - timedelta(hours=12))
+	assert heal.budget_decision([recent], fp=fp, now=P5_NOW, cause=P5_CAUSE, cause_window_days=0)["match"] == "cause"
+	# An unreadable signature file is reported, and the occurrence still composes.
+	payload_file = tmp_path / "payload.json"
+	payload_file.write_text(json.dumps(_p1_payload()), encoding="utf-8")
+	assert heal.main(["compose-occurrence", "--payload-json", str(payload_file), "--intake-run-url", "u",
+		"--signature-file", str(tmp_path / "missing.txt"), "--cause-shape", "stall"]) == 0
+	captured = capsys.readouterr()
+	assert "WORKFLOW_HEAL warn signature_unreadable" in captured.err
+	assert "Matched by" in captured.out and "Error signature" not in captured.out

@@ -5745,7 +5745,7 @@ def budget_decision(
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 	if not (isinstance(cause, str) and _FP_HEX_RE.fullmatch(cause)):
 		cause = None
-	cause_window_start = now - timedelta(days=cause_window_days if isinstance(cause_window_days, int) and 1 <= cause_window_days <= 30 else 3)
+	cause_window_start = now - timedelta(days=min(max(cause_window_days, 1), 30) if type(cause_window_days) is int else 3)
 	cause_duplicate: dict[str, Any] | None = None
 	open_issues: list[dict[str, Any]] = []
 	created_today = 0
@@ -9646,7 +9646,7 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		trusted_author=args.trusted_author or None,
 		reissues=_load_reissues(args.reissues_json) if args.reissues_json else None,
 		cause=args.cause or None,
-		cause_window_days=args.cause_window_days if 1 <= args.cause_window_days <= 30 else 3,
+		cause_window_days=min(max(args.cause_window_days, 1), 30),
 	)
 	_write_json(decision)
 	return 0
@@ -9922,6 +9922,7 @@ def _cmd_compose_occurrence(args: argparse.Namespace) -> int:
 		try:
 			signature = Path(args.signature_file).read_text(encoding="utf-8", errors="replace")
 		except OSError:
+			print("WORKFLOW_HEAL warn signature_unreadable", file=sys.stderr)
 			signature = None
 	evidence_pack: str | None = None
 	if getattr(args, "evidence_pack_file", ""):
@@ -10484,7 +10485,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--source-head-branch", default="", help="head branch of that pull request; ai/issue-<N> links heal issue N")
 	p.add_argument("--reissues-json", default="", help="issues opening with the unblock judge's re-issue line (Q147)")
 	p.add_argument("--cause", default="", help="cause grouping key (P5 / D3); empty disables the cause match")
-	p.add_argument("--cause-window-days", type=int, default=3, help="cause match window in days (1..30, else 3)")
+	p.add_argument("--cause-window-days", type=int, default=3, help="cause match window in days (clamped to 1..30)")
 	p.set_defaults(func=_cmd_budget)
 
 	p = sub.add_parser("heal-already-fixed", help="Closed siblings whose fix merged, for a blocked heal issue (Q148)")

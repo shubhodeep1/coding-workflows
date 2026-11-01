@@ -2295,6 +2295,14 @@ _heal_scope_recovery_evaluate()
 			recovery_arg_index=$((recovery_arg_index + 2))
 			continue
 		fi
+		# Cause grouping (P5 / D3) is not one of the caps the re-run keeps: an
+		# unrelated same-cause heal issue must not block the replacement.
+		case "${BUDGET_ARGS[${recovery_arg_index}]}" in
+			--cause|--cause-window-days)
+				recovery_arg_index=$((recovery_arg_index + 2))
+				continue
+				;;
+		esac
 		recovery_budget_args+=("${BUDGET_ARGS[${recovery_arg_index}]}")
 		recovery_arg_index=$((recovery_arg_index + 1))
 	done
@@ -2400,7 +2408,7 @@ case "${ACTION}" in
 			DUPLICATE_OCCURRENCE_STATE="failed"
 			log "warn duplicate_comment_failed existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
 		fi
-		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${DUPLICATE_MATCH}" = "fingerprint" ] && [ "${EXISTING}" = "${ISSUE_NUMBER}" ] && [ "${EXISTING_REPO}" = "${SOURCE_REPO}" ]; then
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && { [ "${DUPLICATE_MATCH}" = "fingerprint" ] || [ "${DUPLICATE_MATCH}" = "cause" ]; } && [ "${EXISTING}" = "${ISSUE_NUMBER}" ] && [ "${EXISTING_REPO}" = "${SOURCE_REPO}" ]; then
 			# The heal issue's own clarify / plan / implement run failed the way
 			# the issue was filed for: the pipeline cannot run the fix, and every
 			# retry would only add another occurrence here. Hand it to a human.
