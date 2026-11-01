@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Several changes extend `scripts/workflow_failure_heal.py` and exercise its behavior through `tests/test_workflow_failure_heal.py` using JSON fixtures. When planning changes to failure analysis or healing, check the existing fixture patterns and test the relevant input shapes rather than treating each intake workflow as isolated.",
+  "fingerprint": "caf3a1573cce0a902588654831023d38c21419c36f63713af3f134a51c2aed69",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41259949352",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41259949352",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8530",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8543",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8544",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8559",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8561",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8537",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8560",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8563"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261101011653_2329b58cad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The workflow-failure healing logic is a shared script with fixture-backed tests.",
+  "timestamps": {
+    "created_at": "2026-11-01T01:16:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
