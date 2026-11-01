@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-01T10:43:05Z",
+  "issue_number": 8596,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=(external check-run copilot-pull-request-reviewer):0; cited_path=copilot-pull-request-reviewer (run 41296766258, job 124819156204); files_touched=.github/workflows/workflow-failure-heal-intake.yml, agents.d/heal-suspect-scope.md, changelog.d/heal-suspect-scope.md, scripts/workflow_failure_heal.py, scripts/workflow_failure_heal_intake.sh, tests/test_workflow_failure_heal.py, tests/test_workflow_failure_heal_scope_tests.py.",
+  "phase": "review_autofix",
+  "pr_number": 8597,
+  "record_id": "lesson_20261101104305_35f4e35d74",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer (run 41296766258, job 124819156204)",
+    "(external check-run copilot-pull-request-reviewer)",
+    ".github/workflows/workflow-failure-heal-intake.yml",
+    "agents.d/heal-suspect-scope.md",
+    "changelog.d/heal-suspect-scope.md",
+    "scripts/workflow_failure_heal.py",
+    "scripts/workflow_failure_heal_intake.sh",
+    "tests/test_workflow_failure_heal.py",
+    "tests/test_workflow_failure_heal_scope_tests.py"
+  ]
+}
