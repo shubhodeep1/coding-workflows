@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_engine.py:821-822 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The hours are rounded before the sign check, so a reset 1-179 seconds in the future reads \"now\" while the window is still unavailable.\n  WHY: Operators see \"resets now\" for up to about three minutes. The reviewers rated it NIT (mapped to low). anthropic_claude-sonnet-5_5 gave confidence 2 and recommended dropping it, because the `_format_reset_in` docstring and `tests/test_claude_engine.py` document and pin this behavior. openai_gpt-6-luna and z-ai_glm-5_3-flash gave confidence 5, and they note it conflicts with the looser `pool_health` docstring.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/claude_engine.py:821-822 | severity=NIT | confidence=2\n  PROBLEM: A reset 1 to 179 seconds away reads `now`, because the hours are rounded to one decimal before the sign check.\n  WHY: The effect is cosmetic and the message is sent at most once an hour. The behavior is deliberate and documented in the `_format_reset_in` docstring. `tests/test_claude_engine.py::test_format_reset_in_reads_now_for_a_reset_under_three_minutes_away` pins it. The reviewer would drop this finding.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_engine.py:821-822 | severity=NIT | confidence=5\n  PROBLEM: The duration is rounded before the positivity check, so a reset 1-179 seconds in the future is reported as \"now\". The test at tests/test_claude_engine.py:695-696 expects this for a reset 60 seconds away, but the PR says \"now\" applies once the reset time has passed.\n  WHY: Operators are told the account is resetting now even though it stays unavailable for up to nearly three minutes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/claude_engine.py:821-822 (with tests/test_claude_engine.py:695-697) | severity=NIT | confidence=5\n  PROBLEM: A reset up to 179 seconds in the future is reported as \"now\" because the duration is rounded before the positivity check (`shown = round((seconds - now) / 3600, 1)`, then `f\"in {shown:.1f}h\" if shown > 0 else \"now\"`). The test at tests/test_claude_engine.py:695-697 expects a reset 60 seconds away to read \"now\".\n  WHY: Operators are told a window is resetting now while it stays unavailable for up to nearly three minutes. This conflicts with the `pool_health` documentation at scripts/claude_engine.py:866-867. The function-level docstring at scripts/claude_engine.py:815-817 documents the under-0.05h behavior and the test pins it, so this is a deliberate documented choice.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cbad6cc8bc9920e90e8cf2bcfee4f5af81e436c19d6cd276cdef734cf8e3133d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8580,
+    "run_id": "41268235634",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41268235634",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101035312_b1d4e9f059",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8580,
+    "run_id": "41268235634"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T03:53:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
