@@ -29744,10 +29744,14 @@ def test_persist_orch_record_merged_pr_covers_backward_scan_merges():
 	issues = [
 		{"id": "a", "github_issue": 12, "status": "merged"},
 		{"id": "b", "github_issue": 13, "status": "merged", "persist_merged_pr": 99},
+		{"id": "c", "github_issue": 14, "status": "implementing"},
 	]
 	for persist, issue, pr, expected in (
 		("true", 12, "40", 40),
 		("true", 13, "41", 99),
+		("true", 13, "", None),
+		("true", 14, "42", None),
+		("true", 14, "", None),
 		("true", 12, "", None),
 		("yes", 12, "40", None),
 		(None, 12, "40", None),
@@ -29767,7 +29771,10 @@ def test_persist_orch_record_merged_pr_covers_backward_scan_merges():
 				assert f"PERSIST orch_context outcome=recorded issue=12 pr={expected}" in proc.stderr
 			else:
 				assert "outcome=recorded" not in proc.stderr
-			assert ("reason=pr_unknown issue=12" in proc.stderr) == (persist == "true" and pr == ""), (persist, issue, pr)
+			assert ("reason=pr_unknown issue=12" in proc.stderr) == (persist == "true" and pr == "" and issue == 12), (persist, issue, pr)
+			if issue in (13, 14):
+				# Already recorded, or not merged: no PERSIST orch_context line at all.
+				assert "PERSIST orch_context" not in proc.stderr, (persist, issue, pr)
 
 
 if __name__ == "__main__":

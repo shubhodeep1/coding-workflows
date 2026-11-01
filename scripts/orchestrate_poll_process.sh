@@ -19803,17 +19803,20 @@ persist_orch_record_merged_pr() {
   local porm_wi="${1:-}" porm_issue="${2:-}" porm_pr="${3:-}"
   [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] || return 0
   [[ "${porm_wi}" =~ ^[0-9]+$ ]] && [[ "${porm_issue}" =~ ^[0-9]+$ ]] || return 0
-  if ! [[ "${porm_pr}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "PERSIST orch_context outcome=skipped reason=pr_unknown issue=${porm_issue}" >&2
-    return 0
-  fi
   [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
   if jq -e --argjson wi "${porm_wi}" --arg inum "${porm_issue}" \
     'any(.waves[$wi].issues[]; (.github_issue | tostring) == $inum and has("persist_merged_pr"))' "${STATE_FILE}" >/dev/null 2>&1; then
     return 0
   fi
+  # Only a merged entry gets the field (a failed status write leaves none).
+  jq -e --argjson wi "${porm_wi}" --arg inum "${porm_issue}" \
+    'any(.waves[$wi].issues[]; (.github_issue | tostring) == $inum and .status == "merged")' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if ! [[ "${porm_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "PERSIST orch_context outcome=skipped reason=pr_unknown issue=${porm_issue}" >&2
+    return 0
+  fi
   if jq --argjson wi "${porm_wi}" --arg inum "${porm_issue}" --arg pr "${porm_pr}" \
-    '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).persist_merged_pr = ($pr|tonumber)' \
+    '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum and .status == "merged")).persist_merged_pr = ($pr|tonumber)' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
     echo "PERSIST orch_context outcome=recorded issue=${porm_issue} pr=${porm_pr}" >&2
   else
