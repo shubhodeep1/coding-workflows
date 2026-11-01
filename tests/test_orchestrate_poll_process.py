@@ -30283,17 +30283,28 @@ def test_persist_orch_wave_check_red_routes_to_the_judge_with_a_block():
 		block = out["BLOCK"]
 		assert block.startswith("=== BEGIN UNTRUSTED WAVE CHECK ===\n") and block.count("=== END UNTRUSTED") == 1
 		assert "UNTRUSTED_DATA: failing check: tests (failure)" in block and "UNTRUSTED_DATA: boom" in block
-		# The wait fields stay, so a persistent red reaches the judge again on
-		# the next tick instead of taking the boundary_first_seen hold.
-		assert after["wave_check_wait_since"] == "2026-11-01T00:00:00Z" and after["wave_check_wait_head"] == _PWC_SHA and posts == 0
+		# The wait fields stay and the judged head is recorded, so the next tick
+		# neither takes the boundary_first_seen hold nor re-invokes the judge.
+		assert after["wave_check_wait_since"] == "2026-11-01T00:00:00Z" and after["wave_check_wait_head"] == _PWC_SHA and posts == 1
+		assert after["wave_check_judged"] == f"{_PWC_SHA}:red" and isinstance(after["wave_check_judged_at"], int)
 		assert "PERSIST wave_check outcome=red reason=checks_failed pr=77 failing=1" in proc.stderr
 		assert "boom" not in proc.stderr
 		assert any("--stage wave_check --outcome fail" in line for line in py)
 		(Path(tmp) / "calls.bin").unlink()
-		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), after, runs=runs)
+		(Path(tmp) / "posts.log").unlink()
+		(Path(tmp) / "python.log").unlink()
+		proc, out, gh_calls, py, posts, _ = _pwc_run(Path(tmp), after, runs=runs)
+		assert proc.returncode == 0, proc.stderr
+		assert out["HOLD"] == "true" and out["STUCK"] == "false" and len(gh_calls) == 1 and posts == 0
+		assert "PERSIST wave_check outcome=pending reason=judged_recently pr=77" in proc.stderr
+		assert "reason=boundary_first_seen" not in proc.stderr
+		assert not any("attempt_journal.py" in line for line in py)
+		# After the maximum wait the same red head reaches the judge again.
+		after["wave_check_judged_at"] = int(time.time()) - 91 * 60
+		(Path(tmp) / "calls.bin").unlink()
+		proc, out, gh_calls, py, posts, _ = _pwc_run(Path(tmp), after, runs=runs)
 		assert proc.returncode == 0, proc.stderr
 		assert out["HOLD"] == "false" and out["STUCK"] == "true" and len(gh_calls) == 2
-		assert "reason=boundary_first_seen" not in proc.stderr
 
 
 def test_persist_orch_wave_check_pending_past_the_wait_routes_to_the_judge():
@@ -30336,6 +30347,30 @@ def test_persist_orch_wave_check_api_failure_and_no_checks_fail_open():
 		assert proc.returncode == 0, proc.stderr
 		assert out["HOLD"] == "false" and out["STUCK"] == "false"
 		assert "PERSIST wave_check outcome=skipped reason=no_checks pr=77" in proc.stderr
+
+
+def test_persist_orch_wave_check_incomplete_wave_tick_clears_the_wait_fields():
+	"""Fields kept by red / timeout must not carry over once the judge advances
+	the wave or adds fix-ups: the incomplete-wave branch clears them before it
+	continues, because persist_orch_wave_check is not reached there."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	branch = script.index('  if [ "${WAVE_COMPLETE}" != "true" ]; then\n')
+	end = script.index("    fi  # end: INVOKE_JUDGE_FOR_STUCK != true", branch)
+	tail = script[branch:end]
+	clear = tail.rindex("_persist_orch_wave_check_clear stale")
+	assert clear < tail.rindex("      continue\n")
+	assert end < script.index("  persist_orch_wave_check < /dev/null || true\n", end)
+	helper = _extract_bash_function(script, "_persist_orch_wave_check_clear() {")
+	with tempfile.TemporaryDirectory() as tmp:
+		state_file = Path(tmp) / "state.json"
+		state_file.write_text(json.dumps(_pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z", wave_check_wait_head=_PWC_SHA,
+			wave_check_judged=f"{_PWC_SHA}:red", wave_check_judged_at=1)), encoding="utf-8")
+		harness = f"STATE_FILE='{state_file}'\npost_state_comment() {{ :; }}\n{helper}_persist_orch_wave_check_clear stale\n"
+		proc = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, timeout=30, check=False)
+		assert proc.returncode == 0, proc.stderr
+		after = json.loads(state_file.read_text(encoding="utf-8"))
+		assert not any(k.startswith("wave_check_") for k in after)
+		assert "PERSIST wave_check outcome=cleared reason=stale" in proc.stderr
 
 
 def test_persist_orch_wave_check_stale_field_is_removed_when_the_gate_does_not_hold():

@@ -85,8 +85,11 @@ wave-check --check-runs-file F --now EPOCH [--wait-since ISO8601Z] [--required-n
 	scripts/pr_checks_lib.sh, a newer run of the same ``name`` supersedes only a
 	``cancelled`` run; for ``--ci-check-name`` (the resolved
 	AUTO_MERGE_REQUIRED_CI_CHECK, default ``none``) only a newer run of the
-	same Actions run (``/actions/runs/<id>`` in ``details_url``) does, as in
-	``PR_CHECKS_JQ_SUPERSEDE_DEFS``. Then ``skipped`` / ``neutral`` conclusions
+	same Actions run (``/actions/runs/<id>`` in ``details_url``) does: the
+	same-run half of ``PR_CHECKS_JQ_SUPERSEDE_DEFS``. Its bound-CI-run half is
+	not applied (no runs listing is read, to stay in the API budget), so a
+	cancelled CI run beside a newer one from another CI run counts as red and
+	reaches the judge. Then ``skipped`` / ``neutral`` conclusions
 	are dropped. ``--required-names`` uses the final-merge gate's sentinels
 	(``*``, the default: every failure blocks; empty: no failure blocks; else
 	a comma list): a completed non-``success`` run of a required name is

@@ -20009,8 +20009,8 @@ persist_orch_group_failures() {
 # later one. One jq check and nothing else when the field is absent.
 _persist_orch_wave_check_clear() {
   local pwcc_reason="$1"
-  jq -e 'type == "object" and (has("wave_check_wait_since") or has("wave_check_wait_head"))' "${STATE_FILE}" >/dev/null 2>&1 || return 0
-  if jq 'del(.wave_check_wait_since, .wave_check_wait_head)' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+  jq -e 'type == "object" and (has("wave_check_wait_since") or has("wave_check_wait_head") or has("wave_check_judged") or has("wave_check_judged_at"))' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if jq 'del(.wave_check_wait_since, .wave_check_wait_head, .wave_check_judged, .wave_check_judged_at)' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
     && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
     && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
     echo "PERSIST wave_check outcome=cleared reason=${pwcc_reason}" >&2
@@ -20025,12 +20025,12 @@ _persist_orch_wave_check_clear() {
 # _persist_orch_wave_check_stamp HEAD_SHA [SINCE] (issue #8427, P9). Writes
 # wave_check_wait_since (SINCE when given, else now, starting the wait clock)
 # and wave_check_wait_head (the head last seen at the boundary; empty when no
-# head was known) and posts the state. Sets PERSIST_ORCH_WAVE_CHECK_STAMP to
-# the written timestamp. Returns 1 when the state could not be written.
+# head was known) and posts the state. Returns 1 when the state could not be
+# written.
 _persist_orch_wave_check_stamp() {
   local pwcs_head="$1"
-  PERSIST_ORCH_WAVE_CHECK_STAMP="${2:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
-  if jq --arg t "${PERSIST_ORCH_WAVE_CHECK_STAMP}" --arg h "${pwcs_head}" '.wave_check_wait_since = $t | .wave_check_wait_head = $h' \
+  local pwcs_since="${2:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  if jq --arg t "${pwcs_since}" --arg h "${pwcs_head}" '.wave_check_wait_since = $t | .wave_check_wait_head = $h' \
       "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
     && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
     && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
@@ -20072,11 +20072,14 @@ _persist_orch_wave_check_stamp() {
 # green / red / timeout append a wave_check entry to the tracking issue's
 # attempt journal (the helper's own PERSIST_JOURNAL_ENABLED gate applies).
 # API budget (section 14): at most two reads (check runs + one job log), plus
-# the identity read shared through PERSIST_JOURNAL_LOGIN_CACHE. Always returns 0.
+# the identity read shared through PERSIST_JOURNAL_LOGIN_CACHE. The journal
+# append is a separate comment write by attempt_journal.py under its own
+# PERSIST_JOURNAL_ENABLED gate and is not counted here. Always returns 0.
 persist_orch_wave_check() {
   local pwc_pr pwc_status pwc_sha pwc_base pwc_runs pwc_out pwc_log pwc_block pwc_details pwc_comments pwc_note
   local pwc_wait pwc_wait_head pwc_outcome pwc_job pwc_waited pwc_max pwc_failing pwc_valid pwc_truncated pwc_journal
   local pwc_head_moved=false pwc_ci_name="none"
+  local pwc_judged_key pwc_judged_prev pwc_judged_at pwc_now pwc_since_keep
   [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
   if [ "${PERSIST_ORCH_WAVE_CHECK_ENABLED:-false}" != "true" ]; then
     _persist_orch_wave_check_clear switch_off
@@ -20182,7 +20185,29 @@ persist_orch_wave_check() {
   [[ "${pwc_failing}" =~ ^[0-9]+$ ]] || pwc_failing=0
   [[ "${pwc_truncated}" =~ ^[01]$ ]] || pwc_truncated=0
   pwc_journal=""
+  # A red / timeout head already sent to the judge holds instead of invoking
+  # it again on every tick: the same head and outcome reach the judge at most
+  # once per PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES (the final-PR phase
+  # bypasses the judge-cycle cap, so nothing else bounds it). A head move, a
+  # new outcome, or the wait fields' stale clear (wave advanced or fix-ups
+  # added) lets the judge run again.
+  pwc_judged_key=""
+  pwc_now="$(date -u +%s)"
+  if [ "${pwc_outcome}" = "red" ] || [ "${pwc_outcome}" = "timeout" ]; then
+    pwc_judged_key="${pwc_sha}:${pwc_outcome}"
+    pwc_judged_prev="$(jq -r '.wave_check_judged // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+    pwc_judged_at="$(jq -r '.wave_check_judged_at // 0 | if type == "number" then floor else 0 end' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    [[ "${pwc_judged_at}" =~ ^[0-9]+$ ]] || pwc_judged_at=0
+    if [ "${pwc_judged_prev}" = "${pwc_judged_key}" ] && [ "${pwc_judged_at}" -gt 0 ] \
+      && [ "${pwc_judged_at}" -le "${pwc_now}" ] && [ $((pwc_now - pwc_judged_at)) -lt $((pwc_max * 60)) ]; then
+      pwc_outcome="judged_hold"
+    fi
+  fi
   case "${pwc_outcome}" in
+    judged_hold)
+      echo "PERSIST wave_check outcome=pending reason=judged_recently pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      ;;
     green)
       echo "PERSIST wave_check outcome=green reason=checks_passed pr=${pwc_pr} truncated=${pwc_truncated}" >&2
       _persist_orch_wave_check_clear green
@@ -20242,12 +20267,22 @@ persist_orch_wave_check() {
       else
         echo "PERSIST wave_check outcome=timeout reason=checks_pending pr=${pwc_pr} failing=${pwc_failing} waited=${pwc_waited} max=${pwc_max}" >&2
       fi
-      # The wait fields stay, so the next tick classifies this head again and
-      # a persistent red (or still-pending) result reaches the judge each tick
-      # instead of taking the boundary_first_seen hold. The stale clear removes
+      # The wait fields stay, so the next tick classifies this head again
+      # instead of taking the boundary_first_seen hold; wave_check_judged
+      # records this head and outcome so the judged_hold above bounds repeat
+      # judge runs. The stale clear (also run on incomplete-wave ticks) removes
       # them once the judge advances the wave or adds fix-ups.
-      if [ "${pwc_head_moved}" = "true" ]; then
-        _persist_orch_wave_check_stamp "${pwc_sha}" "${pwc_wait}" || true
+      pwc_since_keep="${pwc_wait}"
+      [ "${pwc_valid}" = "true" ] || pwc_since_keep="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      if jq --arg t "${pwc_since_keep}" --arg h "${pwc_sha}" --arg k "${pwc_judged_key}" --argjson n "${pwc_now}" \
+          '.wave_check_wait_since = $t | .wave_check_wait_head = $h | .wave_check_judged = $k | .wave_check_judged_at = $n' \
+          "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+        && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+        && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+        post_state_comment || true
+      else
+        rm -f "${STATE_FILE}.persist_wave_check.tmp"
+        echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
       fi
       pwc_journal="fail"
       ;;
@@ -31643,6 +31678,13 @@ with open('${STATE_FILE}', 'w') as f:
     fi
 
     if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+      # P9 (#8427): an incomplete wave is not at a boundary, so wait fields
+      # kept by a red / timeout check (the judge advanced the wave or added
+      # fix-ups) must not carry over into the next boundary. One jq check
+      # when they are absent.
+      if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+        _persist_orch_wave_check_clear stale
+      fi
       continue
     fi
     fi  # end: INVOKE_JUDGE_FOR_STUCK != true
