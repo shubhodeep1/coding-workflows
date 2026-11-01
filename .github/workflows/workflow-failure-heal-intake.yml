@@ -19,6 +19,10 @@ name: Workflow Failure Heal Intake
 #      only `recovery-scan`, which runs when there are any, joins the
 #      `workflow-failure-heal-intake` group. HEAL_SCOPE_RECOVERY_ENABLED=false
 #      turns the scan off.
+#      The same hourly schedule also runs the `heal-verify` job (P7, Refs
+#      #8434, scripts/workflow_failure_heal_verify.sh) when
+#      WORKFLOW_HEAL_VERIFY_ENABLED is 'true': it checks the first decisive run
+#      after a heal's fix merged and reopens the heal when the fix did not hold.
 #
 # scripts/workflow_failure_heal_intake.sh fetches the failed job logs, runs the
 # diagnosis model (prompts/mode-workflow-failure-heal.txt), de-duplicates by
@@ -573,4 +577,67 @@ jobs:
             gh_pat_budget end workflow-failure-heal-intake recovery-scan "${GH_PAT_BUDGET_FILE}"
           else
             echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=recovery-scan remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+
+  heal-verify:
+    # Post-merge heal verification (P7, Refs #8434): on the hourly schedule,
+    # check that the first decisive run after a heal's fix merged no longer
+    # fails at the same step (scripts/workflow_failure_heal_verify.sh). Off
+    # unless WORKFLOW_HEAL_VERIFY_ENABLED is 'true'; it does not join the
+    # intake queue because it never files a heal issue.
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.WORKFLOW_HEAL_ENABLED != 'false' &&
+      vars.WORKFLOW_HEAL_VERIFY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_VERIFY_ENABLED: ${{ vars.WORKFLOW_HEAL_VERIFY_ENABLED || 'false' }}
+      WORKFLOW_HEAL_VERIFY_MAX_PER_TICK: ${{ vars.WORKFLOW_HEAL_VERIFY_MAX_PER_TICK || '3' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Record GH_PAT budget at heal-verify start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_verify
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=workflow-failure-heal-intake job=heal-verify remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+
+      - name: Run heal post-merge verification
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-verify" bash scripts/workflow_failure_heal_verify.sh
+
+      - name: Record GH_PAT budget at heal-verify end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_verify
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end workflow-failure-heal-intake heal-verify "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=heal-verify remaining=unknown reset=unknown used_in_job=unknown'
           fi

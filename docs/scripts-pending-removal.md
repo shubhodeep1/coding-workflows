@@ -370,3 +370,14 @@ Copy this block when adding a new entry:
   - `grep -rn heal_reproduce .github/workflows scripts` returns no callers other than this file.
   - `tests/test_heal_reproduce.py` (and `tests/test_heal_reproduce_docker_e2e.py`, with their `ci.yml` entries) is removed in the same PR.
 - **Owner:** @shubhodeep1
+
+### `scripts/workflow_failure_heal_verify.sh`
+
+- **Introduced in:** PR for #8583 (2026-11-01), Refs #8434
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the post-merge check (plan P7) that reopens a heal issue whose fix did not hold; the `heal-verify` job of `.github/workflows/workflow-failure-heal-intake.yml` runs it hourly behind `WORKFLOW_HEAL_VERIFY_ENABLED`.
+- **Removal preflight checks:**
+  - The `heal-verify` job is removed from `.github/workflows/workflow-failure-heal-intake.yml` in the same PR.
+  - `grep -rn workflow_failure_heal_verify .github/workflows scripts` returns no callers other than this file.
+  - `tests/test_workflow_failure_heal_verify.py` (and its `ci.yml` entry), the `docs/INVENTORY.md` line and the `heal-verify` entry in `tests/test_review_autofix_sweep_zero_candidate_fast_exit.py` are removed in the same PR.
+- **Owner:** @shubhodeep1
