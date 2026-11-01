@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The fix this issue suggests (`_SOFT_LOG_PATTERNS` and `_drop_step_script_lines` in `scripts/workflow_failure_heal.py`) is outside this issue's scope, which allows only `.github/workflows/clarify.yml`, `tests/**` and `changelog.d/*.md`. How should it be delivered?\nChoices:\n- A: Close this heal issue and file a new ordinary issue (not a heal issue) for the `workflow_failure_heal.py` log-filter fix and its regression tests in `tests/test_workflow_failure_heal.py`, so the normal pipeline can change that script. (RECOMMENDED)\n- B: Keep this issue and stay strictly in scope: only add tests that reproduce the filter defect, plus a changelog fragment. The script itself is not fixed, so the new tests fail until a follow-up lands. **Note:** this goes against the issue's own rule that the regression test must pass with the fix in the same PR.\n- C: Keep this issue and let the plan list `scripts/workflow_failure_heal.py` anyway. A human then approves the held plan, accepting that the implement step may still refuse with `out_of_heal_scope`.\nQ2: The Claude crash on btc_sweeper#248 (`Claude clarify failed after 3 attempts.`) has an unknown cause, and no logs were attached. Should the crash be fixed as part of this work?\nChoices:\n- A: No. Fix only the heal-intake log filter now. Once the filter fix lands, the crash gets its own heal or issue, with the `CLAUDE_POOL run \u2026 outcome= reason= exit_code=` lines that the filter will then keep. (RECOMMENDED)\n- B: Yes. I'll paste the three `CLAUDE_POOL run role=CLARIFY \u2026 outcome=\u2026 reason=\u2026` lines and the Claude CLI stderr from the \"Run Codex\" step of run 41287557900, so the crash can be fixed too. **Note:** that fix would probably touch `scripts/clarify_isolated_run.sh`, which is also outside this issue's scope. So it is incompatible with Q1:B, and with Q1:C it would also need a human approval.",
+  "fingerprint": "a2c3b96474b5352485bbcc4ef8e8c7ce8bf96be11dc2230d697004b4995f80c3",
+  "lineage": {
+    "issue_number": 8602,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41288654973",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41288654973",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261101082703_a623c5e18f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8602,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41288654973"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8602 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-01T08:27:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
