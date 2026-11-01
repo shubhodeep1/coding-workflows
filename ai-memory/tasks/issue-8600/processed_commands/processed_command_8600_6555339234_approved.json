@@ -5,13 +5,25 @@
   "entry_id": "processed_command_8600_6555339234_approved",
   "issue_number": 8600,
   "metadata": {
+    "branch": "ai/issue-8600",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/8600-tg-cleanup-snapshot-retain.md",
+      "scripts/tg_helpers.sh",
+      "tests/test_tg_helpers_cleanup.py"
+    ],
+    "issue_number": 8600,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8600",
+    "pr_number": 8605,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8605",
+    "run_attempt": "1",
+    "run_id": "41287552892",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41287552892"
   },
   "run_attempt": 1,
   "run_id": "41287552892",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-01T08:11:16Z",
+  "status": "completed",
+  "timestamp": "2026-11-01T08:46:56Z",
   "workflow": "implement"
 }
