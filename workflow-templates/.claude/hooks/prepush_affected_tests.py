@@ -735,10 +735,15 @@ def error_node_names(tail: str) -> list[str]:
 	"""Node IDs from pytest `ERROR path::node` summary lines (setup/teardown errors).
 
 	failing_names() parses FAILED lines only. Inherited entries carry no tail, so
-	these names are the only proof that a listed node errored on both trees.
+	these names are the only record of which listed nodes errored. They come
+	from the tested tree's output only and prove nothing about the baseline.
+	Only lines after the last "short test summary info" banner count (captured
+	output printed earlier is ignored); without the banner nothing is returned.
 	"""
 	unique: list[str] = []
-	for line in tail.splitlines():
+	lines = tail.splitlines()
+	banner = [index for index, line in enumerate(lines) if "short test summary info" in line]
+	for line in lines[banner[-1] + 1:] if banner else []:
 		match = _ERROR_NODE_RE.match(re.sub(r"^\d{4}-\d{2}-\d{2}T\S+\s+", "", line))
 		if match:
 			name = _sanitize_name(match.group(1))

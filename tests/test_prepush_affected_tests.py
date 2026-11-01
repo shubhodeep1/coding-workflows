@@ -1340,6 +1340,8 @@ def test_tests_file_named_test_missing_on_both_trees_is_inherited(tmp_path):
 
 def test_error_node_names_parses_only_summary_lines():
 	tail = (
+		"ERROR tests/test_a.py::test_early - printed before the summary\n"
+		"=========================== short test summary info ============================\n"
 		"ERROR tests/test_a.py::test_x - RuntimeError: boom\n"
 		"2026-11-01T00:00:00.0Z ERROR tests/test_a.py::test_p[1] - fixture\n"
 		"log: ERROR tests/test_a.py::test_mid - noise\n"
@@ -1347,6 +1349,8 @@ def test_error_node_names_parses_only_summary_lines():
 		"FAILED tests/test_a.py::test_f - assert 0\n"
 	)
 	assert gate.error_node_names(tail) == ["tests/test_a.py::test_x", "tests/test_a.py::test_p[1]"]
+	# Without the summary banner nothing counts (fail closed).
+	assert gate.error_node_names("ERROR tests/test_a.py::test_x - boom\n") == []
 
 
 def test_tests_file_setup_error_on_both_trees_lists_error_names(tmp_path):
