@@ -193,6 +193,8 @@ def _execute(tmp_path: Path, state: dict, **env_overrides) -> tuple[subprocess.C
 		"WORKFLOW_HEAL_VERIFY_ENABLED": "true", "RUNTIME_DIR": str(tmp_path / "runtime"),
 		"TG_BOT_SECRET": "fake-secret", "TG_CHAT_ID": "1", "TG_ADMIN_CHAT_ID": "1",
 		"ALERT_MSG_LEVEL": "WARNING", "TMPDIR": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1",
+		# Drop the runner's run number: it rotates the heal START and made default-order tests flaky (#8592: test_per_tick_cap_is_honoured saw issues 11 and 12).
+		"GITHUB_RUN_NUMBER": None,
 	})
 	env.update(env_overrides)
 	for key in [key for key, value in env.items() if value is None]:
