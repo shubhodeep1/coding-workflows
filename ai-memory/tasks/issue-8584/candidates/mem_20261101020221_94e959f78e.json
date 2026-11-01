@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `ai/issue-8569` @ `311c07d9842839600037224728816fa3eecafa85` (Integration branch mismatch: false).\n\nScope-mode: Hold Scope\nReuse-audit: extends `.github/workflows/ci.yml` step \"Pre-push affected-test gate tests\" and the `docs/INVENTORY.md` Scripts section\nScope-mode justification: The triage issue names both CI failures and both guards. `tests/test_ci_wires_every_test_file.py` fails because `tests/test_persist_orchestrator.py` runs in no workflow. `tests/inventory_parity.py` fails because `docs/INVENTORY.md` has no entry for `scripts/persist_orchestrator.py`. The fix is two additive lines that register the files in the places their sibling files (`persist_budget`, `persist_postmerge_verify`, `evidence_pack`) already use. Nothing in the script, its test, the workflows that call it or the `agents.d/8427-p7-persist-orch-context.md` fragment changes. The guard's `UNWIRED_ALLOWLIST` is not used, because this is an ordinary pytest file. The complete fix is these two lines, so there is no shortcut to weigh against it. This follows \u00a76 (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed) and \u00a79 (minimal change set).\n\n## Files likely to change\n- `.github/workflows/ci.yml`\n- `docs/INVENTORY.md`\n\n## Functions or modules to implement\n1. **`.github/workflows/ci.yml`**, job step `- name: Pre-push affected-test gate tests` (on the planning ref this is around lines 662-673):\n   - Add one line directly after `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_budget.py` and before the `tests/test_evidence_pack.py` line:\n     `          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_orchestrator.py`\n   - Use the same 10-space YAML indentation as the lines around it (spaces, not tabs; \u00a711).\n   - Do not add a job or a step. `tests/test_ci_job_split_contract.py` pins the job layout and requires each step to run in exactly one job.\n2. **`docs/INVENTORY.md`**, Scripts section: add one bullet directly after line 190 (`scripts/persist_budget.py`), in the same style as that entry. The wording comes from the script's docstring:\n   `- \\`scripts/persist_orchestrator.py\\` \u2014 Orchestrator context for persistent unattended work: \\`since-note\\` renders the \"Since this plan was decomposed\" section for a later-wave issue body from orchestrator state (zero API calls), \\`open-projects\\` lists other open \\`ai:orchestrator-tracking\\` projects inside an untrusted fence (one REST read), and \\`plan-path\\` resolves the plan file named in a description (issue #8427 P7, default off via \\`PERSIST_ORCH_CONTEXT_ENABLED\\`; log prefix \\`PERSIST\\`).`\n\n## Data structures affected\nNone. The only additions are one CI command line and one documentation bullet.\n\n## API or interface changes\nNone. The CI job and step names stay the same. The new test runs inside the existing `tests-release-and-log-analysis`/static job layout, in whichever job already owns that step.\n\n## Decisions\n### D1 \u2014 Wire the test into the existing persist test step\n- Chosen: add `tests/test_persist_orchestrator.py` to the \"Pre-push affected-test gate tests\" step, next to `tests/test_persist_budget.py`.\n- Alternatives considered: a new CI step or job; an entry in `UNWIRED_ALLOWLIST`.\n- Why: the sibling issue #8427 test files already run in this step. A new job would break `tests/test_ci_job_split_contract.py`. The allowlist is only for files that cannot run in CI, and this one can.\n\n### D2 \u2014 Inventory bullet only; leave the agents.md fragment as is\n- Chosen: add one bullet to the `docs/INVENTORY.md` Scripts section after `scripts/persist_budget.py`.\n- Alternatives considered: remove the `scripts/persist_orchestrator.py` reference from `agents.d/8427-p7-persist-orch-context.md`, which is folded into agents.md and is what parity reports as `agents.md:1860`.\n- Why: the parity failure means the inventory is missing an entry, not that the reference is wrong. Removing documentation would hide a real script (\u00a75, \u00a79).\n\n## Security considerations\n- No trust boundary, endpoint, credential or runtime surface changes. The CI line runs a repo test with the same `PYTHONDONTWRITEBYTECODE=1 -p no:cacheprovider` flags as its siblings (\u00a713), in a step that already runs untrusted PR code under the existing CI permissions.\n- The inventory text is static documentation and contains no secrets or issue/PR `#N` auto-close keywords (\u00a721).\n\n## Potential risks or edge cases\n- **The test may fail once it runs.** No CI log has ever run `tests/test_persist_orchestrator.py`. If it fails, that is a new failure outside this issue's scope, as the triage text says. The implementer should run it locally and report the result. Logic fixes to the script or test should not go into this change unless the failure is trivially a wiring problem.\n- **Byte-level parity.** `tests/inventory_parity.py` matches the backticked path. The path must be written exactly as `scripts/persist_orchestrator.py`, inside backticks.\n- **Workflow file size.** The CI file grows by about 110 bytes, far below the 480,000-byte guard (\u00a724). Confirm with `wc -c .github/workflows/ci.yml`.\n- **Name mismatches.** None found. All paths and line references in the issue match the planning ref: `ci.yml` around 671-673 and `INVENTORY.md` 189-190. The `agents.md:1860` reference comes from the pending `agents.d/8427-p7-persist-orch-context.md` fragment, which `inventory_parity.py` folds in through `agents_doc.agents_text`.\n\n## Testing considerations\nRun in this order:\n1. `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_wires_every_test_file.py` (expect 4 passed)\n2. `PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py` (expect the `OK: inventory parity validated` line)\n3. `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_job_split_contract.py tests/test_workflow_file_size_limit.py`\n4. `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_orchestrator.py` (sanity check that the newly wired test passes)\n\nNo new tests are needed: the existing guards are the contract tests for this change.\n\n## Pre-execution self-check\n- Every failure in the issue's evidence maps to one edit: wiring guard \u2192 ci.yml line; inventory parity \u2192 INVENTORY.md bullet.\n- No direct agents.md edit (\u00a725), no new script (\u00a720), no new env var (\u00a78), and no auto-close keyword aimed at a tracking issue (\u00a721).\n- Planning ref and branch confirmed above; no integration mismatch.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "de6691b63282076bb7d40b419b571f9216b76b874e5950926281de339f14b25d",
+  "lineage": {
+    "issue_number": 8584,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41263198129",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41263198129",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8584"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261101020221_94e959f78e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8584,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41263198129"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8584",
+  "timestamps": {
+    "created_at": "2026-11-01T02:02:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
