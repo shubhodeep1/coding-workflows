@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: One `changelog.d/<issue>-<slug>.md` fragment is required when a PR changes observable behaviour (CLAUDE.md \u00a720.A / repo convention); this PR changes how malformed `pulls/N/files` entries are handled (previously the lookup failed or yielded a \"null\" path, now the entries are skipped)\n  expected_change_site: changelog.d/8631-<slug>.md (new file)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR changed-files list contains only scripts/review_merge_train.sh and tests/test_review_merge_train.py, no changelog.d/8631-*.md exists in the diff or last commit stat. Severity disagreement: NIT (anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite) vs MAJOR (minimax_minimax-m3); highest is MAJOR.\n- requirement: The pipeline plan grant in the linked issue lists `agents.d/*` in `files_touched`; the merge-train gate's changed per-entry filter behaviour should be documented\n  expected_change_site: agents.d/8631-<slug>.md with a `<!-- agents: section=\"Merge train gate\" -->` block\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No agents.d/8631-*.md file appears in the PR diff or the last commit stat; only scripts/review_merge_train.sh and tests/test_review_merge_train.py were touched. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: The repo convention is one `changelog.d` fragment for a behaviour change; the issue grants `changelog.d/*` among its paths. This PR changes how malformed `pulls/N/files` entries are handled (before they failed the lookup and the gate failed open; now they are skipped).\n  Expected change site: changelog.d/8631-<slug>.md (new file)\n  Evidence of absence: The PR changed-files list contains only `scripts/review_merge_train.sh` and `tests/test_review_merge_train.py`. A glob for `changelog.d/*8631*` finds nothing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\nHARDENING_SUGGESTIONS:\n- scripts/review_merge_train.sh, `_mt_pr_files_into`, jq filter on line 230 | HARDENING_RISK_SCORE: 1\n  Issue: A 200 response whose top level is a JSON object rather than an array would now yield an empty result that is cached and returned as success; the previous filter made jq error and the function returned 1. No trigger is evidenced.\n  Suggested minimal fix: wrap the filter as `if type == \"array\" then <filter> else error(\"not an array\") end` (about 1 line).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Repo convention in CLAUDE.md section 20.A: add one changelog.d fragment when a PR changes observable behaviour. This PR changes the merge-train gate's failure mode for pulls/N/files responses that contain non-object or null-filename entries.\n  Expected change site: changelog.d/8631-merge-train-rename-fix.md (new file)\n  Evidence of absence: The PR diff contains no new file in the changelog.d/ directory.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: CLAUDE.md \u00a720.A mandates one `changelog.d/<issue>-<slug>.md` fragment when a PR changes observable behaviour, including failure modes. The linked issue's plan grant also lists `changelog.d/*` in `files_touched`.\n  Expected change site: `changelog.d/8631-<slug>.md` (e.g. `changelog.d/8631-review-merge-train-non-object-filename.md`)\n  Evidence of absence: The PR changed-files list is `scripts/review_merge_train.sh` and `tests/test_review_merge_train.py` only. No `changelog.d/8631-*.md` is referenced in the PR diff, the last commit stat (only those two files touched in commit `8aef0eab`), or the `pr_changed_files.txt` snapshot. The added test `test_gate_skips_non_object_and_null_filename_entries` asserts the observable consequence of the failure-mode change.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: The linked issue's plan grant lists `agents.d/*` in `files_touched`; the merge-train gate is documented in `agents.md` and this PR changes its per-entry filter behaviour.\n  Expected change site: `agents.d/8631-<slug>.md` with a `<!-- agents: section=\"Merge train gate\" -->` (or equivalent) block.\n  Evidence of absence: No `agents.d/8631-*.md` file appears in the PR diff or the last commit stat; only the script and test were touched. The plan grant explicitly anticipated one.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "1173b77c59835c8a84115c0c5f410ae26422a2672367708d6b290e6f460320ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8634,
+    "run_id": "41325484987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41325484987",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101165725_9e2371732f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8634,
+    "run_id": "41325484987"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T16:57:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
