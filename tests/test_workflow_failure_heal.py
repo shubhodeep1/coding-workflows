@@ -10861,7 +10861,10 @@ def test_classify_failure_shape_only_called_by_run_time_trend() -> None:
 
 	trend_fn = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_time_trend")
 	assert len(calls_in(trend_fn)) == 1
-	assert len(calls_in(tree)) == 1
+	# Cause grouping (P5 / D3) is the second caller: the pure cause-key subcommand.
+	cause_fn = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_cmd_cause_key")
+	assert len(calls_in(cause_fn)) == 1
+	assert len(calls_in(tree)) == 2
 
 
 def test_classify_failure_shape_numeric_alternatives_through_error_signature() -> None:
@@ -11517,3 +11520,302 @@ def test_suspect_commits_intake_wiring() -> None:
 	reproduction = script.split("\n_heal_run_reproduction()\n{", 1)[1].split("\n}\n", 1)[0]
 	assert reproduction.count('python3 "${HEAL_PY}" last-green-run') == 1 and '"${HEAL_LAST_GREEN_CACHE_FILE}"' in reproduction
 	assert 'suspect_commits_args=(--suspect-commits-file "${SUSPECT_COMMITS_FILE}")' in script
+
+
+# ---------------------------------------------------------------------------
+# Cause grouping (P5 / decision D3 of the heal evidence plan, Refs #8434)
+#
+# #8376 and #8391 failed at the same step with the same error, but one extra
+# error line gave the second report a new fingerprint and a second heal issue.
+# The cause key (workflow name, failing step, classify_failure_shape class)
+# records such a report as an occurrence on the open heal issue instead.
+# ---------------------------------------------------------------------------
+
+P5_ENV_LINES = (
+	"      WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED || 'false' }}\n",
+	"      WORKFLOW_HEAL_CAUSE_GROUPING_DAYS: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_DAYS || '3' }}\n",
+)
+P5_NOW = datetime(2026, 10, 31, 12, tzinfo=timezone.utc)
+P5_CAUSE = "c" * 64
+
+
+def _p5_cause_issue(number: int, *, fp: str, cause: str = P5_CAUSE, created: datetime | None = None, state: str = "open") -> dict:
+	issue = _heal_issue(number, state=state, fp=fp, created=created or P5_NOW - timedelta(days=1))
+	issue["body"] += f"\n<!-- {heal.MARKER_PREFIX}source={SELF_REPO}#run -->\n<!-- {heal.MARKER_PREFIX}classification=workflow-defect -->\n<!-- {heal.MARKER_PREFIX}cause={cause} -->\n"
+	return issue
+
+
+def _p5_body(**extra) -> str:
+	return heal.compose_issue_body(
+		payload=_p1_payload(), diagnosis=DIAG_WORKFLOW_DEFECT, fp="1" * 64, gen=1, root="1" * 64,
+		classification="workflow-defect", target_branch="main", max_depth=3,
+		intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/1", run_summaries=[], **extra,
+	)
+
+
+def test_cause_key_is_pure_strips_cycle_suffix_and_separates_shapes() -> None:
+	key = heal.cause_key("Test & Mark Stable Release", "Phase 3: Wait for implement PRs", "stall")
+	assert re.fullmatch(r"[0-9a-f]{64}", key)
+	assert key == heal.cause_key("Test & Mark Stable Release", "Phase 3: Wait for implement PRs", "stall")
+	assert key == hashlib.sha256(b"test & mark stable release|phase 3: wait for implement prs|stall").hexdigest()
+	assert key == heal.cause_key("Test & Mark Stable Release [cycle:41]", "Phase 3: Wait for implement PRs", "stall")
+	# Same step, different error class: different keys.
+	timeout_shape = heal.classify_failure_shape("::error::the job exceeded the 30 minute budget and timed out")
+	test_shape = heal.classify_failure_shape("FAILED tests/test_x.py::test_y - AssertionError")
+	assert (timeout_shape, test_shape) == ("timeout", "test_failure")
+	assert heal.cause_key("CI", "Run tests", timeout_shape) != heal.cause_key("CI", "Run tests", test_shape)
+	assert heal.cause_key("CI", "Run tests", "bogus") == heal.cause_key("CI", "Run tests", "other")
+	# #8376 / #8391: one extra error line gives a new fingerprint, not a new cause.
+	sig_a = "::error::Implement phase stalled - no activity for <n> minutes"
+	sig_b = sig_a + "\n::error::child run <n> cancelled"
+	assert heal.fingerprint("CI", "Run tests", sig_a) != heal.fingerprint("CI", "Run tests", sig_b)
+	shape_a, shape_b = heal.classify_failure_shape(sig_a), heal.classify_failure_shape(sig_b)
+	assert shape_a == shape_b == "stall"
+	assert heal.cause_key("CI", "Run tests", shape_a) == heal.cause_key("CI", "Run tests", shape_b)
+
+
+def test_validator_accepts_only_an_exact_sixth_cause_line() -> None:
+	five = _p5_body()
+	six = _p5_body(cause=P5_CAUSE)
+	check = lambda body: heal.validate_heal_issue_body_routing(body, target_branch="main", integration_branch=None)  # noqa: E731
+	assert check(five) == "" and check(six) == ""
+	six_lines = six.split("\n")
+	assert six_lines[5] == f"<!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->"
+	assert six_lines[:5] == five.split("\n")[:5] and six_lines[6:] == five.split("\n")[5:]
+	assert heal.parse_heal_markers(six)["cause"] == P5_CAUSE
+	assert "cause" not in heal.parse_heal_markers(five)
+	# Switch off (None), empty or invalid cause: byte-identical body.
+	for value in (None, "", "C" * 64, "c" * 63, "z" * 64):
+		assert _p5_body(cause=value) == five, value
+	seventh = "\n".join(six_lines[:6] + [f"<!-- {heal.MARKER_PREFIX}cause={'d' * 64} -->"] + six_lines[6:])
+	assert check(seventh) == "marker"
+	for bad in ("C" * 64, "c" * 63, "c" * 65):
+		malformed = "\n".join(six_lines[:5] + [f"<!-- {heal.MARKER_PREFIX}cause={bad} -->"] + six_lines[6:])
+		assert check(malformed) == "marker", bad
+	assert check("\n".join(six_lines[:5] + [f" <!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->"] + six_lines[6:])) == "marker"
+	assert check(six + "\n<!-- injected -->\n") == "marker"
+	assert check(five + "\n<!-- injected -->\n") == "marker"
+
+
+def test_build_issue_payload_keeps_lineage_trust_with_a_cause_line() -> None:
+	body = (f"<!-- {heal.MARKER_PREFIX}fp={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}gen=2 -->\n"
+		f"<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}source={CONSUMER_REPO}#39 -->\n"
+		f"<!-- {heal.MARKER_PREFIX}classification=workflow-defect -->\n<!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->\nsome body")
+	payload = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:needs-human",
+		issue=dict(_issue(body=body, labels=["ai:workflow-heal", "ai:needs-human"]), author_association="OWNER"),
+		comments=[], runs=[], wrapper_sha=None, reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/1",
+	)
+	normalized = heal.validate_payload(payload)
+	assert normalized["source_gen"] == 2 and normalized["source_root"] == FP_HEX
+
+
+def test_budget_decision_cause_match_window_and_precedence() -> None:
+	fp, other = "1" * 64, "2" * 64
+	recent = _p5_cause_issue(8376, fp=other)
+	decision = heal.budget_decision([recent], fp=fp, now=P5_NOW, cause=P5_CAUSE)
+	assert decision == {
+		"action": "duplicate", "match": "cause", "cause": P5_CAUSE, "existing_issue": 8376,
+		"existing_url": recent["html_url"], "existing_repo": "", "gen": 1, "root": other,
+		"open_count": 1, "today_count": 0, "lineage_source": "none",
+	}
+	# Outside the window (default 3 days), closed, or without created_at: no match.
+	old = _p5_cause_issue(8376, fp=other, created=P5_NOW - timedelta(days=4))
+	assert heal.budget_decision([old], fp=fp, now=P5_NOW, cause=P5_CAUSE)["action"] == "open"
+	assert heal.budget_decision([old], fp=fp, now=P5_NOW, cause=P5_CAUSE, cause_window_days=5)["match"] == "cause"
+	closed = _p5_cause_issue(8376, fp=other, state="closed")
+	assert heal.budget_decision([closed], fp=fp, now=P5_NOW, cause=P5_CAUSE)["action"] == "open"
+	undated = dict(recent, created_at=None)
+	assert heal.budget_decision([undated], fp=fp, now=P5_NOW, cause=P5_CAUSE)["action"] == "open"
+	# A different cause never matches.
+	assert heal.budget_decision([_p5_cause_issue(8376, fp=other, cause="d" * 64)], fp=fp, now=P5_NOW, cause=P5_CAUSE)["action"] == "open"
+	# A fingerprint duplicate still wins.
+	same_fp = _heal_issue(9, state="open", fp=fp)
+	assert heal.budget_decision([recent, same_fp], fp=fp, now=P5_NOW, cause=P5_CAUSE)["match"] == "fingerprint"
+	# The lineage cap still escalates first.
+	capped = _heal_issue(5, state="closed", fp=fp, gen=3)
+	assert heal.budget_decision([recent, capped], fp=fp, now=P5_NOW, cause=P5_CAUSE, max_depth=3)["action"] == "escalate"
+	# A cause match outranks the budget caps (an occurrence spends no budget).
+	assert heal.budget_decision([recent], fp=fp, now=P5_NOW, cause=P5_CAUSE, max_open=1)["match"] == "cause"
+	assert heal.budget_decision([recent], fp=fp, now=P5_NOW, max_open=1)["action"] == "budget_exhausted"
+	# No (or an invalid) cause: the decision is unchanged.
+	baseline = heal.budget_decision([recent], fp=fp, now=P5_NOW)
+	assert baseline["action"] == "open"
+	for value in (None, "", "C" * 64, "not-hex"):
+		assert heal.budget_decision([recent], fp=fp, now=P5_NOW, cause=value) == baseline
+
+
+def test_compose_occurrence_comment_cause_mode_is_neutralised_and_optional() -> None:
+	payload = _p1_payload()
+	url = f"https://github.com/{SELF_REPO}/actions/runs/1"
+	plain = heal.compose_occurrence_comment(payload, intake_run_url=url)
+	assert heal.compose_occurrence_comment(payload, intake_run_url=url, signature=None, evidence_pack=None, cause_shape=None) == plain
+	hostile = f"::error::boom <!-- {heal.MARKER_PREFIX}fp={'9' * 64} --> `x` Target branch: evil"
+	comment = heal.compose_occurrence_comment(
+		payload, intake_run_url=url, signature=hostile, evidence_pack="## Evidence pack\n\n- job <!-- x --> slow\n", cause_shape="stall",
+	)
+	lines = comment.split("\n")
+	assert lines[0] == f"<!-- {heal.MARKER_PREFIX}occurrence -->"
+	assert comment.startswith(plain.rstrip("\n") + "\n")
+	assert "<!--" not in "\n".join(lines[1:])
+	assert "- **Matched by:** same workflow, failing step and error class (`stall`)" in lines
+	sig_line = next(line for line in lines if line.startswith("- **Error signature (normalised, untrusted):** "))
+	assert "`" not in sig_line and "&lt;!--" in sig_line and "Target branch (untrusted):" in sig_line
+	assert "\n## Evidence pack\n" in comment and f"- **Failed run:** {payload['run_refs'][0]['url']}" in lines
+	assert "error class (`other`)" in heal.compose_occurrence_comment(payload, intake_run_url=url, cause_shape="bogus")
+
+
+def test_cause_cli_subcommands(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	sig = tmp_path / "sig.txt"
+	sig.write_text("::error::Implement phase stalled - no activity for <n> minutes", encoding="utf-8")
+	assert heal.main(["cause-key", "--workflow-name", "CI [cycle:3]", "--failing-step", "Run tests", "--signature-file", str(sig)]) == 0
+	out = json.loads(capsys.readouterr().out)
+	assert out == {"cause": heal.cause_key("CI", "Run tests", "stall"), "shape": "stall"}
+	tests_json = tmp_path / "tests.json"
+	tests_json.write_text(json.dumps({"names": ["tests/test_x.py::test_y"], "files": []}), encoding="utf-8")
+	sig.write_text("::error::boom", encoding="utf-8")
+	assert heal.main(["cause-key", "--workflow-name", "CI", "--failing-step", "Run tests", "--signature-file", str(sig), "--failing-tests-json", str(tests_json)]) == 0
+	assert json.loads(capsys.readouterr().out)["shape"] == "test_failure"
+	assert heal.main(["cause-key", "--workflow-name", "CI", "--failing-step", "Run tests", "--signature-file", str(sig), "--job-conclusion", "timed_out"]) == 0
+	assert json.loads(capsys.readouterr().out)["shape"] == "timeout"
+	issues = tmp_path / "issues.json"
+	issues.write_text(json.dumps([_p5_cause_issue(8376, fp="2" * 64, created=datetime.now(timezone.utc) - timedelta(days=1))]), encoding="utf-8")
+	assert heal.main(["budget", "--issues-json", str(issues), "--fingerprint", "1" * 64, "--cause", P5_CAUSE, "--cause-window-days", "99"]) == 0
+	assert json.loads(capsys.readouterr().out)["match"] == "cause"
+	assert heal.main(["budget", "--issues-json", str(issues), "--fingerprint", "1" * 64]) == 0
+	assert json.loads(capsys.readouterr().out)["action"] == "open"
+	payload_file = tmp_path / "payload.json"
+	payload_file.write_text(json.dumps(_p1_payload()), encoding="utf-8")
+	assert heal.main(["compose-occurrence", "--payload-json", str(payload_file), "--intake-run-url", "u",
+		"--signature-file", str(sig), "--cause-shape", "stall", "--evidence-pack-file", str(tmp_path / "missing.md")]) == 0
+	captured = capsys.readouterr()
+	assert "Matched by" in captured.out and "## Evidence pack" not in captured.out
+	assert "WORKFLOW_HEAL warn evidence_pack_unreadable" in captured.err
+
+
+def _p5_api_calls(state: dict) -> list[list[str]]:
+	# Temp-file arguments (`body=@/tmp/...`) differ between runs; the API calls must not.
+	return [[part for part in call if "/tmp" not in str(part) and not str(part).startswith("/")] for call in state.get("calls", [])]
+
+
+def _p5_cause_from(result: subprocess.CompletedProcess[str]) -> str:
+	match = re.search(r"^WORKFLOW_HEAL cause outcome=ok shape=stall cause=([0-9a-f]{64})$", result.stdout, re.MULTILINE)
+	assert match, result.stdout
+	return match.group(1)
+
+
+def _p5_open_heal(number: int, *, fp: str, cause: str, created: datetime) -> dict:
+	body = heal.compose_issue_body(
+		payload=_p1_payload(), diagnosis=DIAG_WORKFLOW_DEFECT, fp=fp, gen=1, root=fp, classification="workflow-defect",
+		target_branch="main", max_depth=3, intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/1", run_summaries=[], cause=cause,
+	)
+	return {
+		"number": number, "state": "open", "body": body, "created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+		"html_url": f"https://github.com/{SELF_REPO}/issues/{number}", "pull_request": False,
+	}
+
+
+def test_intake_cause_match_replay_posts_an_occurrence_with_no_new_reads() -> None:
+	on = {"WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED": "true"}
+	first, first_state, _ = _run_p1_intake(_p1_state(), on)
+	assert first.returncode == 0, first.stderr + first.stdout
+	cause = _p5_cause_from(first)
+	fp = re.search(r"WORKFLOW_HEAL fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
+	assert first_state["composed_issue"]["body"].split("\n")[5] == f"<!-- {heal.MARKER_PREFIX}cause={cause} -->"
+	# #8376: open, one day old, same cause, a different fingerprint (one error line fewer).
+	now = datetime.now(timezone.utc)
+	prior = _p5_open_heal(8376, fp="a" * 64, cause=cause, created=now - timedelta(days=1))
+	result, state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [prior]}, on)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "composed_issue" not in state
+	posted = state.get("comments_posted", [])
+	assert [item["path"] for item in posted] == [f"repos/{SELF_REPO}/issues/8376/comments"]
+	assert re.search(rf"^WORKFLOW_HEAL duplicate reason=cause_match existing_issue=8376 existing_repo={SELF_REPO} fp={fp} cause={cause} shape=stall ", result.stdout, re.MULTILINE)
+	assert "Matched by:** same workflow, failing step and error class (`stall`)" in posted[0]["body"]
+	assert "- **Failed run:** " in posted[0]["body"] and "- **Error signature (normalised, untrusted):** " in posted[0]["body"]
+	assert "## Evidence pack" not in posted[0]["body"]
+	# 0 new reads: the same calls as a fingerprint duplicate on the same issue.
+	fp_dup = _p5_open_heal(8376, fp=fp, cause=cause, created=now - timedelta(days=1))
+	fp_result, fp_state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [fp_dup]}, {})
+	assert fp_result.returncode == 0 and "match=fingerprint" in fp_result.stdout
+	assert _p5_api_calls(state) == _p5_api_calls(fp_state)
+	# Evidence pack on: the occurrence carries it, still with no extra call.
+	pack_on = {**on, "WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED": "true"}
+	pack_result, pack_state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [prior]}, pack_on)
+	assert pack_result.returncode == 0, pack_result.stderr + pack_result.stdout
+	assert "\n## Evidence pack\n" in pack_state["comments_posted"][0]["body"]
+	pack_fp_result, pack_fp_state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [fp_dup]}, {"WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED": "true"})
+	assert pack_fp_result.returncode == 0
+	assert _p5_api_calls(pack_state) == _p5_api_calls(pack_fp_state)
+
+
+def test_intake_cause_match_window_and_switch_off_byte_identity() -> None:
+	on = {"WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED": "true"}
+	first, _first_state, _ = _run_p1_intake(_p1_state(), on)
+	cause = _p5_cause_from(first)
+	stale = _p5_open_heal(8376, fp="a" * 64, cause=cause, created=datetime.now(timezone.utc) - timedelta(days=4))
+	result, state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [stale]}, on)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert not state.get("comments_posted")
+	assert state["composed_issue"]["body"].split("\n")[5] == f"<!-- {heal.MARKER_PREFIX}cause={cause} -->"
+	assert "reason=cause_match" not in result.stdout
+	# A longer window matches it.
+	wide, wide_state, _ = _run_p1_intake(_p1_state() | {"heal_issues": [stale]}, {**on, "WORKFLOW_HEAL_CAUSE_GROUPING_DAYS": "5"})
+	assert wide.returncode == 0 and "reason=cause_match" in wide.stdout and "composed_issue" not in wide_state
+	# Switch off or unset: the recent cause marker is ignored and nothing changes.
+	recent = _p5_open_heal(8376, fp="a" * 64, cause=cause, created=datetime.now(timezone.utc) - timedelta(days=1))
+	unset_result, unset_state, unset_frozen = _run_p1_intake(_p1_state() | {"heal_issues": [recent]}, {"WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED": None})
+	off_result, off_state, off_frozen = _run_p1_intake(_p1_state() | {"heal_issues": [recent]}, {"WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED": "false"})
+	for item in (unset_result, off_result):
+		assert item.returncode == 0, item.stderr + item.stdout
+		assert "WORKFLOW_HEAL cause " not in item.stdout and "cause_match" not in item.stdout
+	assert unset_state["composed_issue"]["body"] == off_state["composed_issue"]["body"]
+	assert "cause=" not in off_state["composed_issue"]["body"].split("\n\n", 1)[0]
+	assert _p5_api_calls(unset_state) == _p5_api_calls(off_state) and unset_frozen == off_frozen
+	assert not off_state.get("comments_posted")
+
+
+def test_cause_grouping_switch_defaults_and_workflow_wiring() -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'CAUSE_GROUPING_ENABLED="${WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED:-false}"' in script
+	assert 'CAUSE_GROUPING_DAYS="$(_positive_or_default "${WORKFLOW_HEAL_CAUSE_GROUPING_DAYS:-}" 3)"' in script
+	# Computed after the fingerprint, before the budget decision.
+	assert script.index('log "fingerprint fp=') < script.index("\n_heal_cause_key ||") < script.index('python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" >')
+	for name in ("_heal_cause_key", "_heal_cause_occurrence_args"):
+		body = script.split(f"\n{name}()\n{{", 1)[1].split("\n}\n", 1)[0]
+		assert "gh " not in body and "gh_retry" not in body and "_heal_fetch_evidence_pack_api" not in body, name
+	# Scope recovery never replaces a cause-matched heal issue.
+	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert '!= "cause" ] || return 0' in recovery
+	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	intake_job, scan_job = workflow.split("\n  recovery-scan:\n", 1)
+	for line in P5_ENV_LINES:
+		assert workflow.count(line) == 2, line
+		assert intake_job.split("\n  intake:\n", 1)[1].count(line) == 1, line
+		assert scan_job.count(line) == 1, line
+
+
+def test_cause_grouping_review_fixes_escalation_recovery_window_and_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	# A phase failure that cause-matches its own heal issue still escalates.
+	assert ('[ "${SOURCE_KIND}" = "phase_failure" ] && { [ "${DUPLICATE_MATCH}" = "fingerprint" ] '
+		'|| [ "${DUPLICATE_MATCH}" = "cause" ]; }') in script
+	# The scope-recovery budget re-run drops the cause key and its window.
+	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
+	loop = recovery.split("local recovery_budget_args=()", 1)[1].split("done", 1)[0]
+	assert "--cause|--cause-window-days)" in loop and "recovery_arg_index=$((recovery_arg_index + 2))" in loop
+	# The window is clamped to 1..30, as documented; a bool is not a window.
+	fp, other = "1" * 64, "2" * 64
+	old = _p5_cause_issue(8376, fp=other, created=P5_NOW - timedelta(days=20))
+	assert heal.budget_decision([old], fp=fp, now=P5_NOW, cause=P5_CAUSE, cause_window_days=45)["match"] == "cause"
+	assert heal.budget_decision([old], fp=fp, now=P5_NOW, cause=P5_CAUSE, cause_window_days=True)["action"] == "open"
+	recent = _p5_cause_issue(8376, fp=other, created=P5_NOW - timedelta(hours=12))
+	assert heal.budget_decision([recent], fp=fp, now=P5_NOW, cause=P5_CAUSE, cause_window_days=0)["match"] == "cause"
+	# An unreadable signature file is reported, and the occurrence still composes.
+	payload_file = tmp_path / "payload.json"
+	payload_file.write_text(json.dumps(_p1_payload()), encoding="utf-8")
+	assert heal.main(["compose-occurrence", "--payload-json", str(payload_file), "--intake-run-url", "u",
+		"--signature-file", str(tmp_path / "missing.txt"), "--cause-shape", "stall"]) == 0
+	captured = capsys.readouterr()
+	assert "WORKFLOW_HEAL warn signature_unreadable" in captured.err
+	assert "Matched by" in captured.out and "Error signature" not in captured.out
