@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:3064-3067 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Keeping buffered lines in _drop_step_script_lines when a Run group closes before a section key is found changes the input log sent to filter_log, which can alter the error_signature fingerprint.\n  WHY: The issue says \"Do not change fingerprint inputs\", and retained lines matching _SIGNATURE_PATTERNS (e.g. 'FAILED') could change dedup lineage. Severity disagreement: gemini said MAJOR and minimax said NIT with confidence 3, so the highest is used. Minimax noted the drift is relative to the original PR, not pre-PR behaviour. Sonnet-5_5 and glm-5_3-flash rejected this finding as invalid, because the change restores the pre-PR baseline.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:3064-3067 | severity=MAJOR | confidence=5\n  PROBLEM: Keeping buffered lines in _drop_step_script_lines when a Run group closes before a section key is found changes the input log sent to filter_log, which subsequently affects the error_signature fingerprint calculation.\n  WHY: The issue says \"Do not change fingerprint inputs\". Retaining previously dropped lines that match _SIGNATURE_PATTERNS (such as 'FAILED') can change the error signature, leading to inconsistent failure fingerprinting and broken dedup lineage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:3062-3067 | severity=NIT | confidence=3\n  PROBLEM: The fix preserves lines buffered inside a `##[group]Run` header that closes before any `shell:` / `with:` / `env:` section key. For a user-defined Run group containing e.g. `FAILED test_x`, filter_log now retains a line the original-PR code dropped, so error_signature and the downstream intake fingerprint differ from the original PR's.\n  WHY: A run that differs from a previous dedup'd run only by a Run group closing without a section key now hashes to a fresh fingerprint. The drift is relative to the original PR, not pre-PR behaviour, and the \"Do not change fingerprint inputs\" constraint is ambiguous about which baseline applies.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "11d47b9cab3a4fd72848a333bd7c13880ab2eb3dbc51e3f44d0dd9ea0876fb36",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8617,
+    "run_id": "41315427243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41315427243",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101143507_b84b701254",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8617,
+    "run_id": "41315427243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T14:35:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
