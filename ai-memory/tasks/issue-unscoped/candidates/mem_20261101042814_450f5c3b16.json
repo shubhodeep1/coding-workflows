@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_engine.py:821-822 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: `_format_reset_in` rounds the remaining hours to one decimal before checking whether the value is positive, so a future reset 1-179 seconds away is shown as \"now\".\n  WHY: Reports and `next_usable_in` can say an account resets now while it is still gated. Both reviewers rated it NIT, which is mapped to low. The docstring documents this behavior, and anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash reviewed the same code and chose not to report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_engine.py:821-822 | severity=NIT | confidence=5\n  PROBLEM: The reset time is rounded to one decimal place in hours before its sign is checked. A reset in the future between 1 and 179 seconds is rendered as \"now\".\n  WHY: The hourly alert or usage report can indicate an account \"resets now\" while it remains gated for up to 179 more seconds. The docstring reflects this behavior, but it is slightly counterintuitive for operators.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_engine.py:821-822 | severity=NIT | confidence=5\n  PROBLEM: The code rounds the remaining time before checking whether it is positive. A reset up to 179 seconds in the future therefore rounds to 0.0 hours and is reported as \"now.\"\n  WHY: Pool messages and next_usable_in can say an account resets now while its reset time is still in the future. The displayed countdown contradicts the actual reset time.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6544323313ea309a1d1c2149eeacf9a614d20881a2660f005d592d253a614b24",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8580,
+    "run_id": "41271291419",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41271291419",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101042814_450f5c3b16",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8580,
+    "run_id": "41271291419"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T04:28:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
