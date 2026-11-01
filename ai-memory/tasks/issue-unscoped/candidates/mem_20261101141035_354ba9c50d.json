@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_checkout_integration_ref_audit.py:Test suite failure | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push test gate reports `tests/test_workflow_checkout_integration_ref_audit.py` as a failure caused by this change.\n  WHY: The test fails in CI upon applying this PR's changes, although the diff does not modify the file, suggesting an incompatibility with the changes in `scripts/workflow_failure_heal.py` or the test environment. Severity was not stated by the source, so medium is a placeholder. Another reviewer (anthropic_claude-sonnet-5_5) attributed the failure to an allowlist entry for a workflow file missing from this checkout and found no link to the diff.\n- scripts/workflow_failure_heal.py:3064-3073 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: ANSI-cyan lines are discarded immediately, before the close-before-section path preserves buffered lines.\n  WHY: In a user-defined `##[group]Run ...` group with no section key, cyan-colored output is skipped at line 3072, so colored diagnostic output is still missing after the group closes. The source rated this a NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_checkout_integration_ref_audit.py:Test suite failure | confidence=4\n  PROBLEM: The pre-push test gate reports `tests/test_workflow_checkout_integration_ref_audit.py` as a failure caused by this change.\n  WHY: The test suite fails in the CI environment upon applying this PR's changes, despite the file not being modified by the diff, indicating a regression or an incompatibility with the changes in `scripts/workflow_failure_heal.py` or the test environment for `tests/test_workflow_failure_heal.py`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py:3064-3073 | severity=NIT | confidence=4\n  PROBLEM: ANSI-cyan lines are discarded immediately, before the close-before-section path preserves buffered lines.\n  WHY: In a user-defined `##[group]Run ...` group with no section key, cyan-colored output is skipped at line 3072. When the group closes, only the remaining buffered lines are restored, so colored diagnostic output is still missing.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3ee2cd662a2fd347671ec605dd4d3ff80e49b2d1de02c2aaf20a922d5081f2af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8617,
+    "run_id": "41312472895",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41312472895",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101141035_354ba9c50d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8617,
+    "run_id": "41312472895"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T14:10:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
