@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-01T05:50:59Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 007 as out-of-scope; anchor=copilot-pull-request-reviewer (external check-run):n/a; cited_path=copilot-pull-request-reviewer check-run 41274781232 (external service; no repository file); files_touched=.github/workflows/ci.yml, agents.d/wfopt-2026-09-28-ci-subtest-timing.md, analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-09-28.md, changelog.d/wfopt-2026-09-28-ci-single-file-overlap.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 8591,
+  "record_id": "lesson_20261101055059_e68e0c645a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check-run 41274781232 (external service; no repository file)",
+    "copilot-pull-request-reviewer (external check-run)",
+    ".github/workflows/ci.yml",
+    "agents.d/wfopt-2026-09-28-ci-subtest-timing.md",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-09-28.md",
+    "changelog.d/wfopt-2026-09-28-ci-single-file-overlap.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
