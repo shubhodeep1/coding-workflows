@@ -183,9 +183,135 @@ tg_delete_msg()
 	if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${chat_id}" ] || [ -z "${msg_id}" ]; then
 		return 0
 	fi
-	curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/deleteMessage" \
+	# Exit status stays 0 for compatibility; the checked helper bounds the
+	# call to 10 seconds (the former inline curl had no timeout).
+	_tg_delete_msg_checked "${msg_id}" || true
+	return 0
+}
+
+# ---------------------------------------------------------------
+# _tg_delete_msg_checked — Delete one Telegram message and classify
+# the outcome so cleanup can keep a tracking comment on transient
+# failures (BUG-006).
+# Returns 0 when no retry is needed: deleted (HTTP 2xx, .ok == true),
+# already gone or permanent (HTTP 400, or any other .ok == false that
+# is not 429/5xx, e.g. "message to delete not found").
+# Returns 1 when the failure is transient: curl transport failure,
+# HTTP 429 or 5xx, or a missing / unparsable response.
+# Prints nothing; never logs the URL, token or response body.
+# Usage: if _tg_delete_msg_checked 12345; then ...; fi
+# ---------------------------------------------------------------
+_tg_delete_msg_checked()
+{
+	# Callers run this inside IFS=',' loops; reset IFS for our own splitting.
+	local IFS=$' \t\n'
+	local msg_id="$1"
+	local chat_id
+	chat_id="$(_tg_chat_id)"
+	if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${chat_id}" ] || [ -z "${msg_id}" ]; then
+		return 0
+	fi
+	local resp="" rc=0 http_code="" body="" ok=""
+	resp=$(curl -s --max-time 10 -w '\n%{http_code}' -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/deleteMessage" \
 		-d "chat_id=${chat_id}" \
-		-d "message_id=${msg_id}" >/dev/null 2>&1 || true
+		-d "message_id=${msg_id}" 2>/dev/null) || rc=$?
+	if [ "${rc}" -ne 0 ]; then
+		return 1
+	fi
+	case "${resp}" in
+		*$'\n'*)
+			body="${resp%$'\n'*}"
+			http_code="${resp##*$'\n'}"
+			;;
+		*)
+			http_code="${resp}"
+			;;
+	esac
+	if ! [[ "${http_code}" =~ ^[0-9][0-9][0-9]$ ]] || [ "${http_code}" = "000" ]; then
+		return 1
+	fi
+	if [ "${http_code}" = "429" ] || [ "${http_code:0:1}" = "5" ]; then
+		return 1
+	fi
+	if [ "${http_code}" = "400" ]; then
+		return 0
+	fi
+	if ! ok=$(printf '%s' "${body}" | jq -r 'if type=="object" and (.ok|type)=="boolean" then (.ok|tostring) else "missing" end' 2>/dev/null); then
+		return 1
+	fi
+	if [ "${ok}" = "true" ] && [ "${http_code:0:1}" = "2" ]; then
+		return 0
+	fi
+	if [ "${ok}" = "false" ]; then
+		return 0
+	fi
+	return 1
+}
+
+# ---------------------------------------------------------------
+# _tg_snapshot_tracking_entries — Read EVERY comments page first and
+# print the matching tracking comments as "id<TAB>body" lines, so the
+# cleanup functions never paginate while deleting (BUG-003: deleting
+# page-1 comments shifted page-2 comments up and they were skipped).
+# With a phase, matches <!-- tg_phase:PHASE: ; without one, matches
+# <!-- tg_(cleanup|phase): (the existing cleanup selectors).
+# Returns 1 (after a ::warning::) when any page read fails, a page is
+# not a JSON array, or more than 100 pages are seen; callers then
+# delete nothing. API calls: one GET per 100 comments.
+# Usage: snapshot=$(_tg_snapshot_tracking_entries 42 clarify) || return 0
+# ---------------------------------------------------------------
+_tg_snapshot_tracking_entries()
+{
+	local issue_num="$1" phase="${2:-}"
+	local api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues"
+	local page=1 max_pages=100 entries="" ctx comments_json count page_entries
+	while true; do
+		if [ -n "${phase}" ]; then
+			ctx="phase cleanup (issue #${issue_num}, phase ${phase}, page ${page})"
+		else
+			ctx="cleanup (issue #${issue_num}, page ${page})"
+		fi
+		if [ "${page}" -gt "${max_pages}" ]; then
+			echo "::warning::Issue comments for ${ctx} exceed ${max_pages} pages; aborting cleanup" >&2
+			return 1
+		fi
+		comments_json=$(curl_gh_api -s \
+			-H "Authorization: token ${GH_TOKEN}" \
+			-H "Accept: application/vnd.github.v3+json" \
+			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || {
+			echo "::warning::Failed to fetch issue comments for ${ctx}; aborting cleanup" >&2
+			return 1
+		}
+		count=$(printf '%s' "${comments_json}" | jq 'if type=="array" then length else error("not an array") end' 2>/dev/null) || count=""
+		if ! [[ "${count}" =~ ^[0-9]+$ ]]; then
+			echo "::warning::Unparsable issue comments page for ${ctx}; aborting cleanup" >&2
+			return 1
+		fi
+		if [ "${count}" -eq 0 ]; then
+			break
+		fi
+		if [ -n "${phase}" ]; then
+			page_entries=$(printf '%s' "${comments_json}" | jq -r \
+				--arg m "<!-- tg_phase:${phase}:" \
+				'.[] | select((.body // "") | contains($m)) | "\(.id)\t\(.body)"' 2>/dev/null) || page_entries="__tg_snapshot_failed__"
+		else
+			page_entries=$(printf '%s' "${comments_json}" | jq -r \
+				'.[] | select((.body // "") | test("<!-- tg_(cleanup|phase):")) | "\(.id)\t\(.body)"' 2>/dev/null) || page_entries="__tg_snapshot_failed__"
+		fi
+		if [ "${page_entries}" = "__tg_snapshot_failed__" ]; then
+			echo "::warning::Unparsable issue comments page for ${ctx}; aborting cleanup" >&2
+			return 1
+		fi
+		if [ -n "${page_entries}" ]; then
+			entries+="${page_entries}"$'\n'
+		fi
+		if [ "${count}" -lt 100 ]; then
+			break
+		fi
+		page=$((page + 1))
+	done
+	printf '%s' "${entries}"
+	return 0
 }
 
 # ---------------------------------------------------------------
@@ -389,61 +515,61 @@ tg_cleanup_phase_msgs()
 
 	local chat_id
 	chat_id="$(_tg_chat_id)"
-	local api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues"
-	local marker="<!-- tg_phase:${phase}:"
-	local page=1
 
-	while true; do
-		local comments_json
-		comments_json=$(curl_gh_api -s \
-			-H "Authorization: token ${GH_TOKEN}" \
-			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || {
-			echo "::warning::Failed to fetch issue comments for phase cleanup (issue #${issue_num}, phase ${phase}, page ${page}); aborting cleanup" >&2
-			break
-		}
+	# Snapshot every page before deleting anything (BUG-003).
+	local tracking_entries
+	tracking_entries=$(_tg_snapshot_tracking_entries "${issue_num}" "${phase}") || return 0
 
-		local count
-		count=$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null) || break
-		[ "${count:-0}" -gt 0 ] || break
-
-		local tracking_entries
-		tracking_entries=$(printf '%s' "${comments_json}" | jq -r \
-			--arg m "${marker}" \
-			'.[] | select(.body | contains($m)) | "\(.id)\t\(.body)"' 2>/dev/null) || true
-
-		if [ -n "${tracking_entries}" ]; then
-			while IFS=$'\t' read -r comment_id comment_body; do
-				[ -n "${comment_id}" ] || continue
-				local id_list
-				id_list=$(printf '%s' "${comment_body}" | \
-					sed -n "s/.*<!-- tg_phase:${phase}:\([0-9,]*\) -->.*/\1/p")
-				if [ -n "${id_list}" ] && [ -n "${chat_id}" ] && [ -n "${TG_BOT_SECRET:-}" ]; then
-					local old_ifs="${IFS}"
-					IFS=','
-					for tg_id in ${id_list}; do
-						[ -n "${tg_id}" ] || continue
-						tg_delete_msg "${tg_id}"
-					done
-					IFS="${old_ifs}"
+	local kept_comments=0 failed_ids_total=0 consecutive=0
+	local comment_id comment_body
+	while IFS=$'\t' read -r comment_id comment_body; do
+		[[ "${comment_id}" =~ ^[0-9]+$ ]] || continue
+		local id_list failed=0
+		id_list=$(printf '%s' "${comment_body}" | \
+			sed -n "s/.*<!-- tg_phase:${phase}:\([0-9,]*\) -->.*/\1/p")
+		if [ -n "${id_list}" ] && [ -n "${chat_id}" ] && [ -n "${TG_BOT_SECRET:-}" ]; then
+			local old_ifs="${IFS}"
+			IFS=','
+			for tg_id in ${id_list}; do
+				[ -n "${tg_id}" ] || continue
+				# Breaker: after 3 consecutive transient failures stop calling
+				# Telegram for this cleanup and keep the remaining comments.
+				if [ "${consecutive}" -ge 3 ]; then
+					failed=$((failed + 1))
+				elif _tg_delete_msg_checked "${tg_id}"; then
+					consecutive=0
+				else
+					failed=$((failed + 1))
+					consecutive=$((consecutive + 1))
 				fi
-				curl -s -X DELETE \
-					-H "Authorization: token ${GH_TOKEN}" \
-					-H "Accept: application/vnd.github.v3+json" \
-					"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
-					>/dev/null 2>&1 || true
-			done <<< "${tracking_entries}"
+			done
+			IFS="${old_ifs}"
 		fi
+		if [ "${failed}" -eq 0 ]; then
+			curl -s -X DELETE \
+				-H "Authorization: token ${GH_TOKEN}" \
+				-H "Accept: application/vnd.github.v3+json" \
+				"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+				>/dev/null 2>&1 || true
+		else
+			# Keep the tracking comment so the next cleanup retries its IDs (BUG-006).
+			kept_comments=$((kept_comments + 1))
+			failed_ids_total=$((failed_ids_total + failed))
+		fi
+	done <<< "${tracking_entries}"
 
-		[ "${count}" -lt 100 ] && break
-		page=$((page + 1))
-	done
+	if [ "${kept_comments}" -gt 0 ]; then
+		echo "::warning::Telegram cleanup kept ${kept_comments} tracking comment(s) on issue #${issue_num} (phase ${phase}): ${failed_ids_total} message ID(s) hit a transient Telegram failure; the next cleanup retries them" >&2
+	fi
+	return 0
 }
 
 # ---------------------------------------------------------------
 # tg_cleanup_msgs — Delete all tracked TG messages for an issue.
 # Reads tracking comments, deletes each TG message, then removes
-# the tracking comments from GitHub.
+# the tracking comments from GitHub. All pages are read before
+# anything is deleted; a tracking comment is kept when any of its
+# IDs hits a transient Telegram failure, so the next cleanup retries.
 # Usage: tg_cleanup_msgs 42
 # ---------------------------------------------------------------
 tg_cleanup_msgs()
@@ -459,54 +585,53 @@ tg_cleanup_msgs()
 	local chat_id
 	chat_id="$(_tg_chat_id)"
 
-	local api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues"
-	local page=1
+	# Snapshot every page before deleting anything (BUG-003). Matches both
+	# general and phase-specific tracking comments.
+	local tracking_entries
+	tracking_entries=$(_tg_snapshot_tracking_entries "${issue_num}" "") || return 0
 
-	while true; do
-		local comments_json
-		comments_json=$(curl_gh_api -s \
-			-H "Authorization: token ${GH_TOKEN}" \
-			-H "Accept: application/vnd.github.v3+json" \
-			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || {
-			echo "::warning::Failed to fetch issue comments for cleanup (issue #${issue_num}, page ${page}); aborting cleanup" >&2
-			break
-		}
-
-		local count
-		count=$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null) || break
-		[ "${count:-0}" -gt 0 ] || break
-
-		# Extract tracking comments (both general and phase-specific)
-		local tracking_entries
-		tracking_entries=$(printf '%s' "${comments_json}" | jq -r \
-			'.[] | select(.body | test("<!-- tg_(cleanup|phase):")) | "\(.id)\t\(.body)"' 2>/dev/null) || true
-
-		if [ -n "${tracking_entries}" ]; then
-			while IFS=$'\t' read -r comment_id comment_body; do
-				[ -n "${comment_id}" ] || continue
-				# Extract comma-separated message IDs (general or phase tags)
-				local id_list
-				id_list=$(printf '%s' "${comment_body}" | \
-					sed -n 's/.*<!-- tg_\(cleanup\|phase:[a-z_]*\):\([0-9,]*\) -->.*/\2/p')
-				if [ -n "${id_list}" ] && [ -n "${chat_id}" ] && [ -n "${TG_BOT_SECRET:-}" ]; then
-					local old_ifs="${IFS}"
-					IFS=','
-					for tg_id in ${id_list}; do
-						[ -n "${tg_id}" ] || continue
-						tg_delete_msg "${tg_id}"
-					done
-					IFS="${old_ifs}"
+	local kept_comments=0 failed_ids_total=0 consecutive=0
+	local comment_id comment_body
+	while IFS=$'\t' read -r comment_id comment_body; do
+		[[ "${comment_id}" =~ ^[0-9]+$ ]] || continue
+		# Extract comma-separated message IDs (general or phase tags)
+		local id_list failed=0
+		id_list=$(printf '%s' "${comment_body}" | \
+			sed -n 's/.*<!-- tg_\(cleanup\|phase:[a-z_]*\):\([0-9,]*\) -->.*/\2/p')
+		if [ -n "${id_list}" ] && [ -n "${chat_id}" ] && [ -n "${TG_BOT_SECRET:-}" ]; then
+			local old_ifs="${IFS}"
+			IFS=','
+			for tg_id in ${id_list}; do
+				[ -n "${tg_id}" ] || continue
+				# Breaker: after 3 consecutive transient failures stop calling
+				# Telegram for this cleanup and keep the remaining comments.
+				if [ "${consecutive}" -ge 3 ]; then
+					failed=$((failed + 1))
+				elif _tg_delete_msg_checked "${tg_id}"; then
+					consecutive=0
+				else
+					failed=$((failed + 1))
+					consecutive=$((consecutive + 1))
 				fi
-				# Remove the tracking comment from GitHub
-				curl -s -X DELETE \
-					-H "Authorization: token ${GH_TOKEN}" \
-					-H "Accept: application/vnd.github.v3+json" \
-					"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
-					>/dev/null 2>&1 || true
-			done <<< "${tracking_entries}"
+			done
+			IFS="${old_ifs}"
 		fi
+		if [ "${failed}" -eq 0 ]; then
+			# Remove the tracking comment from GitHub
+			curl -s -X DELETE \
+				-H "Authorization: token ${GH_TOKEN}" \
+				-H "Accept: application/vnd.github.v3+json" \
+				"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+				>/dev/null 2>&1 || true
+		else
+			# Keep the tracking comment so the next cleanup retries its IDs (BUG-006).
+			kept_comments=$((kept_comments + 1))
+			failed_ids_total=$((failed_ids_total + failed))
+		fi
+	done <<< "${tracking_entries}"
 
-		[ "${count}" -lt 100 ] && break
-		page=$((page + 1))
-	done
+	if [ "${kept_comments}" -gt 0 ]; then
+		echo "::warning::Telegram cleanup kept ${kept_comments} tracking comment(s) on issue #${issue_num}: ${failed_ids_total} message ID(s) hit a transient Telegram failure; the next cleanup retries them" >&2
+	fi
+	return 0
 }
