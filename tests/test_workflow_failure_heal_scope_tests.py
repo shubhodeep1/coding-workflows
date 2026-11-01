@@ -204,8 +204,15 @@ def test_render_cli_without_failing_tests_is_unchanged() -> None:
 
 def test_intake_freezes_failing_tests_before_the_diagnosis() -> None:
 	text = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
-	extract_at = text.index('heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt')
-	assert text.index('SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"') < extract_at < text.index("jq -n --arg crash")
+	# Anchor on the FAILING_TESTS_JSON assignment: the cause-grouping helper
+	# (_heal_cause_key) runs an earlier copy of the same command for the dedup
+	# cause key only, so a bare command match would find that copy first.
+	extract_at = text.index('FAILING_TESTS_JSON="$(python3 "${HEAL_PY}" heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt')
+	freeze_at = text.index('SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"')
+	assert freeze_at < extract_at < text.index("jq -n --arg crash")
+	cause_key_at = text.find('cause_tests="$(python3 "${HEAL_PY}" heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt')
+	if cause_key_at >= 0:
+		assert cause_key_at < freeze_at
 	assert text.index("failing_tests: $failing_tests") < text.index("# --- Run the diagnosis model")
 	assert "failing_tests: (.failing_tests // {names: [], files: []})" in text
 
