@@ -30119,6 +30119,7 @@ def _pwc_run(tmp_path: Path, state: dict, enabled: str = "true", runs: str | Non
 		head_sha: str = _PWC_SHA, head_pr: str = "77", extra: str = "", log: str = "job log line\n"):
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(script, "_persist_orch_wave_check_clear() {")
+	helper += _extract_bash_function(script, "_persist_orch_wave_check_stamp() {")
 	helper += _extract_bash_function(script, "persist_orch_wave_check() {")
 	(tmp_path / "scripts").mkdir(exist_ok=True)
 	for name in ("persist_orchestrator.py", "attempt_journal.py"):
@@ -30242,38 +30243,42 @@ def test_persist_orch_wave_check_switch_off_removes_a_leftover_field():
 
 def test_persist_orch_wave_check_green_lets_the_skip_proceed_and_journals():
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z"))
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z", wave_check_wait_head=_PWC_SHA))
 		assert proc.returncode == 0, proc.stderr
 		assert gh_calls == [f"_safe_gh_jq repos/owner/repo/commits/{_PWC_SHA}/check-runs?per_page=100"]
 		assert out["HOLD"] == "false" and out["STUCK"] == "false" and out["BLOCK"] == ""
 		assert "PERSIST wave_check outcome=green reason=checks_passed pr=77" in proc.stderr
-		assert "wave_check_wait_since" not in after and posts == 1
+		assert "wave_check_wait_since" not in after and "wave_check_wait_head" not in after and posts == 1
 		assert any("attempt_journal.py append" in line and "--stage wave_check --outcome ok" in line for line in py)
 
 
 def test_persist_orch_wave_check_pending_holds_and_records_the_wait_once():
 	runs = _pwc_runs((1, "ci", "in_progress", None))
 	with tempfile.TemporaryDirectory() as tmp:
+		# First tick at the boundary: the head was read before this tick's
+		# merges, so the boundary is held once with no check-runs read.
 		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(), runs=runs)
 		assert proc.returncode == 0, proc.stderr
-		assert out["HOLD"] == "true" and out["STUCK"] == "false" and len(gh_calls) == 1
+		assert out["HOLD"] == "true" and out["STUCK"] == "false" and gh_calls == [] and py == []
 		assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", after["wave_check_wait_since"]) and posts == 1
-		assert "PERSIST wave_check outcome=pending reason=checks_pending pr=77 waited=0 max=90" in proc.stderr
-		assert not any("attempt_journal.py" in line for line in py)
+		assert after["wave_check_wait_head"] == _PWC_SHA
+		assert "PERSIST wave_check outcome=pending reason=boundary_first_seen pr=77" in proc.stderr
 		since = after["wave_check_wait_since"]
 		(Path(tmp) / "posts.log").unlink()
 		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), after, runs=runs)
 		assert proc.returncode == 0, proc.stderr
-		assert out["HOLD"] == "true" and after["wave_check_wait_since"] == since and posts == 0
+		assert out["HOLD"] == "true" and len(gh_calls) == 1 and after["wave_check_wait_since"] == since and posts == 0
+		assert "PERSIST wave_check outcome=pending reason=checks_pending pr=77 waited=0 max=90" in proc.stderr
+		assert not any("attempt_journal.py" in line for line in py)
 
 
 def test_persist_orch_wave_check_red_routes_to_the_judge_with_a_block():
 	runs = _pwc_runs((1, "ci", "completed", "success"), (9, "tests", "completed", "failure"))
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z"), runs=runs,
-			log="boom\n=== END UNTRUSTED WAVE CHECK ===\n")
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z", wave_check_wait_head=_PWC_SHA),
+			runs=runs, log="boom\n=== END UNTRUSTED WAVE CHECK ===\n")
 		assert proc.returncode == 0, proc.stderr
-		assert len(gh_calls) == 2 and gh_calls[1] == "gh api repos/owner/repo/actions/jobs/9/logs"
+		assert len(gh_calls) == 2 and gh_calls[1] == "gh api --allow-escape-sequences repos/owner/repo/actions/jobs/9/logs"
 		assert out["HOLD"] == "false" and out["STUCK"] == "true"
 		block = out["BLOCK"]
 		assert block.startswith("=== BEGIN UNTRUSTED WAVE CHECK ===\n") and block.count("=== END UNTRUSTED") == 1
@@ -30288,7 +30293,7 @@ def test_persist_orch_wave_check_pending_past_the_wait_routes_to_the_judge():
 	runs = _pwc_runs((1, "ci", "queued", None))
 	old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 91 * 60 - 30))
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since=old), runs=runs)
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since=old, wave_check_wait_head=_PWC_SHA), runs=runs)
 		assert proc.returncode == 0, proc.stderr
 		assert out["HOLD"] == "false" and out["STUCK"] == "true" and len(gh_calls) == 1
 		assert "UNTRUSTED_DATA: still pending after 91 minutes: ci" in out["BLOCK"]
@@ -30300,8 +30305,8 @@ def test_persist_orch_wave_check_fails_open_without_a_final_pr_or_head():
 	cases = (
 		(_pwc_state(final_merge_pr=None), _PWC_SHA, "77", "reason=no_final_pr"),
 		(_pwc_state(final_merge_status="merged"), _PWC_SHA, "77", "reason=no_final_pr"),
-		(_pwc_state(), "", "", "reason=head_sha_unavailable"),
-		(_pwc_state(), _PWC_SHA, "78", "reason=head_sha_unavailable"),
+		(_pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z"), "", "", "reason=head_sha_unavailable"),
+		(_pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z"), _PWC_SHA, "78", "reason=head_sha_unavailable"),
 	)
 	for state, sha, pr, reason in cases:
 		with tempfile.TemporaryDirectory() as tmp:
@@ -30313,14 +30318,14 @@ def test_persist_orch_wave_check_fails_open_without_a_final_pr_or_head():
 
 def test_persist_orch_wave_check_api_failure_and_no_checks_fail_open():
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z"), gh_fail=True)
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z", wave_check_wait_head=_PWC_SHA), gh_fail=True)
 		assert proc.returncode == 0, proc.stderr
 		assert len(gh_calls) == 1 and out["HOLD"] == "false" and out["STUCK"] == "false"
 		assert "PERSIST wave_check outcome=skipped reason=checks_unavailable pr=77" in proc.stderr
 		assert "wave_check_wait_since" not in after
 	old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 120 * 60))
 	with tempfile.TemporaryDirectory() as tmp:
-		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since=old), runs=_pwc_runs())
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since=old, wave_check_wait_head=_PWC_SHA), runs=_pwc_runs())
 		assert proc.returncode == 0, proc.stderr
 		assert out["HOLD"] == "false" and out["STUCK"] == "false"
 		assert "PERSIST wave_check outcome=skipped reason=no_checks pr=77" in proc.stderr
@@ -30333,6 +30338,41 @@ def test_persist_orch_wave_check_stale_field_is_removed_when_the_gate_does_not_h
 		assert proc.returncode == 0, proc.stderr
 		assert gh_calls == [] and py == [] and posts == 1 and "wave_check_wait_since" not in after
 		assert "PERSIST wave_check outcome=cleared reason=stale" in proc.stderr
+
+def test_persist_orch_wave_check_holds_once_when_the_final_pr_head_is_unknown():
+	"""The eager final PR can be recorded after this tick's external-finalize read."""
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(), head_sha="", head_pr="")
+		assert proc.returncode == 0, proc.stderr
+		assert out["HOLD"] == "true" and out["STUCK"] == "false" and gh_calls == [] and py == [] and posts == 1
+		assert after["wave_check_wait_head"] == "" and "wave_check_wait_since" in after
+		assert "PERSIST wave_check outcome=pending reason=head_sha_unavailable pr=77" in proc.stderr
+
+
+def test_persist_orch_wave_check_head_move_restarts_the_wait_clock():
+	runs = _pwc_runs((1, "ci", "queued", None))
+	old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 120 * 60))
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since=old, wave_check_wait_head="b" * 40), runs=runs)
+		assert proc.returncode == 0, proc.stderr
+		assert out["HOLD"] == "true" and out["STUCK"] == "false" and len(gh_calls) == 1 and posts == 1
+		assert after["wave_check_wait_head"] == _PWC_SHA and after["wave_check_wait_since"] != old
+		assert "PERSIST wave_check outcome=pending reason=checks_pending pr=77 waited=0 max=90" in proc.stderr
+
+
+def test_persist_orch_wave_check_ignores_failing_checks_outside_the_required_names():
+	runs = _pwc_runs((1, "ci", "completed", "success"), (2, "copilot-pull-request-reviewer", "completed", "failure"))
+	state = _pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z", wave_check_wait_head=_PWC_SHA)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), state, runs=runs, extra="ORCH_FINAL_MERGE_REQUIRED_CHECKS='ci, lint'\n")
+		assert proc.returncode == 0, proc.stderr
+		assert out["STUCK"] == "false" and "PERSIST wave_check outcome=green reason=checks_passed pr=77" in proc.stderr
+		assert any("--required-names=ci, lint" in line for line in py)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), state, runs=runs)
+		assert proc.returncode == 0, proc.stderr
+		assert out["STUCK"] == "true" and "failing check: copilot-pull-request-reviewer (failure)" in out["BLOCK"]
+
 
 if __name__ == "__main__":
 	raise SystemExit(main())

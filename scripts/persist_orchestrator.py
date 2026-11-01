@@ -75,18 +75,21 @@ group --state-file F --journals-json D --now EPOCH --wave-index I [--trusted-log
 	outcome=<ok|skipped|error> reason=<token> [groups=<n>] [grouped=<n>]
 	[released=<n>]`` line (issue #8427, P8).
 
-wave-check --check-runs-file F --now EPOCH [--wait-since ISO8601Z] --out O
+wave-check --check-runs-file F --now EPOCH [--wait-since ISO8601Z] [--required-names CSV] --out O
 	Pure: no subprocess, no network, zero API calls. Switch:
 	PERSIST_ORCH_WAVE_CHECK_ENABLED (default "false"; only the exact value
 	"true" turns it on). PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES (default 90;
 	a value that is not a positive integer falls back to 90). Classifies one
 	page of ``GET repos/<r>/commits/<sha>/check-runs?per_page=100`` (an object
-	with ``check_runs[]`` or an array of such pages): only the newest run
-	(highest ``id``) per ``name`` counts, then ``skipped`` / ``neutral``
-	conclusions are dropped. ``red`` (a completed run that is not ``success``)
-	wins over ``pending`` (a run not completed); ``green`` needs at least one
-	run left; ``no_checks`` when none is left; ``unavailable`` for unreadable
-	input. With a valid past ``--wait-since`` and ``waited_minutes >= max``,
+	with ``check_runs[]`` or an array of such pages): as in
+	scripts/pr_checks_lib.sh, a newer run of the same ``name`` supersedes only a
+	``cancelled`` run, then ``skipped`` / ``neutral`` conclusions are dropped.
+	``--required-names`` uses the final-merge gate's sentinels (``*``, the
+	default: every failure blocks; empty: nothing blocks; else a comma list):
+	a completed non-``success`` run of a required name is ``red``, any run not
+	completed is ``pending``, and ``red`` wins. ``green`` needs at least one
+	run left and a complete listing (a truncated page is ``pending``);
+	``no_checks`` when none is left; ``unavailable`` for unreadable input. With a valid past ``--wait-since`` and ``waited_minutes >= max``,
 	``pending`` becomes ``timeout`` and ``no_checks`` becomes
 	``no_checks_timeout``. Writes ``{"schema": "wave_check.v1", "outcome",
 	"failing": [{"name", "conclusion"}], "pending": [name], "log_job_id",
@@ -695,7 +698,18 @@ def _check_run_pages(payload: Any) -> tuple[list[dict], int] | None:
 	return runs, total
 
 
-def classify_check_runs(payload: Any, now: int, wait_since: str | None, max_wait: int) -> dict:
+def _wave_check_required(required: str | None) -> tuple[str, list[str]]:
+	"""("all" | "none" | "list", names), the same sentinels as
+	_pr_required_check_names_for_base: "*" every failure blocks, "" none does."""
+	if required is None or required.strip() == "*":
+		return "all", []
+	names = [n.strip() for n in required.split(",") if n.strip()]
+	if not required.strip() or not names:
+		return "none", []
+	return "list", names
+
+
+def classify_check_runs(payload: Any, now: int, wait_since: str | None, max_wait: int, required: str | None = "*") -> dict:
 	"""wave_check.v1 result for one page of check runs (see the module docstring)."""
 	result: dict = {
 		"schema": "wave_check.v1", "outcome": "unavailable", "failing": [], "pending": [], "log_job_id": None,
@@ -706,19 +720,29 @@ def classify_check_runs(payload: Any, now: int, wait_since: str | None, max_wait
 		return result
 	runs, total = parsed
 	result["truncated"] = total > len(runs)
-	# Newest run per name (highest id): a failed run that was re-run and passed
-	# does not count.
-	newest: dict[str, dict] = {}
-	for run in runs:
-		name = run.get("name")
-		if not isinstance(name, str):
-			continue
-		if name not in newest or (_positive_int(run.get("id")) or 0) > (_positive_int(newest[name].get("id")) or 0):
-			newest[name] = run
-	kept = [r for r in newest.values() if r.get("conclusion") not in WAVE_CHECK_IGNORED_CONCLUSIONS]
+	# Same rule as scripts/pr_checks_lib.sh: a check run carries no workflow
+	# identity (this repo has three jobs named `lint`), so a newer run of the
+	# same name supersedes only a cancelled run. A failed or still-running
+	# run keeps counting even when a newer same-name run exists.
+	named = [r for r in runs if isinstance(r.get("name"), str)]
+	def _key(r: dict) -> tuple[int, str]:
+		return (_positive_int(r.get("id")) or 0, str(r.get("started_at") or ""))
+	def _superseded(r: dict) -> bool:
+		return r.get("conclusion") == "cancelled" and any(o is not r and o.get("name") == r.get("name") and _key(o) > _key(r) for o in named)
+	kept = [r for r in named if not _superseded(r) and r.get("conclusion") not in WAVE_CHECK_IGNORED_CONCLUSIONS]
 	kept.sort(key=lambda r: (str(r.get("name")), _positive_int(r.get("id")) or 0))
-	failing = [r for r in kept if r.get("status") == "completed" and r.get("conclusion") != "success"]
-	pending = [r for r in kept if r.get("status") != "completed"]
+	# Required-set filter, as for the final integration merge: a pending run
+	# always holds, a failed run blocks only when its name is required.
+	mode, names = _wave_check_required(required)
+	if mode == "none":
+		failing: list[dict] = []
+		pending: list[dict] = []
+	else:
+		failing = [
+			r for r in kept
+			if r.get("status") == "completed" and r.get("conclusion") != "success" and (mode == "all" or r.get("name") in names)
+		]
+		pending = [r for r in kept if r.get("status") != "completed"]
 	result["failing"] = [
 		{"name": str(r.get("name")), "conclusion": str(r.get("conclusion") if r.get("conclusion") is not None else "unknown")}
 		for r in failing[:WAVE_CHECK_LIST_MAX]
@@ -737,6 +761,9 @@ def classify_check_runs(payload: Any, now: int, wait_since: str | None, max_wait
 	if failing:
 		result["outcome"] = "red"
 	elif pending:
+		result["outcome"] = "pending"
+	elif kept and result["truncated"]:
+		# Runs past the first page were not read: never green on a partial list.
 		result["outcome"] = "pending"
 	elif kept:
 		result["outcome"] = "green"
@@ -764,7 +791,7 @@ def cmd_wave_check(args: argparse.Namespace) -> None:
 		log_wave_check("error", "args_invalid")
 		return
 	max_wait = _env_hours("PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES", WAVE_CHECK_MAX_WAIT_MINUTES_DEFAULT)
-	result = classify_check_runs(_read_json(args.check_runs_file), now, args.wait_since, max_wait)
+	result = classify_check_runs(_read_json(args.check_runs_file), now, args.wait_since, max_wait, args.required_names)
 	if not _write(args.out, json.dumps(result, sort_keys=True) + "\n"):
 		log_wave_check("error", "out_unwritable")
 		return
@@ -817,7 +844,8 @@ def _unmet_items(state: Any, wave_index: int, details: Any, login: str) -> list[
 		_cid, entries = _aj.parse(cached["comments"], login)
 		if not entries:
 			continue
-		newest = sorted(entries, key=lambda e: e.get("ts", ""))[-1]
+		# Newest by ts; on a tie the later entry wins, as sorted(...)[-1] did.
+		newest = max(reversed(entries), key=lambda e: e.get("ts", ""))
 		acc = newest.get("acceptance") if isinstance(newest.get("acceptance"), dict) else {}
 		if acc.get("state") != "unmet":
 			continue
@@ -833,6 +861,8 @@ def render_wave_check_block(result: dict, log_text: str, unmet: list[tuple[int, 
 	for item in result.get("failing") or []:
 		if isinstance(item, dict):
 			data += _wave_check_neutralise(f"failing check: {item.get('name', '')} ({item.get('conclusion', '')})")
+	if result.get("truncated") is True:
+		data += _wave_check_neutralise("note: only the first page of check runs was read")
 	if outcome == "timeout":
 		waited = _positive_int(result.get("waited_minutes")) or 0
 		for name in result.get("pending") or []:
@@ -955,6 +985,7 @@ def build_parser() -> argparse.ArgumentParser:
 	wave.add_argument("--check-runs-file", required=True)
 	wave.add_argument("--now", required=True)
 	wave.add_argument("--wait-since", default=None)
+	wave.add_argument("--required-names", default="*")
 	wave.add_argument("--out", required=True)
 	block = sub.add_parser("wave-check-block")
 	block.add_argument("--result-file", required=True)

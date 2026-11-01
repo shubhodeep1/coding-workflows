@@ -20009,8 +20009,8 @@ persist_orch_group_failures() {
 # later one. One jq check and nothing else when the field is absent.
 _persist_orch_wave_check_clear() {
   local pwcc_reason="$1"
-  jq -e 'type == "object" and has("wave_check_wait_since")' "${STATE_FILE}" >/dev/null 2>&1 || return 0
-  if jq 'del(.wave_check_wait_since)' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+  jq -e 'type == "object" and (has("wave_check_wait_since") or has("wave_check_wait_head"))' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if jq 'del(.wave_check_wait_since, .wave_check_wait_head)' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
     && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
     && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
     echo "PERSIST wave_check outcome=cleared reason=${pwcc_reason}" >&2
@@ -20020,6 +20020,26 @@ _persist_orch_wave_check_clear() {
     echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
   fi
   return 0
+}
+
+# _persist_orch_wave_check_stamp HEAD_SHA (issue #8427, P9). Starts the wait
+# clock: writes wave_check_wait_since (now) and wave_check_wait_head (the head
+# the clock belongs to; empty when no head was known) and posts the state.
+# Sets PERSIST_ORCH_WAVE_CHECK_STAMP to the new timestamp. Returns 1 when the
+# state could not be written.
+_persist_orch_wave_check_stamp() {
+  local pwcs_head="$1"
+  PERSIST_ORCH_WAVE_CHECK_STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if jq --arg t "${PERSIST_ORCH_WAVE_CHECK_STAMP}" --arg h "${pwcs_head}" '.wave_check_wait_since = $t | .wave_check_wait_head = $h' \
+      "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+    && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+    && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+    post_state_comment || true
+    return 0
+  fi
+  rm -f "${STATE_FILE}.persist_wave_check.tmp"
+  echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+  return 1
 }
 
 # persist_orch_wave_check (issue #8427, P9; check between waves). Called in the
@@ -20033,7 +20053,13 @@ _persist_orch_wave_check_clear() {
 # clean-wave skip condition holds: reads the head SHA of the pending
 # final_merge_pr that the external-finalize block captured this tick
 # (PERSIST_ORCH_WAVE_CHECK_HEAD_SHA, no extra read), reads one page of its
-# check runs and classifies them with persist_orchestrator.py wave-check.
+# check runs and classifies them with persist_orchestrator.py wave-check
+# against the final-merge gate's required names (ORCH_FINAL_MERGE_REQUIRED_CHECKS;
+# the branch-protection lookup is not repeated here). The first tick that
+# reaches a boundary only records wave_check_wait_since / wave_check_wait_head
+# and holds: the head was read before this tick's sub-issue merges (or the
+# final PR was created this tick), so the next tick reads the current head.
+# A head that moved during a hold restarts the wait clock.
 # green: the skip proceeds. pending / no_checks: records wave_check_wait_since
 # once (post_state_comment) and sets PERSIST_ORCH_WAVE_CHECK_HOLD=true (the
 # caller continues to the next project). red, or pending after
@@ -20048,7 +20074,7 @@ _persist_orch_wave_check_clear() {
 # the identity read shared through PERSIST_JOURNAL_LOGIN_CACHE. Always returns 0.
 persist_orch_wave_check() {
   local pwc_pr pwc_status pwc_sha pwc_base pwc_runs pwc_out pwc_log pwc_block pwc_details pwc_comments pwc_note
-  local pwc_wait pwc_outcome pwc_job pwc_waited pwc_max pwc_failing pwc_valid pwc_truncated pwc_stamp pwc_journal
+  local pwc_wait pwc_wait_head pwc_outcome pwc_job pwc_waited pwc_max pwc_failing pwc_valid pwc_truncated pwc_journal
   [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
   if [ "${PERSIST_ORCH_WAVE_CHECK_ENABLED:-false}" != "true" ]; then
     _persist_orch_wave_check_clear switch_off
@@ -20071,8 +20097,19 @@ persist_orch_wave_check() {
     _persist_orch_wave_check_clear no_final_pr
     return 0
   fi
+  pwc_wait="$(jq -r '.wave_check_wait_since // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+  [[ "${pwc_wait}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || pwc_wait=""
+  pwc_wait_head="$(jq -r '.wave_check_wait_head // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
   pwc_sha="${PERSIST_ORCH_WAVE_CHECK_HEAD_SHA:-}"
   if ! [[ "${pwc_sha}" =~ ^[0-9a-f]{40}$ ]] || [ "${PERSIST_ORCH_WAVE_CHECK_HEAD_PR:-}" != "${pwc_pr}" ]; then
+    # First tick at the boundary (for example the final PR was recorded this
+    # tick, after the external-finalize read): hold once so the next tick
+    # reads its head. Later ticks without a head fail open, as before.
+    if [ -z "${pwc_wait}" ] && _persist_orch_wave_check_stamp ""; then
+      echo "PERSIST wave_check outcome=pending reason=head_sha_unavailable pr=${pwc_pr}" >&2
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      return 0
+    fi
     echo "PERSIST wave_check outcome=skipped reason=head_sha_unavailable pr=${pwc_pr}" >&2
     _persist_orch_wave_check_clear head_sha_unavailable
     return 0
@@ -20082,8 +20119,23 @@ persist_orch_wave_check() {
     _persist_orch_wave_check_clear helper_absent
     return 0
   fi
-  pwc_wait="$(jq -r '.wave_check_wait_since // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
-  [[ "${pwc_wait}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || pwc_wait=""
+  if [ -z "${pwc_wait}" ]; then
+    # First tick at this boundary: the head was read before this tick's
+    # sub-issue merges, so hold once and classify the next tick's head. When
+    # the stamp cannot be written, classify this head instead (no endless hold).
+    if _persist_orch_wave_check_stamp "${pwc_sha}"; then
+      echo "PERSIST wave_check outcome=pending reason=boundary_first_seen pr=${pwc_pr}" >&2
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      return 0
+    fi
+  elif [ "${pwc_wait_head}" != "${pwc_sha}" ]; then
+    # The head moved during the hold: the wait clock restarts for the new head.
+    if _persist_orch_wave_check_stamp "${pwc_sha}"; then
+      pwc_wait="${PERSIST_ORCH_WAVE_CHECK_STAMP}"
+    else
+      pwc_wait=""
+    fi
+  fi
   pwc_base="${RUNTIME_DIR:-/tmp}"
   [ -d "${pwc_base}" ] || pwc_base="/tmp"
   # Private scratch files (mktemp), so overlapping runs never share them.
@@ -20092,13 +20144,16 @@ persist_orch_wave_check() {
   if [ -z "${pwc_runs}" ] || [ -z "${pwc_out}" ]; then
     rm -f "${pwc_runs}" "${pwc_out}"
     echo "PERSIST wave_check outcome=error reason=scratch_unwritable" >&2
+    _persist_orch_wave_check_clear scratch_unwritable
     return 0
   fi
   # API read 1 of at most 2: one page, no --paginate. A failure leaves the
   # file empty and the helper reports unavailable.
   gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${pwc_sha}/check-runs?per_page=100" > "${pwc_runs}" 2>/dev/null || : > "${pwc_runs}"
   PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py wave-check --check-runs-file "${pwc_runs}" \
-    --now "$(date -u +%s)" --wait-since="${pwc_wait}" --out "${pwc_out}" < /dev/null || true
+    --now "$(date -u +%s)" --wait-since="${pwc_wait}" \
+    --required-names="${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:-*}}" \
+    --out "${pwc_out}" < /dev/null || true
   rm -f "${pwc_runs}"
   pwc_outcome="$(jq -r 'if type == "object" and .schema == "wave_check.v1" then (.outcome // "" | tostring) else "" end' "${pwc_out}" 2>/dev/null || true)"
   case "${pwc_outcome}" in
@@ -20129,15 +20184,7 @@ persist_orch_wave_check() {
       ;;
     pending|no_checks)
       if [ "${pwc_valid}" != "true" ]; then
-        pwc_stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        if jq --arg t "${pwc_stamp}" '.wave_check_wait_since = $t' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
-          && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
-          && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
-          post_state_comment || true
-        else
-          rm -f "${STATE_FILE}.persist_wave_check.tmp"
-          echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
-        fi
+        _persist_orch_wave_check_stamp "${pwc_sha}" || true
       fi
       if [ "${pwc_outcome}" = "pending" ]; then
         echo "PERSIST wave_check outcome=pending reason=checks_pending pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
@@ -20157,7 +20204,7 @@ persist_orch_wave_check() {
         if [ -n "${pwc_log}" ]; then
           # API read 2 of at most 2: the failing Actions job's log; only its
           # last 8192 bytes reach the helper and the log never reaches stdout.
-          { gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${pwc_job}/logs" 2>/dev/null || true; } | tail -c 8192 > "${pwc_log}" 2>/dev/null || : > "${pwc_log}"
+          { gh_retry gh api --allow-escape-sequences "repos/${GITHUB_REPOSITORY}/actions/jobs/${pwc_job}/logs" 2>/dev/null || true; } | tail -c 8192 > "${pwc_log}" 2>/dev/null || : > "${pwc_log}"
         fi
       fi
       pwc_details="$(mktemp "${pwc_base}/persist_wave_check_details.XXXXXX" 2>/dev/null)" || pwc_details=""

@@ -676,7 +676,7 @@ def _run(rid: int, name: str, status: str = "completed", conclusion: str | None 
 	return {"id": rid, "name": name, "status": status, "conclusion": conclusion, "app": {"slug": slug}, "output": {"summary": summary}}
 
 
-def _wave_check(tmp_path: Path, monkeypatch, payload, wait_since: str | None = None, env: dict | None = None):
+def _wave_check(tmp_path: Path, monkeypatch, payload, wait_since: str | None = None, env: dict | None = None, required: str | None = None):
 	monkeypatch.setenv("PERSIST_ORCH_WAVE_CHECK_ENABLED", "true")
 	for name, value in (env or {}).items():
 		if value is None:
@@ -691,6 +691,8 @@ def _wave_check(tmp_path: Path, monkeypatch, payload, wait_since: str | None = N
 	argv = ["wave-check", "--check-runs-file", str(runs), "--now", str(WC_NOW), "--out", str(out)]
 	if wait_since is not None:
 		argv.append(f"--wait-since={wait_since}")
+	if required is not None:
+		argv.append(f"--required-names={required}")
 	assert po.main(argv) == 0
 	return json.loads(out.read_text(encoding="utf-8")) if out.exists() else None
 
@@ -704,7 +706,12 @@ def _wave_check(tmp_path: Path, monkeypatch, payload, wait_since: str | None = N
 		([_run(1, "a", status="queued", conclusion=None)], 90 * 60, "timeout"),
 		([_run(1, "a", status="queued", conclusion=None)], 89 * 60 + 59, "pending"),
 		([_run(1, "a"), _run(2, "b", conclusion="skipped"), _run(3, "c", conclusion="neutral")], None, "green"),
-		([_run(1, "a", conclusion="failure"), _run(5, "a")], None, "green"),
+		# Same rule as pr_checks_lib.sh: a newer same-name run supersedes only a
+		# cancelled run; a failed or running run keeps counting.
+		([_run(1, "a", conclusion="failure"), _run(5, "a")], None, "red"),
+		([_run(1, "a", conclusion="cancelled"), _run(5, "a")], None, "green"),
+		([_run(5, "a", conclusion="cancelled"), _run(1, "a")], None, "red"),
+		([_run(1, "a", status="in_progress", conclusion=None), _run(5, "a")], None, "pending"),
 		([_run(5, "a", conclusion="failure"), _run(1, "a")], None, "red"),
 		([_run(1, "a", conclusion="failure"), _run(2, "b", status="in_progress", conclusion=None)], None, "red"),
 		([], None, "no_checks"),
@@ -728,7 +735,34 @@ def test_wave_check_unreadable_input_is_unavailable(tmp_path, monkeypatch, paylo
 
 def test_wave_check_accepts_an_array_of_pages_and_reports_truncation(tmp_path, monkeypatch):
 	out = _wave_check(tmp_path, monkeypatch, [{"total_count": 150, "check_runs": [_run(1, "a")]}, {"check_runs": [_run(2, "b")]}])
-	assert out["outcome"] == "green" and out["truncated"] is True
+	# Runs past the page were not read, so a passing first page is never green.
+	assert out["outcome"] == "pending" and out["truncated"] is True
+	out = _wave_check(tmp_path, monkeypatch, {"total_count": 150, "check_runs": [_run(1, "a", conclusion="failure")]})
+	assert out["outcome"] == "red" and out["truncated"] is True
+	out = _wave_check(tmp_path, monkeypatch, {"total_count": 2, "check_runs": [_run(1, "a"), _run(2, "b")]})
+	assert out["outcome"] == "green" and out["truncated"] is False
+
+
+@pytest.mark.parametrize(
+	("required", "outcome"),
+	[
+		(None, "red"),
+		("*", "red"),
+		("ci, lint", "green"),
+		("ci,copilot", "red"),
+		("", "green"),
+		(" , ", "green"),
+	],
+)
+def test_wave_check_required_names_follow_the_final_merge_gate(tmp_path, monkeypatch, required, outcome):
+	runs = [_run(1, "ci"), _run(2, "copilot", conclusion="failure")]
+	out = _wave_check(tmp_path, monkeypatch, {"check_runs": runs}, required=required)
+	assert out["outcome"] == outcome
+
+
+def test_wave_check_pending_advisory_run_still_holds(tmp_path, monkeypatch):
+	runs = [_run(1, "ci"), _run(2, "copilot", status="in_progress", conclusion=None)]
+	assert _wave_check(tmp_path, monkeypatch, {"check_runs": runs}, required="ci")["outcome"] == "pending"
 
 
 def test_wave_check_log_job_only_for_actions_and_summary_otherwise(tmp_path, monkeypatch):
