@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Reviewer passes must receive a non-empty PR diff (REVIEWER_FILTERED_PR_DIFF_FILE), PR description, and linked-issue body, plus an expanded {{REFERENCE_SEVERITY_CLASSIFICATION}} reference block.\n  expected_change_site: The reviewer bundle assembly step in the review pipeline (e.g. the script that exports REVIEWER_FILTERED_* artefacts and assembles the reviewer prompt).\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The review prompt in this pass contained no diff hunks, no PR description, no linked-issue body, and the literal unexpanded placeholder `{{REFERENCE_SEVERITY_CLASSIFICATION}}`, so all nine lenses were un-evaluable. Reviewer stated severity MAJOR and confidence \"high\". This conflicts with other reviewers, who saw the diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: Reviewer passes must receive a non-empty PR diff (REVIEWER_FILTERED_PR_DIFF_FILE), PR description, and linked-issue body, plus an expanded {{REFERENCE_SEVERITY_CLASSIFICATION}} reference block.\nExpected change site: The reviewer bundle assembly step in the review pipeline (e.g. the script that exports REVIEWER_FILTERED_* artefacts and assembles the reviewer prompt).\nEvidence of absence: The review prompt in this pass contains no diff hunks, no PR description, no linked-issue body, and the literal unexpanded placeholder `{{REFERENCE_SEVERITY_CLASSIFICATION}}`, meaning all nine lenses were un-evaluable by construction.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: high\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "89a5727bfac80ee44f4f9807f2fa8149898eb57d257838638244603bf1e9d3c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41274267557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41274267557",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101050543_3724b3a58a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41274267557"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T05:05:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
