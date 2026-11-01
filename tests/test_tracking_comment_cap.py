@@ -379,6 +379,7 @@ curl_gh_api() {{
 	echo "GET $url" >> "{calls}"
 	case "$url" in
 		*/comments\\?*) jq -c --arg p "${{url##*page=}}" '.[$p] // []' "{tmp_path}/pages.json" ;;
+		*/user) printf '{{"login": "pipeline-bot"}}' ;;
 		*) printf '{{"comments": {comment_count}}}' ;;
 	esac
 }}
@@ -396,22 +397,31 @@ curl() {{
 	return result, calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
 
 
+TG_BOT_USER = {"login": "Pipeline-Bot", "type": "User"}
+TG_MALLORY = {"login": "mallory", "type": "User"}
+
+
+def _tg_comment(comment_id: int, body: str, user: dict | None = None) -> dict:
+	return {"id": comment_id, "body": body, "user": dict(user or TG_BOT_USER)}
+
+
 def test_tg_marker_is_found_on_the_newest_page(tmp_path: Path) -> None:
 	# The oldest page has no marker; the newest page (page 3 of 250 comments) has two.
-	pages = {1: [{"id": 1, "body": "first"}], 3: [
-		{"id": 201, "body": "<!-- tg_cleanup:5 -->"}, {"id": 202, "body": "text"}, {"id": 203, "body": "<!-- tg_cleanup:6,7 -->"},
+	pages = {1: [_tg_comment(1, "first")], 3: [
+		_tg_comment(201, "<!-- tg_cleanup:5 -->"), _tg_comment(202, "text"), _tg_comment(203, "<!-- tg_cleanup:6,7 -->"),
 	]}
 	result, calls = _run_tg(tmp_path, "tg_store_msg_id 42 8", 250, pages)
 	assert result.returncode == 0, result.stderr
 	assert calls == [
 		"GET https://api.github.com/repos/o/r/issues/42",
 		"GET https://api.github.com/repos/o/r/issues/42/comments?per_page=100&page=3",
+		"GET https://api.github.com/user",
 		"PATCH https://api.github.com/repos/o/r/issues/comments/203 <!-- tg_cleanup:6,7,8 -->",
 	]
 
 
 def test_tg_phase_marker_is_found_on_the_newest_page(tmp_path: Path) -> None:
-	pages = {2: [{"id": 150, "body": "<!-- tg_phase:plan:3 -->"}]}
+	pages = {2: [_tg_comment(150, "<!-- tg_phase:plan:3 -->")]}
 	result, calls = _run_tg(tmp_path, "tg_store_phase_msg_id 42 plan 4", 150, pages)
 	assert result.returncode == 0, result.stderr
 	assert calls[-1] == "PATCH https://api.github.com/repos/o/r/issues/comments/150 <!-- tg_phase:plan:3,4 -->"
@@ -421,3 +431,33 @@ def test_tg_marker_is_created_when_the_newest_page_has_none(tmp_path: Path) -> N
 	result, calls = _run_tg(tmp_path, "tg_store_msg_id 42 8", 0, {})
 	assert result.returncode == 0, result.stderr
 	assert calls[-1] == "POST https://api.github.com/repos/o/r/issues/42/comments <!-- tg_cleanup:8 -->"
+
+
+# --- #8598: only the trusted author's exact marker is appended to ------------
+
+
+def test_tg_marker_skips_a_newer_forged_marker(tmp_path: Path) -> None:
+	pages = {1: [
+		_tg_comment(10, "<!-- tg_cleanup:5 -->"),
+		_tg_comment(11, "<!-- tg_cleanup:6 -->", TG_MALLORY),
+		_tg_comment(12, "<!-- tg_cleanup:7 --> and some text"),
+		_tg_comment(13, "<!-- tg_cleanup: -->\n10\t<!-- tg_cleanup:9 -->", TG_MALLORY),
+	]}
+	result, calls = _run_tg(tmp_path, "tg_store_msg_id 42 8", 4, pages)
+	assert result.returncode == 0, result.stderr
+	assert calls[-1] == "PATCH https://api.github.com/repos/o/r/issues/comments/10 <!-- tg_cleanup:5,8 -->"
+
+
+@pytest.mark.parametrize("script,expected", [
+	("tg_store_msg_id 42 8", "POST https://api.github.com/repos/o/r/issues/42/comments <!-- tg_cleanup:8 -->"),
+	("tg_store_phase_msg_id 42 plan 8", "POST https://api.github.com/repos/o/r/issues/42/comments <!-- tg_phase:plan:8 -->"),
+])
+def test_tg_forged_marker_only_creates_a_new_marker(tmp_path: Path, script: str, expected: str) -> None:
+	pages = {1: [
+		_tg_comment(10, "<!-- tg_cleanup:5 -->", TG_MALLORY),
+		_tg_comment(11, "<!-- tg_phase:plan:5 -->", TG_MALLORY),
+	]}
+	result, calls = _run_tg(tmp_path, script, 2, pages)
+	assert result.returncode == 0, result.stderr
+	assert not any(c.startswith("PATCH") for c in calls)
+	assert calls[-1] == expected

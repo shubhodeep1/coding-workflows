@@ -2679,3 +2679,128 @@ def test_gate_queued_comment_post_failure_warns_and_still_queues(tmp_path: Path)
 	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
 	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
 	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+
+
+def _write_raw_files(fixtures: Path, number: int, entries: list[dict]) -> None:
+	(fixtures / f"files_{number}.json").write_text(json.dumps(entries), encoding="utf-8")
+
+
+def test_gate_queues_pr_editing_old_path_of_older_rename(tmp_path: Path) -> None:
+	"""An older PR renaming a.sh -> b.sh blocks a younger PR that edits a.sh.
+
+	Regression: ``_mt_pr_files_into`` read only ``.filename`` from
+	``pulls/N/files``, so the old path of a rename was dropped and the gate
+	failed open while the diff-based own-files path counted both sides.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_raw_files(fixtures, 4075, [{"filename": "b.sh", "previous_filename": "a.sh", "status": "renamed"}])
+	diff = tmp_path / "pr.diff"
+	diff.write_text("diff --git a/a.sh b/a.sh\n", encoding="utf-8")
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	assert log_text.count("pulls/4075/files") == 1
+
+
+def test_gate_own_api_fallback_includes_renamed_old_path(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["a.sh"])
+	_write_raw_files(fixtures, 4077, [{"filename": "b.sh", "previous_filename": "a.sh", "status": "renamed"}])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	assert log_text.count("pulls/4077/files") == 1
+
+
+def test_release_keeps_pr_queued_behind_older_rename_and_fetches_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064"),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_raw_files(fixtures, 4077, [{"filename": "b.sh", "previous_filename": "a.sh", "status": "renamed"}])
+	_write_files(fixtures, 4081, ["a.sh"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STILL_QUEUED pr=4081 blockers=#4077" in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4081" not in result.stdout
+	for number in (4077, 4081):
+		calls = log_text.count(f"pulls/{number}/files")
+		assert calls == 1, f"/pulls/{number}/files fetched {calls} times; the per-run cache must hold it to one"
+
+
+@pytest.mark.parametrize("own_path,queued", [("null", False), ("y.sh", True)])
+def test_gate_missing_null_or_empty_previous_filename_adds_no_path(tmp_path: Path, own_path: str, queued: bool) -> None:
+	"""Entries without a usable previous_filename add no blank or ``null`` path,
+	but still count their ``filename``."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_raw_files(fixtures, 4075, [
+		{"filename": "x.sh"},
+		{"filename": "y.sh", "previous_filename": None},
+		{"filename": "z.sh", "previous_filename": ""},
+	])
+	diff = tmp_path / "pr.diff"
+	diff.write_text(f"diff --git a/{own_path} b/{own_path}\n", encoding="utf-8")
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	if queued:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+		assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	else:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
+		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert log_text.count("pulls/4075/files") == 1
+
+
+@pytest.mark.parametrize("own_path,queued", [("a.sh", True), ("null", False)])
+def test_gate_skips_non_object_and_null_filename_entries(tmp_path: Path, own_path: str, queued: bool) -> None:
+	"""A non-object entry no longer fails the whole files lookup (which made
+	the gate fail open), and a null or empty ``filename`` adds no ``null`` path."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_raw_files(fixtures, 4075, [
+		"junk",
+		{"filename": None},
+		{"filename": ""},
+		{"filename": "b.sh", "previous_filename": "a.sh"},
+	])
+	diff = tmp_path / "pr.diff"
+	diff.write_text(f"diff --git a/{own_path} b/{own_path}\n", encoding="utf-8")
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	if queued:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+		assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	else:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
+		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert log_text.count("pulls/4075/files") == 1
