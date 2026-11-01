@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_heal_port_to_default.py:184 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test runs `scripts/heal_port_to_default.sh` from a location in `/tmp`, and `/tmp` is mounted with `noexec` in the CI environment.\n  WHY: Execution from `/tmp` is blocked, so the test fails with \"Permission denied\". anthropic_claude-sonnet-5_5 checked this and rejected it: noexec is the reviewer sandbox's mount option, and the fake `gh` lives under pytest's `tmp_path`.\n- tests/test_files_touched_scope_guard.py:Suite failure | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new script `scripts/heal_port_to_default.sh` is not registered in the files-touched scope guard.\n  WHY: The pre-push test gate fails and blocks the PR merge, because the guard does not whitelist the script's usage. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this as not mapping to any PR hunk.\n- tests/test_gh_api_write_guard.py:Suite failure | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new script causes the gh API write guard tests to fail.\n  WHY: The gh API write guard hook in `tests/test_gh_api_write_guard.py` flags the `gh api` calls in `scripts/heal_port_to_default.sh` as non-routine writes that lack authorization. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this: the failures concern settings and template parity, not this script.\n- tests/test_changelog_fragment_contract.py:Suite failure | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The changelog fragment `changelog.d/heal-port-to-default.md` makes the assembly and `.gitattributes` checks fail.\n  WHY: The pre-push test gate fails because the changelog directory initialization or the `.gitattributes` merge-union setup does not match the new fragment. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this as unrelated to any file the PR changes.\n- scripts/heal_port_to_default.sh:247 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Passing file content to `gh api -X POST` as `body=@${heal_port_work}/body` relies on a partly dynamic path.\n  WHY: The path is currently in a temporary directory made by `mktemp -d`, but if `heal_port_work` were manipulated or the directory permissions were lax, it could become a path injection vector.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/heal_port_to_default.sh:247 | confidence=2\n  PROBLEM: Passing file content to `gh api -X POST` as `body=@${heal_port_work}/body` relies on a partly dynamic path.\n  WHY: The path is currently in a temporary directory made by `mktemp -d`, but if `heal_port_work` were manipulated or the directory permissions were lax, it could become a path injection vector.\n- tests/test_heal_port_to_default.py:184 | confidence=4\n  PROBLEM: The test runs `scripts/heal_port_to_default.sh` from a location in `/tmp`, and `/tmp` is mounted with `noexec` in the CI environment.\n  WHY: The CI environment blocks execution from `/tmp`, so the test fails with \"Permission denied\".\n- tests/test_files_touched_scope_guard.py:Suite failure | confidence=4\n  PROBLEM: The new script `scripts/heal_port_to_default.sh` is not registered in the files-touched scope guard.\n  WHY: The pre-push test gate fails and blocks the PR merge, because the guard does not whitelist the script's usage.\n- tests/test_gh_api_write_guard.py:Suite failure | confidence=4\n  PROBLEM: The new script causes the gh API write guard tests to fail.\n  WHY: The gh API write guard hook in `tests/test_gh_api_write_guard.py` flags the `gh api` calls in `scripts/heal_port_to_default.sh` as non-routine writes that lack authorization.\n- tests/test_changelog_fragment_contract.py:Suite failure | confidence=4\n  PROBLEM: The changelog fragment `changelog.d/heal-port-to-default.md` makes the assembly and `.gitattributes` checks fail.\n  WHY: The pre-push test gate fails because the changelog directory initialization or the `.gitattributes` merge-union setup does not match the new fragment.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d231bcd03c3746b60de68c8f5e21a5e40d40962a386c5d6dcc7487b68faaea70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8636,
+    "run_id": "41338077754",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41338077754",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101190427_dad48e9ccc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8636,
+    "run_id": "41338077754"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T19:04:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
