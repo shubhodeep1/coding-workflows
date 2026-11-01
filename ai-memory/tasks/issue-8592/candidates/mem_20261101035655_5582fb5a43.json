@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `HEAD` is `b292fb0d16f6b14f45a8ff32874601fc11f56ad0` on branch `ai/issue-8583`. The `Integration branch mismatch:` line reads `false`.\n\n## Files likely to change\n- `tests/test_workflow_failure_heal_verify.py`\n\n## Functions or modules to implement\n- `tests/test_workflow_failure_heal_verify.py::_execute` (lines 171-194) is the only change. Inside the existing `env.update({...})` defaults block (lines 183-189), add one entry: `\"GITHUB_RUN_NUMBER\": None`.\n  - The existing loop on lines 191-192 already removes every key whose value is `None` after `env.update(env_overrides)`. So the runner's inherited `GITHUB_RUN_NUMBER` never reaches `scripts/workflow_failure_heal_verify.sh`. The script then uses its documented fallback: line 622 sets `RUN_NUMBER=\"$(_bounded_int \"${GITHUB_RUN_NUMBER:-}\" 0 0 1000000000)\"`, which gives 0, so `START=0`.\n  - Overrides are applied after the defaults, so callers that pass `GITHUB_RUN_NUMBER` explicitly still set it. `test_start_rotates_with_run_number` (line 412, `GITHUB_RUN_NUMBER=\"1\"`) keeps working.\n  - Next to the new key, add a one-line comment saying the runner's run number would rotate the heal start position (`START`) and make default-order tests flaky. Cite this issue's failure (`test_per_tick_cap_is_honoured` saw issues 11 and 12).\n- Nothing else changes. Leave the assertions in `test_per_tick_cap_is_honoured` (lines 318-326) and `scripts/workflow_failure_heal_verify.sh` as they are. The rotation is intended behaviour and has its own test.\n\n## Data structures affected\n- Only the per-test subprocess environment dict that `_execute` builds. No runtime data, schemas or state files change.\n\n## API or interface changes\n- None. `_execute`'s signature and its `**env_overrides` behaviour stay the same.\n\nScope-mode: Hold Scope\nReuse-audit: extends _execute\nScope-mode justification: The triage issue names one cause file and one fix. The fix reuses the `None`-means-drop loop already in `_execute` (Layer 1 reuse of the existing helper), so no new mechanism is needed. Pinning `\"0\"` or deleting the key are equivalent. Dropping the key is chosen because it gives the same environment as a local run, where the test already passes. Nothing broader is warranted. The rotation logic is covered by `test_start_rotates_with_run_number`, and changing the script would cut against \u00a76 priorities (Correctness & safety > Backward compatibility) by altering production behaviour to fix a test-isolation bug.\n\n## Decisions\n### D1 \u2014 Drop the inherited `GITHUB_RUN_NUMBER` in the `_execute` defaults\n- Chosen: add `\"GITHUB_RUN_NUMBER\": None` to the `env.update` defaults so the existing `None`-pop loop removes it unless a caller overrides it.\n- Alternatives considered: set `\"GITHUB_RUN_NUMBER\": \"0\"`. Add `\"GITHUB_RUN_NUMBER\"` to the `startswith` exclusion tuple on line 182. Change the assertions in `test_per_tick_cap_is_honoured`. Change the rotation in `scripts/workflow_failure_heal_verify.sh`.\n- Why: dropping the key matches the local run, where `START=0` and the test passes. It is a one-line change that uses an existing mechanism and keeps explicit overrides working. Putting a whole key into a prefix-match tuple is less clear. Changing the assertions or the script would hide the isolation bug or change intended production behaviour, and the issue rules both out.\n\n## Security considerations\n- Trust boundaries touched: none. This is a test-only change to the environment a local subprocess receives. It adds no endpoint, credential or external input.\n- Authorization: no new surface.\n- Abuse cases: none. Removing an environment variable from a test subprocess cannot leak or widen access. The test already gets fake `TG_*` values and a fake `gh`/`curl` on `PATH`, and that stays the same.\n- No money-handling surface is involved.\n\n## Potential risks or edge cases\n- Other tests in the file that rely on the default order were flaky in the same way. They become deterministic too, which is the goal.\n- The script reads only `GITHUB_RUN_NUMBER` and `GITHUB_REPOSITORY` from the `GITHUB_*` namespace (checked by grep). `GITHUB_REPOSITORY` is already pinned, so no other inherited runner variable affects the rotation.\n- Conflict note: `isolated-base` (the default-branch snapshot) has neither `scripts/workflow_failure_heal_verify.sh` nor this test file, so both exist only on this planning ref. That doesn't change the fix, but the fix has to land on this branch line.\n- I could not reproduce the failure locally because pytest isn't installed here. The diagnosis comes from the CI log and from reading lines 620-627 of the script.\n\n## Testing considerations\n- Run `tests/test_workflow_failure_heal_verify.py` with no `GITHUB_RUN_NUMBER` set, then again with `GITHUB_RUN_NUMBER=3` and `GITHUB_RUN_NUMBER=7` exported in the outer shell. Before the fix, `=3` reproduces the CI failure; after it, every variant must pass. `test_start_rotates_with_run_number` must still pass, which proves explicit overrides still work.\n- The CI job `tests-heal-plan-and-validation` already runs this file, so no CI wiring changes are needed.\n- No new test is needed. Running under a non-zero outer `GITHUB_RUN_NUMBER` exercises the change through the existing test.\n\n## Pre-execution self-check\n- Files: one test file, matching the issue's `AFFECTED_FILES` block.\n- No production script or workflow change, no new scripts, no scheduler wiring (\u00a720 not applicable), no agents.md edits.\n- The PR body should use `Fixes #8592`. This is a check-triage issue, not an `ai:orchestrator-tracking` issue, so the keyword is allowed under \u00a721. The implementer should still run the lint before opening the PR.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "bac45854b016c9decfb1ca6e08d1f40d0cbf5218026188e66322c6c201020d42",
+  "lineage": {
+    "issue_number": 8592,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41270836622",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41270836622",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8592"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261101035655_5582fb5a43",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8592,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41270836622"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8592",
+  "timestamps": {
+    "created_at": "2026-11-01T03:56:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
