@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly three lines: `status: ok`, `run_id: 40876853022`, and `updated-by: ai-pipeline`.\n  expected_change_site: `tests/e2e_smoke_canary.txt`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer reported no missing implementation. The PR diff modifies `tests/e2e_smoke_canary.txt`, and the resulting content matches the required three lines. The reviewer stated \"The task is fully complete.\" The reviewer labelled it SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly three lines: `status: ok`, `run_id: 40876853022`, and `updated-by: ai-pipeline`.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The PR diff modifies `tests/e2e_smoke_canary.txt`. The original file content (pre-PR) was `status: ok\\ndecompose-run: 40427433026`. The PR diff shows `-decompose-run: 40427433026` and adds `+run_id: 40876853022` and `+updated-by: ai-pipeline`. The resulting file content matches the exact content required by the issue. The task is fully complete.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9ed606982589ee90f6f09e8753396f565eab40e378407c99f61b3e2759ca3105",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41333092972",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41333092972",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101175611_985f6bdb47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41333092972"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T17:56:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
