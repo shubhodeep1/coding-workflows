@@ -12166,6 +12166,31 @@ def test_code_ref_requests_skips_cached_and_caps_at_three() -> None:
 	assert heal.code_ref_requests(log_texts=[text], repo=SELF_REPO, exclude_run_ids=[], cached_ids=[], limit=10) == [4, 5, 6]
 
 
+def test_cmd_code_ref_rejects_cached_run_with_mismatched_id(tmp_path: Path, capsys) -> None:
+	"""A linked_runs/run-<id>.json whose id differs (left by a run_malformed skip) never routes."""
+	linked = tmp_path / "linked_runs"
+	linked.mkdir()
+	log = tmp_path / "job.log"
+	log.write_text(f"see https://github.com/{SELF_REPO}/actions/runs/701\n", encoding="utf-8")
+	scope = tmp_path / "scope.json"
+	scope.write_text(json.dumps({"self_workflows": CODE_REF_SCOPE}), encoding="utf-8")
+
+	def run_cli() -> dict:
+		args = heal.build_parser().parse_args([
+			"code-ref", "--repo", SELF_REPO, "--failed-head-branch", "stable", "--current-target", "stable",
+			"--scope-json", str(scope), "--log-files", str(log), "--linked-dir", str(linked),
+		])
+		assert args.func(args) == 0
+		return json.loads(capsys.readouterr().out)
+
+	(linked / "run-701.json").write_text(json.dumps(_code_ref_child(id=999)), encoding="utf-8")
+	mismatched = run_cli()
+	assert (mismatched["outcome"], mismatched["reason"], mismatched["retarget"]) == ("partial", "lookup_failed", False)
+	(linked / "run-701.json").write_text(json.dumps(_code_ref_child(id=701)), encoding="utf-8")
+	matched = run_cli()
+	assert (matched["reason"], matched["retarget"], matched["run_id"]) == ("retarget", True, 701)
+
+
 def test_render_code_ran_from_and_compose_issue_body_line() -> None:
 	assert heal.render_code_ran_from(f"main@{SHA_A}") == f"- **Code ran from:** main@{SHA_A}"
 	assert heal.render_code_ran_from("stable@unknown") == "- **Code ran from:** stable@unknown"

@@ -10145,6 +10145,10 @@ def _cmd_code_ref(args: argparse.Namespace) -> int:
 				lookup_failed = lookup_failed or malformed
 				if run_doc is None:
 					continue
+				if not isinstance(run_doc, dict) or run_doc.get("id") != int(run_id):
+					# Same identity check as the intake's GETs: a mismatched doc never routes.
+					lookup_failed = True
+					break
 				jobs_doc, _jobs_malformed = _code_ref_load(Path(directory) / f"run-{run_id}-jobs.json")
 				linked.append((run_doc, jobs_doc))
 				break
