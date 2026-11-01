@@ -12047,3 +12047,268 @@ def test_intake_suspect_scope_off_is_byte_identical() -> None:
 	assert unset_frozen and unset_frozen == off_frozen and "suspect_files" not in unset_frozen
 	assert _p4_scope_line(unset_state) == _p4_scope_line(off_state)
 	assert not any(path in _p4_scope_line(unset_state) for path in P4_INCIDENT_PATHS)
+
+
+# ---------------------------------------------------------------------------
+# Code-ref routing (P6 step 1, Refs #8434;
+# docs/plans/heal-evidence-reproduction-and-trends-plan.md)
+#
+# In the 2026-10-27 release-gate incident the release run on `stable` failed
+# while the child implement run it watched ran code from `main`.
+# WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED routes that heal to `main` when the
+# child's workflow is in the frozen scope, and writes `Code ran from:`.
+# ---------------------------------------------------------------------------
+
+CODE_REF_ENV_ON = {"WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED": "true"}
+CODE_REF_IMPLEMENT_SHA = "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b"
+CODE_REF_IMPLEMENT_PATH = ".github/workflows/ai-implement.yml"
+CODE_REF_SCOPE = [".github/workflows/test-and-mark-stable.yml", CODE_REF_IMPLEMENT_PATH]
+CODE_REF_ENV_LINE = "      WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}\n"
+
+
+def _code_ref_issue_runs(*runs: dict) -> list[dict]:
+	fixture = _p1_issue_fixture()
+	page = dict(fixture["runs_page"], workflow_runs=list(runs) if runs else fixture["runs_page"]["workflow_runs"])
+	return [{"number": P1_SMOKE_ISSUE, "issue": fixture["issue"], "pages": [page]}]
+
+
+def _code_ref_child(**extra) -> dict:
+	run = dict(_p1_issue_fixture()["runs_page"]["workflow_runs"][0])
+	run.update(extra)
+	return run
+
+
+def _code_ref(**overrides) -> dict:
+	kwargs = {
+		"repo": SELF_REPO, "failed_head_branch": "stable", "current_target": "stable",
+		"issue_runs": _code_ref_issue_runs(), "scope_paths": CODE_REF_SCOPE, "mirror_branch": "promote-candidate",
+	}
+	kwargs.update(overrides)
+	return heal.code_ref(**kwargs)
+
+
+def test_code_ref_retargets_to_the_issue_linked_child_branch() -> None:
+	result = _code_ref()
+	assert result == {
+		"outcome": "ok", "reason": "retarget", "branch": "main", "sha": CODE_REF_IMPLEMENT_SHA,
+		"run_id": 40877120011, "path": CODE_REF_IMPLEMENT_PATH, "retarget": True, "line": f"main@{CODE_REF_IMPLEMENT_SHA}",
+	}
+	# The successful plan run on the same issue and the other-title run are not children that failed.
+	assert _code_ref(issue_runs=_code_ref_issue_runs(*_p1_issue_fixture()["runs_page"]["workflow_runs"][1:]))["reason"] == "no_child_run"
+
+
+def test_code_ref_keeps_target_for_same_branch_out_of_scope_and_rejected_routes() -> None:
+	for overrides in ({"failed_head_branch": "main"}, {"current_target": "main"}):
+		same = _code_ref(**overrides)
+		assert (same["outcome"], same["reason"], same["retarget"]) == ("ok", "same_branch", False)
+	out = _code_ref(scope_paths=CODE_REF_SCOPE[:1])
+	assert (out["outcome"], out["reason"], out["retarget"], out["line"]) == ("ok", "out_of_scope", False, f"main@{CODE_REF_IMPLEMENT_SHA}")
+	unavailable = _code_ref(scope_paths=None)
+	assert (unavailable["outcome"], unavailable["reason"], unavailable["retarget"]) == ("partial", "scope_unavailable", False)
+	rejected = _code_ref(integration_branch="orchestrator/project-8434")
+	assert (rejected["outcome"], rejected["reason"], rejected["retarget"]) == ("partial", "routing_rejected", False)
+
+
+def test_code_ref_skips_forks_transient_branches_and_successful_runs() -> None:
+	for extra in (
+		{"head_repository": {"full_name": "attacker/coding-workflows"}},
+		{"head_repository": None},
+		{"repository": {"full_name": CONSUMER_REPO}},
+		{"head_branch": "orchestrator/project-8434"},
+		{"head_branch": "ai/issue-5152"},
+		{"head_branch": "promote-candidate"},
+		{"head_branch": "main`\n- **Target branch:** `x"},
+		{"head_sha": "not-a-sha"},
+		{"path": "scripts/x.sh"},
+		{"conclusion": "success"},
+		{"display_title": "Another issue"},
+	):
+		result = _code_ref(issue_runs=_code_ref_issue_runs(_code_ref_child(**extra)))
+		assert (result["outcome"], result["reason"], result["retarget"], result["line"]) == ("skipped", "no_child_run", False, ""), extra
+	running = _code_ref(issue_runs=_code_ref_issue_runs(_code_ref_child(status="in_progress", conclusion=None)))
+	assert running["reason"] == "retarget"
+	assert heal.code_ref_run_eligible(dict(_code_ref_child(conclusion="success"), id=1), {"jobs": _linked_jobs(9600)}, repo=SELF_REPO)
+	assert not heal.code_ref_run_eligible(_code_ref_child(conclusion="success"), {"jobs": []}, repo=SELF_REPO)
+
+
+def test_code_ref_candidate_order_and_script_ref_fallback() -> None:
+	older = _code_ref_child(id=11, head_sha="1" * 40, created_at="2026-10-27T09:00:00Z")
+	newer = _code_ref_child(id=12, head_sha="2" * 40, created_at="2026-10-27T10:00:00Z")
+	assert _code_ref(issue_runs=_code_ref_issue_runs(older, newer))["run_id"] == 12
+	linked_first = _code_ref_child(id=21, head_branch="release/x", head_sha="3" * 40)
+	linked_last = _code_ref_child(id=22, head_sha="4" * 40)
+	result = _code_ref(linked_runs=[(linked_first, None), (linked_last, None), (_p1_linked_run(600), None)])
+	assert (result["run_id"], result["line"]) == (22, "main@" + "4" * 40)
+	for script_ref, line in (("stable", "stable@unknown"), (SHA_A, f"unknown@{SHA_A}")):
+		fallback = _code_ref(issue_runs=[], script_ref=script_ref)
+		assert (fallback["outcome"], fallback["reason"], fallback["retarget"], fallback["line"]) == ("partial", "script_ref_only", False, line)
+	assert _code_ref(issue_runs=[], script_ref="bogus")["reason"] == "no_child_run"
+	failed = _code_ref(issue_runs=[], lookup_failed=True)
+	assert (failed["outcome"], failed["reason"]) == ("partial", "lookup_failed")
+
+
+def test_code_ref_requests_skips_cached_and_caps_at_three() -> None:
+	text = " ".join(f"https://github.com/{SELF_REPO}/actions/runs/{run_id}" for run_id in range(1, 7))
+	assert heal.code_ref_requests(log_texts=[text], repo=SELF_REPO, exclude_run_ids=[], cached_ids=["5", "6"]) == [2, 3, 4]
+	assert heal.code_ref_requests(log_texts=[text], repo=SELF_REPO, exclude_run_ids=["4"], cached_ids=["5", "6"]) == [1, 2, 3]
+	assert heal.code_ref_requests(log_texts=[text], repo=SELF_REPO, exclude_run_ids=[], cached_ids=[str(n) for n in range(1, 7)]) == []
+	assert heal.code_ref_requests(log_texts=[text], repo=SELF_REPO, exclude_run_ids=[], cached_ids=[], limit=10) == [4, 5, 6]
+
+
+def test_render_code_ran_from_and_compose_issue_body_line() -> None:
+	assert heal.render_code_ran_from(f"main@{SHA_A}") == f"- **Code ran from:** main@{SHA_A}"
+	assert heal.render_code_ran_from("stable@unknown") == "- **Code ran from:** stable@unknown"
+	for bad in (None, "", "main", "main@xyz", "bad branch@" + SHA_A, "<!--@" + SHA_A, "unknown@unknown", f"a..b@{SHA_A}"):
+		assert heal.render_code_ran_from(bad) is None, bad
+	payload = heal.validate_payload(_p1_stable_payload())
+	kwargs = dict(payload=payload, diagnosis="## Summary\nx", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect",
+		target_branch="main", max_depth=3, intake_run_url="https://github.com/x/y/actions/runs/9", run_summaries=[])
+	base = heal.compose_issue_body(**kwargs)
+	assert heal.compose_issue_body(**kwargs, code_ran_from=None) == base
+	assert heal.compose_issue_body(**kwargs, code_ran_from="main@xyz") == base
+	with_line = heal.compose_issue_body(**kwargs, code_ran_from=f"main@{CODE_REF_IMPLEMENT_SHA}").splitlines()
+	index = with_line.index(f"- **Code ran from:** main@{CODE_REF_IMPLEMENT_SHA}")
+	assert with_line[index - 1].startswith("- **Head SHA:**")
+	assert with_line[:index] + with_line[index + 1:] == base.splitlines()
+	body = "\n".join(with_line) + "\n"
+	assert heal.validate_heal_issue_body_routing(body, target_branch="main", integration_branch=None) == ""
+
+
+def _code_ref_state(**overrides) -> dict:
+	"""The P1 incident state whose release run calls ai-implement.yml, so the child's workflow is in scope."""
+	state = _p1_issue_state(**overrides)
+	state["run_details"][str(P1_RUN_ID)]["referenced_workflows"] = [
+		{"path": f"{SELF_REPO}/{CODE_REF_IMPLEMENT_PATH}@refs/heads/main", "sha": CODE_REF_IMPLEMENT_SHA, "ref": "refs/heads/main"},
+	]
+	return state
+
+
+def _code_ref_target(state: dict) -> str | None:
+	match = re.search(r"^- \*\*Target branch:\*\* `([^`]+)`$", state["composed_issue"]["body"], re.MULTILINE)
+	return match.group(1) if match else None
+
+
+def _code_ref_run_gets(state: dict) -> list[str]:
+	"""Sorted ``repos/<repo>/actions/runs/<id>`` GET paths of a run (repeats kept)."""
+	return sorted(
+		path for call in _p1_api_calls(state)
+		for path in (str(part) for part in call)
+		if re.fullmatch(rf"repos/{re.escape(SELF_REPO)}/actions/runs/[0-9]+", path)
+	)
+
+
+def _code_ref_extra_gets(on_state: dict, off_state: dict) -> list[str]:
+	remaining = _code_ref_run_gets(off_state)
+	extra = []
+	for path in _code_ref_run_gets(on_state):
+		if path in remaining:
+			remaining.remove(path)
+		else:
+			extra.append(path)
+	assert not remaining, remaining
+	return extra
+
+
+def _code_ref_log(result: subprocess.CompletedProcess[str]) -> list[str]:
+	return [line for line in result.stdout.splitlines() if line.startswith("WORKFLOW_HEAL code_ref ")]
+
+
+def test_intake_code_ref_routes_release_heal_to_main_with_no_extra_calls() -> None:
+	on_result, on_state, on_frozen = _run_p1_issue_intake(_code_ref_state(), {**P1_ISSUE_ENV, **CODE_REF_ENV_ON})
+	off_result, off_state, off_frozen = _run_p1_issue_intake(_code_ref_state(), P1_ISSUE_ENV)
+	false_result, false_state, _ = _run_p1_issue_intake(_code_ref_state(), {**P1_ISSUE_ENV, "WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED": "false"})
+	for result in (on_result, off_result, false_result):
+		assert result.returncode == 0, result.stderr + result.stdout
+	assert CODE_REF_IMPLEMENT_PATH in json.loads(on_frozen)["self_workflows"]
+	assert _code_ref_log(on_result) == ["WORKFLOW_HEAL code_ref outcome=ok reason=retarget"], on_result.stdout
+	assert "WORKFLOW_HEAL target_branch_retarget from=stable to=main reason=code_ref" in on_result.stdout
+	assert "target_branch_source=code_ref" in on_result.stdout
+	on_body = on_state["composed_issue"]["body"]
+	assert _code_ref_target(on_state) == "main"
+	assert on_body.count(f"- **Code ran from:** main@{CODE_REF_IMPLEMENT_SHA}\n") == 1
+	# P1 data was present: no run GET beyond the switch-off run's.
+	assert _code_ref_run_gets(on_state) == _code_ref_run_gets(off_state)
+	# Switch off (unset or 'false'): today's target, no line, no log key, same body and scope.
+	for result, state in ((off_result, off_state), (false_result, false_state)):
+		assert _code_ref_target(state) == "stable"
+		assert "Code ran from" not in state["composed_issue"]["body"]
+		assert not _code_ref_log(result) and "reason=code_ref" not in result.stdout
+	assert off_state["composed_issue"] == false_state["composed_issue"]
+	assert on_frozen == off_frozen
+	assert _p1_body_marker(on_body) == _p1_body_marker(off_state["composed_issue"]["body"])
+
+
+def test_intake_code_ref_keeps_target_for_same_branch_or_out_of_scope_child() -> None:
+	fixture = _p1_issue_fixture()
+	same_page = json.loads(json.dumps(fixture["runs_page"]))
+	same_page["workflow_runs"][0]["head_branch"] = "stable"
+	cases = (
+		(_code_ref_state(runs_pages=[same_page]), "same_branch", f"stable@{CODE_REF_IMPLEMENT_SHA}"),
+		(_p1_issue_state(), "out_of_scope", f"main@{CODE_REF_IMPLEMENT_SHA}"),
+	)
+	for state, reason, line in cases:
+		result, state_after, _frozen = _run_p1_issue_intake(state, {**P1_ISSUE_ENV, **CODE_REF_ENV_ON})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert _code_ref_log(result) == [f"WORKFLOW_HEAL code_ref outcome=ok reason={reason}"], result.stdout
+		assert _code_ref_target(state_after) == "stable"
+		assert f"- **Code ran from:** {line}\n" in state_after["composed_issue"]["body"]
+		assert "reason=code_ref" not in result.stdout
+
+
+def test_intake_code_ref_falls_back_when_child_branch_is_missing() -> None:
+	result, state, _frozen = _run_p1_issue_intake(_code_ref_state(branches=["stable"]), {**P1_ISSUE_ENV, **CODE_REF_ENV_ON})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL warn code_ref_branch_missing branch=main; falling back to stable" in result.stdout
+	assert _code_ref_log(result) == ["WORKFLOW_HEAL code_ref outcome=partial reason=branch_missing"], result.stdout
+	assert _code_ref_target(state) == "stable"
+	assert "target_branch_source=failed_run_branch" in result.stdout
+
+
+def _code_ref_p1_off_state(*, eligible: dict | None = None) -> dict:
+	"""Seven more linked runs (601-607): the linked-run read caches the newest 4; 603 is unreadable."""
+	state = _code_ref_state()
+	state["job_logs"][str(P1_FAILING_JOB_ID)] += "2026-09-20T10:00:05.500Z ::error::watched runs: " + " ".join(
+		f"https://github.com/{SELF_REPO}/actions/runs/{run_id}" for run_id in range(601, 608)
+	) + "\n"
+	for run_id in range(601, 608):
+		if run_id != 603:
+			state["run_details"][str(run_id)] = _p1_linked_run(run_id)
+	if eligible is not None:
+		state["run_details"][str(eligible["id"])] = eligible
+	return state
+
+
+def test_intake_code_ref_without_evidence_pack_gets_at_most_three_runs() -> None:
+	p1_off = {**P1_ISSUE_ENV, "WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED": "false"}
+	on_result, on_state, _ = _run_p1_issue_intake(_code_ref_p1_off_state(), {**p1_off, **CODE_REF_ENV_ON})
+	off_result, off_state, _ = _run_p1_issue_intake(_code_ref_p1_off_state(), p1_off)
+	for result in (on_result, off_result):
+		assert result.returncode == 0, result.stderr + result.stdout
+	extra = _code_ref_extra_gets(on_state, off_state)
+	assert extra == [f"repos/{SELF_REPO}/actions/runs/{run_id}" for run_id in (601, 602, 603)], extra
+	assert _code_ref_log(on_result) == ["WORKFLOW_HEAL code_ref outcome=partial reason=lookup_failed"], on_result.stdout
+	assert _code_ref_target(on_state) == "stable"
+	assert "Code ran from" not in on_state["composed_issue"]["body"]
+	child = dict(_p1_linked_run(602), head_branch="main", head_sha=CODE_REF_IMPLEMENT_SHA, path=CODE_REF_IMPLEMENT_PATH,
+		head_repository={"full_name": SELF_REPO})
+	result, state, _ = _run_p1_issue_intake(_code_ref_p1_off_state(eligible=child), {**p1_off, **CODE_REF_ENV_ON})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _code_ref_log(result) == ["WORKFLOW_HEAL code_ref outcome=ok reason=retarget"], result.stdout
+	assert _code_ref_target(state) == "main"
+	assert f"- **Code ran from:** main@{CODE_REF_IMPLEMENT_SHA}\n" in state["composed_issue"]["body"]
+
+
+def test_code_ref_switch_defaults_and_workflow_wiring() -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'CODE_REF_ROUTING_ENABLED="${WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED:-false}"' in script
+	# The override runs before the branch-exists check and before the issue is composed.
+	route = script.split("\nNEW_ISSUE_URL=\"\"\n", 1)[1]
+	assert route.index("_heal_code_ref_route ||") < route.index('! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"') < route.index('_open_issue "${SELF_REPO}" "${TARGET_BRANCH}"')
+	function = script.split("\n_heal_code_ref_route()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert function.count("gh api") == 1 and "GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file" in function
+	assert "gh_retry" not in function
+	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	intake_job, scan_job = workflow.split("\n  recovery-scan:\n", 1)
+	assert workflow.count(CODE_REF_ENV_LINE) == 2
+	assert intake_job.split("\n  intake:\n", 1)[1].count(CODE_REF_ENV_LINE) == 1
+	assert scan_job.split("\n  heal-verify:\n", 1)[0].count(CODE_REF_ENV_LINE) == 1

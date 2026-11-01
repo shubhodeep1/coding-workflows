@@ -1111,6 +1111,24 @@ def evidence_pack_job_window(jobs_docs: Iterable[Any]) -> dict[str, str]:
 	return {"created": f"{min(starts)}..{max(ends)}"}
 
 
+def _issue_linked_run_matches(run: Any, *, title: str, wanted: str) -> bool:
+	"""The run filter :func:`issue_linked_runs` and :func:`code_ref` share.
+
+	A run is an int-id dict of the repository ``wanted`` (casefolded full name)
+	whose ``display_title`` equals ``title`` exactly.
+	"""
+	if not isinstance(run, dict):
+		return False
+	run_id = run.get("id")
+	if not isinstance(run_id, int) or isinstance(run_id, bool):
+		return False
+	repository = run.get("repository")
+	full_name = repository.get("full_name") if isinstance(repository, dict) else None
+	if not isinstance(full_name, str) or full_name.casefold() != wanted:
+		return False
+	return run.get("display_title") == title
+
+
 def issue_linked_runs(*, number: Any, issue: Any, pages: Iterable[Any], repo: str) -> dict[str, Any]:
 	"""Render the runs started for one issue during the failed job's window.
 
@@ -1148,16 +1166,7 @@ def issue_linked_runs(*, number: Any, issue: Any, pages: Iterable[Any], repo: st
 			total = count
 		for run in page["workflow_runs"]:
 			read += 1
-			if not isinstance(run, dict):
-				continue
-			run_id = run.get("id")
-			if not isinstance(run_id, int) or isinstance(run_id, bool):
-				continue
-			repository = run.get("repository")
-			full_name = repository.get("full_name") if isinstance(repository, dict) else None
-			if not isinstance(full_name, str) or full_name.casefold() != wanted:
-				continue
-			if run.get("display_title") != title:
+			if not _issue_linked_run_matches(run, title=title, wanted=wanted):
 				continue
 			matched.append(run)
 	lines = [f"runs started for issue #{issue_number} (title: {single_line(title, 160)})"]
@@ -7337,6 +7346,234 @@ def heal_suspect_scope(
 		return finish("partial", "helper_failed")
 
 
+# ---------------------------------------------------------------------------
+# Code-ref routing (P6 step 1 of docs/plans/heal-evidence-reproduction-and-trends-plan.md, Refs #8434)
+#
+# In the 2026-10-27 release-gate incident the failing release run on `stable`
+# ran child implement code from `main`, yet the heal targeted `stable`. Behind
+# WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED (default false, in the intake) the
+# intake routes the heal to the branch the failing child run's code came from
+# when that branch differs from the failed run's branch and the child's
+# workflow is in the frozen heal scope. Pure: the intake makes every GET.
+# ---------------------------------------------------------------------------
+
+CODE_REF_MAX_LOOKUPS = 3
+_CODE_REF_FAILED_CONCLUSIONS = frozenset({"failure", "timed_out", "cancelled", "startup_failure"})
+_CODE_REF_UNKNOWN = "unknown"
+
+
+def code_ref_requests(*, log_texts: Iterable[str], repo: str, exclude_run_ids: Iterable[str], cached_ids: Iterable[Any], limit: int = CODE_REF_MAX_LOOKUPS) -> list[int]:
+	"""Log-linked run ids the intake should GET for code-ref routing (no API call).
+
+	Same links :func:`select_linked_runs` finds for ``_heal_fetch_linked_runs``
+	(same repository, newest mention last, reported runs excluded); ids whose
+	run JSON is already cached are dropped, then at most ``limit`` (newest) are
+	kept, never more than :data:`CODE_REF_MAX_LOOKUPS`.
+	"""
+	limit = min(int(limit), CODE_REF_MAX_LOOKUPS)
+	if limit <= 0:
+		return []
+	cached = {str(value).strip() for value in cached_ids}
+	refs = select_linked_runs(log_texts, repo, exclude_run_ids, 10_000)
+	wanted = [int(ref["run_id"]) for ref in refs if str(ref["run_id"]) not in cached and str(ref["run_id"]).isdigit()]
+	return wanted[-limit:]
+
+
+def _code_ref_branch_denied(branch: str, mirror_branch: str) -> bool:
+	"""Transient branches are never a heal target: integration, heal fix and mirror branches."""
+	return (
+		orchestrator_tracking_issue(branch) is not None
+		or heal_fix_branch_issue(branch) is not None
+		or bool(mirror_branch) and branch == mirror_branch
+	)
+
+
+def _code_ref_jobs_list(jobs: Any) -> list[Any]:
+	if isinstance(jobs, dict):
+		jobs = jobs.get("jobs")
+	return jobs if isinstance(jobs, list) else []
+
+
+def code_ref_run_eligible(run: Any, jobs: Any = None, *, repo: str, mirror_branch: str = "") -> bool:
+	"""A child run whose code ref may route the heal.
+
+	It must be ``repo``'s own run (and, when present, its head repository's, so
+	a fork pull request's ``head_branch`` never names a branch here), carry a
+	valid ``head_branch`` / ``head_sha`` and a ``.github/workflows/`` path, sit
+	on a branch that is not transient (:func:`_code_ref_branch_denied`), and
+	have failed or stalled: a failed conclusion, not completed, or a job or
+	step of ``jobs`` with a failed conclusion.
+	"""
+	if not isinstance(run, dict):
+		return False
+	wanted = str(repo or "").casefold()
+	repository = run.get("repository")
+	full_name = repository.get("full_name") if isinstance(repository, dict) else None
+	if not isinstance(full_name, str) or full_name.casefold() != wanted:
+		return False
+	# Present but null (a deleted fork) or foreign fails closed; absent is allowed.
+	if "head_repository" in run:
+		head_repository = run.get("head_repository")
+		head_name = head_repository.get("full_name") if isinstance(head_repository, dict) else None
+		if not isinstance(head_name, str) or head_name.casefold() != wanted:
+			return False
+	branch = run.get("head_branch")
+	sha = str(run.get("head_sha") or "").lower()
+	if not is_valid_branch(branch) or not is_valid_sha(sha):
+		return False
+	path = run.get("path")
+	if not isinstance(path, str) or not path.startswith(".github/workflows/") or not is_valid_repo_path(path):
+		return False
+	if _code_ref_branch_denied(branch, mirror_branch):
+		return False
+	if run.get("conclusion") in _CODE_REF_FAILED_CONCLUSIONS or run.get("status") != "completed":
+		return True
+	for job in _code_ref_jobs_list(jobs):
+		if not isinstance(job, dict):
+			continue
+		if job.get("conclusion") in _CODE_REF_FAILED_CONCLUSIONS:
+			return True
+		steps = job.get("steps")
+		for step in steps if isinstance(steps, list) else []:
+			if isinstance(step, dict) and step.get("conclusion") in _CODE_REF_FAILED_CONCLUSIONS:
+				return True
+	return False
+
+
+def _code_ref_routing_probe(branch: str, integration_branch: str | None) -> str:
+	"""Run :func:`validate_heal_issue_body_routing` on a minimal header for ``branch``."""
+	parts = [
+		f"<!-- {MARKER_PREFIX}fp={'0' * 64} -->",
+		f"<!-- {MARKER_PREFIX}gen=1 -->",
+		f"<!-- {MARKER_PREFIX}root={'0' * 64} -->",
+		f"<!-- {MARKER_PREFIX}source=probe#run -->",
+		f"<!-- {MARKER_PREFIX}classification=workflow-defect -->",
+		"",
+		f"- **Target branch:** `{branch}`",
+	]
+	tracking_issue = orchestrator_tracking_issue(integration_branch)
+	if tracking_issue:
+		parts.append(f"- **Tracking issue:** #{tracking_issue}")
+		parts.append(f"- **Integration branch:** `{integration_branch}`")
+	body = "\n".join(parts) + "\n"
+	return validate_heal_issue_body_routing(body, target_branch=branch, integration_branch=integration_branch or None)
+
+
+def code_ref(
+	*,
+	repo: str,
+	failed_head_branch: str,
+	current_target: str,
+	integration_branch: str = "",
+	linked_runs: Iterable[tuple[Any, Any]] = (),
+	issue_runs: Iterable[dict[str, Any]] = (),
+	script_ref: Any = "",
+	scope_paths: Iterable[Any] | None = None,
+	mirror_branch: str = "",
+	lookup_failed: bool = False,
+) -> dict[str, Any]:
+	"""Decide which branch the failing child run's code came from.
+
+	``linked_runs`` are ``(run, jobs)`` pairs of the runs the failed logs link
+	to, newest mention last; ``issue_runs`` are ``{"number", "issue", "pages"}``
+	entries from the evidence pack's issue reads (P1). All inputs are
+	untrusted API data. The last eligible linked run wins; without one, the
+	newest eligible issue-linked run (same title and repository filter as
+	:func:`issue_linked_runs`). ``script_ref`` only renders the line when no
+	child qualifies; it never retargets.
+
+	Returns ``{outcome, reason, branch, sha, run_id, path, retarget, line}``:
+	``ok`` with ``same_branch`` / ``out_of_scope`` / ``retarget``; ``partial``
+	with ``routing_rejected`` / ``scope_unavailable`` / ``lookup_failed`` /
+	``script_ref_only``; ``skipped`` with ``no_child_run``.
+	"""
+	result: dict[str, Any] = {
+		"outcome": "skipped", "reason": "no_child_run", "branch": None, "sha": None,
+		"run_id": None, "path": None, "retarget": False, "line": "",
+	}
+	candidate: dict[str, Any] | None = None
+	for run, jobs in linked_runs:
+		if code_ref_run_eligible(run, jobs, repo=repo, mirror_branch=mirror_branch):
+			candidate = run
+	if candidate is None:
+		wanted = str(repo or "").casefold()
+		best: tuple[datetime, int] | None = None
+		position = 0
+		for entry in issue_runs:
+			if not isinstance(entry, dict):
+				continue
+			issue = entry.get("issue")
+			try:
+				number = int(entry.get("number"))
+			except (TypeError, ValueError):
+				continue
+			issue_field = issue.get("number") if isinstance(issue, dict) else None
+			if (not isinstance(issue_field, int) or isinstance(issue_field, bool) or issue_field != number
+					or not isinstance(issue.get("title"), str)):
+				continue
+			for page in list(entry.get("pages") or [])[:EVIDENCE_PACK_RUNS_PAGE_LIMIT]:
+				if not isinstance(page, dict) or not isinstance(page.get("workflow_runs"), list):
+					continue
+				for run in page["workflow_runs"]:
+					position += 1
+					if not _issue_linked_run_matches(run, title=issue["title"], wanted=wanted):
+						continue
+					if not code_ref_run_eligible(run, None, repo=repo, mirror_branch=mirror_branch):
+						continue
+					created = _parse_actions_ts(run.get("created_at"))
+					if created is None:
+						continue
+					# Newest created_at wins; on a tie the earlier (API order, newest first) run.
+					key = (created, -position)
+					if best is None or key > best:
+						best = key
+						candidate = run
+	if candidate is None:
+		normalized_ref = _normalize_script_ref(script_ref)
+		if normalized_ref:
+			result["line"] = "stable@unknown" if normalized_ref == "stable" else f"{_CODE_REF_UNKNOWN}@{normalized_ref}"
+			result.update(outcome="partial", reason="script_ref_only")
+		if lookup_failed:
+			result.update(outcome="partial", reason="lookup_failed")
+		return result
+	branch = candidate["head_branch"]
+	sha = str(candidate["head_sha"]).lower()
+	run_id = candidate.get("id") if isinstance(candidate.get("id"), int) and not isinstance(candidate.get("id"), bool) else None
+	result.update(branch=branch, sha=sha, run_id=run_id, path=candidate["path"], line=f"{branch}@{sha}")
+	if branch in (failed_head_branch, current_target):
+		result.update(outcome="ok", reason="same_branch")
+		return result
+	if scope_paths is None:
+		result.update(outcome="partial", reason="scope_unavailable")
+		return result
+	if candidate["path"] not in {path for path in scope_paths if isinstance(path, str)}:
+		result.update(outcome="ok", reason="out_of_scope")
+		return result
+	if _code_ref_routing_probe(branch, integration_branch or None):
+		result.update(outcome="partial", reason="routing_rejected")
+		return result
+	result.update(outcome="ok", reason="retarget", retarget=True)
+	return result
+
+
+def render_code_ran_from(value: Any) -> str | None:
+	"""``- **Code ran from:** <branch>@<sha>`` for a valid value, else None.
+
+	The branch part passes :func:`is_valid_branch` or is ``unknown``; the sha
+	part passes :func:`is_valid_sha` or is ``unknown``. Not a routing key.
+	"""
+	if not isinstance(value, str) or "@" not in value:
+		return None
+	branch, _, sha = value.rpartition("@")
+	if branch != _CODE_REF_UNKNOWN and not is_valid_branch(branch):
+		return None
+	if sha != _CODE_REF_UNKNOWN and not is_valid_sha(sha):
+		return None
+	if branch == _CODE_REF_UNKNOWN and sha == _CODE_REF_UNKNOWN:
+		return None
+	return neutralize_untrusted_routing(f"- **Code ran from:** {branch}@{sha}")[0]
+
+
 def compose_issue_body(
 	*,
 	payload: dict[str, Any],
@@ -7355,6 +7592,7 @@ def compose_issue_body(
 	trend: str | None = None,
 	suspect_commits_section: str | None = None,
 	cause: str | None = None,
+	code_ran_from: str | None = None,
 ) -> str:
 	"""Compose the heal issue body (upstream or consumer-side).
 
@@ -7385,6 +7623,12 @@ def compose_issue_body(
 	``cause`` (optional, :func:`cause_key`, 64 lowercase hex) adds the sixth
 	header line ``cause=<hex>`` (cause grouping P5 / D3); ``None``, empty or
 	invalid adds nothing, so a switch-off body is byte-identical.
+
+	``code_ran_from`` (optional, ``<branch>@<sha>``, code-ref routing P6) adds
+	``- **Code ran from:** <branch>@<sha>`` after the ``Head SHA`` line (after
+	``Failed on branch`` without one); ``None`` or an invalid value
+	(:func:`render_code_ran_from`) adds nothing, so a switch-off body is
+	byte-identical.
 	"""
 	parts = [
 		f"<!-- {MARKER_PREFIX}fp={fp} -->",
@@ -7464,7 +7708,14 @@ def compose_issue_body(
 			"issue was filed here for the normal clarify -> plan -> implement -> review pipeline."
 		)
 	parts.append("")
-	parts.extend(_neutralize_heal_routing_text(line) for line in _context_lines(payload, run_summaries=run_summaries))
+	context_lines = _context_lines(payload, run_summaries=run_summaries)
+	code_ran_from_line = render_code_ran_from(code_ran_from) if code_ran_from else None
+	if code_ran_from_line:
+		anchor = next((index for index, line in enumerate(context_lines) if line.startswith("- **Head SHA:**")), None)
+		if anchor is None:
+			anchor = next((index for index, line in enumerate(context_lines) if line.startswith("- **Failed on branch:**")), len(context_lines) - 1)
+		context_lines.insert(anchor + 1, code_ran_from_line)
+	parts.extend(_neutralize_heal_routing_text(line) for line in context_lines)
 	parts.append(f"- **Classification:** `{classification}`")
 	parts.append(f"- **Heal intake run:** {intake_run_url}")
 	parts.append("")
@@ -9816,6 +10067,104 @@ def _cmd_evidence_pack_requests(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _code_ref_cached_ids(directory: str) -> list[str]:
+	if not directory or not Path(directory).is_dir():
+		return []
+	ids = []
+	for path in Path(directory).glob("run-*.json"):
+		match = re.fullmatch(r"run-([0-9]+)\.json", path.name)
+		if match:
+			ids.append(match.group(1))
+	return ids
+
+
+def _cmd_code_ref_requests(args: argparse.Namespace) -> int:
+	"""Print the JSON id list for the intake's code-ref GETs (P6). Always exits 0."""
+	try:
+		ids = code_ref_requests(
+			log_texts=_read_text_files(args.log_files or []),
+			repo=args.repo,
+			exclude_run_ids=str(args.exclude_run_ids or "").split(","),
+			cached_ids=_code_ref_cached_ids(args.linked_dir),
+		)
+	except Exception:  # noqa: BLE001 - fail open, routing keeps today's target
+		ids = []
+	sys.stdout.write(json.dumps(ids) + "\n")
+	return 0
+
+
+def _code_ref_load(path: Path) -> tuple[Any, bool]:
+	"""``(document, malformed)``: a missing file is ``(None, False)``."""
+	if not path.is_file():
+		return None, False
+	try:
+		return json.loads(path.read_text(encoding="utf-8")), False
+	except (OSError, ValueError):
+		return None, True
+
+
+def _cmd_code_ref(args: argparse.Namespace) -> int:
+	"""Print the :func:`code_ref` decision as JSON (P6). Always exits 0."""
+	try:
+		lookup_failed = bool(args.lookup_failed)
+		scope_paths: list[Any] | None = None
+		if args.scope_json:
+			scope_doc, _malformed = _code_ref_load(Path(args.scope_json))
+			if isinstance(scope_doc, dict) and isinstance(scope_doc.get("self_workflows"), list):
+				scope_paths = scope_doc["self_workflows"]
+		refs = select_linked_runs(_read_text_files(args.log_files or []), args.repo, str(args.exclude_run_ids or "").split(","), 10_000)
+		linked: list[tuple[Any, Any]] = []
+		for ref in refs:
+			run_id = str(ref["run_id"])
+			if not run_id.isdigit():
+				continue
+			for directory in (args.linked_dir, args.fetched_dir):
+				if not directory:
+					continue
+				run_doc, malformed = _code_ref_load(Path(directory) / f"run-{run_id}.json")
+				lookup_failed = lookup_failed or malformed
+				if run_doc is None:
+					continue
+				jobs_doc, _jobs_malformed = _code_ref_load(Path(directory) / f"run-{run_id}-jobs.json")
+				linked.append((run_doc, jobs_doc))
+				break
+		issue_runs: list[dict[str, Any]] = []
+		if args.evidence_api_dir and Path(args.evidence_api_dir).is_dir():
+			api_dir = Path(args.evidence_api_dir)
+			page_files = sorted(
+				(path for path in api_dir.glob("runs-page-*.json") if re.fullmatch(r"runs-page-[0-9]+\.json", path.name)),
+				key=lambda path: int(path.name[len("runs-page-"):-len(".json")]),
+			)
+			pages = []
+			for page_file in page_files:
+				page_doc, malformed = _code_ref_load(page_file)
+				lookup_failed = lookup_failed or malformed
+				pages.append(page_doc)
+			for issue_file in sorted(api_dir.glob("issue-*.json")):
+				match = re.fullmatch(r"issue-([1-9][0-9]{0,9})\.json", issue_file.name)
+				if not match:
+					continue
+				issue_doc, malformed = _code_ref_load(issue_file)
+				lookup_failed = lookup_failed or malformed
+				issue_runs.append({"number": int(match.group(1)), "issue": issue_doc, "pages": pages})
+		result = code_ref(
+			repo=args.repo,
+			failed_head_branch=args.failed_head_branch,
+			current_target=args.current_target,
+			integration_branch=args.integration_branch,
+			linked_runs=linked,
+			issue_runs=issue_runs,
+			script_ref=args.script_ref,
+			scope_paths=scope_paths,
+			mirror_branch=args.mirror_branch,
+			lookup_failed=lookup_failed,
+		)
+	except Exception:  # noqa: BLE001 - fail open, routing keeps today's target
+		result = {"outcome": "partial", "reason": "helper_failed", "branch": None, "sha": None, "run_id": None, "path": None, "retarget": False, "line": ""}
+	sys.stdout.write(json.dumps(result) + "\n")
+	return 0
+
+
 def _cmd_log_window(args: argparse.Namespace) -> int:
 	text = Path(args.log_file).read_text(encoding="utf-8", errors="replace")
 	sys.stdout.write(slice_log_to_window(text, args.start, args.end))
@@ -10139,6 +10488,7 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		trend=trend or None,
 		suspect_commits_section=suspect_commits_text or None,
 		cause=getattr(args, "cause", "") or None,
+		code_ran_from=getattr(args, "code_ran_from", "") or None,
 	)
 	reason = validate_heal_issue_body_routing(body, target_branch=args.target_branch or None, integration_branch=args.integration_branch or None)
 	if reason:
@@ -10702,6 +11052,29 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--jobs-json", nargs="*", default=[])
 	p.set_defaults(func=_cmd_evidence_pack_requests)
 
+	p = sub.add_parser("code-ref-requests", help="Log-linked run ids to GET for code-ref routing, at most 3, cached ids left out (always exits 0)")
+	p.add_argument("--log-files", nargs="*", default=[])
+	p.add_argument("--repo", required=True)
+	p.add_argument("--exclude-run-ids", default="")
+	p.add_argument("--linked-dir", default="")
+	p.set_defaults(func=_cmd_code_ref_requests)
+
+	p = sub.add_parser("code-ref", help="Branch the failing child run's code came from, and whether to retarget the heal (P6); pure, always exits 0")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--failed-head-branch", default="")
+	p.add_argument("--current-target", default="")
+	p.add_argument("--integration-branch", default="")
+	p.add_argument("--scope-json", default="", metavar="SCOPE_INPUTS_FROZEN")
+	p.add_argument("--log-files", nargs="*", default=[])
+	p.add_argument("--exclude-run-ids", default="")
+	p.add_argument("--linked-dir", default="")
+	p.add_argument("--fetched-dir", default="")
+	p.add_argument("--evidence-api-dir", default="")
+	p.add_argument("--script-ref", default="", help="payload script_ref; renders the line only when no child run qualifies")
+	p.add_argument("--mirror-branch", default="")
+	p.add_argument("--lookup-failed", action="store_true")
+	p.set_defaults(func=_cmd_code_ref)
+
 	p = sub.add_parser("log-window", help="Keep the log lines inside a step's time window")
 	p.add_argument("--log-file", required=True)
 	p.add_argument("--start", required=True)
@@ -10782,6 +11155,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--trend-file", default="")
 	p.add_argument("--suspect-commits-file", default="")
 	p.add_argument("--cause", default="", help="cause grouping key for the sixth header line (P5 / D3)")
+	p.add_argument("--code-ran-from", default="", help="<branch>@<sha> for the `Code ran from` line (code-ref routing P6); invalid values add nothing")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
 	p.add_argument("--title-out", required=True)
