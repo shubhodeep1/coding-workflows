@@ -271,6 +271,24 @@ def test_persist_orch_failure_grouping_env_defaults_are_declared() -> None:
 	assert "GROUP_WINDOW_HOURS_DEFAULT = 24" in helper and "GROUP_MAX_HOURS_DEFAULT = 12" in helper
 
 
+def test_persist_orch_wave_check_env_defaults_are_declared() -> None:
+	"""Refs #8427 P9: the between-waves check switch and wait default in the workflow env."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for line in (
+		"PERSIST_ORCH_WAVE_CHECK_ENABLED: ${{ vars.PERSIST_ORCH_WAVE_CHECK_ENABLED || 'false' }}",
+		"PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES: ${{ vars.PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES || '90' }}",
+	):
+		assert wf.count(line) == 1, line
+	env = yaml.safe_load(wf)["env"]
+	assert env["PERSIST_ORCH_WAVE_CHECK_ENABLED"] == "${{ vars.PERSIST_ORCH_WAVE_CHECK_ENABLED || 'false' }}"
+	assert env["PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES"] == "${{ vars.PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES || '90' }}"
+	helper = (REPO_ROOT / "scripts" / "persist_orchestrator.py").read_text(encoding="utf-8")
+	assert 'os.environ.get("PERSIST_ORCH_WAVE_CHECK_ENABLED", "false") == "true"' in helper
+	assert "WAVE_CHECK_MAX_WAIT_MINUTES_DEFAULT = 90" in helper
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert 'if [ "${PERSIST_ORCH_WAVE_CHECK_ENABLED:-false}" != "true" ]; then' in poller
+
+
 WIDENED_GATE = (
 	"(steps.find_tracking.outputs.has_work == 'true' || "
 	"steps.find_tracking.outputs.standalone_recovery == 'true')"
@@ -634,6 +652,7 @@ def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_persist_budget_env_defaults_are_declared()
 	test_persist_orch_failure_grouping_env_defaults_are_declared()
+	test_persist_orch_wave_check_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
