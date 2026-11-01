@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_engine.py:820-821 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `_format_reset_in` returns \"in 0.0h\" for a future reset 1-179 seconds away, because the `.1f` format rounds the small positive `hours_left` to 0.0.\n  WHY: The daily report, hourly alert and capacity-wait line show a misleading \"in 0.0h\" next to a timestamp that has not yet arrived, and no test covers the boundary. All four reviewers rated it NIT, which is mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CLAUDE.md requires exactly one `changelog.d/<issue-or-pr>-<slug>.md` fragment for a PR that changes observable behaviour. This PR changes the daily usage report, the hourly alert and the capacity-wait line, and adds the `next_usable_in` field.\n  expected_change_site: new file `changelog.d/8580-claude-pool-hours-until-reset.md`\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR changed files are README.md, scripts/claude_engine.py, scripts/claude_pool_health_alert.sh and three test files (tests/test_claude_engine.py, tests/test_claude_pool_daily_usage.py, tests/test_claude_pool_health_alert.py). No `changelog.d/` fragment is among them, and no linked issue or PR description defers it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/claude_engine.py:814-821 | severity=NIT | confidence=4\n  PROBLEM: The \"now\" branch of `_format_reset_in` applies only when `hours_left` is zero or negative. A reset 1 to 179 seconds away gives a small positive `hours_left`, and the `.1f` format rounds it to `0.0`.\n  WHY: The daily report, the hourly alert and the capacity-wait line print \"resets in 0.0h\" or \"(in 0.0h)\" next to a timestamp that has not yet arrived. The new tests cover only `now=0` (0.3h and 0.6h) and `now=5000` (past reset), not this boundary.\n- TASK_GAP:\n  Requirement: CLAUDE.md requires exactly one `changelog.d/<issue-or-pr>-<slug>.md` fragment for a PR that changes observable behaviour.\n  Expected change site: a new `changelog.d/<pr>-claude-pool-hours-until-reset.md`\n  Evidence of absence: The PR changed files are README.md, scripts/claude_engine.py, scripts/claude_pool_health_alert.sh and three test files. No `changelog.d/` file is among them. Existing fragments such as `changelog.d/8534-s21-resend-branch-fallback.md` show the convention is in use. No linked issue defers the fragment.\n  severity=NIT | confidence=3\n- HARDENING_SUGGESTIONS: scripts/claude_engine.py `_format_reset_in`: return \"now\" when `hours_left < 0.05` (or use `hours_left <= 0.05` as the cutoff), and add one assertion in `tests/test_claude_engine.py` with `now = reset - 60` (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_engine.py:_format_reset_in (no line range given) | severity=NIT | confidence=4\n  PROBLEM: `_format_reset_in` returns \"in 0.0h\" for reset times that are 1 to 179 seconds away.\n  WHY: The `(seconds - now) / 3600` calculation gives a positive value below 0.05 for durations under 3 minutes. The `.1f` f-string rounds it to 0.0, so \"in 0.0h\" appears instead of the time remaining or \"now\".\n- TASK_GAP:\n  Requirement: The PR changes observable behaviour (the daily usage report and hourly near-cap alert now show hours until reset), and CLAUDE.md (\u00a720.A) requires one changelog.d/<issue-or-pr>-<slug>.md fragment for such a PR.\n  Expected change site: A new file changelog.d/8580-claude-pool-hours-until-reset.md\n  Evidence of absence: The PR changed files are README.md, scripts/claude_engine.py, scripts/claude_pool_health_alert.sh and three test files. No changelog.d/ fragment is present in the PR.\n  severity=NIT | confidence=4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_engine.py:820-821 | severity=NIT | confidence=5\n  PROBLEM: A future reset less than three minutes away is displayed as `in 0.0h`.\n  WHY: `hours_left` is positive, but formatting to one decimal rounds it to `0.0`. The hourly alert and daily report then say the reset is in zero hours while also showing a future UTC reset time.\n- TASK_GAP:\n  Requirement: Add exactly one `changelog.d/` fragment for a PR that changes observable behavior (CLAUDE.md \u00a720.A-B).\n  Expected change site: `changelog.d/8580-claude-pool-hours-until-reset.md`\n  Evidence of absence: The PR changes the displayed usage report, hourly alert and capacity-wait message, but its changed-file list contains no changelog fragment.\n  severity=NIT | confidence=4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/claude_engine.py:820-821 | severity=NIT | confidence=4\n  PROBLEM: For a reset 1-179 seconds in the future, `hours_left` is positive but rounds to 0.0 under the `.1f` format, producing \"resets in 0.0h\" while the timestamp (when shown) has not yet arrived. The same text appears in the daily report lines (`_usage_percent`), the hourly alert (`_window_summary`) and the capacity-wait line (`next_usable_in`), e.g. \"earliest reset 2026-11-01 01:00 UTC (in 0.0h)\".\n  WHY: Nothing crashes, but the text is misleading at the sub-0.05h boundary and no test covers it (the tests use offsets of about 1000s and about 2h, which round cleanly). A minimal fix is to floor to at least 0.1h or render \"now\" below a small epsilon.\n- TASK_GAP:\n  Requirement: The PR changes observable behaviour (the daily usage report and hourly near-cap alert now show hours until reset for every account, and the capacity-wait line gains a new `next_usable_in` output field). CLAUDE.md \u00a720 (\"Never edit CHANGELOG.md directly. Write a fragment file instead... Add exactly one fragment when the PR changes observable behaviour\") requires one `changelog.d/<issue-or-pr>-<slug>.md` fragment.\n  Expected change site: A new fragment file `changelog.d/<pr-number>-claude-pool-hours-until-reset.md`\n  Evidence of absence: The PR changed files are README.md, scripts/claude_engine.py, scripts/claude_pool_health_alert.sh, tests/test_claude_engine.py, tests/test_claude_pool_daily_usage.py and tests/test_claude_pool_health_alert.py (pr_changed_files.txt). No `changelog.d/` file is among them, and neither the PR description nor a linked issue defers the entry.\n  severity=NIT | confidence=3\n- HARDENING_SUGGESTIONS: scripts/claude_engine.py `_format_reset_in`, lines 820-821: treat deltas under a small epsilon (e.g. < 0.05h) as \"now\", or clamp the rendered value to a minimum of 0.1h (1-2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9fc1c7ca29ca5a3ee9ad806e2a698b0f24d32cd61dbf6d7896ff126560db86a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8580,
+    "run_id": "41261254996",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41261254996",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101020410_30315afa41",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8580,
+    "run_id": "41261254996"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T02:04:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
