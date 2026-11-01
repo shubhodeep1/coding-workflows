@@ -97,17 +97,17 @@ def test_report_lists_every_account_in_one_message() -> None:
 		_probe("EPSILON", None, None, status=None, error="probe_failed"),
 		_probe("ZETA", None, 0.3),
 	]
-	report = claude_engine.pool_usage_report(probes, 0.95)
+	report = claude_engine.pool_usage_report(probes, 0.95, now=0)
 	assert report == {
 		"accounts": 6, "usable": 2, "gated": 2, "auth_failed": 1, "probe_failed": 1,
 		"text": "\n".join([
 			"Claude pool daily usage: 6 account(s), 2 usable, 2 at or above the 95% gate, 1 with a rejected token, 1 not probed.",
-			"ALPHA: 5h 12%, 7d 48%",
-			"BETA: 5h 97% (resets 1970-01-01 00:16 UTC), 7d 60%",
+			"ALPHA: 5h 12% (resets in 0.3h), 7d 48% (resets in 0.6h)",
+			"BETA: 5h 97% (resets in 0.3h, 1970-01-01 00:16 UTC), 7d 60% (resets in 0.6h)",
 			"DELTA: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_DELTA",
 			"EPSILON: probe failed (probe_failed)",
 			"GAMMA: 5h ?, 7d ?, usage limit reached (resets unknown)",
-			"ZETA: 5h ?, 7d 30%",
+			"ZETA: 5h ?, 7d 30% (resets in 0.6h)",
 		]),
 	}
 
@@ -167,7 +167,8 @@ def test_send_reaches_telegram_at_the_default_warning_threshold(env: dict) -> No
 	assert _outputs(env) == {"sent": "true"}
 	text = _sent_text(env)
 	assert text.startswith("📊 Claude pool daily usage: 2 account(s), 1 usable, 1 at or above the 90% gate.\n")
-	assert "ALPHA: 5h 95% (resets 1970-01-01 00:16 UTC), 7d 40%\nBETA: 5h 20%, 7d 10%\n" in text
+	# The 1970 reset times are in the past, so each note reads "resets now".
+	assert "ALPHA: 5h 95% (resets now, 1970-01-01 00:16 UTC), 7d 40% (resets now)\nBETA: 5h 20% (resets now), 7d 10% (resets now)\n" in text
 	assert "DEBUG" not in text and "WARNING" not in text
 	assert text.endswith("Probed by https://github.com/shubhodeep1/coding-workflows/actions/runs/123456")
 	assert "bot-secret-value" not in result.stdout + result.stderr
