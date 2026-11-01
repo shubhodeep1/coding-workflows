@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.79,
+  "details": "Changes to GitHub Actions workflows and their helper scripts can affect how untrusted input is handled. Before modifying those paths, inspect the existing workflow contract tests and preserve their security expectations; add coverage when a change affects those boundaries.",
+  "fingerprint": "6d2d530684daacd25566d931a83c2baea111361611db9b9d6dc9e061e0bcf8bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41259949352",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41259949352",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8530",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8543",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8544",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8559",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8561",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8537",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8560",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8563"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261101011545_6899c01b30",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes should preserve explicit contracts for untrusted inputs and be covered by contract tests.",
+  "timestamps": {
+    "created_at": "2026-11-01T01:15:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
