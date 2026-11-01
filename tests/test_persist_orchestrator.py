@@ -88,7 +88,10 @@ def test_two_merged_wave_one_items_appear_on_a_wave_two_body_with_zero_calls(tmp
 	[
 		("false", 2, TWO_MERGED, "switch_off"),
 		(None, 2, TWO_MERGED, "switch_off"),
-		("TRUE ", 1, TWO_MERGED, "first_wave"),
+		("TRUE ", 2, TWO_MERGED, "switch_off"),
+		("1", 2, TWO_MERGED, "switch_off"),
+		("yes", 2, TWO_MERGED, "switch_off"),
+		("on", 2, TWO_MERGED, "switch_off"),
 		("true", 1, TWO_MERGED, "first_wave"),
 		("true", 0, TWO_MERGED, "first_wave"),
 		("true", "x", TWO_MERGED, "wave_invalid"),
@@ -364,4 +367,4 @@ def test_plan_path_cli_prints_the_path(tmp_path, capsys):
 
 def test_switch_defaults_off_in_the_helper():
 	text = SCRIPT.read_text(encoding="utf-8")
-	assert 'os.environ.get("PERSIST_ORCH_CONTEXT_ENABLED", "false")' in text
+	assert 'os.environ.get("PERSIST_ORCH_CONTEXT_ENABLED", "false") == "true"' in text

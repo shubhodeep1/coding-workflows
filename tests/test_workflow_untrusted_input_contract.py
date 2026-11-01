@@ -927,6 +927,7 @@ def test_orch_context_build_step_is_gated_token_scoped_and_fail_open() -> None:
 	loop_gate = stage.index('          if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then\n            for f in persist_orchestrator.py ')
 	assert loop_gate < stage.index("            done\n          fi\n", loop_gate)
 	assert 'timeout 120 python3 -B scripts/persist_orchestrator.py open-projects' in run
+	assert 'timeout 30 python3 -B scripts/persist_orchestrator.py plan-path' in run
 	assert stage.index("persist_orchestrator.py evidence_pack.py") < stage.index('printf \'%s\\n\' "${_fetched_scripts[@]}" .gitignore')
 
 

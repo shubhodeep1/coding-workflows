@@ -29533,7 +29533,7 @@ def test_persist_budget_managed_hook_records_basis_on_replan():
 
 # --- orchestrator context (issue #8427, P7) -------------------------------------------
 
-_POS_GUARD = '_is_truthy "${PERSIST_ORCH_CONTEXT_ENABLED:-false}"'
+_POS_GUARD = '[ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]'
 
 
 def test_persist_orch_since_note_is_gated_placed_and_spends_no_api_call():
@@ -29626,7 +29626,7 @@ def _pos_run(tmp_path: Path, persist: str | None, *, details: str = "", stub_pyt
 
 
 def test_persist_orch_since_note_switch_off_keeps_issue_bodies_byte_identical():
-	for persist in (None, "false", "0", "no"):
+	for persist in (None, "false", "0", "no", "1", "yes", "on", "TRUE "):
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, calls = _pos_run(Path(tmp), persist, stub_python=True)
 			assert proc.returncode == 0, proc.stderr
@@ -29693,7 +29693,7 @@ def test_persist_merged_pr_is_recorded_once_even_without_a_status_change():
 		assert "CHANGED=true" in proc.stdout
 		assert "PERSIST orch_context outcome=recorded issue=12 pr=40" in proc.stderr
 		assert "issue=13" not in proc.stderr
-	for persist in (None, "false"):
+	for persist in (None, "false", "yes", "1"):
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, state = _persist_loop_run(Path(tmp), persist, merged_map, issues, wave_status)
 			assert proc.returncode == 0, proc.stderr
@@ -29722,7 +29722,7 @@ def test_persist_judge_added_marker_is_written_only_at_wave_judge_additions_and_
 	assert judge_block.count(marker) == 2
 	helper = _extract_bash_function(script, "persist_orch_judge_added_json() {")
 	assert _POS_GUARD in helper
-	for persist, expected in ((None, "false"), ("false", "false"), ("true", "true")):
+	for persist, expected in ((None, "false"), ("false", "false"), ("yes", "false"), ("1", "false"), ("true", "true")):
 		env = {k: v for k, v in os.environ.items() if not k.startswith("PERSIST_")}
 		if persist is not None:
 			env["PERSIST_ORCH_CONTEXT_ENABLED"] = persist
@@ -29730,6 +29730,41 @@ def test_persist_judge_added_marker_is_written_only_at_wave_judge_additions_and_
 		proc = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, timeout=60, check=False)
 		assert proc.returncode == 0, proc.stderr
 		assert proc.stdout.strip() == expected, persist
+
+
+def test_persist_orch_record_merged_pr_covers_backward_scan_merges():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(script, "persist_orch_record_merged_pr() {")
+	assert "gh " not in helper and "gh_retry" not in helper
+	# Both prior-wave backward-scan merge paths call it; the ready-to-merge path reuses PW_PR.
+	assert script.count('persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${_pom_bws_pr}"') == 1
+	assert script.count('persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${PW_PR}"') == 1
+	issues = [
+		{"id": "a", "github_issue": 12, "status": "merged"},
+		{"id": "b", "github_issue": 13, "status": "merged", "persist_merged_pr": 99},
+	]
+	for persist, issue, pr, expected in (
+		("true", 12, "40", 40),
+		("true", 13, "41", 99),
+		("true", 12, "", None),
+		("yes", 12, "40", None),
+		(None, 12, "40", None),
+	):
+		with tempfile.TemporaryDirectory() as tmp:
+			state = Path(tmp) / "state.json"
+			state.write_text(json.dumps({"waves": [{"issues": issues}]}), encoding="utf-8")
+			env = {k: v for k, v in os.environ.items() if not k.startswith("PERSIST_")}
+			if persist is not None:
+				env["PERSIST_ORCH_CONTEXT_ENABLED"] = persist
+			harness = f"set -euo pipefail\nSTATE_FILE='{state}'\n" + helper + f"persist_orch_record_merged_pr 0 {issue} '{pr}'\n"
+			proc = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, timeout=60, check=False)
+			assert proc.returncode == 0, proc.stderr
+			got = {e["github_issue"]: e for e in json.loads(state.read_text(encoding="utf-8"))["waves"][0]["issues"]}
+			assert got[issue].get("persist_merged_pr") == (expected if expected is not None else issues[issue - 12].get("persist_merged_pr")), (persist, issue, pr)
+			if expected is not None and issue == 12:
+				assert f"PERSIST orch_context outcome=recorded issue=12 pr={expected}" in proc.stderr
+			else:
+				assert "outcome=recorded" not in proc.stderr
 
 
 if __name__ == "__main__":

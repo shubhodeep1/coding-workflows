@@ -96,7 +96,9 @@ def log(outcome: str, reason: str, **extra: int) -> None:
 
 
 def enabled() -> bool:
-	return os.environ.get("PERSIST_ORCH_CONTEXT_ENABLED", "false").strip().lower() == "true"
+	# Exactly "true", the same rule as the orchestrate.yml gates and the poller,
+	# so a value like "1", "yes" or "TRUE " is off everywhere.
+	return os.environ.get("PERSIST_ORCH_CONTEXT_ENABLED", "false") == "true"
 
 
 def _positive_int(value: Any) -> int | None:

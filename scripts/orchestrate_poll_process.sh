@@ -19763,7 +19763,7 @@ persist_budget_govern_issue() {
 # true and the helper is staged. Always returns 0.
 persist_orch_since_note() {
   local pos_wave="${1:-}" pos_details="${2:-}" pos_base pos_details_file="" pos_out
-  _is_truthy "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" || return 0
+  [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] || return 0
   [ -f scripts/persist_orchestrator.py ] || return 0
   [[ "${pos_wave}" =~ ^[1-9][0-9]*$ ]] || return 0
   [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
@@ -19790,7 +19790,33 @@ persist_orch_since_note() {
 # record persist_judge_added only then, so the since-note can tell judge-added
 # items from decomposed ones; with the switch off the state is unchanged.
 persist_orch_judge_added_json() {
-  if _is_truthy "${PERSIST_ORCH_CONTEXT_ENABLED:-false}"; then echo true; else echo false; fi
+  if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then echo true; else echo false; fi
+}
+
+# persist_orch_record_merged_pr WAVE_IDX ISSUE PR (issue #8427, P7): record
+# persist_merged_pr on a prior-wave entry the backward scan found merged (the
+# current-wave persist loop only covers .waves[WAVE_IDX]). Acts only with
+# PERSIST_ORCH_CONTEXT_ENABLED exactly "true" (the same rule as the workflow
+# gates and scripts/persist_orchestrator.py), only when the field is still
+# absent, and makes no API call. Always returns 0.
+persist_orch_record_merged_pr() {
+  local porm_wi="${1:-}" porm_issue="${2:-}" porm_pr="${3:-}"
+  [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] || return 0
+  [[ "${porm_wi}" =~ ^[0-9]+$ ]] && [[ "${porm_issue}" =~ ^[0-9]+$ ]] && [[ "${porm_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  if jq -e --argjson wi "${porm_wi}" --arg inum "${porm_issue}" \
+    'any(.waves[$wi].issues[]; (.github_issue | tostring) == $inum and has("persist_merged_pr"))' "${STATE_FILE}" >/dev/null 2>&1; then
+    return 0
+  fi
+  if jq --argjson wi "${porm_wi}" --arg inum "${porm_issue}" --arg pr "${porm_pr}" \
+    '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).persist_merged_pr = ($pr|tonumber)' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    echo "PERSIST orch_context outcome=recorded issue=${porm_issue} pr=${porm_pr}" >&2
+  else
+    rm -f "${STATE_FILE}.tmp"
+    echo "PERSIST orch_context outcome=error reason=state_write_failed issue=${porm_issue}" >&2
+  fi
+  return 0
 }
 
 invoke_stall_judge() {
@@ -27592,14 +27618,21 @@ The poller will resume processing on the next cycle."
           # Capture intent fingerprints for the late-detected merged
           # sub-issue (going-forward only — see capture helper docs).
           _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+          _pom_bws_pr=""
           if [ -n "${_bws_integ}" ]; then
             _bws_pr="$(_subissue_closing_pr_number "${pw_inum}" || echo "")"
             if [[ "${_bws_pr}" =~ ^[0-9]+$ ]]; then
               capture_intent_fingerprints_for_merged_subissue "${pw_inum}" "${_bws_pr}" || true
             fi
+            _pom_bws_pr="${_bws_pr}"
             unset _bws_pr
+          elif [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then
+            # persist_merged_pr (issue #8427, P7): one lookup, only with the switch on.
+            _pom_bws_pr="$(_subissue_closing_pr_number "${pw_inum}" 2>/dev/null || echo "")"
           fi
           unset _bws_integ
+          persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${_pom_bws_pr}"
+          unset _pom_bws_pr
         elif echo "${PW_LABELS}" | jq -e 'index("ai:closed")' >/dev/null 2>&1; then
           echo "  [backward-scan] #${pw_inum} is now ai:closed. Updating state."
           jq --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
@@ -27645,6 +27678,8 @@ The poller will resume processing on the next cycle."
                 '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).status = "merged"' \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
               PRIOR_WAVE_REMEDIATED="true"
+              # persist_merged_pr (issue #8427, P7): PW_PR is the verified merged PR.
+              persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${PW_PR}"
               _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
               if [ -n "${_bws_integ}" ]; then
                 _bws_pr="$(_subissue_closing_pr_number "${pw_inum}" || echo "")"
@@ -28053,7 +28088,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
     done
     PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || echo "${PR_STATES_JSON}")"
-    if _is_truthy "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" && [ "${PR_MERGED}" = "true" ] && [[ "${LINKED_PR_NUM}" =~ ^[1-9][0-9]*$ ]]; then
+    if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [[ "${LINKED_PR_NUM}" =~ ^[1-9][0-9]*$ ]]; then
       PERSIST_ORCH_MERGED_PRS_JSON="$(printf '%s' "${PERSIST_ORCH_MERGED_PRS_JSON}" | jq -c --arg key "${inum}" --argjson pr "${LINKED_PR_NUM}" '. + {($key): $pr}' 2>/dev/null || printf '%s' "${PERSIST_ORCH_MERGED_PRS_JSON}")"
     fi
 
@@ -28283,7 +28318,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     fi
     # persist_merged_pr (issue #8427, P7): outside the transition branch, so a
     # merged entry still missing it is recorded on a later tick too.
-    if _is_truthy "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" && [ "${_ws_status}" = "merged" ] && [[ "${_ws_gh}" =~ ^[0-9]+$ ]]; then
+    if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] && [ "${_ws_status}" = "merged" ] && [[ "${_ws_gh}" =~ ^[0-9]+$ ]]; then
       _pom_pr="$(printf '%s' "${PERSIST_ORCH_MERGED_PRS_JSON:-}" | jq -r --arg key "${_ws_gh}" '.[$key] // empty' 2>/dev/null || true)"
       if [[ "${_pom_pr}" =~ ^[1-9][0-9]*$ ]] && ! jq -e --arg lid "${_ws_id}" --argjson wi "${WAVE_IDX}" \
         'any(.waves[$wi].issues[]; .id == $lid and has("persist_merged_pr"))' "${STATE_FILE}" >/dev/null 2>&1; then
