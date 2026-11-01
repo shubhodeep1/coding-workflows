@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8633,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8633\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8637\",\"pr_number\":8637,\"branch\":\"ai/issue-8633\",\"run_id\":\"41325112234\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41325112234\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"agents.d/8427-p9-persist-wave-check.md\",\"changelog.d/8427-p9-persist-wave-check.md\",\"scripts/orchestrate_poll_process.sh\",\"scripts/persist_orchestrator.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_orchestrate_poll_workflow_contract.py\",\"tests/test_persist_orchestrator.py\",\"tests/test_workflow_untrusted_input_contract.py\"]}",
+  "fingerprint": "e3a8ca15a3585847d0299a59a9014e97960ca5ea5974f6fdc364908e7aae1589",
+  "lineage": {
+    "issue_number": 8633,
+    "parent_ids": [],
+    "pr_number": 8637,
+    "run_id": "41325112234",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41325112234",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8637"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261101180840_3738a01fc6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8633,
+    "level": "run",
+    "pr_number": 8637,
+    "run_id": "41325112234"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8633: https://github.com/shubhodeep1/coding-workflows/pull/8637",
+  "timestamps": {
+    "created_at": "2026-11-01T18:08:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
