@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 import importlib.util
 import http.client
@@ -635,6 +636,158 @@ def test_clarify_loop_on_claude_never_calls_codex() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		result, calls = _run_clarify_loop(Path(tmp), "codex", 0)
 		assert calls == [f"{tmp}/p.txt {tmp}/o.txt {tmp}/codex_log.txt"]
+
+# Clarify attempt failures name their cause on a line heal evidence keeps
+# (#8602). btc_sweeper#248 failed clarify three times with "Claude clarify
+# failed after 3 attempts." and the heal intake could not classify it: the raw
+# job log writes the loop's warnings as "##[warning]...", which the intake's
+# filter_log drops, and the runner's "CLAUDE_POOL run ... outcome= reason="
+# line matches none of its patterns. The loop now prints
+# CLARIFY_ENGINE_ATTEMPT_FAILED, which the unchanged filter keeps.
+ATTEMPT_POOL_LINE = "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1"
+ATTEMPT_STUB_RUNNER = r"""#!/usr/bin/env bash
+# Stub of scripts/clarify_isolated_run.sh: $4 is "claude" on the Claude path.
+engine="${4:-codex}"
+case "${STUB_MODE}" in
+  crash)
+    echo "some cli noise" >&2
+    echo "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1" >&2
+    exit 1
+    ;;
+  fallback)
+    if [ "${engine}" = "claude" ]; then
+      echo "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1" >&2
+      exit 75
+    fi
+    exit 1
+    ;;
+  spoof)
+    echo 'CLAUDE_POOL run reason=$(id);::error::x outcome=::warning::y' >&2
+    echo "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1" >&2
+    exit 1
+    ;;
+  spoof_only)
+    echo 'CLAUDE_POOL run reason=$(id);::error::x outcome=::warning::y' >&2
+    exit 1
+    ;;
+  glued)
+    printf 'cli line without newline' >&2
+    echo "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1" >&2
+    exit 1
+    ;;
+  empty)
+    : > "$2"
+    exit 0
+    ;;
+esac
+echo "container failed to start" >&2
+exit 1
+"""
+
+
+def _clarify_attempt_script() -> str:
+	"""The attempt loop with its failure-line helpers, which sit just above max_attempts=3."""
+	lines = _read(CLARIFY_WF).splitlines()
+	starts = [i for i, line in enumerate(lines) if line.strip().startswith("# Issue #8602: each failed attempt")]
+	# Without the helpers (before #8602) the loop alone still runs, so the
+	# behavioural checks fail on the missing line rather than on extraction.
+	start = starts[0] if starts else next(i for i, line in enumerate(lines) if line.strip() == "max_attempts=3")
+	stop = next(i for i in range(start, len(lines)) if lines[i].strip() == "- name: Semantic cache store")
+	end = max(i for i in range(start, stop) if lines[i].strip() == "done")
+	return textwrap.dedent("\n".join(lines[start : end + 1])) + "\n"
+
+
+def _run_clarify_attempts(tmp: Path, mode: str) -> subprocess.CompletedProcess[str]:
+	(tmp / "scripts").mkdir()
+	stub = tmp / "scripts" / "clarify_isolated_run.sh"
+	stub.write_text(ATTEMPT_STUB_RUNNER, encoding="utf-8")
+	stub.chmod(0o755)
+	(tmp / "p.txt").write_text("prompt\n", encoding="utf-8")
+	env = {
+		"PATH": "/usr/bin:/bin",
+		"STUB_MODE": mode,
+		"CLARIFY_ENGINE": "claude",
+		"RUNTIME_DIR": str(tmp),
+		"CODEX_PROMPT_FILE": str(tmp / "p.txt"),
+		"CODEX_OUTPUT_FILE": str(tmp / "o.txt"),
+		"GITHUB_ENV": str(tmp / "github_env"),
+	}
+	script = "set -euo pipefail\nsleep() { :; }\n" + _clarify_attempt_script()
+	return subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True, timeout=120, check=False)
+
+
+def _attempt_failed_lines(stdout: str) -> list[str]:
+	return [line for line in stdout.splitlines() if line.startswith("CLARIFY_ENGINE_ATTEMPT_FAILED ")]
+
+
+def test_clarify_attempt_loop_keeps_its_messages_and_adds_the_failure_line() -> None:
+	loop = _clarify_attempt_script()
+	assert "CLARIFY_ENGINE_ATTEMPT_FAILED" in loop
+	for field in ("pool_role=", "pool_account=", "pool_outcome=", "pool_reason=", "pool_exit_code="):
+		assert field in loop
+	assert 'echo "::warning::${clarify_engine_name} exited with code $rc on attempt ${attempt}."' in loop
+	assert 'echo "::warning::${clarify_engine_name} returned empty output on attempt ${attempt}."' in loop
+	assert 'echo "::error::${clarify_engine_name} clarify failed after ${max_attempts} attempts."' in loop
+	# Only the give-up line is an error annotation; a retry that later
+	# succeeds must not leave errors behind.
+	assert loop.count("::error::") == 1
+
+
+def test_crashed_clarify_attempts_name_the_pool_reason_in_heal_evidence() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result = _run_clarify_attempts(Path(tmp), "crash")
+	assert result.returncode == 1, result.stdout + result.stderr
+	failed = _attempt_failed_lines(result.stdout)
+	assert len(failed) == 3, result.stdout
+	for attempt, line in enumerate(failed, start=1):
+		assert f"engine=Claude attempt={attempt} max_attempts=3 kind=nonzero_exit exit_code=1 " in line
+		assert "pool_role=CLARIFY pool_account=TEAM1 pool_outcome=crashed pool_reason=no_result pool_exit_code=1" in line
+	# The runner's stderr still reaches the job log unchanged.
+	assert result.stderr.count("some cli noise") == 3
+	assert result.stderr.count(ATTEMPT_POOL_LINE) == 3
+
+	# The raw job log as the runner writes it (run 41287557900): the echoed
+	# step script without the ANSI cyan prefix, the output with workflow
+	# commands rendered as ##[...], then a keyword-free tail that pushes the
+	# attempt lines out of filter_log's 400-line tail.
+	stamp = "2026-11-01T08:14:52.4911812Z "
+	raw = [stamp + "##[group]Run bash scripts/clarify_isolated_run.sh"]
+	raw += [stamp + line for line in _clarify_attempt_script().splitlines()[:60]]
+	raw += [stamp + "shell: /usr/bin/bash -e {0}", stamp + "##[endgroup]"]
+	raw += [stamp + re.sub(r"^::(warning|error)::", r"##[\1]", line) for line in result.stdout.splitlines()]
+	raw += [stamp + f"padding line {i}" for i in range(450)]
+	spec = importlib.util.spec_from_file_location("workflow_failure_heal_8602", REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	assert spec and spec.loader
+	heal = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(heal)
+	filtered = heal.filter_log("\n".join(raw) + "\n")
+	kept = [line for line in filtered.splitlines() if "CLARIFY_ENGINE_ATTEMPT_FAILED" in line and "pool_reason=no_result" in line]
+	assert len(kept) == 3, filtered
+
+
+def test_clarify_attempt_failure_line_edge_cases() -> None:
+	unknown = "pool_role=unknown pool_account=unknown pool_outcome=unknown pool_reason=unknown pool_exit_code=unknown"
+	cases = {
+		# Claude unavailable: the codex attempts carry no pool fields.
+		"fallback": lambda line: "engine=Codex" in line and unknown in line,
+		# The runner's own line is written last, so it wins over CLI noise.
+		"spoof": lambda line: "pool_outcome=crashed pool_reason=no_result" in line,
+		# A spoofed line cannot carry workflow commands or shell syntax.
+		"spoof_only": lambda line: not any(bad in line for bad in ("$", ";", "::", "(", ")")),
+		"empty": lambda line: "kind=empty_output exit_code=0" in line,
+		# The CLI's unterminated last stderr line shares a line with the pool line.
+		"glued": lambda line: "pool_outcome=crashed pool_reason=no_result pool_exit_code=1" in line,
+		"nopool": lambda line: "engine=Claude" in line and "exit_code=1" in line and unknown in line,
+	}
+	for mode, check in cases.items():
+		with tempfile.TemporaryDirectory() as tmp:
+			result = _run_clarify_attempts(Path(tmp), mode)
+		assert result.returncode == 1, (mode, result.stdout, result.stderr)
+		failed = _attempt_failed_lines(result.stdout)
+		assert len(failed) == 3, (mode, result.stdout)
+		for line in failed:
+			assert check(line), (mode, line)
+
 
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
