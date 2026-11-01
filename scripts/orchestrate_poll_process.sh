@@ -20022,14 +20022,14 @@ _persist_orch_wave_check_clear() {
   return 0
 }
 
-# _persist_orch_wave_check_stamp HEAD_SHA (issue #8427, P9). Starts the wait
-# clock: writes wave_check_wait_since (now) and wave_check_wait_head (the head
-# the clock belongs to; empty when no head was known) and posts the state.
-# Sets PERSIST_ORCH_WAVE_CHECK_STAMP to the new timestamp. Returns 1 when the
-# state could not be written.
+# _persist_orch_wave_check_stamp HEAD_SHA [SINCE] (issue #8427, P9). Writes
+# wave_check_wait_since (SINCE when given, else now, starting the wait clock)
+# and wave_check_wait_head (the head last seen at the boundary; empty when no
+# head was known) and posts the state. Sets PERSIST_ORCH_WAVE_CHECK_STAMP to
+# the written timestamp. Returns 1 when the state could not be written.
 _persist_orch_wave_check_stamp() {
   local pwcs_head="$1"
-  PERSIST_ORCH_WAVE_CHECK_STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  PERSIST_ORCH_WAVE_CHECK_STAMP="${2:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
   if jq --arg t "${PERSIST_ORCH_WAVE_CHECK_STAMP}" --arg h "${pwcs_head}" '.wave_check_wait_since = $t | .wave_check_wait_head = $h' \
       "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
     && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
@@ -20059,7 +20059,8 @@ _persist_orch_wave_check_stamp() {
 # reaches a boundary only records wave_check_wait_since / wave_check_wait_head
 # and holds: the head was read before this tick's sub-issue merges (or the
 # final PR was created this tick), so the next tick reads the current head.
-# A head that moved during a hold restarts the wait clock.
+# A head that moved during a hold keeps the wait clock (the wait is bounded per
+# boundary, not per head) and only the recorded head is updated.
 # green: the skip proceeds. pending / no_checks: records wave_check_wait_since
 # once (post_state_comment) and sets PERSIST_ORCH_WAVE_CHECK_HOLD=true (the
 # caller continues to the next project). red, or pending after
@@ -20075,6 +20076,7 @@ _persist_orch_wave_check_stamp() {
 persist_orch_wave_check() {
   local pwc_pr pwc_status pwc_sha pwc_base pwc_runs pwc_out pwc_log pwc_block pwc_details pwc_comments pwc_note
   local pwc_wait pwc_wait_head pwc_outcome pwc_job pwc_waited pwc_max pwc_failing pwc_valid pwc_truncated pwc_journal
+  local pwc_head_moved=false pwc_ci_name="none"
   [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
   if [ "${PERSIST_ORCH_WAVE_CHECK_ENABLED:-false}" != "true" ]; then
     _persist_orch_wave_check_clear switch_off
@@ -20129,12 +20131,15 @@ persist_orch_wave_check() {
       return 0
     fi
   elif [ "${pwc_wait_head}" != "${pwc_sha}" ]; then
-    # The head moved during the hold: the wait clock restarts for the new head.
-    if _persist_orch_wave_check_stamp "${pwc_sha}"; then
-      pwc_wait="${PERSIST_ORCH_WAVE_CHECK_STAMP}"
-    else
-      pwc_wait=""
-    fi
+    # The head moved during the hold. The wait clock is kept, so a head that
+    # keeps moving cannot hold the boundary past the maximum wait; the new head
+    # is recorded only by a branch that writes state anyway (one write a tick).
+    pwc_head_moved=true
+  fi
+  # The CI check name whose cancelled runs a newer same-name run from another
+  # workflow must not hide (the rule of PR_CHECKS_JQ_SUPERSEDE_DEFS).
+  if declare -F _pr_auto_merge_required_ci_check_name >/dev/null 2>&1; then
+    pwc_ci_name="$(_pr_auto_merge_required_ci_check_name 2>/dev/null || echo none)"
   fi
   pwc_base="${RUNTIME_DIR:-/tmp}"
   [ -d "${pwc_base}" ] || pwc_base="/tmp"
@@ -20153,6 +20158,7 @@ persist_orch_wave_check() {
   PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py wave-check --check-runs-file "${pwc_runs}" \
     --now "$(date -u +%s)" --wait-since="${pwc_wait}" \
     --required-names="${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:-*}}" \
+    --ci-check-name="${pwc_ci_name:-none}" \
     --out "${pwc_out}" < /dev/null || true
   rm -f "${pwc_runs}"
   pwc_outcome="$(jq -r 'if type == "object" and .schema == "wave_check.v1" then (.outcome // "" | tostring) else "" end' "${pwc_out}" 2>/dev/null || true)"
@@ -20185,6 +20191,8 @@ persist_orch_wave_check() {
     pending|no_checks)
       if [ "${pwc_valid}" != "true" ]; then
         _persist_orch_wave_check_stamp "${pwc_sha}" || true
+      elif [ "${pwc_head_moved}" = "true" ]; then
+        _persist_orch_wave_check_stamp "${pwc_sha}" "${pwc_wait}" || true
       fi
       if [ "${pwc_outcome}" = "pending" ]; then
         echo "PERSIST wave_check outcome=pending reason=checks_pending pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
@@ -20234,7 +20242,13 @@ persist_orch_wave_check() {
       else
         echo "PERSIST wave_check outcome=timeout reason=checks_pending pr=${pwc_pr} failing=${pwc_failing} waited=${pwc_waited} max=${pwc_max}" >&2
       fi
-      _persist_orch_wave_check_clear "${pwc_outcome}"
+      # The wait fields stay, so the next tick classifies this head again and
+      # a persistent red (or still-pending) result reaches the judge each tick
+      # instead of taking the boundary_first_seen hold. The stale clear removes
+      # them once the judge advances the wave or adds fix-ups.
+      if [ "${pwc_head_moved}" = "true" ]; then
+        _persist_orch_wave_check_stamp "${pwc_sha}" "${pwc_wait}" || true
+      fi
       pwc_journal="fail"
       ;;
     no_checks_timeout)

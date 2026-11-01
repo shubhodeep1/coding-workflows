@@ -30283,10 +30283,17 @@ def test_persist_orch_wave_check_red_routes_to_the_judge_with_a_block():
 		block = out["BLOCK"]
 		assert block.startswith("=== BEGIN UNTRUSTED WAVE CHECK ===\n") and block.count("=== END UNTRUSTED") == 1
 		assert "UNTRUSTED_DATA: failing check: tests (failure)" in block and "UNTRUSTED_DATA: boom" in block
-		assert "wave_check_wait_since" not in after
+		# The wait fields stay, so a persistent red reaches the judge again on
+		# the next tick instead of taking the boundary_first_seen hold.
+		assert after["wave_check_wait_since"] == "2026-11-01T00:00:00Z" and after["wave_check_wait_head"] == _PWC_SHA and posts == 0
 		assert "PERSIST wave_check outcome=red reason=checks_failed pr=77 failing=1" in proc.stderr
 		assert "boom" not in proc.stderr
 		assert any("--stage wave_check --outcome fail" in line for line in py)
+		(Path(tmp) / "calls.bin").unlink()
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), after, runs=runs)
+		assert proc.returncode == 0, proc.stderr
+		assert out["HOLD"] == "false" and out["STUCK"] == "true" and len(gh_calls) == 2
+		assert "reason=boundary_first_seen" not in proc.stderr
 
 
 def test_persist_orch_wave_check_pending_past_the_wait_routes_to_the_judge():
@@ -30298,7 +30305,7 @@ def test_persist_orch_wave_check_pending_past_the_wait_routes_to_the_judge():
 		assert out["HOLD"] == "false" and out["STUCK"] == "true" and len(gh_calls) == 1
 		assert "UNTRUSTED_DATA: still pending after 91 minutes: ci" in out["BLOCK"]
 		assert "PERSIST wave_check outcome=timeout reason=checks_pending pr=77" in proc.stderr
-		assert "wave_check_wait_since" not in after
+		assert after["wave_check_wait_since"] == old
 
 
 def test_persist_orch_wave_check_fails_open_without_a_final_pr_or_head():
@@ -30349,15 +30356,22 @@ def test_persist_orch_wave_check_holds_once_when_the_final_pr_head_is_unknown():
 		assert "PERSIST wave_check outcome=pending reason=head_sha_unavailable pr=77" in proc.stderr
 
 
-def test_persist_orch_wave_check_head_move_restarts_the_wait_clock():
+def test_persist_orch_wave_check_head_move_keeps_the_wait_clock():
+	"""A head that keeps moving cannot hold the boundary past the maximum wait."""
 	runs = _pwc_runs((1, "ci", "queued", None))
 	old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 120 * 60))
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since=old, wave_check_wait_head="b" * 40), runs=runs)
 		assert proc.returncode == 0, proc.stderr
-		assert out["HOLD"] == "true" and out["STUCK"] == "false" and len(gh_calls) == 1 and posts == 1
-		assert after["wave_check_wait_head"] == _PWC_SHA and after["wave_check_wait_since"] != old
-		assert "PERSIST wave_check outcome=pending reason=checks_pending pr=77 waited=0 max=90" in proc.stderr
+		assert out["HOLD"] == "false" and out["STUCK"] == "true" and len(gh_calls) == 1 and posts == 1
+		assert after["wave_check_wait_head"] == _PWC_SHA and after["wave_check_wait_since"] == old
+		assert "PERSIST wave_check outcome=timeout reason=checks_pending pr=77" in proc.stderr
+	recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 10 * 60))
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, out, gh_calls, py, posts, after = _pwc_run(Path(tmp), _pwc_state(wave_check_wait_since=recent, wave_check_wait_head="b" * 40), runs=runs)
+		assert proc.returncode == 0, proc.stderr
+		assert out["HOLD"] == "true" and posts == 1
+		assert after["wave_check_wait_head"] == _PWC_SHA and after["wave_check_wait_since"] == recent
 
 
 def test_persist_orch_wave_check_ignores_failing_checks_outside_the_required_names():

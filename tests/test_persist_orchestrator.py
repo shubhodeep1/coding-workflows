@@ -765,6 +765,48 @@ def test_wave_check_pending_advisory_run_still_holds(tmp_path, monkeypatch):
 	assert _wave_check(tmp_path, monkeypatch, {"check_runs": runs}, required="ci")["outcome"] == "pending"
 
 
+def test_wave_check_pending_holds_even_when_no_name_is_required(tmp_path, monkeypatch):
+	runs = [_run(1, "ci"), _run(2, "copilot", status="in_progress", conclusion=None)]
+	assert _wave_check(tmp_path, monkeypatch, {"check_runs": runs}, required="")["outcome"] == "pending"
+
+
+def test_wave_check_truncated_page_without_counted_runs_is_pending(tmp_path, monkeypatch):
+	payload = {"total_count": 150, "check_runs": [_run(1, "a", conclusion="skipped"), _run(2, "b", conclusion="neutral")]}
+	assert _wave_check(tmp_path, monkeypatch, payload)["outcome"] == "pending"
+	# Past the wait it reaches the judge (timeout), never the no_checks fail-open.
+	assert _wave_check(tmp_path, monkeypatch, payload, wait_since=_iso(WC_NOW - 91 * 60))["outcome"] == "timeout"
+
+
+def _ci_run(rid: int, name: str, actions_run: int, conclusion: str) -> dict:
+	run = _run(rid, name, conclusion=conclusion)
+	run["details_url"] = f"https://github.com/o/r/actions/runs/{actions_run}/job/{rid}"
+	return run
+
+
+@pytest.mark.parametrize(
+	("ci_name", "newer_actions_run", "outcome"),
+	[
+		# Another workflow's `lint` does not hide a cancelled CI `lint`.
+		("lint", 200, "red"),
+		# A re-run in the same Actions run does.
+		("lint", 100, "green"),
+		# Without a CI name the general rule applies.
+		(None, 200, "green"),
+		("none", 200, "green"),
+	],
+)
+def test_wave_check_ci_check_name_follows_the_pr_checks_lib_exception(tmp_path, monkeypatch, ci_name, newer_actions_run, outcome):
+	monkeypatch.setenv("PERSIST_ORCH_WAVE_CHECK_ENABLED", "true")
+	runs = tmp_path / "ci_runs.json"
+	runs.write_text(json.dumps({"check_runs": [_ci_run(1, "lint", 100, "cancelled"), _ci_run(5, "lint", newer_actions_run, "success")]}), encoding="utf-8")
+	out = tmp_path / "ci_out.json"
+	argv = ["wave-check", "--check-runs-file", str(runs), "--now", str(WC_NOW), "--out", str(out)]
+	if ci_name is not None:
+		argv.append(f"--ci-check-name={ci_name}")
+	assert po.main(argv) == 0
+	assert json.loads(out.read_text(encoding="utf-8"))["outcome"] == outcome
+
+
 def test_wave_check_log_job_only_for_actions_and_summary_otherwise(tmp_path, monkeypatch):
 	runs = [_run(7, "ext", conclusion="failure", slug="third-party", summary="ext summary"), _run(9, "act", conclusion="failure")]
 	out = _wave_check(tmp_path, monkeypatch, {"check_runs": runs})
