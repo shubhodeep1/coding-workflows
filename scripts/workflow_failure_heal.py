@@ -4167,7 +4167,7 @@ HEAL_SCOPE_SUBJECT_RESERVE = 8
 HEAL_SCOPE_LINKED_PATHS_MAX = 20 - HEAL_SCOPE_SUBJECT_RESERVE
 
 
-def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = ()) -> str:
+def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = (), suspect_files: Iterable[str] = ()) -> str:
 	paths = []
 	dropped = 0
 	# Test files are already covered by the trailing ``tests/**`` glob, so only
@@ -4178,7 +4178,12 @@ def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable
 	# ``changed_files`` list: a PR or base diff touching 20+ files would
 	# otherwise fill every slot first and confine the heal to tests/** again.
 	# The crash file and workflow paths keep priority; remaining subjects follow.
-	ordered = [crash_file, *workflow_paths, *subjects[:HEAL_SCOPE_SUBJECT_RESERVE], *changed_files, *subjects[HEAL_SCOPE_SUBJECT_RESERVE:]]
+	# Suspect-commit files (P4, Refs #8434; heal_suspect_scope_paths) sit after
+	# the subject reserve and before changed_files, so they can never take the
+	# reserve's slots. They are never step globs (only ``subjects`` may be), and
+	# an empty list leaves the order, and so the marker, byte-identical.
+	suspects = [path for path in suspect_files if isinstance(path, str)]
+	ordered = [crash_file, *workflow_paths, *subjects[:HEAL_SCOPE_SUBJECT_RESERVE], *suspects, *changed_files, *subjects[HEAL_SCOPE_SUBJECT_RESERVE:]]
 	for path in ordered:
 		if not isinstance(path, str) or path in paths:
 			continue
@@ -6794,6 +6799,9 @@ SUSPECT_COMMITS_MAX = 15
 SUSPECT_FILES_MAX = 20
 SUSPECT_SLOW_DAY_PER_PAGE = 50
 SUSPECT_PIPELINE_ROOTS = ("scripts/", ".github/workflows/", "workflow-templates/", "prompts/")
+# Suspect-commit scope (P4, Refs #8434): at most this many compare files join
+# the frozen heal scope, ranked by `changes` (heal_suspect_scope_paths).
+HEAL_SUSPECT_SCOPE_MAX = 8
 # The compare API returns at most 300 files; anything longer is hostile data.
 SUSPECT_COMPARE_FILES_MAX = 300
 SUSPECT_BANNER = (
@@ -7000,6 +7008,7 @@ def suspect_commits(
 	last_green: dict[str, Any] | None = None,
 	run_gh: Any = None,
 	timeout: int = 30,
+	compare_cache: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
 	"""Suspect commits for a stall / timeout report; returns ``(summary, section, files)``.
 
@@ -7028,6 +7037,11 @@ def suspect_commits(
 		``<failed>...<branch>`` (commits after the failure, not before it) and
 		the divergence compare is ``<target>...<default>``; neither covers the
 		last-green range, and no existing read lists one day's commits.
+		The compare call is skipped when the suspect-scope handoff matches:
+		``compare_cache`` is the ``{"green_sha", "failing_sha", "compare"}``
+		part of the :func:`heal_suspect_scope` handoff (P4), used only when both
+		SHAs equal this report's resolved green and failing SHAs; the cached
+		document goes through the same parse and ``behind`` checks.
 	- Fails open: never raises. No baseline gives ``partial/no_last_green``
 		with no compare call; a failed or unparsable compare gives
 		``partial/compare_failed|malformed`` and no section; a failed commits
@@ -7073,16 +7087,18 @@ def suspect_commits(
 	green_sha = green_sha.lower() if isinstance(green_sha, str) else ""
 	if not isinstance(green, dict) or green.get("reason") != "ok" or not _SUSPECT_SHA_RE.fullmatch(green_sha):
 		return finish("partial", "no_last_green")
-	try:
-		completed = counted(["gh", "api", "--method", "GET", f"repos/{repo}/compare/{green_sha}...{failing}"], timeout)
-	except Exception:  # noqa: BLE001 - fail open, never block the intake
-		return finish("partial", "compare_failed")
-	if getattr(completed, "returncode", 1) != 0:
-		return finish("partial", "compare_failed")
-	try:
-		compare_doc = json.loads(getattr(completed, "stdout", "") or "")
-	except (TypeError, ValueError):
-		return finish("partial", "malformed")
+	compare_doc: Any = _suspect_cached_compare(compare_cache, green_sha=green_sha, failing_sha=failing)
+	if compare_doc is None:
+		try:
+			completed = counted(["gh", "api", "--method", "GET", f"repos/{repo}/compare/{green_sha}...{failing}"], timeout)
+		except Exception:  # noqa: BLE001 - fail open, never block the intake
+			return finish("partial", "compare_failed")
+		if getattr(completed, "returncode", 1) != 0:
+			return finish("partial", "compare_failed")
+		try:
+			compare_doc = json.loads(getattr(completed, "stdout", "") or "")
+		except (TypeError, ValueError):
+			return finish("partial", "malformed")
 	parsed = parse_suspect_compare(compare_doc)
 	if parsed["reason"] != "ok":
 		return finish("partial", "malformed")
@@ -7120,6 +7136,205 @@ def suspect_commits(
 	summary["pipeline_files"] = len(parsed["pipeline_files"])
 	summary["slow_day_commits"] = len(slow_rows or [])
 	return finish("ok" if reason == "ok" else "partial", reason, section, parsed["files"])
+
+
+def _suspect_cached_compare(compare_cache: Any, *, green_sha: str, failing_sha: str) -> dict[str, Any] | None:
+	"""The cached compare document when ``compare_cache`` is keyed to exactly this range, else None."""
+	if not isinstance(compare_cache, dict) or not isinstance(compare_cache.get("compare"), dict):
+		return None
+	cached_green = compare_cache.get("green_sha")
+	cached_failing = compare_cache.get("failing_sha")
+	if not isinstance(cached_green, str) or not isinstance(cached_failing, str):
+		return None
+	if cached_green.lower() != green_sha or cached_failing.lower() != failing_sha:
+		return None
+	return compare_cache["compare"]
+
+
+# --- Suspect-commit heal scope (P4 of the heal evidence plan, Refs #8434) ---
+# Release run 40876853022 regressed through scripts/implement_step_prepush_test_gate.sh
+# and workflow-templates/.claude/hooks/prepush_affected_tests.py, both outside
+# the frozen scope, so the plan gate held every fix. The files changed between
+# the failing workflow's last green run and the failing SHA (GitHub compare
+# ``files[]``, authenticated API metadata, never logs or the diagnosis) may now
+# join the frozen scope, filtered and capped here. The marker format, its
+# 20-path cap and its provenance checks are unchanged.
+
+
+def heal_suspect_scope_paths(files: Any, exists: Any, limit: int = HEAL_SUSPECT_SCOPE_MAX) -> list[str]:
+	"""Scope paths from compare ``files[]`` rows; pure apart from ``exists``, never raises.
+
+	``files`` is the ``{"filename", "status", "changes"}`` list of
+	:func:`parse_suspect_compare` (P3's ``compare_files.json``); each row is
+	re-validated by :func:`_suspect_file_entry`. Only ``filename`` is read, so a
+	renamed file's ``previous_filename`` never enters, and a ``removed`` row is
+	dropped. A path is kept only when it passes :func:`_safe_heal_path`, sits
+	under SUSPECT_PIPELINE_ROOTS and is not under ``.github/ai/`` or ``.claude/``.
+	Those prefixes are anchored at the repository root:
+	``workflow-templates/.claude/hooks/...`` is under ``workflow-templates/``
+	and allowed; only a top-level ``.claude/`` (and ``.github/ai/``) is
+	forbidden. Rows are deduplicated, stably ranked by ``changes`` (descending,
+	compare order breaks ties), and each is kept only when ``exists(path)`` is
+	true at the scope commit, until ``limit`` paths are kept: a missing path
+	never takes a slot.
+	"""
+	if not isinstance(files, list):
+		return []
+	cap = limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else 0
+	cap = min(cap, HEAL_SUSPECT_SCOPE_MAX)
+	candidates: list[tuple[str, int]] = []
+	seen: set[str] = set()
+	for item in files[:SUSPECT_COMPARE_FILES_MAX]:
+		entry = _suspect_file_entry(item)
+		if entry is None or entry["status"] == "removed":
+			continue
+		path = entry["filename"]
+		if path in seen:
+			continue
+		if not _safe_heal_path(path) or not path.startswith(SUSPECT_PIPELINE_ROOTS):
+			continue
+		# Belt and braces: _safe_heal_path already rejects both root prefixes.
+		if path.lower().startswith((".github/ai/", ".claude/")):
+			continue
+		seen.add(path)
+		candidates.append((path, entry["changes"]))
+	ranked = sorted(candidates, key=lambda pair: -pair[1])
+	kept: list[str] = []
+	for path, _changes in ranked:
+		if len(kept) >= cap:
+			break
+		try:
+			present = bool(exists(path))
+		except Exception:  # noqa: BLE001 - an unreadable path is left out
+			present = False
+		if present:
+			kept.append(path)
+	return kept
+
+
+def _suspect_scope_trimmed_compare(compare_doc: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
+	"""The compare fields :func:`parse_suspect_compare` reads, without patch bodies."""
+	raw_commits = compare_doc.get("commits") if isinstance(compare_doc.get("commits"), list) else []
+	commits: list[Any] = []
+	for item in raw_commits:
+		if isinstance(item, dict):
+			commit = item.get("commit") if isinstance(item.get("commit"), dict) else {}
+			commits.append({"sha": item.get("sha"), "commit": {"message": commit.get("message")}})
+		else:
+			commits.append(None)
+	total = compare_doc.get("total_commits")
+	return {
+		"status": compare_doc.get("status"),
+		"total_commits": total if isinstance(total, int) and not isinstance(total, bool) else len(raw_commits),
+		"commits": commits,
+		"files": list(parsed.get("files") or []),
+	}
+
+
+def heal_suspect_scope(
+	*,
+	repo: str,
+	failing_sha: str,
+	workflow_id: Any,
+	branch: str,
+	before: str | None,
+	compare_files: list[Any] | None = None,
+	exists: Any,
+	run_gh: Any = None,
+	timeout: int = 30,
+) -> tuple[dict[str, Any], list[str], dict[str, Any] | None]:
+	"""Suspect-commit scope paths for one report; returns ``(summary, paths, handoff)``.
+
+	Batching contract (CLAUDE.md §14):
+	- Input: ``repo`` (``owner/name``), the 40-hex ``failing_sha``, the failing
+		run's ``workflow_id``, ``branch`` and ``before`` (its created_at); optional
+		``compare_files``, P3's parsed compare ``files[]`` (``compare_files.json``)
+		for the same range; ``exists(path)`` checks the scope commit.
+	- Output: ``summary`` is ``{"outcome": "added|none|partial|skipped",
+		"reason", "paths", "calls", "source": "p3|fetched|none"}``; ``paths`` the
+		kept scope paths (:func:`heal_suspect_scope_paths`, at most
+		HEAL_SUSPECT_SCOPE_MAX); ``handoff`` ``{"repo", "workflow_id", "branch",
+		"failing_sha", "green_sha", "last_green", "compare"}`` (the compare
+		trimmed to the fields :func:`parse_suspect_compare` reads, no patches)
+		after a successful fetch, else None. P3's later suspect step reuses it
+		(``suspect_commits(last_green=..., compare_cache=...)``) instead of
+		repeating both reads.
+	- API calls: 0 when ``compare_files`` is a list (P3 data); otherwise at
+		most 2 single-attempt (no retry) REST GETs: the last-green lookup
+		(:func:`last_green_run`, ``repos/<repo>/actions/workflows/<id>/runs``)
+		and ``repos/<repo>/compare/<green>...<failing>``. Counted in the job's
+		``GH_PAT_BUDGET`` start/end delta. Audited existing reads: P3's
+		:func:`suspect_commits` compare and the reproduction's
+		:func:`last_green_run` both run after the scope freeze, so neither
+		result exists when this runs; the branch-progress and divergence
+		compares cover other ranges.
+	- Fails open: never raises. No ``before`` or no usable baseline (including
+		a ``behind`` compare) gives ``partial/no_last_green``; a failed or
+		unparsable compare gives ``partial/compare_failed|malformed``; every
+		failure keeps no path.
+
+	``run_gh(argv, timeout)`` is injectable; the default runs ``gh`` with a list
+	argv through :func:`subprocess.run`, never a shell.
+	"""
+	summary: dict[str, Any] = {"outcome": "skipped", "reason": "invalid_input", "paths": 0, "calls": 0, "source": "none"}
+	runner = run_gh if run_gh is not None else _last_green_run_gh
+	counter = {"calls": 0}
+
+	def counted(argv: list[str], call_timeout: int) -> Any:
+		counter["calls"] += 1
+		return runner(argv, call_timeout)
+
+	def finish(outcome: str, reason: str, paths: list[str] | None = None, handoff: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[str], dict[str, Any] | None]:
+		kept = paths or []
+		summary.update({"outcome": outcome, "reason": reason, "paths": len(kept), "calls": counter["calls"]})
+		return summary, kept, handoff
+
+	try:
+		failing = failing_sha.lower() if isinstance(failing_sha, str) else ""
+		if not is_valid_repo_slug(repo) or not _SUSPECT_SHA_RE.fullmatch(failing):
+			return finish("skipped", "invalid_input")
+		if isinstance(compare_files, list):
+			summary["source"] = "p3"
+			paths = heal_suspect_scope_paths(compare_files, exists)
+			return finish("added" if paths else "none", "ok", paths)
+		if not before:
+			# Without the failing run's creation time the lookup is unbounded and
+			# could pick a green run newer than the failure.
+			return finish("partial", "no_last_green")
+		try:
+			green = last_green_run(repo, workflow_id, branch, failing_sha=failing, before=before, run_gh=counted, timeout=timeout)
+		except Exception:  # noqa: BLE001 - fail open, never block the intake
+			green = _last_green_result("request_failed")
+		summary["source"] = "fetched" if counter["calls"] else "none"
+		green_sha = green.get("head_sha") if isinstance(green, dict) else None
+		green_sha = green_sha.lower() if isinstance(green_sha, str) else ""
+		if not isinstance(green, dict) or green.get("reason") != "ok" or not _SUSPECT_SHA_RE.fullmatch(green_sha):
+			return finish("partial", "no_last_green")
+		try:
+			completed = counted(["gh", "api", "--method", "GET", f"repos/{repo}/compare/{green_sha}...{failing}"], timeout)
+		except Exception:  # noqa: BLE001 - fail open, never block the intake
+			return finish("partial", "compare_failed")
+		if getattr(completed, "returncode", 1) != 0:
+			return finish("partial", "compare_failed")
+		try:
+			compare_doc = json.loads(getattr(completed, "stdout", "") or "")
+		except (TypeError, ValueError):
+			return finish("partial", "malformed")
+		parsed = parse_suspect_compare(compare_doc)
+		if parsed["reason"] != "ok" or not isinstance(compare_doc, dict):
+			return finish("partial", "malformed")
+		if compare_doc.get("status") == "behind":
+			# The baseline is newer than the failing SHA: it is not a last-green baseline.
+			return finish("partial", "no_last_green")
+		paths = heal_suspect_scope_paths(parsed["files"], exists)
+		workflow_text = str(workflow_id) if isinstance(workflow_id, (int, str)) and not isinstance(workflow_id, bool) else ""
+		handoff = {
+			"repo": repo, "workflow_id": workflow_text, "branch": branch, "failing_sha": failing, "green_sha": green_sha,
+			"last_green": green, "compare": _suspect_scope_trimmed_compare(compare_doc, parsed),
+		}
+		return finish("added" if paths else "none", "ok", paths, handoff)
+	except Exception:  # noqa: BLE001 - fail open, never block the scope freeze
+		return finish("partial", "helper_failed")
 
 
 def compose_issue_body(
@@ -9268,7 +9483,9 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 				test_files.extend(path for path in matches if path not in test_files)
 		subjects = heal_scope_test_subjects(test_files, exists)
 		subjects += [path for path in heal_scope_guard_subjects(test_files, exists, lambda: _heal_oversized_workflows(args.checkout, args.ref)) if path not in subjects]
-		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=subjects)
+		# suspect_files (P4) is present only in a self-repo scope's frozen inputs.
+		suspect_files = [path for path in (data.get("suspect_files") or []) if isinstance(path, str)][:HEAL_SUSPECT_SCOPE_MAX]
+		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=subjects, suspect_files=suspect_files)
 		sys.stdout.write(marker + "\n")
 	elif args.operation == "failing-tests":
 		merged: dict[str, list[str]] = {"names": [], "files": [], "pairs": []}
@@ -9785,6 +10002,7 @@ def _cmd_suspect_commits(args: argparse.Namespace) -> int:
 			except OSError:
 				trend_text = ""
 		cached = _trend_load_json(args.last_green_json) if args.last_green_json else None
+		compare_cached = _trend_load_json(args.compare_json) if getattr(args, "compare_json", "") else None
 		summary, section, files = suspect_commits(
 			repo=args.repo,
 			failing_sha=args.failing_sha,
@@ -9794,6 +10012,7 @@ def _cmd_suspect_commits(args: argparse.Namespace) -> int:
 			default_branch=args.default_branch or None,
 			trend_text=trend_text,
 			last_green=cached if isinstance(cached, dict) else None,
+			compare_cache=compare_cached if isinstance(compare_cached, dict) else None,
 		)
 	except Exception:  # noqa: BLE001 - fail open, never block the intake
 		section, files = "", []
@@ -9810,6 +10029,44 @@ def _cmd_suspect_commits(args: argparse.Namespace) -> int:
 			Path(args.out).write_text("", encoding="utf-8")
 		except OSError:
 			pass
+	print(json.dumps(summary, sort_keys=True))
+	return 0
+
+
+def _cmd_suspect_scope(args: argparse.Namespace) -> int:
+	failed: dict[str, Any] = {"outcome": "partial", "reason": "helper_failed", "paths": 0, "calls": 0, "source": "none"}
+	summary: dict[str, Any] = dict(failed)
+	paths: list[str] = []
+	handoff: dict[str, Any] | None = None
+	try:
+		ref = args.ref.lower() if isinstance(args.ref, str) else ""
+		if not _SUSPECT_SHA_RE.fullmatch(ref):
+			# The scope commit must be a full SHA: no path is checked and no call is made.
+			summary = {"outcome": "skipped", "reason": "invalid_input", "paths": 0, "calls": 0, "source": "none"}
+		else:
+			loaded = _trend_load_json(args.compare_files_json) if args.compare_files_json else None
+			summary, paths, handoff = heal_suspect_scope(
+				repo=args.repo,
+				failing_sha=args.failing_sha,
+				workflow_id=args.workflow_id,
+				branch=args.branch,
+				before=args.before or None,
+				compare_files=loaded if isinstance(loaded, list) else None,
+				exists=lambda path: _heal_regular_file_at_ref(args.checkout, ref, path),
+			)
+	except Exception:  # noqa: BLE001 - fail open, never block the scope freeze
+		summary, paths, handoff = dict(failed), [], None
+	try:
+		Path(args.paths_out).write_text(json.dumps(paths) + "\n", encoding="utf-8")
+		Path(args.handoff_out).write_text(json.dumps(handoff, sort_keys=True) + "\n" if handoff else "", encoding="utf-8")
+	except OSError:
+		# Keep the call count: GETs made before a failed output write still count.
+		summary = dict(failed, calls=summary.get("calls", 0) if isinstance(summary, dict) else 0)
+		for out_path, text in ((args.paths_out, "[]\n"), (args.handoff_out, "")):
+			try:
+				Path(out_path).write_text(text, encoding="utf-8")
+			except OSError:
+				pass
 	print(json.dumps(summary, sort_keys=True))
 	return 0
 
@@ -10572,9 +10829,23 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--default-branch", default="")
 	p.add_argument("--trend-file", default="")
 	p.add_argument("--last-green-json", default="", metavar="FILE")
+	p.add_argument("--compare-json", default="", metavar="FILE")
 	p.add_argument("--out", required=True)
 	p.add_argument("--files-out", required=True)
 	p.set_defaults(func=_cmd_suspect_commits)
+
+	p = sub.add_parser("suspect-scope", help="Suspect-commit heal scope paths (P4), 0 GETs with P3 data else at most 2, fail-open (always exits 0)")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--failing-sha", required=True)
+	p.add_argument("--workflow-id", default="")
+	p.add_argument("--branch", default="")
+	p.add_argument("--before", default="")
+	p.add_argument("--compare-files-json", default="", metavar="FILE")
+	p.add_argument("--checkout", default=".")
+	p.add_argument("--ref", required=True)
+	p.add_argument("--paths-out", required=True)
+	p.add_argument("--handoff-out", required=True)
+	p.set_defaults(func=_cmd_suspect_scope)
 
 	p = sub.add_parser("compose-occurrence", help="Print the occurrence comment for a duplicate report")
 	p.add_argument("--payload-json", required=True)

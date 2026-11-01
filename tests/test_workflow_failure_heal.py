@@ -11819,3 +11819,231 @@ def test_cause_grouping_review_fixes_escalation_recovery_window_and_warning(tmp_
 	captured = capsys.readouterr()
 	assert "WORKFLOW_HEAL warn signature_unreadable" in captured.err
 	assert "Matched by" in captured.out and "Error signature" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Suspect-commit scope (P4 of the heal evidence plan, Refs #8434)
+#
+# Behind WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED the files changed between the
+# failing workflow's last green run and the failing SHA (compare files[]) join
+# the frozen heal scope as `suspect_files`: only `filename`, no removed rows,
+# pipeline roots only, never a top-level .claude/ or .github/ai/, present at
+# the scope commit, at most 8 ranked by `changes`. 0 calls with P3 data,
+# otherwise 2, and P3's later suspect step reuses both reads.
+# ---------------------------------------------------------------------------
+
+P4_INCIDENT_PATHS = ("scripts/implement_step_prepush_test_gate.sh", "workflow-templates/.claude/hooks/prepush_affected_tests.py")
+
+
+def _p4_compare_doc() -> dict:
+	doc = _p3_compare_doc()
+	doc["files"] = doc["files"] + [
+		{"filename": "workflow-templates/.claude/hooks/prepush_affected_tests.py", "status": "modified", "changes": 20},
+		{"filename": ".claude/settings.json", "status": "modified", "changes": 300},
+		{"filename": "scripts/new_name.sh", "previous_filename": "scripts/old_name.sh", "status": "renamed", "changes": 5},
+	]
+	return doc
+
+
+def test_heal_suspect_scope_paths_drops_every_excluded_input() -> None:
+	files = [
+		{"filename": "prompts/removed.txt", "status": "removed", "changes": 99},
+		{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh", "status": "renamed", "changes": 3},
+		{"filename": ".claude/settings.json", "status": "modified", "changes": 98},
+		{"filename": ".github/ai/WORKFLOW.md", "status": "modified", "changes": 97},
+		{"filename": "scripts/missing.sh", "status": "added", "changes": 96},
+		{"filename": "docs/x.md", "status": "modified", "changes": 95},
+		{"filename": "scripts/bad name.sh", "status": "modified", "changes": 94},
+		{"filename": "scripts/../escape.sh", "status": "modified", "changes": 93},
+		{"filename": 7, "status": "modified", "changes": 92},
+		{"filename": "workflow-templates/.claude/hooks/prepush_affected_tests.py", "status": "modified", "changes": 20},
+		{"filename": "scripts/implement_step_prepush_test_gate.sh", "status": "modified", "changes": 47},
+	]
+	present = {entry["filename"] for entry in files if isinstance(entry["filename"], str)} | {"scripts/old.sh"}
+	present.discard("scripts/missing.sh")
+	out = heal.heal_suspect_scope_paths(files, present.__contains__)
+	assert out == ["scripts/implement_step_prepush_test_gate.sh", "workflow-templates/.claude/hooks/prepush_affected_tests.py", "scripts/new.sh"]
+	assert heal.heal_suspect_scope_paths("not a list", lambda path: True) == []
+	# An exists() that raises leaves the path out instead of failing.
+	assert heal.heal_suspect_scope_paths(files[-1:], lambda path: 1 / 0) == []
+
+
+def test_heal_suspect_scope_paths_ranks_by_changes_and_caps_at_8() -> None:
+	changes = [5, 9, 9, 1, 7, 7, 3, 0, 9, 2, 4, 6]
+	files = [{"filename": f"scripts/f{index}.sh", "status": "modified", "changes": value} for index, value in enumerate(changes)]
+	files.append(dict(files[2]))  # a duplicate adds nothing
+	missing = {"scripts/f1.sh"}
+	out = heal.heal_suspect_scope_paths(files, lambda path: path not in missing)
+	# Stable ties keep compare order; a missing path never takes one of the 8 slots.
+	assert out == ["scripts/f2.sh", "scripts/f8.sh", "scripts/f4.sh", "scripts/f5.sh", "scripts/f11.sh", "scripts/f0.sh", "scripts/f10.sh", "scripts/f6.sh"]
+	assert heal.HEAL_SUSPECT_SCOPE_MAX == 8
+	assert len(heal.heal_suspect_scope_paths(files, lambda path: True, limit=20)) == 8
+	assert heal.heal_suspect_scope_paths(files, lambda path: True, limit=2) == ["scripts/f1.sh", "scripts/f2.sh"]
+
+
+def test_heal_suspect_scope_makes_two_calls_or_none_with_p3_data() -> None:
+	assert "Batching contract" in heal.heal_suspect_scope.__doc__ and "GH_PAT_BUDGET" in heal.heal_suspect_scope.__doc__
+	kwargs = {"repo": SELF_REPO, "failing_sha": P2_FAILED_SHA, "workflow_id": P2_WORKFLOW_ID, "branch": "main", "before": "2026-10-27T09:40:12Z", "exists": lambda path: True}
+	calls: list[list[str]] = []
+	summary, paths, handoff = heal.heal_suspect_scope(**kwargs, run_gh=_p3_suspect_runner(calls))
+	assert summary == {"outcome": "added", "reason": "ok", "paths": 2, "calls": 2, "source": "fetched"}
+	assert paths == ["scripts/implement_step_prepush_test_gate.sh", ".github/workflows/internal-implement.yml"]
+	assert "/actions/workflows/" in calls[0][4] and calls[1][4] == f"repos/{SELF_REPO}/compare/{P3_SUSPECT_COMPARE_KEY}"
+	assert all(call[call.index("--method") + 1] == "GET" for call in calls)
+	assert handoff["green_sha"] == P2_GREEN_SHA and handoff["failing_sha"] == P2_FAILED_SHA and handoff["workflow_id"] == str(P2_WORKFLOW_ID)
+	assert handoff["repo"] == SELF_REPO and handoff["branch"] == "main" and handoff["last_green"]["reason"] == "ok"
+
+	def boom(argv, timeout):
+		raise AssertionError("no call expected with P3 data")
+	p3_files = heal.parse_suspect_compare(_p4_compare_doc())["files"]
+	summary, paths, handoff = heal.heal_suspect_scope(**kwargs, compare_files=p3_files, run_gh=boom)
+	assert summary == {"outcome": "added", "reason": "ok", "paths": 4, "calls": 0, "source": "p3"} and handoff is None
+	assert paths[:2] == list(P4_INCIDENT_PATHS)
+
+
+def test_heal_suspect_scope_fails_open() -> None:
+	kwargs = {"repo": SELF_REPO, "failing_sha": P2_FAILED_SHA, "workflow_id": P2_WORKFLOW_ID, "branch": "main", "before": "2026-10-27T09:40:12Z", "exists": lambda path: True}
+	behind = dict(_p3_compare_doc(), status="behind")
+	for runner_kwargs, reason, expected_calls in (({"compare": behind}, "no_last_green", 2), ({"compare": None}, "compare_failed", 2),
+		({"compare": "not json"}, "malformed", 2), ({"green": None}, "no_last_green", 1)):
+		summary, paths, handoff = heal.heal_suspect_scope(**kwargs, run_gh=_p3_suspect_runner([], **runner_kwargs))
+		assert (summary["outcome"], summary["reason"], summary["calls"], paths, handoff) == ("partial", reason, expected_calls, [], None), runner_kwargs
+
+	def boom(argv, timeout):
+		raise OSError("gh missing")
+	summary, paths, _handoff = heal.heal_suspect_scope(**kwargs, run_gh=boom)
+	assert summary["outcome"] == "partial" and paths == []
+	summary, _paths, _handoff = heal.heal_suspect_scope(**{**kwargs, "before": ""}, run_gh=boom)
+	assert (summary["reason"], summary["calls"]) == ("no_last_green", 0)
+	summary, _paths, _handoff = heal.heal_suspect_scope(**{**kwargs, "repo": "not a repo"}, run_gh=boom)
+	assert (summary["outcome"], summary["reason"], summary["calls"]) == ("skipped", "invalid_input", 0)
+
+
+def test_suspect_commits_reuses_the_suspect_scope_handoff() -> None:
+	kwargs = {"repo": SELF_REPO, "failing_sha": P2_FAILED_SHA, "workflow_id": P2_WORKFLOW_ID, "branch": "main", "before": "2026-10-27T09:40:12Z", "exists": lambda path: True}
+	_summary, _paths, handoff = heal.heal_suspect_scope(**kwargs, run_gh=_p3_suspect_runner([]))
+	cache = {key: handoff[key] for key in ("green_sha", "failing_sha", "compare")}
+	reference = heal.suspect_commits(**_p3_suspect_kwargs(), run_gh=_p3_suspect_runner([]))
+	calls: list[list[str]] = []
+	summary, section, files = heal.suspect_commits(**_p3_suspect_kwargs(), last_green=handoff["last_green"], compare_cache=cache, run_gh=_p3_suspect_runner(calls))
+	assert calls == [] and summary["calls"] == 0 and summary["last_green"] == "cached" and summary["outcome"] == "ok"
+	# The trimmed compare renders the same section and files as the fetched one.
+	assert section == reference[1] and files == reference[2]
+	for bad in ({**cache, "green_sha": "d" * 40}, {**cache, "failing_sha": "d" * 40}, {**cache, "compare": "x"}, {"compare": cache["compare"]}):
+		calls = []
+		summary, _section, _files = heal.suspect_commits(**_p3_suspect_kwargs(), last_green=handoff["last_green"], compare_cache=bad, run_gh=_p3_suspect_runner(calls))
+		assert summary["calls"] == 1 and "/compare/" in calls[0][4], bad
+
+
+def test_render_marker_suspect_files_order_cap_and_byte_identity() -> None:
+	common = {"crash_file": None, "workflow_paths": [".github/workflows/ci.yml"], "changed_files": ["scripts/changed.sh"],
+		"runs": [f"{SELF_REPO}:1"], "exists": lambda path: True, "test_subjects": ["tests/test_subject.py", "scripts/subject.sh"]}
+	baseline = heal.render_heal_scope_marker(**common)
+	assert heal.render_heal_scope_marker(**common, suspect_files=()) == baseline == heal.render_heal_scope_marker(**common, suspect_files=[])
+	marker = heal.render_heal_scope_marker(**common, suspect_files=["scripts/suspect.sh", "scripts/x_step_*.sh", 5])
+	assert marker == (f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,scripts/subject.sh,scripts/suspect.sh,scripts/changed.sh,"
+		f"tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->")
+	crowded = heal.render_heal_scope_marker(**{**common, "changed_files": [f"scripts/c{index}.sh" for index in range(10)]},
+		suspect_files=[f"scripts/s{index}.sh" for index in range(30)])
+	paths = crowded.split("paths=", 1)[1].split(" ", 1)[0].split(",")
+	assert len(paths) == 22 and paths[2:20] == [f"scripts/s{index}.sh" for index in range(18)]
+	verified = heal.verify_heal_scope(body=crowded, author_login="bot", last_edited_at=None, labels=[heal.HEAL_LABEL], pipeline_login="bot")
+	assert verified["status"] == "verified"
+
+
+def test_suspect_scope_cli_fails_open(tmp_path: Path) -> None:
+	paths_out, handoff_out = tmp_path / "paths.json", tmp_path / "handoff.json"
+	base = [sys.executable, str(LIB_PATH), "suspect-scope", "--repo", SELF_REPO, "--failing-sha", P2_FAILED_SHA, "--checkout", str(tmp_path)]
+	result = subprocess.run([*base, "--ref", "main", "--paths-out", str(paths_out), "--handoff-out", str(handoff_out)], capture_output=True, text=True, check=False)
+	assert result.returncode == 0
+	assert json.loads(result.stdout) == {"calls": 0, "outcome": "skipped", "paths": 0, "reason": "invalid_input", "source": "none"}
+	assert json.loads(paths_out.read_text()) == [] and handoff_out.read_text() == ""
+	result = subprocess.run([*base, "--ref", P2_FAILED_SHA, "--paths-out", str(tmp_path / "missing" / "paths.json"), "--handoff-out", str(handoff_out)],
+		capture_output=True, text=True, check=False, env={**os.environ, "PATH": "/nonexistent", "PYTHONDONTWRITEBYTECODE": "1"})
+	assert result.returncode == 0
+	assert json.loads(result.stdout) == {"calls": 0, "outcome": "partial", "paths": 0, "reason": "helper_failed", "source": "none"}
+
+
+def _p4_origin(root: Path) -> tuple[Path, str]:
+	origin = root / "origin"
+	for path in (*P4_INCIDENT_PATHS, "scripts/new_name.sh", ".github/workflows/internal-implement.yml", ".github/workflows/test-and-mark-stable.yml", ".claude/settings.json"):
+		(origin / path).parent.mkdir(parents=True, exist_ok=True)
+		(origin / path).write_text("x\n", encoding="utf-8")
+	subprocess.run(["git", "init", "-q", "-b", "main", str(origin)], check=True)
+	subprocess.run(["git", "-C", str(origin), "add", "-A"], check=True)
+	subprocess.run(["git", "-C", str(origin), "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "scope"], check=True)
+	return origin, subprocess.run(["git", "-C", str(origin), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _run_p4_intake(extra_env: dict[str, str | None]) -> tuple[subprocess.CompletedProcess[str], dict, str]:
+	"""Replay release run 40876853022 (P1/P3 fixtures) with its head SHA at a real scope commit."""
+	with tempfile.TemporaryDirectory(prefix="heal-p4-") as tmp_name:
+		tmp = Path(tmp_name)
+		origin, sha = _p4_origin(tmp)
+		run = dict(_p1_run(), head_sha=sha)
+		state = _p3_state()
+		state["run_details"][str(P1_RUN_ID)] = run
+		state["last_green_runs"] = _p2_green_runs()
+		state["compares"] = {f"{P2_GREEN_SHA}...{sha}": _p4_compare_doc()}
+		state["slow_day_commits"] = _p3_slow_day_commits()
+
+		def setup(_tmp: Path, work: Path) -> None:
+			subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True)
+			subprocess.run(["git", "-C", str(work), "remote", "add", "origin", str(origin)], check=True)
+			subprocess.run(["git", "-C", str(work), "fetch", "-q", "origin"], check=True)
+		runtime = tmp / "runtime"
+		result, state_after, _prompt = _run_intake(heal.build_workflow_run_payload(repo=SELF_REPO, workflow_run=run), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+			extra_env={"RUNTIME_DIR": str(runtime), **extra_env}, setup_git=setup)
+		frozen_file = runtime / "scope_inputs_frozen.json"
+		frozen = frozen_file.read_text(encoding="utf-8") if frozen_file.exists() else ""
+	return result, state_after, frozen
+
+
+def _p4_scope_line(state: dict) -> str:
+	body = state.get("composed_issue", {}).get("body", "")
+	return next((line for line in body.splitlines() if "ai:workflow-heal-scope:v1" in line), "")
+
+
+def _p4_calls(state: dict) -> dict[str, list[list[str]]]:
+	calls = _p1_api_calls(state)
+	return {
+		"green": [call for call in calls if any("/actions/workflows/" in str(part) for part in call) and not any(str(part).startswith("page=") for part in call)],
+		"compare": [call for call in calls if any("/compare/" in str(part) and str(part).startswith(f"repos/{SELF_REPO}/compare/{P2_GREEN_SHA}...") for part in call)],
+		"commits": [call for call in calls if any(str(part) == f"repos/{SELF_REPO}/commits" for part in call)],
+	}
+
+
+def test_intake_suspect_scope_replay_adds_the_incident_files_with_two_calls() -> None:
+	result, state_after, frozen = _run_p4_intake({"WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL suspect_scope outcome=added reason=ok paths=4 calls=2 source=fetched" in result.stdout
+	assert json.loads(frozen)["suspect_files"] == [*P4_INCIDENT_PATHS, "scripts/new_name.sh", ".github/workflows/internal-implement.yml"]
+	marker = _p4_scope_line(state_after)
+	assert all(path in marker for path in P4_INCIDENT_PATHS) and ".claude/settings.json" not in marker
+	calls = _p4_calls(state_after)
+	assert len(calls["green"]) == 1 and len(calls["compare"]) == 1 and not calls["commits"]
+
+
+def test_intake_suspect_scope_with_trend_keeps_the_p3_budget() -> None:
+	result, state_after, _frozen = _run_p4_intake({"WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED": "true", "WORKFLOW_HEAL_TREND_ENABLED": "true", "WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL suspect_scope outcome=added reason=ok paths=4 calls=2 source=fetched" in result.stdout
+	# P3 reuses P4's last-green lookup and compare: only its slow-day commits read remains.
+	assert re.search(r"WORKFLOW_HEAL suspect_commits outcome=ok reason=ok commits=4 files=\d+ slow_day_commits=2 calls=1 last_green=cached", result.stdout), result.stdout
+	calls = _p4_calls(state_after)
+	assert len(calls["green"]) == 1 and len(calls["compare"]) == 1 and len(calls["commits"]) == 1
+	assert sum(len(group) for group in calls.values()) + len(_p3_trend_calls(state_after)) <= 9
+	assert "## Suspect commits" in state_after["composed_issue"]["body"]
+
+
+def test_intake_suspect_scope_off_is_byte_identical() -> None:
+	unset_result, unset_state, unset_frozen = _run_p4_intake({"WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED": None})
+	off_result, off_state, off_frozen = _run_p4_intake({"WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED": "false"})
+	for result, state in ((unset_result, unset_state), (off_result, off_state)):
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "suspect_scope" not in result.stdout
+		calls = _p4_calls(state)
+		assert not calls["green"] and not calls["compare"]
+	assert unset_frozen and unset_frozen == off_frozen and "suspect_files" not in unset_frozen
+	assert _p4_scope_line(unset_state) == _p4_scope_line(off_state)
+	assert not any(path in _p4_scope_line(unset_state) for path in P4_INCIDENT_PATHS)
