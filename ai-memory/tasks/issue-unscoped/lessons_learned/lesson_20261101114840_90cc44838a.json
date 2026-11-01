@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-01T11:48:40Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=external GitHub check run `copilot-pull-request-reviewer`:1; cited_path=external check run `copilot-pull-request-reviewer` (job 124825825183, no repository file); files_touched=.github/workflows/clarify.yml, agents.d/8602-clarify-attempt-failure-reason.md, changelog.d/8602-clarify-attempt-failure-reason.md, tests/test_plan_clarify_blocked_output.py.",
+  "phase": "review_autofix",
+  "pr_number": 8610,
+  "record_id": "lesson_20261101114840_90cc44838a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "external check run `copilot-pull-request-reviewer` (job 124825825183, no repository file)",
+    "external GitHub check run `copilot-pull-request-reviewer`",
+    ".github/workflows/clarify.yml",
+    "agents.d/8602-clarify-attempt-failure-reason.md",
+    "changelog.d/8602-clarify-attempt-failure-reason.md",
+    "tests/test_plan_clarify_blocked_output.py"
+  ]
+}
