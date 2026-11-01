@@ -115,7 +115,7 @@ if match and method == "DELETE":
 match = re.search(r"/issues/(\d+)/comments\?per_page=100&page=(\d+)$", url)
 if match and method == "GET":
 	page = match.group(2)
-	log(f"GET page={page}")
+	log(f"GET page={page} max_time={max_time}")
 	mode = config.get("page_modes", {}).get(page)
 	if mode == "exit7":
 		sys.exit(7)
@@ -205,7 +205,7 @@ def test_markers_on_every_page_are_deleted(tmp_path: Path) -> None:
 	assert sorted(_tg_ids(calls)) == ["11", "12", "13", "14", "15"]
 	# Every page is read before anything is deleted.
 	first_mutation = next(i for i, c in enumerate(calls) if not c.startswith("GET "))
-	assert [c for c in calls[:first_mutation]] == ["GET page=1", "GET page=2"]
+	assert [c for c in calls[:first_mutation]] == ["GET page=1 max_time=30", "GET page=2 max_time=30"]
 	assert all(not c.startswith("GET ") for c in calls[first_mutation:])
 	assert not _warnings(result)
 

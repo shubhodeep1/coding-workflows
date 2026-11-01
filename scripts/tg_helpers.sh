@@ -275,7 +275,9 @@ _tg_snapshot_tracking_entries()
 			echo "::warning::Issue comments for ${ctx} exceed ${max_pages} pages; aborting cleanup" >&2
 			return 1
 		fi
-		comments_json=$(curl_gh_api -s \
+		# Bound each attempt so a stalled read cannot hold cleanup until the
+		# job timeout (curl_gh_api passes extra args through to curl).
+		comments_json=$(curl_gh_api -s --max-time 30 \
 			-H "Authorization: token ${GH_TOKEN}" \
 			-H "Accept: application/vnd.github.v3+json" \
 			"${api_base}/${issue_num}/comments?per_page=100&page=${page}") || {
