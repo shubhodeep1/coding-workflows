@@ -151,6 +151,9 @@ jobs:
       # off by default. The ratio is the latest-day median that counts as a regression.
       WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}
       WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}
+      # Suspect-commit scope (P4): 'true' adds up to 8 files changed since the failing
+      # workflow's last green run (compare files[]) to the frozen heal scope; off by default.
+      WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED: ${{ vars.WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED || 'false' }}
       # Cause grouping (P5 / D3): 'true' adds the `cause=` header line to new heal
       # issues and records a cause match on a recent open heal issue (within
       # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
@@ -443,6 +446,9 @@ jobs:
       # off by default. The ratio is the latest-day median that counts as a regression.
       WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}
       WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}
+      # Suspect-commit scope (P4): 'true' adds up to 8 files changed since the failing
+      # workflow's last green run (compare files[]) to the frozen heal scope; off by default.
+      WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED: ${{ vars.WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED || 'false' }}
       # Cause grouping (P5 / D3): 'true' adds the `cause=` header line to new heal
       # issues and records a cause match on a recent open heal issue (within
       # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
