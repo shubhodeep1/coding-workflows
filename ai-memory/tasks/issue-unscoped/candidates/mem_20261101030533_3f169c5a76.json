@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "Orchestration-poll persistence changes are commonly split across the workflow, its process script, a dedicated Python utility, and contract/unit tests.",
   "timestamps": {
     "created_at": "2026-11-01T03:05:33Z",
-    "promoted_at": null,
+    "promoted_at": "2026-11-01T03:06:06Z",
     "superseded_at": null
   }
 }

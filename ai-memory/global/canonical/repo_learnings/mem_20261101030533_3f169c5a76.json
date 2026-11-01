@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Merged persistence work paired `.github/workflows/orchestrate_poll.yml` with `scripts/orchestrate_poll_process.sh` and a focused utility under `scripts/`. Tests covered both process behavior and workflow contracts, so preserve that cross-layer coverage when modifying this path.",
+  "fingerprint": "06a1005a0382c14a0557e1f79d511b7617bceb456e6ae84ade4b8e56fa71d8d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41267457717",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41267457717",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8543",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8544",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8559",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8561",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8567",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8560",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8563",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8568"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261101030533_3f169c5a76",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Orchestration-poll persistence changes are commonly split across the workflow, its process script, a dedicated Python utility, and contract/unit tests.",
+  "timestamps": {
+    "created_at": "2026-11-01T03:05:33Z",
+    "promoted_at": "2026-11-01T03:06:06Z",
+    "superseded_at": null
+  }
+}
