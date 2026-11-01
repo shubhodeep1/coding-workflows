@@ -1,2 +1,3 @@
 # One exemption per line: repo/relative/path | short justification
 # Intentionally empty; add entries only when a documented parity escape is required.
+scripts/heal_port_to_default.sh | Heal port to the default branch (P6 step 2, Refs #8434; run by issue_pr_status.yml in this repository only): documented in agents.d/heal-port-to-default.md and docs/scripts-pending-removal.md; docs/INVENTORY.md is outside the #8635 plan grant, so move this line there in the next INVENTORY edit.

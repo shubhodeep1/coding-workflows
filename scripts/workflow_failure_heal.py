@@ -10664,6 +10664,197 @@ def _cmd_check_already_fixed(args: argparse.Namespace) -> int:
 	return 0
 
 
+# --- Heal port to the default branch (P6 step 2, decision D4; Refs #8434) ----
+# After a heal PR merges into `stable`, scripts/heal_port_to_default.sh files a
+# follow-up heal issue on the default branch when the same patch still applies
+# there. `heal-port` is the pure helper (it never calls `gh`): `fingerprint`
+# gives the deterministic port fp (dedup key and exact search token), `check`
+# reads the script's single GraphQL response (viewer, heal issue, fp search)
+# and `compose` renders the port issue body, validated like every heal body.
+HEAL_PORT_SOURCE_BRANCH = "stable"
+HEAL_PORT_STAT_MAX_LINES = 60
+HEAL_PORT_STAT_MAX_BYTES = 6000
+# CLAUDE.md §21: untrusted text must never carry `close|fix|resolve #N`.
+_HEAL_PORT_AUTO_CLOSE_RE = re.compile(r"(?i)\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(\s*:?\s*)#(?=[0-9])")
+
+
+def heal_port_fingerprint(repo: str, heal_issue: int) -> str:
+	return fingerprint("heal-port", f"{repo}#{heal_issue}", "port-to-default")
+
+
+def _heal_port_neutralize(text: str) -> str:
+	text = neutralize_untrusted_routing(text)[0]
+	return _HEAL_PORT_AUTO_CLOSE_RE.sub(r"\1 (ref)\2#", text)
+
+
+def _heal_port_data(response: Any) -> dict[str, Any]:
+	"""Return ``data`` of the port lookup; raise when viewer or search is unusable."""
+	data = response.get("data") if isinstance(response, dict) else None
+	if not isinstance(data, dict):
+		raise ValueError("port lookup has no data")
+	viewer = data.get("viewer")
+	if not isinstance(viewer, dict) or not str(viewer.get("login") or "").strip():
+		raise ValueError("port lookup has no viewer login")
+	search = data.get("search")
+	if not isinstance(search, dict) or not isinstance(search.get("nodes"), list):
+		raise ValueError("port lookup has no search result")
+	return data
+
+
+def _heal_port_issue(data: dict[str, Any], heal_issue: int) -> dict[str, Any] | None:
+	repository = data.get("repository")
+	issue = repository.get("issue") if isinstance(repository, dict) else None
+	if not isinstance(issue, dict) or _positive_int(issue.get("number")) != heal_issue:
+		return None
+	return issue
+
+
+def heal_port_check(response: Any, *, fp: str, heal_issue: int) -> dict[str, Any]:
+	"""Decide not_heal / not_needed / candidate from the port lookup response.
+
+	An existing port counts only when the pipeline login wrote it, its first
+	line is the exact port fp marker and it has an exact ``Refs #<heal>`` line.
+	Any state counts: a closed port is still a port.
+	"""
+	data = _heal_port_data(response)
+	login = str(data["viewer"]["login"]).strip().lower()
+	issue = _heal_port_issue(data, heal_issue)
+	if issue is None:
+		return {"decision": "not_heal", "existing": None}
+	label_nodes = (issue.get("labels") or {}).get("nodes") if isinstance(issue.get("labels"), dict) else []
+	labels = [node.get("name") for node in (label_nodes or []) if isinstance(node, dict)]
+	if not is_heal_route({"labels": labels, "body": str(issue.get("body") or "")}):
+		return {"decision": "not_heal", "existing": None}
+	first_line = f"<!-- {MARKER_PREFIX}fp={fp} -->"
+	refs_line = f"Refs #{heal_issue}"
+	for node in data["search"]["nodes"]:
+		if not isinstance(node, dict):
+			continue
+		author = node.get("author") if isinstance(node.get("author"), dict) else {}
+		lines = str(node.get("body") or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+		number = _positive_int(node.get("number"))
+		if number and str(author.get("login") or "").strip().lower() == login and lines[0] == first_line and refs_line in lines:
+			return {"decision": "not_needed", "existing": number}
+	return {"decision": "candidate", "existing": None}
+
+
+def compose_heal_port_issue(*, repo: str, heal_issue: int, pr_number: int, merge_sha: str, default_branch: str,
+	default_sha: str, parent_title: str, parent_body: str, stat_text: str, intake_run_url: str = "") -> tuple[str, str]:
+	"""Return (title, body) of the port issue, before the scope marker is appended."""
+	if not is_valid_repo_slug(repo) or not is_valid_sha(merge_sha) or not is_valid_sha(default_sha) or not is_valid_branch(default_branch):
+		raise ValueError("invalid heal port input")
+	fp = heal_port_fingerprint(repo, heal_issue)
+	markers = parse_heal_markers(parent_body)
+	gen = _positive_int(markers.get("gen")) or 1
+	root = markers.get("root") or ""
+	if not re.fullmatch(r"[0-9a-f]{64}", root):
+		root = fp
+	classification = markers.get("classification") if markers.get("classification") in CLASSIFICATIONS else "workflow-defect"
+	stat_lines: list[str] = []
+	size = 0
+	for raw in sanitize_text(stat_text).split("\n"):
+		line = _heal_port_neutralize(raw.rstrip()).replace("`", "'")
+		if not line.strip():
+			continue
+		if len(stat_lines) >= HEAL_PORT_STAT_MAX_LINES or size + len(line) + 1 > HEAL_PORT_STAT_MAX_BYTES:
+			stat_lines.append("[... truncated ...]")
+			break
+		stat_lines.append(line)
+		size += len(line) + 1
+	if not stat_lines:
+		stat_lines = ["(no file summary)"]
+	parent = _heal_port_neutralize(single_line(parent_title, 180)) or f"heal #{heal_issue}"
+	title = f"[port to {default_branch}] {parent}"
+	lines = [
+		f"<!-- {MARKER_PREFIX}fp={fp} -->",
+		f"<!-- {MARKER_PREFIX}gen={gen} -->",
+		f"<!-- {MARKER_PREFIX}root={root} -->",
+		f"<!-- {MARKER_PREFIX}source={repo}#{heal_issue} -->",
+		f"<!-- {MARKER_PREFIX}classification={classification} -->",
+		"",
+		f"## Port a merged {HEAL_PORT_SOURCE_BRANCH} heal to {default_branch}",
+		"",
+		f"PR #{pr_number} merged the change for heal #{heal_issue} into `{HEAL_PORT_SOURCE_BRANCH}`. "
+		f"The same patch applies cleanly to `{default_branch}`, so this issue carries that change over.",
+		"",
+		f"- **Target branch:** `{default_branch}`",
+		f"- **Ported from heal:** #{heal_issue}",
+		f"- **Merged {HEAL_PORT_SOURCE_BRANCH} PR:** #{pr_number}",
+		f"- **Merge commit:** `{merge_sha}`",
+		f"- **Patch applies cleanly to:** `{default_branch}` at `{default_sha[:12]}`",
+	]
+	run_url = single_line(intake_run_url, 300)
+	if re.fullmatch(r"https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+", run_url):
+		lines.append(f"- **Port check run:** {run_url}")
+	lines += [
+		"",
+		"## Patch summary",
+		"",
+		"```text",
+		*stat_lines,
+		"```",
+		"",
+		"## Fix constraints",
+		"",
+		f"- Re-apply the same change to `{default_branch}`; do not widen it.",
+		"- Keep the change minimal.",
+		"- Add or keep the regression test that covers the original failure.",
+		"",
+		f"Refs #{heal_issue}",
+	]
+	return title, "\n".join(lines) + "\n"
+
+
+def _cmd_heal_port(args: argparse.Namespace) -> int:
+	heal_issue = _positive_int(args.heal_issue)
+	if not is_valid_repo_slug(args.repo) or heal_issue is None:
+		raise ValueError("invalid repo or heal issue")
+	fp = heal_port_fingerprint(args.repo, heal_issue)
+	if args.operation == "fingerprint":
+		sys.stdout.write(fp + "\n")
+		return 0
+	response = _load_json_file(args.response_json)
+	if args.operation == "check":
+		_write_json(heal_port_check(response, fp=fp, heal_issue=heal_issue))
+		return 0
+	pr_number = _positive_int(args.pr)
+	if pr_number is None:
+		raise ValueError("invalid pr number")
+	issue = _heal_port_issue(_heal_port_data(response), heal_issue)
+	if issue is None:
+		raise ValueError("heal issue missing from the port lookup")
+	parent_body = str(issue.get("body") or "")
+	title, body = compose_heal_port_issue(
+		repo=args.repo, heal_issue=heal_issue, pr_number=pr_number, merge_sha=args.merge_sha,
+		default_branch=args.default_branch, default_sha=args.default_sha, parent_title=str(issue.get("title") or ""),
+		parent_body=parent_body, stat_text=Path(args.stat_file).read_text(encoding="utf-8", errors="replace"),
+		intake_run_url=args.intake_run_url,
+	)
+	reason = validate_heal_issue_body_routing(body, target_branch=args.default_branch, integration_branch=None)
+	if reason:
+		print(f"WORKFLOW_HEAL error body_validation_failed reason={reason}", file=sys.stderr)
+		return 1
+	# The scope marker is appended after routing validation (same order as
+	# _cmd_compose_issue): the merged diff's paths are the port's scope, and
+	# the run refs come from the parent's own shape-checked marker.
+	runs: list[str] = []
+	parent_scope = HEAL_SCOPE_RE.search(parent_body)
+	if parent_scope and _heal_scope_marker_shape_ok(parent_scope.group(1).split(","), parent_scope.group(2).split(",")):
+		runs = parent_scope.group(2).split(",")
+	changed = [path for path in Path(args.paths_file).read_text(encoding="utf-8", errors="replace").split("\0") if path]
+	diff_set = set(changed)
+	marker = render_heal_scope_marker(crash_file=None, workflow_paths=[], changed_files=changed, exists=lambda path: path in diff_set, runs=runs) if runs else ""
+	rendered = HEAL_SCOPE_RE.fullmatch(marker)
+	if not rendered or not _heal_scope_marker_shape_ok(rendered.group(1).split(","), rendered.group(2).split(",")):
+		_write_json({"reason": "scope_unavailable"})
+		return 3
+	body = body.rstrip() + "\n\n" + marker + "\n"
+	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
+	Path(args.body_out).write_text(body, encoding="utf-8")
+	_write_json({"reason": "", "fp": fp})
+	return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -11032,6 +11223,23 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--parent-issue", default="")
 	p.add_argument("--pipeline-login", default="")
 	p.set_defaults(func=_cmd_heal_scope)
+
+	# Heal port to the default branch (P6 step 2; scripts/heal_port_to_default.sh).
+	p = sub.add_parser("heal-port", help="Port a merged stable heal to the default branch: port fingerprint, existing-port check, or port issue body")
+	p.add_argument("operation", choices=("fingerprint", "check", "compose"))
+	p.add_argument("--repo", required=True)
+	p.add_argument("--heal-issue", required=True)
+	p.add_argument("--response-json", default="")
+	p.add_argument("--pr", default="")
+	p.add_argument("--merge-sha", default="")
+	p.add_argument("--default-branch", default="")
+	p.add_argument("--default-sha", default="")
+	p.add_argument("--paths-file", default="")
+	p.add_argument("--stat-file", default="")
+	p.add_argument("--intake-run-url", default="")
+	p.add_argument("--title-out", default="")
+	p.add_argument("--body-out", default="")
+	p.set_defaults(func=_cmd_heal_port)
 
 	p = sub.add_parser("heal-scope-recovery", help="Decide whether a markerless heal issue may be replaced (check), print the recovery marker (marker) or scan marker (scan-marker), or rebuild its report for the recovery scan (reconstruct)")
 	p.add_argument("operation", choices=("check", "marker", "reconstruct", "scan-marker"))
