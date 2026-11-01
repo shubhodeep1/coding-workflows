@@ -2932,7 +2932,8 @@ jobs:
             case "${sf_rc}" in
               ''|*[!0-9]*) sf_rc=1 ;;
             esac
-            # Timing is telemetry only: a missing or non-numeric time gives 0.
+            # Timing is telemetry only: a missing or non-numeric start time gives 0;
+            # a missing or non-numeric end time is replaced by the current clock.
             sf_start_ms="$(cat "${sf_stem}.start_ms" 2>/dev/null || true)"
             sf_end_ms="$(cat "${sf_stem}.end_ms" 2>/dev/null || true)"
             case "${sf_end_ms}" in
