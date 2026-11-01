@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_checkout_integration_ref_audit.py:(no line given) | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI test failure caused by the PR changes.\n  WHY: The reviewer said the audit test expects the TG cleanup script to follow staging contracts that the diff likely violated. It rated this BLOCKER. Anthropic, minimax and z-ai found no causal path from the diff to the failure, so the reviewers disagree on whether it is a defect.\n- changelog.d/8600-tg-cleanup-snapshot-retain.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog says each comment-page read times out after 30 seconds, but 30 seconds is the limit for each attempt only.\n  WHY: `curl_gh_api` retries up to 5 times by default with backoff, so a stalled read can take about 150-165 seconds. Safety is unaffected, because the snapshot returns 1 and deletes nothing. All reviewers rated it NIT. Minimax judged the wording technically accurate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Also run the existing tests that touch these functions: tests/test_tracking_comment_cap.py and tests/test_orchestrate_poll_process.py -k tg.\"\n  expected_change_site: .github/workflows/ci.yml\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The diff adds tests/test_tg_helpers_cleanup.py but does not add tests/test_orchestrate_poll_process.py -k tg to the test command. Anthropic and z-ai disputed this gap, saying that file already runs in its own CI steps.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/8600-tg-cleanup-snapshot-retain.md:2 | severity=NIT | confidence=4\n  PROBLEM: The 30-second limit applies to each attempt, not to the whole read. `curl_gh_api` (scripts/gh_helpers.sh:1504-1557) runs up to `GH_RETRY_MAX_ATTEMPTS` attempts (default 5).\n  WHY: A stalled read can hold cleanup for about 150 seconds plus backoff. Safety is unaffected, so this is a wording problem only.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_checkout_integration_ref_audit.py:CI failure reported in pre-push check | severity=BLOCKER | confidence=4\n  PROBLEM: CI test failure caused by the PR changes.\n  WHY: The audit test expects the TG cleanup script to follow staging contracts that the diff likely violated, indicating a structural regression in how helpers are staged or executed.\n- changelog.d/8600-tg-cleanup-snapshot-retain.md:2 | severity=NIT | confidence=4\n  PROBLEM: The changelog claims comment-page reads time out after 30 seconds.\n  WHY: This is inaccurate because `curl_gh_api` has built-in retries (default 5 attempts) and backoff.\n- TASK_GAP:\n  Requirement: \"Also run the existing tests that touch these functions: tests/test_tracking_comment_cap.py and tests/test_orchestrate_poll_process.py -k tg.\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The diff adds tests/test_tg_helpers_cleanup.py but does not include tests/test_orchestrate_poll_process.py -k tg in the test command.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/8600-tg-cleanup-snapshot-retain.md:2 | severity=NIT | confidence=4\n  PROBLEM: The changelog describes each comment-page read as timing out after 30 seconds, but `curl_gh_api` retries failed requests up to five times by default with exponential backoff.\n  WHY: Repeated transport failures can take about 165 seconds (five 30-second attempts plus 15 seconds of backoff), so the 30-second figure does not describe the total read duration.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/8600-tg-cleanup-snapshot-retain.md:2 | severity=NIT | confidence=4\n  PROBLEM: The 30-second ceiling is per curl attempt only. `curl_gh_api` (scripts/gh_helpers.sh:1506, `GH_RETRY_MAX_ATTEMPTS` default 5) retries with exponential backoff (gh_helpers.sh:1544-1548) before the final `::error::` (gh_helpers.sh:1555).\n  WHY: This is not a runtime failure. A stalled read can hold cleanup for about 165 seconds, while the changelog implies about 30. Safety is unaffected. The code comment at scripts/tg_helpers.sh:278-279 is worded correctly.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "86860524de701cdd0963ff66dcfcd377b6a23cfa3d10238037f82d854b4a662f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8605,
+    "run_id": "41294438767",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41294438767",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101100258_c3119b266c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8605,
+    "run_id": "41294438767"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T10:02:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
