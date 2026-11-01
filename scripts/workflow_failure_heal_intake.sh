@@ -43,6 +43,13 @@
 #      issues the failed jobs' logs name, and (self repo only) the commits on
 #      the default branch that are not on the heal issue's target branch (the
 #      failed run's branch), at most 5 extra GitHub GETs (#8475).
+#      WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED=true (default false, P6 step 1,
+#      Refs #8434) routes a workflow-defect / inconclusive heal of this
+#      repository's workflow_run report to the branch the failing child run's
+#      code came from (a linked or issue-linked run on another branch whose
+#      workflow is in the frozen scope), writes `- **Code ran from:**
+#      <branch>@<sha>` in the body, and logs `code_ref outcome=... reason=...`;
+#      0 extra GETs with evidence-pack data, otherwise at most 3.
 #   3. Fingerprints the failure (workflow + failing step + normalised error
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
@@ -366,6 +373,13 @@ HEAL_LAST_GREEN_CACHE_FILE="${RUNTIME_DIR}/last_green_run.json"
 SUSPECT_SCOPE_ENABLED="${WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED:-false}"
 SUSPECT_SCOPE_PATHS_JSON='[]'
 SUSPECT_SCOPE_HANDOFF_FILE="${RUNTIME_DIR}/suspect_scope/handoff.json"
+# Code-ref routing (P6 step 1, Refs #8434): only the literal 'true' turns it on.
+CODE_REF_ROUTING_ENABLED="${WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED:-false}"
+CODE_REF_LINE=""
+CODE_REF_OUTCOME="skipped"
+CODE_REF_REASON="disabled"
+CODE_REF_PRIOR_TARGET=""
+CODE_REF_PRIOR_SOURCE=""
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
@@ -3703,6 +3717,107 @@ _heal_build_suspect_commits()
 }
 _heal_build_suspect_commits || { SUSPECT_COMMITS_FILE=""; log "suspect_commits outcome=partial reason=helper_failed"; }
 
+# --- Code-ref routing (P6 step 1, Refs #8434) --------------------------------
+
+# _heal_code_ref_route
+#   With WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED=true, runs inside the Route
+#   block's workflow-defect / inconclusive arm after today's target is chosen
+#   and before _open_issue renders the routing header. `code-ref` (pure
+#   Python) picks the failing child run: the last eligible run the failed logs
+#   link to (${RUNTIME_DIR}/linked_runs/, already read by
+#   _heal_fetch_linked_runs), else the newest eligible issue-linked run of the
+#   evidence pack's reads (${RUNTIME_DIR}/evidence_pack_api/, P1). When its
+#   branch differs from the failed run's branch and the current target, its
+#   workflow is in the frozen `self_workflows` scope and the routing probe
+#   (validate_heal_issue_body_routing) accepts it, TARGET_BRANCH becomes that
+#   branch (TARGET_BRANCH_SOURCE=code_ref); the Route block's branch-exists
+#   check restores the prior target when it is missing. Sets CODE_REF_LINE
+#   (`<branch>@<sha>`, or the payload's script_ref when no child qualifies),
+#   CODE_REF_OUTCOME and CODE_REF_REASON. Only this repository's workflow_run
+#   reports (and, for the line only, autofix_failure reports with a
+#   script_ref) qualify. A helper failure keeps today's target.
+_heal_code_ref_route()
+{
+	local code_ref_dir="${RUNTIME_DIR}/code_ref"
+	local code_ref_json="" code_ref_requests_json="" code_ref_id="" code_ref_exclude_ids="" code_ref_api_dir=""
+	local code_ref_branch="" code_ref_retarget="" code_ref_outcome="" code_ref_reason=""
+	local -a code_ref_logs=() code_ref_extra_args=()
+	[ "${CODE_REF_ROUTING_ENABLED}" = true ] || return 0
+	CODE_REF_LINE=""
+	if [ "${SOURCE_REPO,,}" != "${SELF_REPO,,}" ] \
+		|| { [ "${SOURCE_KIND:-}" != workflow_run ] && { [ "${SOURCE_KIND:-}" != autofix_failure ] || [ -z "${PAYLOAD_SCRIPT_REF:-}" ]; }; }; then
+		CODE_REF_OUTCOME=skipped
+		CODE_REF_REASON=not_eligible
+		return 0
+	fi
+	# Stale responses from an earlier call must never be reused; the directory
+	# is this function's own scratch space under RUNTIME_DIR.
+	rm -rf "${code_ref_dir}"
+	if [ "${SOURCE_KIND}" = workflow_run ] && [ -s "${SUMMARIES_FILE:-}" ]; then
+		mapfile -t code_ref_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+		code_ref_exclude_ids="$(jq -r '[.run_refs[]?.run_id | tostring] | join(",")' "${PAYLOAD_FILE:-}" 2>/dev/null || true)"
+	fi
+	if [ "${EVIDENCE_PACK_ENABLED}" = true ]; then
+		# P1 data: issue-linked runs from the evidence pack's reads; no GET here.
+		code_ref_api_dir="${RUNTIME_DIR}/evidence_pack_api"
+	elif [ "${#code_ref_logs[@]}" -gt 0 ]; then
+		# API budget (CLAUDE.md §14): audited reads first. _heal_fetch_linked_runs
+		# already saved ${RUNTIME_DIR}/linked_runs/run-<id>.json for the linked
+		# runs it read, and `code-ref-requests` leaves those out; the P1 runs
+		# listing (_heal_fetch_evidence_pack_api) is not read with the pack off,
+		# and adding it would exceed this step's budget. What remains is one
+		# single-attempt `GET actions/runs/<id>` per uncached log-linked run, at
+		# most 3 (CODE_REF_MAX_LOOKUPS).
+		code_ref_requests_json="$(python3 "${HEAL_PY}" code-ref-requests --log-files "${code_ref_logs[@]}" --repo "${SOURCE_REPO}" \
+			--exclude-run-ids "${code_ref_exclude_ids}" --linked-dir "${RUNTIME_DIR}/linked_runs" 2>/dev/null)" || code_ref_requests_json='[]'
+		jq -e 'type == "array"' <<< "${code_ref_requests_json}" >/dev/null 2>&1 || code_ref_requests_json='[]'
+		mkdir -p "${code_ref_dir}" || { CODE_REF_OUTCOME=partial; CODE_REF_REASON=helper_failed; return 0; }
+		while IFS= read -r code_ref_id; do
+			[[ "${code_ref_id}" =~ ^[0-9]+$ ]] || continue
+			if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${code_ref_dir}/run-${code_ref_id}.json" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${code_ref_id}" 2>/dev/null; then
+				rm -f "${code_ref_dir}/run-${code_ref_id}.json"
+				code_ref_extra_args=(--lookup-failed)
+				continue
+			fi
+			# Same identity and repository checks as _heal_fetch_linked_runs.
+			if ! jq -e --arg id "${code_ref_id}" --arg repo "${SOURCE_REPO}" \
+				'type == "object" and ((.id | tostring) == $id) and (.repository.full_name | type == "string") and ((.repository.full_name | ascii_downcase) == ($repo | ascii_downcase))' \
+				"${code_ref_dir}/run-${code_ref_id}.json" >/dev/null 2>&1; then
+				rm -f "${code_ref_dir}/run-${code_ref_id}.json"
+				code_ref_extra_args=(--lookup-failed)
+			fi
+		done < <(jq -r '.[:3][] | tostring' <<< "${code_ref_requests_json}" 2>/dev/null)
+	fi
+	if ! code_ref_json="$(python3 "${HEAL_PY}" code-ref --repo "${SOURCE_REPO}" \
+		--failed-head-branch "${HEAD_BRANCH:-}" --current-target "${TARGET_BRANCH:-}" --integration-branch "" \
+		--scope-json "${SCOPE_INPUTS_FROZEN:-}" --log-files "${code_ref_logs[@]}" --exclude-run-ids "${code_ref_exclude_ids}" \
+		--linked-dir "${RUNTIME_DIR}/linked_runs" --fetched-dir "${code_ref_dir}" --evidence-api-dir "${code_ref_api_dir}" \
+		--script-ref "${PAYLOAD_SCRIPT_REF:-}" --mirror-branch "${HEAL_PIPELINE_MIRROR_BRANCH}" "${code_ref_extra_args[@]}" 2>/dev/null)" \
+		|| ! jq -e 'type == "object" and (.outcome | type == "string") and (.reason | type == "string")' <<< "${code_ref_json}" >/dev/null 2>&1; then
+		CODE_REF_OUTCOME=partial
+		CODE_REF_REASON=helper_failed
+		return 0
+	fi
+	code_ref_outcome="$(jq -r '.outcome' <<< "${code_ref_json}" 2>/dev/null | tr -cd 'a-z_' | head -c 20 || true)"
+	code_ref_reason="$(jq -r '.reason' <<< "${code_ref_json}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+	CODE_REF_OUTCOME="${code_ref_outcome:-partial}"
+	CODE_REF_REASON="${code_ref_reason:-helper_failed}"
+	# compose-issue validates the line again; the filter keeps it one token.
+	CODE_REF_LINE="$(jq -r '.line // ""' <<< "${code_ref_json}" 2>/dev/null | tr -cd 'A-Za-z0-9._/@-' | head -c 260 || true)"
+	code_ref_retarget="$(jq -r 'if .retarget == true then "true" else "false" end' <<< "${code_ref_json}" 2>/dev/null || echo false)"
+	if [ "${code_ref_retarget}" = true ] && [ "${SOURCE_KIND}" = workflow_run ]; then
+		code_ref_branch="$(jq -r '.branch // ""' <<< "${code_ref_json}" 2>/dev/null | tr -cd 'A-Za-z0-9._/-' | head -c 200 || true)"
+		if [[ "${code_ref_branch}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]] && [[ "${code_ref_branch}" != *..* ]] && [ "${code_ref_branch}" != "${TARGET_BRANCH}" ]; then
+			CODE_REF_PRIOR_TARGET="${TARGET_BRANCH}"
+			CODE_REF_PRIOR_SOURCE="${TARGET_BRANCH_SOURCE}"
+			log "target_branch_retarget from=${TARGET_BRANCH:-default} to=${code_ref_branch} reason=code_ref"
+			TARGET_BRANCH="${code_ref_branch}"
+			TARGET_BRANCH_SOURCE=code_ref
+		fi
+	fi
+	return 0
+}
+
 # --- Run the diagnosis model -----------------------------------------------
 
 PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
@@ -4217,6 +4332,12 @@ _open_issue()
 	if [ "${CAUSE_GROUPING_ENABLED}" = true ] && [ -n "${CAUSE_KEY}" ]; then
 		cause_args=(--cause "${CAUSE_KEY}")
 	fi
+	# Code-ref routing (P6 step 1): the `Code ran from` line, only with the
+	# switch on and a line, so a switch-off body is byte-identical.
+	local -a code_ref_args=()
+	if [ "${CODE_REF_ROUTING_ENABLED}" = true ] && [ -n "${CODE_REF_LINE}" ]; then
+		code_ref_args=(--code-ran-from "${CODE_REF_LINE}")
+	fi
 	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${compose_payload_file}" \
 		--diagnosis-file "${DIAG_FILE}" \
@@ -4231,7 +4352,7 @@ _open_issue()
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
-		--body-out "${body_file}" "${cause_args[@]}" "${evidence_pack_args[@]}" "${reproduction_args[@]}" "${trend_args[@]}" "${suspect_commits_args[@]}"; then
+		--body-out "${body_file}" "${cause_args[@]}" "${code_ref_args[@]}" "${evidence_pack_args[@]}" "${reproduction_args[@]}" "${trend_args[@]}" "${suspect_commits_args[@]}"; then
 		log "error issue_compose_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
 		tg_send_msg "Workflow failure heal FAILED to compose a safe issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		return 1
@@ -4340,6 +4461,8 @@ case "${CLASSIFICATION}" in
 					;;
 			esac
 		fi
+		# Code-ref routing (P6 step 1): a no-op unless the switch is on.
+		_heal_code_ref_route || { CODE_REF_OUTCOME=partial; CODE_REF_REASON=helper_failed; }
 		if [ -n "${TARGET_BRANCH}" ] && ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
 			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
 				log "warn source_pr_branch_missing branch=${TARGET_BRANCH}; falling back to ${TARGET_BRANCH_DEFAULT}"
@@ -4349,11 +4472,23 @@ case "${CLASSIFICATION}" in
 					log "warn target_branch_missing branch=${TARGET_BRANCH}; issue will target the default branch"
 					TARGET_BRANCH=""
 				fi
+			elif [ "${TARGET_BRANCH_SOURCE}" = "code_ref" ]; then
+				# Fail closed to the target chosen before code-ref routing.
+				log "warn code_ref_branch_missing branch=${TARGET_BRANCH}; falling back to ${CODE_REF_PRIOR_TARGET:-default}"
+				CODE_REF_OUTCOME=partial
+				CODE_REF_REASON=branch_missing
+				TARGET_BRANCH="${CODE_REF_PRIOR_TARGET}"
+				TARGET_BRANCH_SOURCE="${CODE_REF_PRIOR_SOURCE}"
+				if [ -n "${TARGET_BRANCH}" ] && ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
+					log "warn target_branch_missing branch=${TARGET_BRANCH}; issue will target the default branch"
+					TARGET_BRANCH=""
+				fi
 			else
 				log "warn target_branch_missing branch=${TARGET_BRANCH}; issue will target the default branch"
 				TARGET_BRANCH=""
 			fi
 		fi
+		[ "${CODE_REF_ROUTING_ENABLED}" != true ] || log "code_ref outcome=${CODE_REF_OUTCOME} reason=${CODE_REF_REASON}"
 		_open_issue "${SELF_REPO}" "${TARGET_BRANCH}" || exit 1
 		log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} target_branch=${TARGET_BRANCH:-default} fp=${FP} gen=${GEN} root=${ROOT} source=${SOURCE_LABEL} target_branch_source=${TARGET_BRANCH_SOURCE}"
 		HOTFIX_NOTE=""
