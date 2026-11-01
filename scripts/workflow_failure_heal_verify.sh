@@ -570,6 +570,12 @@ _verify_one()
 	fi
 
 	local jobs_file="${RUNTIME_DIR}/jobs_${picked_id}.json" selected_file="${RUNTIME_DIR}/jobs_${picked_id}_selected.json"
+	# Earlier compares of unrelated runs can already have used the budget; a
+	# run on the merge commit itself skipped the in-loop check.
+	if [ $((reads + 1)) -gt "${MAX_READS_PER_HEAL}" ]; then
+		log "outcome=pending issue=${number} reason=read_budget"
+		return 0
+	fi
 	reads=$((reads + 1))
 	TOTAL_READS=$((TOTAL_READS + 1))
 	if ! gh_retry gh api --method GET "repos/${SELF_REPO}/actions/runs/${picked_id}/jobs?filter=latest&per_page=100" > "${jobs_file}" 2>/dev/null \

@@ -356,6 +356,26 @@ def test_compare_plus_jobs_path_stays_within_three_reads(tmp_path: Path) -> None
 	assert "reads=3" in result.stdout
 
 
+def test_unrelated_compares_then_merge_commit_failure_stays_within_three_reads(tmp_path: Path) -> None:
+	runs = [_run(3, MERGE_SHA, "failure", 10), _run(2, DESC_SHA, "success", 6), _run(1, OTHER_SHA, "success", 5)]
+	result, state, _ = _execute(tmp_path, _state([_closed(10)], runs=runs,
+		compare={OTHER_SHA: "behind", DESC_SHA: "behind"}, jobs={"3": _jobs()}))
+	assert result.returncode == 0, result.stderr
+	reads = [call for call in _rest_calls(state) if "PATCH" not in call and "POST" not in call]
+	assert len(reads) == 3
+	assert "outcome=pending issue=10 reason=read_budget" in result.stdout and "reads=3" in result.stdout
+	assert state.get("reopened") is None and state.get("comments") is None
+
+
+def test_truncated_issue_list_logs_a_warning(tmp_path: Path) -> None:
+	state = _state([_closed(10)], runs=[_run(2, MERGE_SHA, "success", 10)])
+	state["graphql"]["data"]["repository"]["closed"]["pageInfo"]["hasNextPage"] = True
+	result, _, _ = _execute(tmp_path, state)
+	assert result.returncode == 0, result.stderr
+	assert "warn reason=list_truncated" in result.stdout
+	assert "outcome=held issue=10 run=2" in result.stdout
+
+
 # --- Extra cases ---------------------------------------------------------------
 
 
