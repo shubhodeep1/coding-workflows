@@ -77,6 +77,8 @@ export GH_RETRY_MAX_ATTEMPTS="${GH_RETRY_MAX_ATTEMPTS:-1}"
 VERIFY_WINDOW_DAYS=7
 MAX_READS_PER_HEAL=3
 MAX_COMPARES_PER_HEAL=2
+# Days after the merge read again when the open-ended runs list is cut off.
+TRUNCATED_WINDOW_DAYS=1
 
 _bounded_int()
 {
@@ -465,10 +467,29 @@ _verify_one()
 		return 0
 	fi
 	# The list is newest-first; a cut-off page can hide the oldest decisive run,
-	# and a verdict from a later run would be final. Wait instead (fail open).
+	# and a verdict from a later run would be final. The open-ended `created>=`
+	# set only grows, so read once more, limited to the first day after the
+	# merge, where the oldest runs are. Still cut off: wait (fail open).
 	if ! jq -e '(.total_count // 0) <= (.workflow_runs | length)' "${runs_file}" >/dev/null 2>&1; then
-		log "outcome=pending issue=${number} reason=runs_truncated"
-		return 0
+		local window_end window_enc
+		if ! window_end="$(python3 -c 'import sys; from datetime import datetime, timedelta; print((datetime.strptime(sys.argv[1], "%Y-%m-%dT%H:%M:%SZ") + timedelta(days=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "${merged_at}" "${TRUNCATED_WINDOW_DAYS}" 2>/dev/null)" \
+			|| ! [[ "${window_end}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+			|| [ $((reads + 1)) -gt "${MAX_READS_PER_HEAL}" ]; then
+			log "outcome=pending issue=${number} reason=runs_truncated"
+			return 0
+		fi
+		window_enc="$(jq -rn --arg value "${merged_at}..${window_end}" '$value | @uri')"
+		reads=$((reads + 1))
+		TOTAL_READS=$((TOTAL_READS + 1))
+		if ! gh_retry gh api --method GET "repos/${SELF_REPO}/actions/workflows/${file}/runs?branch=${branch_enc}&created=${window_enc}&per_page=100" > "${runs_file}" 2>/dev/null \
+			|| ! jq -e '.workflow_runs | type == "array"' "${runs_file}" >/dev/null 2>&1; then
+			log "outcome=error issue=${number} reason=runs_failed"
+			return 0
+		fi
+		if ! jq -e '(.total_count // 0) <= (.workflow_runs | length)' "${runs_file}" >/dev/null 2>&1; then
+			log "outcome=pending issue=${number} reason=runs_truncated"
+			return 0
+		fi
 	fi
 
 	local picked_id="" picked_conclusion="" stopped=false

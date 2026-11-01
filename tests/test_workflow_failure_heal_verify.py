@@ -68,7 +68,12 @@ if "/actions/workflows/" in route and route.endswith("/runs"):
 		fail()
 	name = route.split("/actions/workflows/", 1)[1].rsplit("/runs", 1)[0]
 	runs = state.get("runs", {}).get(name, [])
-	out({"workflow_runs": runs, "total_count": state.get("runs_total", {}).get(name, len(runs))})
+	total = state.get("runs_total", {}).get(name, len(runs))
+	query = path.split("?", 1)[1] if "?" in path else ""
+	if ".." in query:
+		runs = state.get("runs_window", {}).get(name, runs)
+		total = state.get("runs_window_total", {}).get(name, len(runs))
+	out({"workflow_runs": runs, "total_count": total})
 if "/compare/" in route:
 	if "compare" in fails:
 		fail()
@@ -184,6 +189,7 @@ def _execute(tmp_path: Path, state: dict, **env_overrides) -> tuple[subprocess.C
 		"PATH": f"{bin_dir}:{os.environ['PATH']}",
 		"FAKE_GH_STATE": str(state_file), "FAKE_CURL_LOG": str(curl_log),
 		"GITHUB_REPOSITORY": SELF_REPO, "GITHUB_EVENT_NAME": "schedule", "GITHUB_RUN_ID": "4242",
+		"GITHUB_RUN_NUMBER": "0",
 		"WORKFLOW_HEAL_VERIFY_ENABLED": "true", "RUNTIME_DIR": str(tmp_path / "runtime"),
 		"TG_BOT_SECRET": "fake-secret", "TG_CHAT_ID": "1", "TG_ADMIN_CHAT_ID": "1",
 		"ALERT_MSG_LEVEL": "WARNING", "TMPDIR": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1",
@@ -405,10 +411,23 @@ def test_api_failures_fail_open_without_writes(tmp_path: Path, failure, reason) 
 
 def test_truncated_runs_list_stays_pending(tmp_path: Path) -> None:
 	result, state, _ = _execute(tmp_path, _state([_closed(10)], runs=[_run(2, MERGE_SHA, "success", 10)],
-		runs_total={"ci.yml": 150}))
+		runs_total={"ci.yml": 150}, runs_window_total={"ci.yml": 120}))
 	assert result.returncode == 0, result.stderr
 	assert "outcome=pending issue=10 reason=runs_truncated" in result.stdout
 	assert state.get("comments") is None and state.get("reopened") is None
+
+
+def test_truncated_runs_list_reads_the_first_day_after_the_merge(tmp_path: Path) -> None:
+	newest = [_run(9, MERGE_SHA, "success", 600)]
+	window = [_run(3, MERGE_SHA, "success", 30), _run(2, MERGE_SHA, "failure", 10)]
+	result, state, _ = _execute(tmp_path, _state([_closed(10)], runs=newest, runs_total={"ci.yml": 150},
+		runs_window={"ci.yml": window}, jobs={"2": _jobs()}))
+	assert result.returncode == 0, result.stderr
+	runs_calls = [call for call in _rest_calls(state) if any("/runs?" in a for a in call)]
+	assert len(runs_calls) == 2
+	window_end = _iso(MERGED_AT + timedelta(days=1)).replace(":", "%3A")
+	assert any(window_end in a and ".." in a for a in runs_calls[1])
+	assert "outcome=recurred issue=10 run=2" in result.stdout and "reads=3" in result.stdout
 
 
 def test_start_rotates_with_run_number(tmp_path: Path) -> None:
