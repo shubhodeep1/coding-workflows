@@ -1671,16 +1671,88 @@ jobs:
             sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
           fi
 
+          # Issue #8602: each failed attempt also prints one
+          # CLARIFY_ENGINE_ATTEMPT_FAILED line naming the Claude pool outcome
+          # and reason, taken from the last "CLAUDE_POOL run" line the isolated
+          # runner wrote to stderr. The heal intake's log filter keeps
+          # *_FAILED lines but drops the runner's ##[warning] lines, so this is
+          # the line that carries the cause into heal evidence. Only five
+          # whitelisted keys are re-emitted, each value limited to
+          # [A-Za-z0-9_.-] and 64 characters; raw CLI stderr is never re-emitted.
+          _clarify_attempt_stderr_capture_start() {
+            local previous_bg="${!:-}"
+            clarify_stderr_saved_fd=""
+            clarify_stderr_tee_pid=""
+            exec {clarify_stderr_saved_fd}>&2 2> >(tee "${clarify_attempt_stderr_file}" >&2) || {
+              clarify_stderr_saved_fd=""
+              # Fixed text only: tells "capture failed" apart from "no pool line".
+              echo "::warning::CLARIFY_ENGINE_ATTEMPT_STDERR_CAPTURE_FAILED attempt=${attempt:-unknown}" || true
+              return 0
+            }
+            if [ "${!:-}" != "${previous_bg}" ]; then clarify_stderr_tee_pid="${!:-}"; fi
+            return 0
+          }
+          _clarify_attempt_stderr_capture_stop() {
+            # Restore stderr, then give tee up to 10 seconds to flush; a
+            # process still holding the pipe never blocks the step.
+            local tee_waited=0
+            if [ -n "${clarify_stderr_saved_fd:-}" ]; then
+              exec 2>&"${clarify_stderr_saved_fd}" {clarify_stderr_saved_fd}>&- || true
+            fi
+            clarify_stderr_saved_fd=""
+            if [ -n "${clarify_stderr_tee_pid:-}" ]; then
+              while [ "${tee_waited}" -lt 100 ] && kill -0 "${clarify_stderr_tee_pid}" 2>/dev/null; do
+                command sleep 0.1 || break
+                tee_waited=$((tee_waited + 1))
+              done
+            fi
+            clarify_stderr_tee_pid=""
+            return 0
+          }
+          _clarify_emit_attempt_failed() {
+            local fail_exit_code="$1" fail_kind="$2" pool_line="" pool_token pool_key pool_value
+            local pool_role=unknown pool_account=unknown pool_outcome=unknown pool_reason=unknown pool_exit_code=unknown
+            local -a pool_tokens=()
+            fail_exit_code="$(printf '%s' "${fail_exit_code}" | tr -cd '0-9' | cut -c1-8 || true)"
+            [ -n "${fail_exit_code}" ] || fail_exit_code=unknown
+            if [ "${CLARIFY_ENGINE}" = "claude" ] && [ -f "${clarify_attempt_stderr_file}" ]; then
+              # No ^ anchor: the runner copies raw CLI stderr just before its pool
+              # line, so an unterminated last CLI line can share a line with it.
+              pool_line="$(grep -a -o 'CLAUDE_POOL run .*' "${clarify_attempt_stderr_file}" 2>/dev/null | tail -n 1 || true)"
+            fi
+            if [ -n "${pool_line}" ]; then
+              read -r -a pool_tokens <<< "${pool_line}" || true
+              for pool_token in "${pool_tokens[@]}"; do
+                pool_key="${pool_token%%=*}"
+                [ "${pool_key}" != "${pool_token}" ] || continue
+                pool_value="$(printf '%s' "${pool_token#*=}" | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || true)"
+                [ -n "${pool_value}" ] || pool_value=unknown
+                case "${pool_key}" in
+                  role) pool_role="${pool_value}" ;;
+                  account) pool_account="${pool_value}" ;;
+                  outcome) pool_outcome="${pool_value}" ;;
+                  reason) pool_reason="${pool_value}" ;;
+                  exit_code) pool_exit_code="${pool_value}" ;;
+                esac
+              done
+            fi
+            echo "CLARIFY_ENGINE_ATTEMPT_FAILED engine=${clarify_engine_name} attempt=${attempt} max_attempts=${max_attempts} kind=${fail_kind} exit_code=${fail_exit_code} pool_role=${pool_role} pool_account=${pool_account} pool_outcome=${pool_outcome} pool_reason=${pool_reason} pool_exit_code=${pool_exit_code}" || true
+            return 0
+          }
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3
+          clarify_attempt_stderr_file="${RUNTIME_DIR}/clarify_attempt_stderr.txt"
           for attempt in $(seq 1 "${max_attempts}"); do
             # Name the engine that actually runs, so a Claude run is not logged as Codex.
             clarify_engine_name="Codex"
             if [ "${CLARIFY_ENGINE}" = "claude" ]; then clarify_engine_name="Claude"; fi
             echo "${clarify_engine_name} clarify attempt ${attempt}/${max_attempts}..."
             rc=0
+            : > "${clarify_attempt_stderr_file}" 2>/dev/null || true
             if [ "${CLARIFY_ENGINE}" = "claude" ]; then
+              _clarify_attempt_stderr_capture_start || true
               bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY || rc=$?
+              _clarify_attempt_stderr_capture_stop || true
               if [ "${rc}" -eq 80 ]; then
                 # Claude capacity wait (issue #7370): never codex, no retries.
                 # Later output steps skip; the report step records the wait
@@ -1706,8 +1778,10 @@ jobs:
                 break
               fi
               echo "::warning::${clarify_engine_name} returned empty output on attempt ${attempt}."
+              _clarify_emit_attempt_failed 0 empty_output || true
             else
               echo "::warning::${clarify_engine_name} exited with code $rc on attempt ${attempt}."
+              _clarify_emit_attempt_failed "${rc}" nonzero_exit || true
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
