@@ -3204,10 +3204,13 @@ poll cycle that fetched the pool (a tracking issue with work and a Claude
 role). It reads the `probes` output and sends one Telegram notice at `DEBUG`
 when accounts are only gated, or at `WARNING` when a token is rejected or a
 probe fails. The notice uses `TG_BOT_SECRET` / `TG_ADMIN_CHAT_ID` (the same chat
-as the engine fallback alert) and names every account at or above `gate_utilization` with
-both utilizations and the reset time of each window at the gate, every
-account whose token was rejected (`auth_failed`), and the usable count;
-accounts whose probe failed are listed but not counted. Nothing is sent
+as the engine fallback alert) and lists every probed account with both
+utilizations and the hours until each window resets (`5h 13% (resets in
+1.3h)`), adding the UTC reset time of each window at or above
+`gate_utilization`; it also names every account whose token was rejected
+(`auth_failed`) and gives the usable count. Accounts whose probe failed are
+listed but not counted. The capacity-wait line gives the earliest reset as a
+UTC time plus hours (`earliest reset 2026-11-01 01:00 UTC (in 0.8h)`). Nothing is sent
 while every account is below the gate. The poller runs every five minutes,
 so the message goes out at most once an hour: only the cycle whose UTC
 minute is below `CLAUDE_POOL_HEALTH_WINDOW_MINUTES` (default `5`) sends it,
@@ -3219,7 +3222,8 @@ and never fails the job.
 
 **Daily usage report.** Once a day `orchestrate_poll.yml` sends one Telegram
 message listing every Claude pool account with its 5-hour and 7-day
-utilization, the reset time of any window at or above `gate_utilization`,
+utilization, the hours until each window resets, the UTC reset time of any
+window at or above `gate_utilization`,
 rejected tokens and failed probes. It runs in `shubhodeep1/coding-workflows`
 only, because the pool is shared by every consumer repo. In the poll job,
 "Check Claude pool daily usage slot" (`scripts/claude_pool_daily_usage.sh
