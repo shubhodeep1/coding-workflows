@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/heal-suspect-scope.md:2 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The fragment sentence \"when P4 finds no usable baseline, its compare fails, is malformed or is `behind`, or the helper fails (`helper_failed`), no handoff is written and the reproduction and P3 steps repeat their own lookups, so that fail-open path can exceed 9\" overstates the repeated calls. When `created_at` is invalid, P4, reproduction and P3 all skip the last-green lookup, so 0 calls are made. When reproduction does its own last-green lookup and caches it (`HEAL_LAST_GREEN_CACHE_FILE` / `--last-green-json`), P3 reuses that result and repeats only the compare.\n  WHY: This is the operator-facing contract for the `suspect_scope`/`suspect_commits` `calls=` diagnostics and the GH_PAT budget, and it does not match the control flow in scripts/workflow_failure_heal_intake.sh:3377-3400, 3638-3659 and scripts/workflow_failure_heal.py:7073-7089, 7300, 7320. All four reviewers rated it NIT, which is mapped to low here. Nothing breaks at runtime because the change is documentation only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/heal-suspect-scope.md:Line 2 | severity=NIT | confidence=3\n  PROBLEM: The sentence says both later steps always repeat their own lookups when no handoff exists, and two cases contradict this:\n  - With `TREND_ENABLED=true`, reproduction writes `HEAL_LAST_GREEN_CACHE_FILE` (scripts/workflow_failure_heal_intake.sh:3388-3395), and `_heal_build_suspect_commits` reuses it through `--last-green-json` (scripts/workflow_failure_heal_intake.sh:3639-3645), so P3 repeats only the compare.\n  - When there is no valid `created_at`, P4 returns `no_last_green` with no call. Reproduction then takes `run_unavailable` (`repro_before` is emptied at line 3378, else-branch at line 3399), and `suspect_before` is emptied at line 3624. None of the three steps makes a last-green call.\n  WHY: This is documentation only, but it is the operator-facing contract for the `calls=` diagnostics and it misstates which GETs happen. Suggested wording: \"the reproduction step repeats its last-green lookup (and, with the trend on, caches it for P3), and P3 repeats its compare, so that fail-open path can exceed 9.\"\n- TASK COMPLETENESS: NONE. The reviewer states that the diff covers every deliverable in issue #8596.\n- HARDENING_SUGGESTION: scripts/workflow_failure_heal_intake.sh `_heal_run_reproduction`, handoff match at lines 3379-3382 (`--arg branch \"${HEAD_BRANCH:-}\"`)\n  - Issue: The handoff stores `branch` only after it passes `^[A-Za-z0-9._/-]{1,255}$`, and stores an empty string otherwise. The reproduction step compares it with the raw `HEAD_BRANCH`, so a branch outside that set never matches. The extra last-green call is safe, but it loses the saved GET and differs from `_heal_build_suspect_commits`, which uses the checked `suspect_branch`.\n  - Fix: compute a local checked branch (empty when `HEAD_BRANCH` fails the regex) and pass it as `$branch`. Estimated 3 lines; HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/heal-suspect-scope.md:Line 2 (the \"Workflow architecture\" paragraph) | severity=NIT | confidence=3\n  PROBLEM: The clause \"the reproduction and P3 steps repeat their own lookups\" overstates which steps repeat:\n  - With `before` empty, `_heal_scope_suspect_paths` reaches `heal_suspect_scope` at workflow_failure_heal.py:7320 and returns `no_last_green` with 0 calls. `_heal_run_reproduction` at scripts/workflow_failure_heal_intake.sh:3379-3391 then skips both its handoff branch and its `last-green-run` branch.\n  - `_heal_build_suspect_commits` at scripts/workflow_failure_heal_intake.sh:3653-3659 overwrites `last_green.json` from the handoff when the keys match. It invokes its own `last_green_run` only when the handoff is missing AND the reproduction cache is empty.\n  WHY: In the empty-`before` case the \"exceed 9\" bound does not hold: the worst case is 1 call (P3's `last_green_run` only). Operators budgeting GH_PAT calls per report can be misled.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/heal-suspect-scope.md:Line 2 | severity=NIT | confidence=5\n  PROBLEM: The claim that \"the reproduction and P3 steps repeat their own lookups\" overstates the repeated API calls. With no valid `created_at`, both steps skip the last-green lookup. If reproduction retries P4's unsuccessful lookup, P3 can reuse its cached result.\n  WHY: The documented call budget does not match the control flow in `scripts/workflow_failure_heal_intake.sh:3377-3400, 3638-3644` and `scripts/workflow_failure_heal.py:7073-7089`, so operators can expect calls that the workflow does not make.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/heal-suspect-scope.md:line 2 (related code: scripts/workflow_failure_heal.py:7300 `if not before:`; scripts/workflow_failure_heal_intake.sh:3377-3388 and 3640-3644) | severity=NIT | confidence=4\n  PROBLEM: \"Repeat their own lookups\" does not hold on every path the sentence names:\n  - With an invalid `created_at`, P4 returns `partial/no_last_green` with 0 calls (workflow_failure_heal.py:7300). Reproduction skips its lookup because `repro_before` is emptied (scripts/workflow_failure_heal_intake.sh:3378, 3388), and P3's `suspect_commits` resolves no baseline without a call, so the report cannot exceed 9.\n  - The claim does hold for the compare-failed, malformed and behind sub-paths.\n  WHY: An operator who sees `WORKFLOW_HEAL suspect_scope outcome=partial reason=no_last_green calls=0` and checks GH_PAT_BUDGET finds that the documented claim contradicts the logs.\n- TASK COMPLETENESS: NONE. The reviewer states that all issue deliverables are present.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dbf30506cb0b797b267ff60b2748e6b46577f47d6d4ecc70e4bb80d0cb15b7dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8597,
+    "run_id": "41294681190",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41294681190",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101101159_a1e5392658",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8597,
+    "run_id": "41294681190"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T10:11:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
