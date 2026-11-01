@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/tg_helpers.sh:366-368 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The cleanup loops use `[[ \"${comment_id}\" =~ ^[0-9]+$ ]] || continue` and `[[ \"${id_list}\" =~ ^[0-9]+(,[0-9]+)*$ ]] || continue` (lines 366-368 and 463-465). They skip records that fail validation without logging or counting them.\n  WHY: Operators cannot tell processed records from records skipped because of corruption or injection, which makes debugging harder. The reviewer rated this MAJOR, which is mapped to high here.\n- scripts/tg_helpers.sh:361 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_tg_snapshot_tracking_entries` returns 1 when `author_login` is empty, so `tg_cleanup_phase_msgs` and `tg_cleanup_msgs` return 0.\n  WHY: The callers report success even though no Telegram messages were deleted, which hides the identity-resolution failure. The reviewer rated this MAJOR, which is mapped to high here. Two other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) said this path is unreachable, because `_tg_tracking_author_login` always sets a non-empty value.\n- tests/test_tg_helpers_cleanup.py:447 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `test_unresolved_identity_is_looked_up_once_per_process` asserts `<= 2` on the `/user` call count, so it does not strictly verify once-per-process caching.\n  WHY: A regression that re-introduces per-call `/user` retries would still pass this assertion. The reviewer rated this a NIT, and it is a test-quality gap with no production impact.\n- scripts/tg_helpers.sh:310-313,333-334 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `_TG_TRACKING_AUTHOR_FALLBACK` cache applies to every `/user` failure, including transient transport failures. It is not limited to the permanent 403 case that the comment at lines 315-316 justifies.\n  WHY: After one transient failure, the process keeps the `github-actions[bot]`-only trust set and skips the pipeline's own markers. The reviewer rated this a NIT and called it a fail-closed tradeoff, not a security defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/tg_helpers.sh:366-368 and 463-465 | severity=MAJOR | confidence=4\n  PROBLEM: The cleanup loops skip records that fail the `comment_id` or `id_list` validation with `|| continue`, and they do not log or count the skips.\n  WHY: Operators cannot tell processed records from records skipped because of corruption or injection, which makes debugging cleanup failures harder.\n- scripts/tg_helpers.sh:361 | severity=MAJOR | confidence=4\n  PROBLEM: `_tg_snapshot_tracking_entries` returns 1 when `author_login` is empty, so `tg_cleanup_phase_msgs` and `tg_cleanup_msgs` return 0.\n  WHY: The callers report success although no Telegram messages were deleted, which hides the identity-resolution failure from higher-level logs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_tg_helpers_cleanup.py:447 | severity=NIT | confidence=3\n  PROBLEM: `test_unresolved_identity_is_looked_up_once_per_process` asserts the `/user` call count as `<= 2`, which would also pass under the pre-fix retry behavior.\n  WHY: This is a test-quality gap, not a runtime defect. Only the sibling warning-count `== 1` assertion verifies the caching.\n- scripts/tg_helpers.sh:310-313,334 | severity=NIT | confidence=5\n  PROBLEM: This is a positive note. The new `_TG_TRACKING_AUTHOR_FALLBACK` cache prevents repeated `/user` calls and repeated `::warning::` emissions within a process.\n  WHY: It reduces API pressure and log noise, and it is not a defect.\n- HARDENING: tests/test_tg_helpers_cleanup.py:447 \u2014 tighten the assertion to `== 1` (about 1 line changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/tg_helpers.sh:310-313 and 333-334 | severity=NIT | confidence=3\n  PROBLEM: The `_TG_TRACKING_AUTHOR_FALLBACK` cache covers every `/user` failure mode, not only the permanent 403 case that the comment at lines 315-316 justifies. A transient transport failure therefore downgrades the whole process to the `github-actions[bot]`-only trust set.\n  WHY: Cleanup in that process skips the pipeline's own markers, so some tracking comments and Telegram messages are left behind. The next process retries. This is a fail-closed tradeoff, not a security defect.\n- HARDENING: scripts/tg_helpers.sh:310-313 \u2014 cache only on 403-class failures and keep retrying on transport failures, or accept the tradeoff (\u22646 lines changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4fc82e50b1c902cecc5ec648d7bb034c0819d3df5c0dbe78481b984e2f629ed7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8624,
+    "run_id": "41313916011",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41313916011",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101141753_8c2f278f58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8624,
+    "run_id": "41313916011"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T14:17:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
