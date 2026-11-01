@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When P1 is off, make one GET repos/<repo>/actions/runs/<id> per linked or issue-linked run, at most 3.\"\n  expected_change_site: scripts/workflow_failure_heal_intake.sh `_heal_code_ref_route` (~lines 3760-3772) should set `code_ref_api_dir` or pass evidence-pack runs listings when `EVIDENCE_PACK_ENABLED=false`; scripts/workflow_failure_heal.py `code_ref` (~lines 7446-7599), code_ref_requests and `_cmd_code_ref` (~lines 10149-10173) should enumerate issue-linked run ids from the runs listing when P1 is off.\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: With P1 off, _heal_code_ref_route requests run IDs only from linked log files (scripts/workflow_failure_heal_intake.sh:3763-3772), code_ref_requests selects IDs only from those logs via select_linked_runs(log_texts, ...) (scripts/workflow_failure_heal.py:7377-7379), issue-linked runs are loaded only from evidence_api_dir (scripts/workflow_failure_heal.py:10156-10173), which the intake sets only when P1 is enabled (scripts/workflow_failure_heal_intake.sh:3760-3762), so the P1-off path never looks up issue-linked runs; the narrowing is documented as a deferral for the \"at most 3\" API-call budget in the comment at scripts/workflow_failure_heal_intake.sh:3758-3762 and in agents.d/heal-code-ref.md (\"issue-linked runs are not looked up with P1 off\"); reviewers disagree on severity (NIT: anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite; MAJOR: minimax_minimax-m3, openai_gpt-6-luna)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"When P1 is off, make one GET repos/<repo>/actions/runs/<id> per linked or issue-linked run, at most 3.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh, _heal_code_ref_route (the elif branch taken when EVIDENCE_PACK_ENABLED is not true); scripts/workflow_failure_heal.py, code_ref_requests\n  Evidence of absence: With P1 off, only log-linked runs are looked up. code_ref_requests gets its ids only from select_linked_runs(log_texts, ...), and _heal_code_ref_route sets code_ref_api_dir (the source of issue-linked runs) only when EVIDENCE_PACK_ENABLED=true. Three earlier editor rounds deferred this on purpose because of the 3-GET budget. The deferral is documented in the intake comment and in agents.d/heal-code-ref.md (\"issue-linked runs are not looked up with P1 off\"). The linked issue does not defer it itself, so it is listed for completeness. The switch defaults to off.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"When P1 is off, make one GET repos/<repo>/actions/runs/<id> per linked or issue-linked run, at most 3.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh, _heal_code_ref_route; scripts/workflow_failure_heal.py, code_ref_requests and _cmd_code_ref (code_ref)\n  Evidence of absence: Issue-linked runs are not looked up when P1 is off. As noted in agents.d/heal-code-ref.md and reviewed in prior rounds, this is an explicit, documented deferral due to API-call budget constraints, not a defect in the current implementation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"When P1 is off, make one `GET repos/<repo>/actions/runs/<id>` per linked or issue-linked run, at most 3.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh `_heal_code_ref_route` (~lines 3760-3772) should set `code_ref_api_dir` or pass evidence-pack runs listings when `EVIDENCE_PACK_ENABLED=false`; scripts/workflow_failure_heal.py `code_ref` (~lines 7446-7599) and `_cmd_code_ref` (~lines 10149-10173) should enumerate issue-linked run ids from the runs listing when P1 is off.\n  Evidence of absence: With `EVIDENCE_PACK_ENABLED=false`, `_heal_code_ref_route` only reads `code_ref_logs` (log-linked runs) at scripts/workflow_failure_heal_intake.sh:3763-3772; `code_ref_api_dir` is set only when P1 is enabled. `code_ref_requests` and `_cmd_code_ref` accept `evidence_api_dir` but only the intake sets it when P1 is on, so issue-linked runs are never enumerated when P1 is off. The narrowing is documented as a deferral in `agents.d/heal-code-ref.md` (\"issue-linked runs are not looked up with P1 off\") and in the code comment at scripts/workflow_failure_heal_intake.sh:3758-3762, citing the \"at most 3\" budget. LAST RUN DIFF does not affect this evidence.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"When P1 is off, make one GET repos/<repo>/actions/runs/<id> per linked or issue-linked run, at most 3.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh, _heal_code_ref_route; scripts/workflow_failure_heal.py, code_ref_requests and _cmd_code_ref.\n  Evidence of absence: With P1 off, _heal_code_ref_route requests run IDs only from linked log files (scripts/workflow_failure_heal_intake.sh:3763-3772), and code_ref_requests selects IDs only from those logs (scripts/workflow_failure_heal.py:7377-7379). Issue-linked runs are loaded only from evidence_api_dir (scripts/workflow_failure_heal.py:10156-10173), which the intake sets only when P1 is enabled (scripts/workflow_failure_heal_intake.sh:3760-3762). Thus the P1-off path never looks up or considers issue-linked runs, contrary to the requirement.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "62e22ab26476f2ffb656bf2347103424234c16d063bda4073a1aab637f29e4c7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8616,
+    "run_id": "41319637504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41319637504",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101154249_7628c67953",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8616,
+    "run_id": "41319637504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T15:42:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
