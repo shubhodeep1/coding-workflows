@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (no gap found; reviewer concluded requirement satisfied)\n  Requirement: \"Update its content so it is exactly these three lines ... status: ok / run_id: 40876853022 / updated-by: ai-pipeline ... with a trailing newline\" and \"Only modify tests/e2e_smoke_canary.txt\".\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: No gap. The PR diff modifies only tests/e2e_smoke_canary.txt (original_pr_diff.patch, single hunk) and the resulting content is exactly the three required lines with the trailing newline; the prior `decompose-run:` line was replaced as the issue requires. The PR-body pre-push-gate failures are inherited/unrelated: the PR touches no code the failing tests read, and the issue explicitly forbids touching any other file.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0302416bc267f855541a0afb229b665c39bd3d79fa9434dbe1d6fde6c7939bd0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41315901804",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41315901804",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101143328_ba18745815",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41315901804"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T14:33:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
