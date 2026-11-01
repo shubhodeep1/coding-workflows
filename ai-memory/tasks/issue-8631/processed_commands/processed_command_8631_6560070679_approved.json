@@ -5,13 +5,23 @@
   "entry_id": "processed_command_8631_6560070679_approved",
   "issue_number": 8631,
   "metadata": {
+    "branch": "ai/issue-8631",
+    "changed_files": [
+      "scripts/review_merge_train.sh",
+      "tests/test_review_merge_train.py"
+    ],
+    "issue_number": 8631,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8631",
+    "pr_number": 8634,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8634",
+    "run_attempt": "1",
+    "run_id": "41322069265",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41322069265"
   },
   "run_attempt": 1,
   "run_id": "41322069265",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-01T15:39:04Z",
+  "status": "completed",
+  "timestamp": "2026-11-01T16:17:21Z",
   "workflow": "implement"
 }
