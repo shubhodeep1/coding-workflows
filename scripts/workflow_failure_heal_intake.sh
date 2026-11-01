@@ -2877,8 +2877,11 @@ jq -e 'type == "array" and all(.[]; type == "string")' <<< "${LINKED_SCOPE_PATHS
 #   .github/workflows/, workflow-templates/ or prompts/, never under a
 #   top-level .github/ai/ or .claude/ (workflow-templates/.claude/... is under
 #   workflow-templates/ and allowed: the prefixes are anchored at the repo
-#   root), a regular file at HEAD_SHA (the commit _open_issue renders the scope
-#   against), at most 8 ranked by `changes`. The freeze below stores them as
+#   root), a regular file at HEAD_SHA, at most 8 ranked by `changes`. HEAD_SHA
+#   is the commit _open_issue renders a workflow_run scope against; other
+#   source kinds render at WRAPPER_SHA, the default branch or
+#   PAYLOAD_SCRIPT_REF, where render_heal_scope_marker drops a suspect path
+#   missing at that ref (the scope can only shrink, never widen). The freeze below stores them as
 #   the separate `suspect_files` key; render_heal_scope_marker ranks them after
 #   the 8-subject reserve and before changed_files, under the unchanged 20 cap.
 #   Only a report of this repository whose verified run at HEAD_SHA has a
@@ -2973,12 +2976,13 @@ _heal_scope_suspect_paths()
 	case "${suspect_scope_outcome}" in added|none|partial|skipped) ;; *) suspect_scope_outcome="partial" ;; esac
 	suspect_scope_reason="$(jq -r '.reason // ""' <<< "${suspect_scope_out}" | tr -cd 'a-z_' | head -c 40 || true)"
 	[ -n "${suspect_scope_reason}" ] || suspect_scope_reason="malformed"
+	suspect_scope_calls="$(jq -r '(.calls // 0) | tostring' <<< "${suspect_scope_out}" 2>/dev/null | tr -cd '0-9' | head -c 3 || true)"
 	if [ "${suspect_scope_reason}" = helper_failed ]; then
+		# Keep the helper's call count: GETs made before a failed output write still count.
 		rm -f "${suspect_scope_handoff}"
-		log "suspect_scope outcome=partial reason=helper_failed paths=0 calls=0 source=none"
+		log "suspect_scope outcome=partial reason=helper_failed paths=0 calls=${suspect_scope_calls:-0} source=none"
 		return 0
 	fi
-	suspect_scope_calls="$(jq -r '(.calls // 0) | tostring' <<< "${suspect_scope_out}" 2>/dev/null | tr -cd '0-9' | head -c 3 || true)"
 	suspect_scope_source="$(jq -r '.source // ""' <<< "${suspect_scope_out}" 2>/dev/null | tr -cd 'a-z0-9' | head -c 10 || true)"
 	case "${suspect_scope_source}" in p3|fetched|none) ;; *) suspect_scope_source="none" ;; esac
 	if ! suspect_scope_paths="$(jq -c 'if type == "array" and length <= 8 and all(.[]; type == "string") then . else error("invalid") end' "${suspect_scope_dir}/paths.json" 2>/dev/null)" \
@@ -2999,7 +3003,8 @@ jq -e 'type == "array" and length <= 8 and all(.[]; type == "string")' <<< "${SU
 
 # In the freeze program below, 20 is the explicit-path cap of render_heal_scope_marker
 # and 8 is HEAL_SCOPE_SUBJECT_RESERVE (scripts/workflow_failure_heal.py); change them
-# together. test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker pins it.
+# together. The suspect_files `[:8]` (and the `length <= 8` checks above) is
+# HEAL_SUSPECT_SCOPE_MAX in the same file; change it with them. test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker pins it.
 jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 	--argjson failing_tests "${FAILING_TESTS_JSON}" \
 	--argjson engine_runs "${ENGINE_SCOPE_RUNS_JSON:-[]}" \
@@ -3371,7 +3376,16 @@ _heal_run_reproduction()
 	fi
 	[[ "${repro_workflow_id}" =~ ^[1-9][0-9]{0,19}$ ]] || repro_workflow_id=""
 	[[ "${repro_before}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || repro_before=""
-	if [ -n "${repro_workflow_id}" ] && [ -n "${repro_before}" ]; then
+	if [ -n "${repro_workflow_id}" ] && [ -n "${repro_before}" ] && [ -s "${SUSPECT_SCOPE_HANDOFF_FILE:-}" ] \
+		&& jq -e --arg repo "${SELF_REPO,,}" --arg workflow_id "${repro_workflow_id}" --arg branch "${HEAD_BRANCH:-}" --arg sha "${HEAD_SHA}" \
+			'((.repo // "") | ascii_downcase) == $repo and .workflow_id == $workflow_id and .branch == $branch and .failing_sha == $sha and (.last_green | type == "object")' \
+			"${SUSPECT_SCOPE_HANDOFF_FILE}" >/dev/null 2>&1; then
+		# Reuse the suspect-scope step's last-green lookup (P4 handoff, same keys): no call.
+		repro_green_json="$(jq -c '.last_green' "${SUSPECT_SCOPE_HANDOFF_FILE}" 2>/dev/null || true)"
+		repro_green_reason="$(jq -r '.reason // ""' <<< "${repro_green_json}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+		repro_green_sha="$(jq -r '.head_sha // ""' <<< "${repro_green_json}" 2>/dev/null || true)"
+		[ -n "${repro_green_reason}" ] || repro_green_reason="request_failed"
+	elif [ -n "${repro_workflow_id}" ] && [ -n "${repro_before}" ]; then
 		repro_green_json="$(python3 "${HEAL_PY}" last-green-run --repo "${SELF_REPO}" --workflow-id "${repro_workflow_id}" \
 			--branch "${HEAD_BRANCH:-}" --failing-sha "${HEAD_SHA}" --before "${repro_before}" 2>/dev/null)" || repro_green_json=""
 		# The cache only serves the suspect-commits step, so it is written only behind its switch.
@@ -3633,10 +3647,14 @@ _heal_build_suspect_commits()
 	# only when every key matches; the helper uses the compare only when its
 	# green and failing SHAs match the baseline it resolves.
 	if [ -n "${suspect_workflow_id}" ] && [ -s "${SUSPECT_SCOPE_HANDOFF_FILE:-}" ] \
-		&& jq -e --arg repo "${SOURCE_REPO,,}" --arg workflow_id "${suspect_workflow_id}" --arg branch "${HEAD_BRANCH:-}" --arg sha "${HEAD_SHA:-}" \
+		&& jq -e --arg repo "${SOURCE_REPO,,}" --arg workflow_id "${suspect_workflow_id}" --arg branch "${suspect_branch}" --arg sha "${HEAD_SHA:-}" \
 			'((.repo // "") | ascii_downcase) == $repo and .workflow_id == $workflow_id and .branch == $branch and .failing_sha == $sha and (.last_green | type == "object") and (.compare | type == "object")' \
 			"${SUSPECT_SCOPE_HANDOFF_FILE}" >/dev/null 2>&1; then
-		if [ ! -s "${suspect_dir}/last_green.json" ] && jq -c '.last_green' "${SUSPECT_SCOPE_HANDOFF_FILE}" > "${suspect_dir}/last_green.json" 2>/dev/null; then
+		# The handoff's baseline replaces the reproduction cache's, so the baseline
+		# and the cached compare always come from the same lookup (a cached failed
+		# reproduction lookup would otherwise end P3 at no_last_green).
+		if jq -c '.last_green' "${SUSPECT_SCOPE_HANDOFF_FILE}" > "${suspect_dir}/last_green.json" 2>/dev/null \
+			&& [[ " ${suspect_args[*]} " != *" --last-green-json "* ]]; then
 			suspect_args+=(--last-green-json "${suspect_dir}/last_green.json")
 		fi
 		if jq -c '{green_sha, failing_sha, compare}' "${SUSPECT_SCOPE_HANDOFF_FILE}" > "${suspect_dir}/compare_cache.json" 2>/dev/null; then

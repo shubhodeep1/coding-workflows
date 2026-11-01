@@ -10060,7 +10060,8 @@ def _cmd_suspect_scope(args: argparse.Namespace) -> int:
 		Path(args.paths_out).write_text(json.dumps(paths) + "\n", encoding="utf-8")
 		Path(args.handoff_out).write_text(json.dumps(handoff, sort_keys=True) + "\n" if handoff else "", encoding="utf-8")
 	except OSError:
-		summary = dict(failed)
+		# Keep the call count: GETs made before a failed output write still count.
+		summary = dict(failed, calls=summary.get("calls", 0) if isinstance(summary, dict) else 0)
 		for out_path, text in ((args.paths_out, "[]\n"), (args.handoff_out, "")):
 			try:
 				Path(out_path).write_text(text, encoding="utf-8")
