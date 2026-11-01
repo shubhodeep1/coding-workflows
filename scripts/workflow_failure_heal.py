@@ -574,6 +574,13 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 _STEP_HEADER_OPEN_RE = re.compile(r"^##\[group\]Run ")
 _STEP_HEADER_CLOSE_RE = re.compile(r"^##\[endgroup\]")
 _STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
+# Some runners (and logs re-rendered without ANSI codes) echo the script
+# unstyled. The runner always prints the script first and the `shell:` /
+# `with:` / `env:` sections after it, so inside a Run header every line before
+# the first section key is script too. Those lines are dropped once a section
+# key confirms the header; a header that closes or never closes without one
+# keeps them, so a log cut mid-header still carries its output (Refs #8602).
+_STEP_HEADER_SECTION_RE = re.compile(r"^(?:shell|with|env):")
 # The `env:` block of a step header prints every variable's value, and values
 # the runner does not know to be secrets (tokens minted in an earlier step,
 # derived credentials) are not masked. filter_log keeps only the names: an
@@ -598,9 +605,16 @@ _STEP_ENV_UNTERMINATED_MARKER = "[env block omitted: unterminated step header]"
 _CYCLE_RUN_NAME_SUFFIX_RE = re.compile(r"\s*\[cycle:[0-9]+\]\s*$", re.IGNORECASE)
 # The review/autofix reporter's evidence header (strip_autofix_evidence_header).
 _AUTOFIX_EVIDENCE_HEADER_RE = re.compile(r"^(?:failure_reason=|finalize_reason=|consecutive_failed_runs=|flags: )")
+# High-signal lines filter_log keeps even when they fall outside the tail. The
+# last line holds runtime lines from the runner and the engine wrapper
+# (scripts/ai_engine.sh): the runner's own `##[warning]` / `##[error]` lines, a
+# `CLAUDE_POOL run` line whose outcome is anything but `success`, the
+# `AI_ENGINE_FALLBACK role=... reason=...` line (not the `_REPORT` / `_POLICY`
+# bookkeeping lines), and an `exited with code` line (Refs #8602).
 _SOFT_LOG_PATTERNS = re.compile(
 	r"::error::|::warning::|\bERROR\b|\bFAIL(?:ED|URE)?\b|\bfatal\b|\bTraceback\b|"
-	r"\b[A-Z][A-Z0-9_]*_(?:FAILED|SKIPPED|ESCALATE|BLOCKED)\b|\bexit code\b|\btimed?[ -]?out\b|\brate.?limit",
+	r"\b[A-Z][A-Z0-9_]*_(?:FAILED|SKIPPED|ESCALATE|BLOCKED)\b|\bexit code\b|\btimed?[ -]?out\b|\brate.?limit|"
+	r"##\[(?:warning|error)\]|\bCLAUDE_POOL run\b.*\boutcome=(?!success\b)|\bAI_ENGINE_FALLBACK\b|\bexited with code\b",
 	re.IGNORECASE,
 )
 
@@ -3001,22 +3015,70 @@ def bind_report_claims(
 def _drop_step_script_lines(text: str) -> str:
 	"""Remove the echoed step script from raw Actions job-log text.
 
-	Only ANSI-cyan lines inside a ``##[group]Run`` header block are dropped;
-	the header line itself, the ``shell:`` / ``env:`` block, and every line of
-	real step output are kept. Text without such headers (reporter evidence,
-	already-sanitised logs) is returned unchanged.
+	Inside a ``##[group]Run`` header block, ANSI-cyan lines are dropped, and
+	so are unstyled lines between the header line and the header's first
+	``shell:`` / ``with:`` / ``env:`` section key (the echoed script printed
+	without colour). Those unstyled lines are buffered and dropped only once
+	a section key confirms the header; a header that never closes, closes
+	with ``##[endgroup]`` before any section key (a user-defined ``Run ...``
+	group, since the runner prints a script step's ``shell:`` before the
+	close), or is reopened by another ``##[group]Run`` first keeps them
+	(fail open), so a log cut mid-header still carries the step's output. The
+	header line itself, the ``shell:`` / ``with:`` / ``env:`` block (left for
+	``_strip_step_env_values``), and every line after ``##[endgroup]`` are
+	kept. Text without such headers (reporter evidence, already-sanitised
+	logs) is returned unchanged.
+	Marker shapes are read the way ``_strip_step_env_values`` reads them, so
+	this pass never removes a line that pass needs to bound an ``env:`` block:
+	a ``##[group]Run`` line after the header's first section key is a value
+	line, not a new header, and in a timestamped header a ``##[endgroup]`` is
+	real only when it is timestamped and not followed by an unstamped
+	non-empty line.
 	"""
 	kept: list[str] = []
+	pending: list[str] = []
 	in_header = False
-	for line in text.split("\n"):
+	in_script = False
+	header_stamped = False
+	all_lines = text.split("\n")
+	for index, line in enumerate(all_lines):
 		content = _LOG_TIMESTAMP_RE.sub("", line)
-		if _STEP_HEADER_OPEN_RE.match(content):
+		real_close = bool(_STEP_HEADER_CLOSE_RE.match(content)) and (
+			not header_stamped
+			or (
+				content != line
+				and not (
+					index + 1 < len(all_lines)
+					and all_lines[index + 1].strip()
+					and not _LOG_TIMESTAMP_RE.match(all_lines[index + 1])
+				)
+			)
+		)
+		if _STEP_HEADER_OPEN_RE.match(content) and (not in_header or in_script):
+			# An earlier header that never closed keeps its buffered lines.
+			kept.extend(pending)
+			pending = []
 			in_header = True
-		elif in_header and _STEP_HEADER_CLOSE_RE.match(content):
+			in_script = True
+			header_stamped = content != line
+		elif in_header and real_close:
+			# Closed before any section key: not an echoed script, keep them.
+			if in_script:
+				kept.extend(pending)
+			pending = []
 			in_header = False
+			in_script = False
+			header_stamped = False
 		elif in_header and content.startswith(_STEP_SCRIPT_LINE_PREFIX):
 			continue
+		elif in_script and _STEP_HEADER_SECTION_RE.match(content):
+			pending = []
+			in_script = False
+		elif in_script:
+			pending.append(line)
+			continue
 		kept.append(line)
+	kept.extend(pending)
 	return "\n".join(kept)
 
 
