@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) The clarify / plan / implement pipeline: the `ai-clarify.yml`, plan and implement workflows and their prompts\nB) Review & autofix: `review_autofix.yml`, its reviewer, aggregator and editor modes, and its helper scripts\nC) The orchestrator: `orchestrate_poll.yml`, waves, integration-sync and stall recovery\nD) Docs only: `README.md`, `docs/how-it-works.md` and `agents.d/` fragments\nE) Something else. Name the exact file, workflow or script in your `/answer` (RECOMMENDED)\nQ2: What kind of improvement do you want?\nChoices:\nA) Fix a specific bug or failure. Include the failing run ID, log excerpt or reproduction steps (RECOMMENDED)\nB) Cut cost or runtime: fewer tokens, fewer GitHub API calls, faster jobs\nC) Make it more reliable: fewer transient failures, better retries and self-healing\nD) Make it clearer for operators: better logs, Telegram alerts or docs\nE) Add a new feature. Describe the behaviour you want\nQ3: How will we know the change is done?\nChoices:\nA) A specific failing scenario or test now passes. Name it in your `/answer` (RECOMMENDED)\nB) A measurable metric reaches a target, such as job duration, token use or failure rate. Give the number\nC) A reviewer confirms the behaviour you described in Q2 is in place, with no specific metric\nQ4: How large a change is allowed?\nChoices:\nA) Surgical: the smallest change to the files named in Q1, plus matching contract tests (RECOMMENDED)\nB) Moderate: may touch several related workflows or scripts while keeping their behaviour consistent with each other\nC) Broad: refactoring or redesigning the named subsystem is allowed",
+  "fingerprint": "f11acd40ee39ea145350731fc55232ebe4ba819e25c6a63a0b1beedf903b8a31",
+  "lineage": {
+    "issue_number": 8618,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41308775220",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41308775220",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261101130059_1c88976ffc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8618,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41308775220"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8618 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-01T13:00:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
