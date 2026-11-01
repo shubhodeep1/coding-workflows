@@ -3392,6 +3392,7 @@ _heal_run_reproduction()
 		repro_green_json="$(python3 "${HEAL_PY}" last-green-run --repo "${SELF_REPO}" --workflow-id "${repro_workflow_id}" \
 			--branch "${HEAD_BRANCH:-}" --failing-sha "${HEAD_SHA}" --before "${repro_before}" 2>/dev/null)" || repro_green_json=""
 		# The cache only serves the suspect-commits step, so it is written only behind its switch.
+		# It keys on the raw HEAD_BRANCH to match its reader in _heal_build_suspect_commits; only the P4 handoff keys on the validated branch.
 		if [ "${TREND_ENABLED}" = true ]; then
 			jq -n --arg repo "${SELF_REPO}" --arg workflow_id "${repro_workflow_id}" --arg branch "${HEAD_BRANCH:-}" --arg failing_sha "${HEAD_SHA}" --arg result "${repro_green_json}" \
 				'{repo: $repo, workflow_id: $workflow_id, branch: $branch, failing_sha: $failing_sha, result: (($result | fromjson?) // null)}' > "${HEAL_LAST_GREEN_CACHE_FILE}" 2>/dev/null || true
