@@ -526,3 +526,15 @@ def test_inherited_named_entry_without_parsed_names_is_unverified(h: Env) -> Non
 	assert [(t["status"], t["reason"]) for t in data["tests"]] == [
 		("unverified", "names_incomplete"), ("unverified", "names_incomplete")]
 	h.assert_clean(err)
+
+
+def test_inherited_setup_error_with_error_name_is_pre_existing(h: Env) -> None:
+	# A fixture error on both trees: the gate lists the exact `ERROR <node>` as
+	# error_names, which proves this listed test failed (siblings stay unproven).
+	h.gate(_gate("pass", inherited=[{"test": "tests/test_a.py", "file": "tests/test_a.py", "names": [],
+		"error_names": ["tests/test_a.py::test_x"]}]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x", "tests/test_a.py::test_y"))
+	assert [(t["status"], t["reason"]) for t in data["tests"]] == [
+		("not_reproduced", "pre_existing"), ("unverified", "names_incomplete")]
+	h.assert_clean(err)
+

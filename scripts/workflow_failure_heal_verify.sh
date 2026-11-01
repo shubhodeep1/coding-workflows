@@ -688,7 +688,11 @@ _verify_one()
 		tg_send_msg "Workflow heal #${number}: the fix did not hold for the second time."$'\n'"Run: ${run_url}"$'\n'"Heal: ${heal_url}" "CRITICAL" >/dev/null 2>&1 || true
 		log "alert=critical issue=${number} escalated=${escalated}"
 	fi
-	[ "${marker_rc}" -eq 2 ] || log "outcome=recurred issue=${number} run=${picked_id}"
+	if [ "${marker_rc}" -eq 2 ]; then
+		log "outcome=recurred issue=${number} run=${picked_id} comment=unconfirmed"
+	else
+		log "outcome=recurred issue=${number} run=${picked_id}"
+	fi
 	return 0
 }
 

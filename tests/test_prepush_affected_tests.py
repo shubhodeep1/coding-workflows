@@ -1333,6 +1333,30 @@ def test_tests_file_named_test_missing_on_both_trees_is_inherited(tmp_path):
 	# pytest exits 4 on both trees: the change did not cause it.
 	assert result["failures"] == []
 	assert [i["test"] for i in result["inherited"]] == ["tests/test_a.py"]
+	# pytest's `ERROR: not found:` line is no node error, so a missing node never
+	# proves a failure to the heal reproduction mapping.
+	assert result["inherited"][0]["error_names"] == []
+
+
+def test_error_node_names_parses_only_summary_lines():
+	tail = (
+		"ERROR tests/test_a.py::test_x - RuntimeError: boom\n"
+		"2026-11-01T00:00:00.0Z ERROR tests/test_a.py::test_p[1] - fixture\n"
+		"log: ERROR tests/test_a.py::test_mid - noise\n"
+		"ERROR: not found: tests/test_a.py::test_gone\n"
+		"FAILED tests/test_a.py::test_f - assert 0\n"
+	)
+	assert gate.error_node_names(tail) == ["tests/test_a.py::test_x", "tests/test_a.py::test_p[1]"]
+
+
+def test_tests_file_setup_error_on_both_trees_lists_error_names(tmp_path):
+	body = "import pytest\n\n@pytest.fixture\ndef boom():\n\traise RuntimeError('boom')\n\ndef test_x(boom):\n\tpass\n"
+	root = _repo(tmp_path, {"tests/test_a.py": body})
+	baseline = _repo(tmp_path, {"tests/test_a.py": body}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_x\n", baseline)
+	assert result["failures"] == []
+	assert [(i["test"], i["names"], i["error_names"]) for i in result["inherited"]] == [
+		("tests/test_a.py", [], ["tests/test_a.py::test_x"])]
 
 
 def test_tests_file_names_ignored_by_whole_file_runners_are_unverified(tmp_path):

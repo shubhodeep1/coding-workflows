@@ -237,6 +237,10 @@ def map_entry(data, number, test_path, name):
 			matched = any(n == node or n.startswith(node + "[") for n in names) or (
 				"::" not in name and names and not any("::" in n for n in names)
 				and any(n == short or n.startswith(short + "[") for n in names))
+			# A setup/teardown error gives no FAILED name, but the gate lists the
+			# exact `ERROR <node>` summary nodes of the tested tree as error_names.
+			errored = [n for n in (item.get("error_names") or []) if isinstance(n, str)]
+			matched = matched or any(n == node or n.startswith(node + "[") for n in errored)
 			# No parsed names is no proof: inherited entries carry no rc or tail,
 			# and a node missing on both trees (pytest exit 4/5, for example a test
 			# the heal itself adds) is inherited with no names too. Fail closed.

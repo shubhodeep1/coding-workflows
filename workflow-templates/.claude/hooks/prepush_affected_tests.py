@@ -145,6 +145,8 @@ _DEF_LINE_RE = re.compile(r"^[+-](?![+-])\s*(?:async\s+)?def\s+([A-Za-z_]\w*)|^[
 _FAILED_RE = re.compile(r"\bFAILED\s+(\S+::\S+)")
 _FAIL_RUNNER_RE = re.compile(r"^\s*FAIL\s{2,}([A-Za-z_]\w*)")
 _UNITTEST_RE = re.compile(r"^(?:FAIL|ERROR):\s+([A-Za-z_]\w*)\s+\(")
+# pytest summary line for a setup/teardown error: `ERROR path::node - ...`.
+_ERROR_NODE_RE = re.compile(r"^ERROR\s+(\S+::\S+)")
 _EVENT_PREFIX = "TEST_CASE_EVENT:"
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
@@ -729,6 +731,22 @@ def failing_names(tail: str) -> list[str]:
 	return unique[:50]
 
 
+def error_node_names(tail: str) -> list[str]:
+	"""Node IDs from pytest `ERROR path::node` summary lines (setup/teardown errors).
+
+	failing_names() parses FAILED lines only. Inherited entries carry no tail, so
+	these names are the only proof that a listed node errored on both trees.
+	"""
+	unique: list[str] = []
+	for line in tail.splitlines():
+		match = _ERROR_NODE_RE.match(re.sub(r"^\d{4}-\d{2}-\d{2}T\S+\s+", "", line))
+		if match:
+			name = _sanitize_name(match.group(1))
+			if name and name not in unique:
+				unique.append(name)
+	return unique[:50]
+
+
 def _static_findings(tool: str, files: list[str], cwd: Path, deadline: float) -> list[tuple[str, str, str]] | None:
 	"""(file, code, message) per finding of one static tool on `files` in `cwd`.
 
@@ -943,7 +961,8 @@ def run_gate(
 		"status": status,
 		"ran": [r["id"] for r in ran],
 		"failures": [{"test": r["id"], "file": r.get("file"), "names": failing_names(r.get("tail", "")), "tail": r.get("tail", "")} for r in pr_caused],
-		"inherited": [{"test": r["id"], "file": r.get("file"), "names": failing_names(r.get("tail", ""))} for r in inherited],
+		"inherited": [{"test": r["id"], "file": r.get("file"), "names": failing_names(r.get("tail", "")),
+			"error_names": error_node_names(r.get("tail", ""))} for r in inherited],
 		"unverified": unverified,
 		"changed_assertions": changed_assertions,
 		"selected": len(selection.get("affected_tests", [])),

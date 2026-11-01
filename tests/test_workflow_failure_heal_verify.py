@@ -546,7 +546,7 @@ def test_unreadable_comments_after_failed_posts_keep_the_heal_open(tmp_path: Pat
 	assert state["reopened"] == [10]
 	assert state.get("reclosed") is None
 	assert "warn issue=10 reason=comment_failed reclosed=false" in result.stdout
-	assert "outcome=recurred" not in result.stdout
+	assert "outcome=recurred issue=10 run=2 comment=unconfirmed" in result.stdout
 
 
 def test_unconfirmed_comment_still_escalates_a_second_recurrence(tmp_path: Path) -> None:
