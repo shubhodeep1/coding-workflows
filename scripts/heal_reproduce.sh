@@ -174,7 +174,7 @@ def items(data, key):
 	return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
 
 
-def map_entry(data, number, test_path, name, path_entries=1):
+def map_entry(data, number, test_path, name):
 	unverified = items(data, "unverified")
 	for item in unverified:
 		if item.get("item") == f"tests_file:line{number}":
@@ -237,11 +237,9 @@ def map_entry(data, number, test_path, name, path_entries=1):
 			matched = any(n == node or n.startswith(node + "[") for n in names) or (
 				"::" not in name and names and not any("::" in n for n in names)
 				and any(n == short or n.startswith(short + "[") for n in names))
-			# A setup ERROR on both trees leaves no parsed names. When this
-			# `::name` was the unit's only listed target, the unit's failure on
-			# both trees is this test's.
-			if not names and path_entries == 1:
-				matched = True
+			# No parsed names is no proof: inherited entries carry no rc or tail,
+			# and a node missing on both trees (pytest exit 4/5, for example a test
+			# the heal itself adds) is inherited with no names too. Fail closed.
 			return ("not_reproduced", "pre_existing") if matched else ("unverified", "names_incomplete")
 	ran = data.get("ran") if isinstance(data.get("ran"), list) else []
 	if test_path in ran:
@@ -269,16 +267,13 @@ def cmd_map(tests_file, gate_file, forced, failing_file, passing_file, out):
 				if item.get("item") in ("gate", "merge_base"):
 					gate_item = item
 					break
-		path_counts = {}
-		for _, _, listed_path, _ in listed:
-			path_counts[listed_path] = path_counts.get(listed_path, 0) + 1
 		for number, line, test_path, name in listed:
 			if data is None:
 				status, reason = "unverified", "gate_result_invalid"
 			elif gate_item is not None:
 				status, reason = "unverified", token(gate_item.get("reason"))
 			else:
-				status, reason = map_entry(data, number, test_path, name, path_counts.get(test_path, 1))
+				status, reason = map_entry(data, number, test_path, name)
 			tests.append({"test": line, "status": status, "reason": reason})
 	if forced or not tests:
 		status, reason = "unverified", forced or "no_tests"
@@ -294,7 +289,12 @@ def cmd_map(tests_file, gate_file, forced, failing_file, passing_file, out):
 	result = {"schema": "heal_repro.v1", "status": status, "reason": reason,
 		"failing_at": read_sha(failing_file), "passing_at": read_sha(passing_file), "tests": tests}
 	tmp = out + ".tmp"
-	with open(tmp, "w", encoding="utf-8") as handle:
+	try:
+		os.unlink(tmp)
+	except FileNotFoundError:
+		pass
+	fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+	with os.fdopen(fd, "w", encoding="utf-8") as handle:
 		json.dump(result, handle)
 		handle.write("\n")
 	os.replace(tmp, out)

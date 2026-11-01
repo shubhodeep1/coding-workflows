@@ -50,7 +50,9 @@
 # examined heal at most 3 REST reads (one workflow-runs list, at most 2
 # compares, one jobs read when the deciding run failed; a second list read,
 # counted in those 3, when the runs list is cut off at 100 runs), and at most 3 writes
-# (reopen, comment, label). The recovery scan's `/user` read and OPEN-only
+# (reopen, comment, label). When both comment POSTs fail after a reopen there
+# is one more comments read and possibly a reclose PATCH; neither counts
+# toward MAX_READS_PER_HEAL (an error-path exception). The recovery scan's `/user` read and OPEN-only
 # list cannot serve this pass, so the list query carries `viewer` and both
 # issue states as aliases. Every API error is logged and fails open: nothing
 # is written and the next hourly run retries. The script always exits 0.
@@ -657,11 +659,11 @@ _verify_one()
 	if [ "${marker_rc}" -eq 2 ]; then
 		# The marker may have landed: re-closing would make the next tick skip
 		# the heal as already verified, so keep it open and warn instead.
+		# The recurrence itself is confirmed, so the escalation below still runs:
+		# later ticks list closed heals only and would never retry it.
 		log "warn issue=${number} reason=comment_failed reclosed=false"
 		tg_send_msg "Workflow heal #${number} was reopened by post-merge verification, but its comment could not be confirmed."$'\n'"Run: ${run_url}"$'\n'"Heal: ${heal_url}" "WARNING" >/dev/null 2>&1 || true
-		return 0
-	fi
-	if [ "${marker_rc}" -ne 0 ]; then
+	elif [ "${marker_rc}" -ne 0 ]; then
 		# Later ticks list closed heals only, so close the heal again (as
 		# completed) and let the next tick redo the whole check. A marker that
 		# landed despite the error would make that tick skip the heal as
@@ -686,7 +688,7 @@ _verify_one()
 		tg_send_msg "Workflow heal #${number}: the fix did not hold for the second time."$'\n'"Run: ${run_url}"$'\n'"Heal: ${heal_url}" "CRITICAL" >/dev/null 2>&1 || true
 		log "alert=critical issue=${number} escalated=${escalated}"
 	fi
-	log "outcome=recurred issue=${number} run=${picked_id}"
+	[ "${marker_rc}" -eq 2 ] || log "outcome=recurred issue=${number} run=${picked_id}"
 	return 0
 }
 

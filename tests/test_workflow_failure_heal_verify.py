@@ -549,6 +549,18 @@ def test_unreadable_comments_after_failed_posts_keep_the_heal_open(tmp_path: Pat
 	assert "outcome=recurred" not in result.stdout
 
 
+def test_unconfirmed_comment_still_escalates_a_second_recurrence(tmp_path: Path) -> None:
+	prior = _marker_comment("recurred", MERGED_AT - timedelta(days=1), run=1)
+	result, state, curl = _execute(tmp_path, _state([_closed(10, comments=[prior])],
+		runs=[_run(2, MERGE_SHA, "failure", 10)], jobs={"2": _jobs()}, fail=["comment_stored"]))
+	assert result.returncode == 0, result.stderr
+	assert state["reopened"] == [10] and state.get("reclosed") is None
+	assert state["labels"] == [[10, ["labels[]=ai:workflow-heal-escalated"]]]
+	assert "warn issue=10 reason=comment_failed reclosed=false" in result.stdout
+	assert "alert=critical issue=10 escalated=true" in result.stdout
+	assert "CRITICAL" in "\n".join(curl)
+
+
 def test_heal_without_a_recorded_step_is_skipped(tmp_path: Path) -> None:
 	result, state, _ = _execute(tmp_path, _state([_closed(10, body=_body(step="unknown step"))],
 		runs=[_run(2, MERGE_SHA, "failure", 10)], jobs={"2": _jobs()}))

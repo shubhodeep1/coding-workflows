@@ -516,10 +516,12 @@ def test_named_setup_error_without_parsed_names_is_reproduced(h: Env) -> None:
 	h.assert_clean(err)
 
 
-def test_inherited_sole_named_entry_without_parsed_names_is_pre_existing(h: Env) -> None:
+def test_inherited_named_entry_without_parsed_names_is_unverified(h: Env) -> None:
+	# A node missing on both trees (pytest exit 4/5, e.g. a test the heal adds)
+	# is inherited with no names, so a sole entry is no proof of a failure.
 	h.gate(_gate("pass", inherited=[{"test": "tests/test_a.py", "file": "tests/test_a.py", "names": []}]))
 	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
-	assert (data["status"], data["reason"]) == ("not_reproduced", "pre_existing")
+	assert (data["status"], data["reason"]) == ("unverified", "names_incomplete")
 	data, err = h.run(h.tests_file("tests/test_a.py::test_x", "tests/test_a.py::test_y"))
 	assert [(t["status"], t["reason"]) for t in data["tests"]] == [
 		("unverified", "names_incomplete"), ("unverified", "names_incomplete")]
