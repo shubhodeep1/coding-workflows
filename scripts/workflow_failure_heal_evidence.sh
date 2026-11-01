@@ -91,8 +91,8 @@ if [ "${jobs_count}" -eq 0 ]; then
 fi
 # A log line that repeats a fence delimiter must not close the evidence fence.
 sed -E 's/={3}([[:space:]]*(BEGIN|END)[[:space:]]+UNTRUSTED)/= = =\1/Ig' "${scratch}/content" > "${scratch}/fenced"
-# Pack lines also must not open a fake `=== ... ===` prompt section.
-sed -E -e 's/={3}([[:space:]]*(BEGIN|END)[[:space:]]+UNTRUSTED)/= = =\1/Ig' -e 's/^===/= = =/' "${scratch}/pack_content" > "${scratch}/pack_fenced"
+# Pack lines also must not open a fake `=== ... ===` prompt section, indented or not.
+sed -E -e 's/={3}([[:space:]]*(BEGIN|END)[[:space:]]+UNTRUSTED)/= = =\1/Ig' -e 's/^([[:space:]]*)===/\1= = =/' "${scratch}/pack_content" > "${scratch}/pack_fenced"
 # Pack first, then the tails: the single cut below keeps the pack whole
 # whenever it fits and shrinks the tails to the remaining budget.
 cat "${scratch}/pack_fenced" "${scratch}/fenced" > "${scratch}/combined"

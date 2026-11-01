@@ -505,8 +505,9 @@ def test_start_rotates_with_run_number(tmp_path: Path) -> None:
 
 
 def test_comment_failure_after_reopen_closes_the_heal_again(tmp_path: Path) -> None:
-	result, state, curl = _execute(tmp_path, _state([_closed(10)], runs=[_run(2, MERGE_SHA, "failure", 10)],
-		jobs={"2": _jobs()}, fail=["comment"]))
+	state_in = _state([_closed(10)], runs=[_run(2, MERGE_SHA, "failure", 10)], jobs={"2": _jobs()}, fail=["comment"])
+	state_in["list_comments"] = LOGIN
+	result, state, curl = _execute(tmp_path, state_in)
 	assert result.returncode == 0, result.stderr
 	assert state["reopened"] == [10]
 	assert state["reclosed"] == [[10, ["state=closed", "state_reason=completed"]]]
@@ -534,6 +535,18 @@ def test_recurred_marker_by_another_login_still_recloses(tmp_path: Path) -> None
 	assert result.returncode == 0, result.stderr
 	assert state["reclosed"] == [[10, ["state=closed", "state_reason=completed"]]]
 	assert "outcome=error issue=10 reason=comment_failed reclosed=true" in result.stdout
+
+
+def test_unreadable_comments_after_failed_posts_keep_the_heal_open(tmp_path: Path) -> None:
+	# The marker may have landed: re-closing would make the next tick skip the
+	# heal as already verified, so it stays open with a warning.
+	result, state, curl = _execute(tmp_path, _state([_closed(10)], runs=[_run(2, MERGE_SHA, "failure", 10)],
+		jobs={"2": _jobs()}, fail=["comment_stored"]))
+	assert result.returncode == 0, result.stderr
+	assert state["reopened"] == [10]
+	assert state.get("reclosed") is None
+	assert "warn issue=10 reason=comment_failed reclosed=false" in result.stdout
+	assert "outcome=recurred" not in result.stdout
 
 
 def test_heal_without_a_recorded_step_is_skipped(tmp_path: Path) -> None:

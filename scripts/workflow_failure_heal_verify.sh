@@ -437,19 +437,29 @@ _post_comment()
 }
 
 # A POST that errored can still have been stored. Read the comments posted
-# since the merge once (TOTAL_READS) and look for this run's recurred marker
-# by the pipeline login; any read error counts as not landed.
+# since the merge once (TOTAL_READS; an error-path read on top of the three
+# per-heal reads) and look for this run's recurred marker by the pipeline
+# login. Returns 0 when found, 1 when the read worked and it is absent, and
+# 2 when that cannot be told (failed or malformed read, or a full page of 100
+# comments without the marker): the caller then keeps the heal open.
 _recurred_marker_landed()
 {
-	local number="$1" since="$2" viewer="$3" run_id="$4" since_enc
-	[ -n "${viewer}" ] || return 1
-	since_enc="$(jq -rn --arg value "${since}" '$value | @uri')" || return 1
+	local number="$1" since="$2" viewer="$3" run_id="$4" since_enc listing verdict
+	[ -n "${viewer}" ] || return 2
+	since_enc="$(jq -rn --arg value "${since}" '$value | @uri')" || return 2
 	TOTAL_READS=$((TOTAL_READS + 1))
-	gh_retry gh api "repos/${SELF_REPO}/issues/${number}/comments?since=${since_enc}&per_page=100" 2>/dev/null \
-		| jq -e --arg viewer "${viewer}" --arg marker "<!-- workflow-failure-heal:verified:v1 outcome=recurred run=${run_id} -->" \
-			'[.[]? | select(((.user.login // "") | ascii_downcase) == ($viewer | ascii_downcase))
-				| select(((.body // "") | sub("\\s+$"; "") | split("\n") | last | sub("^\\s+"; "")) == $marker)] | length > 0' \
-			>/dev/null 2>&1
+	listing="$(gh_retry gh api "repos/${SELF_REPO}/issues/${number}/comments?since=${since_enc}&per_page=100" 2>/dev/null)" || return 2
+	verdict="$(printf '%s' "${listing}" | jq -r --arg viewer "${viewer}" --arg marker "<!-- workflow-failure-heal:verified:v1 outcome=recurred run=${run_id} -->" \
+		'if type != "array" then "unknown"
+		elif ([.[]? | select(((.user.login // "") | ascii_downcase) == ($viewer | ascii_downcase))
+			| select(((.body // "") | sub("\\s+$"; "") | split("\n") | last | sub("^\\s+"; "")) == $marker)] | length > 0) then "found"
+		elif length >= 100 then "unknown"
+		else "absent" end' 2>/dev/null)" || return 2
+	case "${verdict}" in
+		found) return 0 ;;
+		absent) return 1 ;;
+	esac
+	return 2
 }
 
 _verify_one()
@@ -640,8 +650,18 @@ _verify_one()
 	fi
 	local run_url="https://github.com/${SELF_REPO}/actions/runs/${picked_id}"
 	local heal_url="https://github.com/${SELF_REPO}/issues/${number}"
-	if ! _post_comment "${number}" "${comment_file}" && ! _post_comment "${number}" "${comment_file}" \
-		&& ! _recurred_marker_landed "${number}" "${merged_at}" "$(jq -r '.viewer // ""' "${cand_file}")" "${picked_id}"; then
+	local marker_rc=0
+	if ! _post_comment "${number}" "${comment_file}" && ! _post_comment "${number}" "${comment_file}"; then
+		_recurred_marker_landed "${number}" "${merged_at}" "$(jq -r '.viewer // ""' "${cand_file}")" "${picked_id}" || marker_rc=$?
+	fi
+	if [ "${marker_rc}" -eq 2 ]; then
+		# The marker may have landed: re-closing would make the next tick skip
+		# the heal as already verified, so keep it open and warn instead.
+		log "warn issue=${number} reason=comment_failed reclosed=false"
+		tg_send_msg "Workflow heal #${number} was reopened by post-merge verification, but its comment could not be confirmed."$'\n'"Run: ${run_url}"$'\n'"Heal: ${heal_url}" "WARNING" >/dev/null 2>&1 || true
+		return 0
+	fi
+	if [ "${marker_rc}" -ne 0 ]; then
 		# Later ticks list closed heals only, so close the heal again (as
 		# completed) and let the next tick redo the whole check. A marker that
 		# landed despite the error would make that tick skip the heal as

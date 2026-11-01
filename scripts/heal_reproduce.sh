@@ -174,7 +174,7 @@ def items(data, key):
 	return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
 
 
-def map_entry(data, number, test_path, name):
+def map_entry(data, number, test_path, name, path_entries=1):
 	unverified = items(data, "unverified")
 	for item in unverified:
 		if item.get("item") == f"tests_file:line{number}":
@@ -185,21 +185,23 @@ def map_entry(data, number, test_path, name):
 	for item in items(data, "failures"):
 		if item.get("test") == test_path:
 			names = [n for n in (item.get("names") or []) if isinstance(n, str)]
-			if name is not None and names:
+			tail = item.get("tail") if isinstance(item.get("tail"), str) else ""
+			if name is not None:
 				node = f"{test_path}::{name}"
-				# Script-style and unittest units report bare names (test_x), and
-				# every name in this item belongs to test_path.
-				short = name.split("::")[-1]
-				tail = item.get("tail") if isinstance(item.get("tail"), str) else ""
 				node_matched = any(n == node or n.startswith(node + "[") for n in names)
 				# The gate matches only FAILED lines, so an `ERROR <node>`
-				# setup/teardown error is missing from its names. Only pytest's
-				# summary line (optionally after a log timestamp) counts, not the
-				# same text printed mid-line by a test. It is the exact node, so it
-				# is checked before the weaker bare-name match below.
+				# setup/teardown error is missing from its names (they can even be
+				# empty). Only pytest's summary line (optionally after a log
+				# timestamp) counts, not the same text printed mid-line by a test.
+				# It is the exact node, so it is checked before the empty-names and
+				# weaker bare-name checks below.
 				if not node_matched and re.search(
 						r"^(?:\d{4}-\d{2}-\d{2}T\S+\s+)?ERROR\s+" + re.escape(node) + r"(?:\[|\s|$)", tail, re.M):
 					return "reproduced", "regression"
+			if name is not None and names:
+				# Script-style and unittest units report bare names (test_x), and
+				# every name in this item belongs to test_path.
+				short = name.split("::")[-1]
 				# A bare name proves the failure only for an unqualified listed name
 				# in a unit whose parsed names are all bare and whose tail shows no
 				# pytest summary output; a class-qualified name, or a bare name
@@ -235,6 +237,11 @@ def map_entry(data, number, test_path, name):
 			matched = any(n == node or n.startswith(node + "[") for n in names) or (
 				"::" not in name and names and not any("::" in n for n in names)
 				and any(n == short or n.startswith(short + "[") for n in names))
+			# A setup ERROR on both trees leaves no parsed names. When this
+			# `::name` was the unit's only listed target, the unit's failure on
+			# both trees is this test's.
+			if not names and path_entries == 1:
+				matched = True
 			return ("not_reproduced", "pre_existing") if matched else ("unverified", "names_incomplete")
 	ran = data.get("ran") if isinstance(data.get("ran"), list) else []
 	if test_path in ran:
@@ -262,13 +269,16 @@ def cmd_map(tests_file, gate_file, forced, failing_file, passing_file, out):
 				if item.get("item") in ("gate", "merge_base"):
 					gate_item = item
 					break
+		path_counts = {}
+		for _, _, listed_path, _ in listed:
+			path_counts[listed_path] = path_counts.get(listed_path, 0) + 1
 		for number, line, test_path, name in listed:
 			if data is None:
 				status, reason = "unverified", "gate_result_invalid"
 			elif gate_item is not None:
 				status, reason = "unverified", token(gate_item.get("reason"))
 			else:
-				status, reason = map_entry(data, number, test_path, name)
+				status, reason = map_entry(data, number, test_path, name, path_counts.get(test_path, 1))
 			tests.append({"test": line, "status": status, "reason": reason})
 	if forced or not tests:
 		status, reason = "unverified", forced or "no_tests"
