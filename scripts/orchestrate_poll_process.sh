@@ -9720,8 +9720,8 @@ create_judge_fixup_issues_from_verdict() {
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
-                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-                  '.issue_number_map[$fix_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"}]' \
+                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+                  '.issue_number_map[$fix_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
                   "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
                 continue
@@ -9756,8 +9756,8 @@ create_judge_fixup_issues_from_verdict() {
           FIX_URL_CLEAN="$(printf '%s\n' "${FIX_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           FIX_NEW_NUM="$(basename "${FIX_URL_CLEAN%%[?#]*}")"
           if [[ "${FIX_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             record_orchestrator_lesson_event "$(lesson_event_json_for_judge_fixup "${FIX_TITLE}" "${FIX_NEW_NUM}" "$((JUDGE_CYCLE + 1))" "${fix_issue}")"
           fi
@@ -19783,6 +19783,14 @@ persist_orch_since_note() {
   [ -s "${pos_out}" ] && cat "${pos_out}" 2>/dev/null || true
   rm -f "${pos_out}" ${pos_details_file:+"${pos_details_file}"}
   return 0
+}
+
+# persist_orch_judge_added_json (issue #8427, P7): "true" when
+# PERSIST_ORCH_CONTEXT_ENABLED is on, else "false". The wave-judge additions
+# record persist_judge_added only then, so the since-note can tell judge-added
+# items from decomposed ones; with the switch off the state is unchanged.
+persist_orch_judge_added_json() {
+  if _is_truthy "${PERSIST_ORCH_CONTEXT_ENABLED:-false}"; then echo true; else echo false; fi
 }
 
 invoke_stall_judge() {
@@ -31940,8 +31948,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
-                jq --arg new_id "${NEW_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-                  '.issue_number_map[$new_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $existing_num, "status": "pending"}]' \
+                jq --arg new_id "${NEW_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+                  '.issue_number_map[$new_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $existing_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
                   "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${NEW_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate addition."
                 continue
@@ -31976,8 +31984,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
           NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           ADD_NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
           if [[ "${ADD_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
-            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-              '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"}]' \
+            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+              '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
