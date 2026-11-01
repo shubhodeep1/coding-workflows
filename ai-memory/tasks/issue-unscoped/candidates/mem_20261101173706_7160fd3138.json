@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In the comment above the function, say renamed files contribute both filename and previous_filename.\"\n  expected_change_site: `scripts/review_merge_train.sh` comment above `_mt_pr_files_into`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The added comment update describes the new behavior regarding malformed entries, but does not clearly rephrase or explicitly state that renamed files contribute both filename and previous_filename (source severity: NIT). Note: anthropic_claude-sonnet-5_5 and minimax_minimax-m3 reported this deliverable as satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: \"In the comment above the function, say renamed files contribute both filename and previous_filename.\"\n  Expected change site: `scripts/review_merge_train.sh` comment above `_mt_pr_files_into`\n  Evidence of absence: The added comment update explicitly describes the new behavior regarding malformed entries, but does not clearly rephrase or explicitly state that renamed files contribute both filename and previous_filename as requested by the specification instruction.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "ec1a1a2f1c7871ae369cdd0c7db288dc8a72240a89624bab8882dfb97da7b4bc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8634,
+    "run_id": "41329460613",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41329460613",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101173706_7160fd3138",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8634,
+    "run_id": "41329460613"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T17:37:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
