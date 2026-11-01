@@ -656,6 +656,7 @@ def test_validate_workflow_stages_and_orders_workspace_hooks() -> None:
 	assert "run_workspace_hook.sh" in fetch_block
 	assert "VALIDATE_HOOK_HELPER=" in fetch_block
 	assert _step(VALIDATE_WORKFLOW, "Run validation process").get("if") == "always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure' && steps.authorized_target.outcome == 'success' && steps.runtime.outcome == 'success' && steps.support_staging.outcome == 'success'"
+	assert _step(VALIDATE_WORKFLOW, "Run workspace before_remove hook").get("if") == "always() && env.VALIDATE_HOOK_HELPER != ''"
 	assert _step_index(VALIDATE_WORKFLOW, "Activate workspace shell context") < _step_index(VALIDATE_WORKFLOW, "Run workspace after_create hook") < _step_index(VALIDATE_WORKFLOW, "Initialize Serena runtime state")
 	assert _step_index(VALIDATE_WORKFLOW, "Build semble index") < _step_index(VALIDATE_WORKFLOW, "Run workspace before_run hook") < _step_index(VALIDATE_WORKFLOW, "Run validation process")
 	assert _step_index(VALIDATE_WORKFLOW, "Run validation process") < _step_index(VALIDATE_WORKFLOW, "Run workspace after_run hook") < _step_index(VALIDATE_WORKFLOW, "Collect validation status")
