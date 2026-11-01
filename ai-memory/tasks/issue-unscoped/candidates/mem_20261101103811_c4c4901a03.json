@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ai_labels.py, tests/test_orchestrate_lib.py, tests/test_workflow_checkout_integration_ref_audit.py:N/A | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push test gate attributes three newly failing test files to this change, and nothing on the PR explains or fixes them.\n  WHY: The gate is red with \"caused by this change\" attribution, so the PR may be blocked from merging. Severity disagreement: both reporters rated it MAJOR. anthropic_claude-sonnet-5_5 grepped the files and found no link to the \"Run Codex\" step, so it did not report the failures. z-ai_glm-5_3-flash's static analysis also found no causal link.\n- .github/workflows/clarify.yml (CI check run copilot-pull-request-reviewer, run 41296057478):N/A | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer check failed with `custom_instructions_too_large` (\"Prompt too big after adding system message\"), so that review channel produced nothing.\n  WHY: The failure comes from building custom instructions from AGENTS.md and CLAUDE.md, which the diff does not touch. It would block merge only if the check is required.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Each test should fail on SHA 32c82d3073c2 and pass with the fix. Record in the PR that you ran it both ways.\"\n  expected_change_site: PR description (and tests/test_plan_clarify_blocked_output.py)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR description has no record of running the tests both ways, and the autofix summary comment reports only the three #8602 tests passing with the fix. No run against SHA 32c82d3073c2 is recorded. The tests are built to fail on the base, but that was not executed and recorded. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"Each test should fail on SHA 32c82d3073c2 and pass with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: PR description\nEvidence of absence: The PR description has no record of running the tests against the pinned head. The autofix summary comment only reports the three #8602 tests passing with the fix. This is a process record, not missing code.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ai_labels.py:N/A (pre-push test gate failure) | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push test gate reports tests/test_ai_labels.py, tests/test_orchestrate_lib.py, and tests/test_workflow_checkout_integration_ref_audit.py as newly failing due to this change.\n  WHY: CI is failing due to these newly introduced test failures, which were not in the inherited failures list.\nTASK_GAP:\nRequirement: \"Each test should fail on SHA 32c82d3073c2 and pass with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: PR description (and tests/test_plan_clarify_blocked_output.py)\nEvidence of absence: The PR description lacks this record. It reports only the three new #8602 tests passing with the fix, not a run against the pinned SHA.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"Each test should fail on SHA 32c82d3073c2 and pass with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: PR description (and tests/test_plan_clarify_blocked_output.py)\nEvidence of absence: The PR description has no \"ran it both ways\" record. The autofix editor's PR comment (entry id 6556514312) only states \"The three #8602 tests passed\" with the fix. The structural tests would fail on the merge base by construction, but this was not executed and recorded.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"Each test should fail on SHA 32c82d3073c2 and pass with the fix. Record in the PR that you ran it both ways.\"\nExpected change site: PR description or PR verification record; tests/test_plan_clarify_blocked_output.py\nEvidence of absence: The PR description does not record runs against both the pinned SHA and the fixed head. The PR comment reports the new tests passing on the fixed code only.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ai_labels.py, tests/test_orchestrate_lib.py, tests/test_workflow_checkout_integration_ref_audit.py:pre-push gate report on PR comment entry[1] (\"Failures caused by this change: 3\") | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push test gate attributes three newly failing test files to this change, and the PR/commit notes neither explain nor fix them. Static analysis shows no plausible causal link.\n  WHY: The gate is red with \"caused by this change\" attribution. Without an explanation or fix the change cannot clear the merge gate.\n- .github/workflows/clarify.yml (CI check run copilot-pull-request-reviewer, run 41296057478):check-run failure \"Prompt too big after adding system message\" / `custom_instructions_too_large` | severity=NIT | confidence=3\n  PROBLEM: The PR's Copilot reviewer check failed, so that review channel produced nothing. The failure comes from building custom instructions from AGENTS.md/CLAUDE.md, which the diff does not touch.\n  WHY: The check job exits 1 on the PR head. If it is a required gate it will block merge regardless of the code being correct.\nTASK_GAP:\nRequirement: \"Each test should fail on SHA 32c82d3073c2 and pass with the fix. Record in the PR that you ran it both ways.\" (linked issue #8602)\nExpected change site: PR description (and, if re-run, tests/test_plan_clarify_blocked_output.py)\nEvidence of absence: The PR description has no both-ways run record. The autofix editor's PR comment (entry id 6556514312) reports only that the three #8602 tests pass with the fix. The tests are constructed to fail on the base, but the issue requires the executed record. This gap was raised last round and remains unaddressed.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "58d006db09133c61b3e9949e226a64c484ba08b71860babd34fb299dd18a7a8d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8606,
+    "run_id": "41296050132",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41296050132",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101103811_c4c4901a03",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8606,
+    "run_id": "41296050132"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T10:38:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
