@@ -656,3 +656,12 @@ def test_group_owner_repeating_the_same_key_does_not_move_the_episode_time(tmp_p
 	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
 	assert out["new"] == [11]
 	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 3 * 3600}
+
+
+def test_group_episode_time_ignores_same_key_failures_from_an_earlier_episode(tmp_path, monkeypatch):
+	# Both item and owner failed with K1 more than a window before failing with
+	# K1 again: the episode starts at the fresh failures, not the aged-out ones.
+	details = _gdetails({10: [_gentry(26 * 3600, K1, "c"), _gentry(1200, K1, "d")], 11: [_gentry(25 * 3600, K1, "a"), _gentry(600, K1, "b")]})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
+	assert out["new"] == [11]
+	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 600}

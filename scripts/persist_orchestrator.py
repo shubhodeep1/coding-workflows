@@ -402,7 +402,8 @@ def _newest_failure(entries: list[dict], now: int, window_s: int) -> tuple[str, 
 	"""(failure_key, earliest failing ts of that key in the window, start ts of
 	the newest unbroken run of failing entries with that key) when the newest
 	entry is a failure inside the window, else None. The run start does not move
-	when the same failure repeats, so it marks when the episode began."""
+	when the same failure repeats, so it marks when the episode began; a gap
+	longer than the window between two entries of the run ends it."""
 	if not entries:
 		return None
 	ordered = sorted(entries, key=lambda e: e.get("ts", ""))
@@ -418,12 +419,19 @@ def _newest_failure(entries: list[dict], now: int, window_s: int) -> tuple[str, 
 		if t is not None and t >= now - window_s
 	]
 	run_start = newest_ts
+	prev_t = newest_ts
 	for e in reversed(ordered):
 		if e.get("outcome") not in GROUP_FAIL_OUTCOMES or e.get("failure_key") != key:
 			break
 		t = _ts_epoch(e.get("ts"))
-		if t is not None:
-			run_start = min(run_start, t)
+		if t is None:
+			continue
+		# A gap longer than the window ends the run: an older same-key failure
+		# that had already aged out belongs to an earlier episode.
+		if prev_t - t > window_s:
+			break
+		run_start = min(run_start, t)
+		prev_t = t
 	return key, (min(stamps) if stamps else newest_ts), run_start
 
 

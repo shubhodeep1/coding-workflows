@@ -20247,7 +20247,7 @@ invoke_stall_judge() {
     fi
   fi
   # Grouped failures (issue #8427, P8): the owner's diagnostics list the items
-  # paused under it (issue, local id, failure key). Switch off, or no entry for
+  # paused under it (issue, local id, title, failure key). Switch off, or no entry for
   # this issue, the diagnostics are unchanged.
   if [ "${PERSIST_ORCH_FAILURE_GROUPING_ENABLED:-false}" = "true" ] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \
     && [ -n "${PERSIST_ORCH_GROUP_DIAG_JSON:-}" ] && [ "${PERSIST_ORCH_GROUP_DIAG_JSON}" != "{}" ]; then
