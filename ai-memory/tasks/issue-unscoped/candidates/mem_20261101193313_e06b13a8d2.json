@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/tg_helpers.sh:235 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: Every HTTP 403 from Telegram is classified as transient in `_tg_delete_msg_checked`, including permanent cases such as the bot being kicked from the group chat.\n  WHY: If the bot permanently loses chat access, tracking comments are never deleted and each cleanup prints warnings. The retries are bounded by the 3-in-a-row breaker and 10-second timeouts. Both reviewers rated it NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/tg_helpers.sh: `_tg_delete_msg_checked`, the line `if [ \"${http_code}\" = \"429\" ] || [ \"${http_code}\" = \"401\" ] || [ \"${http_code}\" = \"403\" ] || [ \"${http_code:0:1}\" = \"5\" ]; then return 1` (consumed in `tg_cleanup_phase_msgs` and `tg_cleanup_msgs`) | severity=NIT | confidence=2\n  PROBLEM: Every HTTP 403 is classified as transient, including permanent cases such as \"bot was kicked from the group chat\". The 403 branch was added deliberately in the last run, so this is a known trade-off and not a regression.\n  WHY: If the bot permanently loses chat access, the affected tracking comments are never deleted. Each cleanup call prints a `::warning::` and makes up to 3 Telegram calls, bounded by the breaker and 10-second timeouts.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/tg_helpers.sh:235 | severity=NIT | confidence=2\n  PROBLEM: The cleanup mechanism treats HTTP 403 (Forbidden) from Telegram as a transient error.\n  WHY: A 403 is often permanent, for example an invalid bot token or a bot kicked from the group. Retries are bounded to 3 consecutive failures, but tracking comments can be left behind and warnings repeat on later cleanup runs until the issue is resolved manually.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "62fdb3b984305ec91f83478f4a3d71037c052749bf5d2397e9f1de67d4f5d56b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8609,
+    "run_id": "41339593668",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41339593668",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101193313_e06b13a8d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8609,
+    "run_id": "41339593668"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T19:33:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
