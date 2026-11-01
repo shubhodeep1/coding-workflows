@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8613_6557643541_approved",
   "issue_number": 8613,
   "metadata": {
+    "branch": "ai/issue-8613",
+    "changed_files": [
+      "changelog.d/8613-filter-log-runtime-lines-unstyled-script.md",
+      "scripts/workflow_failure_heal.py",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 8613,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8613",
+    "pr_number": 8617,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8617",
+    "run_attempt": "1",
+    "run_id": "41304437489",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41304437489"
   },
   "run_attempt": 1,
   "run_id": "41304437489",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-01T12:02:38Z",
+  "status": "completed",
+  "timestamp": "2026-11-01T12:46:23Z",
   "workflow": "implement"
 }
