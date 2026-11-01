@@ -1351,7 +1351,7 @@ jobs:
 
       - name: Run validation process
         id: validate_run
-        if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'
+        if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure' && steps.authorized_target.outcome == 'success' && steps.runtime.outcome == 'success'
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
@@ -1430,6 +1430,16 @@ jobs:
           fi
           echo "VALIDATE_HINTS_CACHE_STAGE_OUT staged_entries=${validate_hints_cache_staged_entries} staging_dir=${validate_hints_cache_staging_dir} workspace_dir=${validate_hints_cache_workspace_dir}"
 
+      # When authorization or runtime setup failed, RUNTIME_DIR is empty or
+      # missing. The step then writes no file (it used to write
+      # /validation_status.json) and reports status=error with
+      # raw_status=not_initialized. That value was chosen over a new
+      # setup_state output because no consumer checks raw_status against a
+      # fixed list: scripts/orchestrate_poll_process.sh and
+      # scripts/workflow_failure_heal.py only compare it with harness_error,
+      # scripts/ai_memory_lib.py only normalises the text, and nothing in
+      # scripts/, .github/workflows/ or workflow-templates/ reads
+      # codex_failure. Enforce validation outcome still exits 1.
       - name: Collect validation status
         id: collect_status
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
@@ -1437,6 +1447,25 @@ jobs:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
         run: |
           set -euo pipefail
+
+          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ]; then
+            echo "::warning::Validation runtime directory is unavailable; reporting status=error without writing status files."
+            {
+              echo "status=error"
+              echo "raw_status=not_initialized"
+              echo "summary=Validation did not start: authorization or runtime setup did not complete."
+              echo "failure_summary=Authorization, checkout or runtime setup failed before validation started. See the earlier step errors."
+              echo "status_file="
+              echo "metadata_file="
+              echo "failure_owner=none"
+              echo "harness_report=false"
+              echo "harness_stage="
+              echo "harness_reason="
+              echo "harness_fp="
+              echo "harness_signature_b64="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           STATUS_FILE_PATH="${RUNTIME_DIR}/validation_status.json"
           METADATA_FILE_PATH="${RUNTIME_DIR}/validation_metadata.json"
@@ -1558,7 +1587,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
 
       - name: Record validation candidate
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always()) && steps.runtime.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1636,8 +1665,11 @@ jobs:
             --actor "${{ github.actor }}" \
             --issue-number "${issue_number}"
 
+      # Never upload / or /validation/ (run 36378523375 scanned /boot/efi):
+      # the step needs a runtime directory, and an empty workspace_path turns
+      # the workspace line into the exclude pattern !/validation/.
       - name: Upload validation artifacts
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always()) && steps.runtime.outputs.runtime_dir != ''
         uses: actions/upload-artifact@v6
         with:
           name: ai-validation-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1645,7 +1677,7 @@ jobs:
           retention-days: 14
           path: |
             ${{ steps.runtime.outputs.runtime_dir }}/
-            ${{ steps.workspace_state.outputs.workspace_path }}/validation/
+            ${{ steps.workspace_state.outputs.workspace_path == '' && '!' || '' }}${{ steps.workspace_state.outputs.workspace_path }}/validation/
 
       - name: Write run summary
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
@@ -1679,7 +1711,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record validation run end
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always()) && steps.runtime.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1772,8 +1804,11 @@ jobs:
           SINK_HEAD_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)" \
             bash "${sink_script}" || true
 
+      # Gated on authorization, not runtime setup: Checkout repository runs
+      # right after authorization, so scripts/orchestrate_force_tick.sh exists
+      # even when runtime setup later fails, and the tick is still wanted then.
       - name: Force orchestrate poll after validation finalization
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always()) && steps.authorized_target.outcome == 'success'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1795,7 +1830,7 @@ jobs:
             --run-id "${{ github.run_id }}"
 
       - name: Run workspace before_remove hook
-        if: always()
+        if: always() && env.VALIDATE_HOOK_HELPER != ''
         run: |
           set -euo pipefail
           : "${VALIDATE_HOOK_HELPER:?Trusted validation hook helper is unavailable}"
