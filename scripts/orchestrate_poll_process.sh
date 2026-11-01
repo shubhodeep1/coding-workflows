@@ -19826,6 +19826,183 @@ persist_orch_record_merged_pr() {
   return 0
 }
 
+# persist_orch_group_failures (issue #8427, P8; grouping repeated failures).
+# The managed loop calls it in the not-stuck branch for .waves[WAVE_IDX]
+# after initialising PERSIST_ORCH_GROUP_STATE_CHANGED=false,
+# PERSIST_ORCH_GROUPED_ISSUES_JSON='{}' and PERSIST_ORCH_GROUP_DIAG_JSON='{}'.
+# Switch PERSIST_ORCH_FAILURE_GROUPING_ENABLED (exactly "true"; default
+# false, also defaulted in scripts/persist_orchestrator.py and
+# orchestrate_poll.yml). Off: starts no Python; one jq check removes leftover
+# grouped_under / persist_group_released_key fields from every wave (no write,
+# no log line when there are none). On: runs persist_orchestrator.py group
+# over STATE_FILE and the tick's _current_wave_details_json cache (written to
+# a scratch file, never argv), applies the decision to STATE_FILE in one jq
+# write (grouped_under = {owner, key, since}; since is kept while owner and key
+# stay the same), and only after that write lands posts one
+# `## Paused: same failure as another project item` comment
+# (AI_PERSIST_GROUPED_V1 key=<k> owner=<n>; skipped when the cached comments
+# already hold that marker from the pipeline login, posted no earlier than the
+# episode time newest_failure_ts: the later start of the item's and its owner's
+# newest run of same-key failures) per newly grouped item. Then exports the
+# tick-local maps PERSIST_ORCH_GROUPED_ISSUES_JSON ({member: owner}; the caller
+# hides members from check-stalls and the P6 governor) and
+# PERSIST_ORCH_GROUP_DIAG_JSON ({owner: [{issue, id, title, key}]}; title is
+# issue-author text labelled "UNTRUSTED_DATA: "; read by
+# invoke_stall_judge). A missing helper output, or a failed state write,
+# leaves the state as it was and pauses nothing. API budget (section 14): zero
+# reads (comments come from the GraphQL details cache), at most one identity
+# read shared through PERSIST_JOURNAL_LOGIN_CACHE, and one comment write per
+# newly grouped item. Always returns 0.
+persist_orch_group_failures() {
+  local pog_base pog_details pog_out pog_now pog_max pog_tmp pog_issue pog_owner pog_key pog_reason pog_body pog_ts
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  if [ "${PERSIST_ORCH_FAILURE_GROUPING_ENABLED:-false}" != "true" ]; then
+    jq -e 'any(.waves[]?.issues[]?; type == "object" and (has("grouped_under") or has("persist_group_released_key")))' \
+      "${STATE_FILE}" >/dev/null 2>&1 || return 0
+    if jq '(.waves[]?.issues[]? | select(type == "object")) |= del(.grouped_under, .persist_group_released_key)' \
+      "${STATE_FILE}" > "${STATE_FILE}.persist_group.tmp" 2>/dev/null && mv "${STATE_FILE}.persist_group.tmp" "${STATE_FILE}"; then
+      PERSIST_ORCH_GROUP_STATE_CHANGED=true
+      echo "PERSIST orch_group outcome=released reason=switch_off" >&2
+    else
+      rm -f "${STATE_FILE}.persist_group.tmp"
+      echo "PERSIST orch_group outcome=error reason=state_write_failed" >&2
+    fi
+    return 0
+  fi
+  [[ "${WAVE_IDX:-}" =~ ^[0-9]+$ ]] || return 0
+  if [ ! -f scripts/persist_orchestrator.py ]; then
+    echo "PERSIST orch_group outcome=skipped reason=helper_absent" >&2
+    return 0
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+    PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+    [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+  fi
+  if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ]; then
+    echo "PERSIST orch_group outcome=skipped reason=identity_unavailable" >&2
+    return 0
+  fi
+  pog_max="${PERSIST_ORCH_GROUP_MAX_HOURS:-12}"
+  [[ "${pog_max}" =~ ^[1-9][0-9]*$ ]] || pog_max=12
+  pog_base="${RUNTIME_DIR:-/tmp}"
+  [ -d "${pog_base}" ] || pog_base="/tmp"
+  pog_tmp="${STATE_FILE}.persist_group.tmp"
+  # Private scratch files (mktemp), so overlapping runs never share them.
+  pog_details="$(mktemp "${pog_base}/persist_orch_group_details.XXXXXX" 2>/dev/null)" || pog_details=""
+  pog_out="$(mktemp "${pog_base}/persist_orch_group_out.XXXXXX" 2>/dev/null)" || pog_out=""
+  if [ -z "${pog_details}" ] || [ -z "${pog_out}" ] \
+    || ! printf '%s' "${_current_wave_details_json:-}" > "${pog_details}" 2>/dev/null; then
+    rm -f "${pog_details}" "${pog_out}"
+    echo "PERSIST orch_group outcome=error reason=scratch_unwritable" >&2
+    return 0
+  fi
+  jq -e 'type == "object"' "${pog_details}" >/dev/null 2>&1 || printf '{}' > "${pog_details}"
+  pog_now="$(date -u +%s)"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py group --state-file "${STATE_FILE}" \
+    --journals-json "${pog_details}" --now "${pog_now}" --wave-index "${WAVE_IDX}" \
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --out "${pog_out}" < /dev/null || true
+  if [ ! -s "${pog_out}" ] || ! jq -e 'type == "object" and (.groups | type) == "array"' "${pog_out}" >/dev/null 2>&1; then
+    # The helper logged why (switch, helper_absent, state_unreadable, ...).
+    rm -f "${pog_out}" "${pog_details}"
+    return 0
+  fi
+  if ! jq --argjson wi "${WAVE_IDX}" --argjson now "${pog_now}" --slurpfile g "${pog_out}" '
+    def ints: [.[]? | select(type == "number" and . > 0 and . == floor)];
+    def hex12: type == "string" and test("^[0-9a-f]{12}$");
+    ($g[0]) as $o
+    | ([$o.groups[]? | select((.owner | type) == "number" and (.owner > 0) and (.key | hex12))
+        | .owner as $ow | .key as $k | (.members | ints)[] | {key: tostring, value: {owner: $ow, key: $k}}] | from_entries) as $set
+    | ($o.release | ints | map(tostring)) as $rel
+    | ([$o.release_cooldown[]? | select((.issue | type) == "number" and (.key | hex12)) | {key: (.issue | tostring), value: .key}] | from_entries) as $cool
+    | ($o.clear_cooldown | ints | map(tostring)) as $clr
+    | .waves[$wi].issues |= map(
+        if type != "object" or .github_issue == null then .
+        else (.github_issue | tostring) as $n
+        | (if ($n | IN($rel[])) then del(.grouped_under) else . end)
+        | (if $set[$n] != null then
+            .grouped_under = (if (.grouped_under | type) == "object" and .grouped_under.owner == $set[$n].owner
+              and .grouped_under.key == $set[$n].key and ((.grouped_under.since | type) == "number")
+              then .grouped_under else {owner: $set[$n].owner, key: $set[$n].key, since: $now} end)
+          else . end)
+        | (if $cool[$n] != null then .persist_group_released_key = $cool[$n]
+          elif ($n | IN($clr[])) then del(.persist_group_released_key) else . end)
+        end)' "${STATE_FILE}" > "${pog_tmp}" 2>/dev/null || [ ! -s "${pog_tmp}" ]; then
+    rm -f "${pog_tmp}" "${pog_out}" "${pog_details}"
+    echo "PERSIST orch_group outcome=error reason=state_write_failed" >&2
+    return 0
+  fi
+  if jq -e --slurpfile a "${pog_tmp}" '. == $a[0]' "${STATE_FILE}" >/dev/null 2>&1; then
+    rm -f "${pog_tmp}"
+  elif mv "${pog_tmp}" "${STATE_FILE}" 2>/dev/null; then
+    PERSIST_ORCH_GROUP_STATE_CHANGED=true
+  else
+    rm -f "${pog_tmp}" "${pog_out}" "${pog_details}"
+    echo "PERSIST orch_group outcome=error reason=state_write_failed" >&2
+    return 0
+  fi
+  while IFS=$'\t' read -r pog_issue pog_reason; do
+    [[ "${pog_issue}" =~ ^[1-9][0-9]*$ ]] || continue
+    echo "PERSIST orch_group outcome=released issue=${pog_issue} reason=${pog_reason}" >&2
+  done < <(jq -r '(.release_reasons // {}) as $r | .release[]? | select(type == "number" and . > 0)
+    | [tostring, (($r[tostring] // "unknown") | tostring | gsub("[^A-Za-z0-9_.-]"; "_") | .[0:40])] | @tsv' "${pog_out}" 2>/dev/null || true)
+  PERSIST_ORCH_GROUPED_ISSUES_JSON="$(jq -c --argjson wi "${WAVE_IDX}" '[.waves[$wi].issues[]?
+    | select(type == "object" and (.grouped_under | type) == "object" and (.github_issue | type) == "number")
+    | select((.grouped_under.owner | type) == "number")
+    | {key: (.github_issue | tostring), value: .grouped_under.owner}] | from_entries' "${STATE_FILE}" 2>/dev/null)" \
+    || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
+  [ -n "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" ] || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
+  # Titles come from the details cache (issue-author text): control characters,
+  # comment delimiters, "#" and "@" are stripped, runs of "=" are broken up so a
+  # title cannot imitate a prompt section header, the length is capped at 120,
+  # and a non-empty title is labelled "UNTRUSTED_DATA: " so the stall judge (and
+  # its semble query) reads it as data, not instructions.
+  PERSIST_ORCH_GROUP_DIAG_JSON="$(jq -c --argjson wi "${WAVE_IDX}" --slurpfile d "${pog_details}" '($d[0] // {}) as $cache
+    | [.waves[$wi].issues[]?
+    | select(type == "object" and (.grouped_under | type) == "object" and (.github_issue | type) == "number")
+    | select((.grouped_under.owner | type) == "number")
+    | {owner: (.grouped_under.owner | tostring),
+       item: {issue: .github_issue, id: ((.id // "item") | tostring | gsub("[^A-Za-z0-9._-]"; "_") | .[0:40]),
+              title: (($cache[.github_issue | tostring].title? // "") | tostring
+                | gsub("\\p{Cc}|\\p{Zl}|\\p{Zp}"; " ") | gsub("<!--|-->"; "") | gsub("={3,}"; "= = =") | gsub("[#@]"; "") | .[0:120]
+                | if . == "" then . else "UNTRUSTED_DATA: " + . end),
+              key: ((.grouped_under.key // "") | tostring | gsub("[^0-9a-f]"; "") | .[0:12])}}]
+    | group_by(.owner) | map({key: .[0].owner, value: map(.item)}) | from_entries' "${STATE_FILE}" 2>/dev/null)" \
+    || PERSIST_ORCH_GROUP_DIAG_JSON='{}'
+  [ -n "${PERSIST_ORCH_GROUP_DIAG_JSON}" ] || PERSIST_ORCH_GROUP_DIAG_JSON='{}'
+  while IFS=$'\t' read -r pog_issue pog_owner pog_key pog_ts; do
+    [[ "${pog_issue}" =~ ^[1-9][0-9]*$ ]] && [[ "${pog_owner}" =~ ^[1-9][0-9]*$ ]] && [[ "${pog_key}" =~ ^[0-9a-f]{12}$ ]] || continue
+    [[ "${pog_ts:-}" =~ ^[0-9]+$ ]] || pog_ts=0
+    echo "PERSIST orch_group outcome=grouped issue=${pog_issue} owner=${pog_owner}" >&2
+    # The grouping state reaches the tracking issue only later in the tick
+    # (post_state_comment), so a cached pipeline comment with the same marker
+    # (key and owner), posted no earlier than the episode time (newest_failure_ts),
+    # means this pause episode was already announced: skip the post. A marker
+    # from an earlier episode (older than the failure that regrouped the item)
+    # does not count.
+    if jq -e --arg n "${pog_issue}" --arg login "${PERSIST_JOURNAL_LOGIN_CACHE}" \
+      --arg m "<!-- AI_PERSIST_GROUPED_V1 key=${pog_key} owner=${pog_owner} " --argjson ts "${pog_ts}" \
+      'any((.[$n].comments? // [])[]?; type == "object" and ((.user.login? // "") == $login) and ((.body // "") | tostring | contains($m))
+        and (((.created_at // "") | tostring | (try fromdateiso8601 catch -1)) >= $ts))' \
+      "${pog_details}" >/dev/null 2>&1; then
+      continue
+    fi
+    pog_body="$(printf '## Paused: same failure as another project item\n\nThe newest failure of this item has the same failure key (`%s`) as issue %s. Stall recovery and re-triggers are paused until that item'"'"'s failure changes, its pull request merges, or %s hours pass.\n\n<!-- AI_PERSIST_GROUPED_V1 key=%s owner=%s -->\n' \
+      "${pog_key}" "${pog_owner}" "${pog_max}" "${pog_key}" "${pog_owner}")"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pog_issue}/comments" -f body="${pog_body}" >/dev/null 2>&1; then
+      # Not retried: the item stays paused, and the pause is still bounded by
+      # PERSIST_ORCH_GROUP_MAX_HOURS.
+      echo "PERSIST orch_group outcome=error reason=comment_failed issue=${pog_issue}" >&2
+    fi
+  done < <(jq -r --argjson wi "${WAVE_IDX}" --slurpfile g "${pog_out}" '
+    [$g[0].new[]? | select(type == "number" and . > 0) | tostring] as $new
+    | .waves[$wi].issues[]?
+    | select(type == "object" and (.grouped_under | type) == "object" and ((.github_issue | tostring) | IN($new[])))
+    | [(.github_issue | tostring), (.grouped_under.owner | tostring), (.grouped_under.key | tostring),
+       (($g[0].newest_failure_ts? // {})[.github_issue | tostring] // 0 | tostring)] | @tsv' "${STATE_FILE}" 2>/dev/null || true)
+  rm -f "${pog_out}" "${pog_details}"
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -20067,6 +20244,17 @@ invoke_stall_judge() {
     if _persist_diag="$(printf '%s' "${diagnostics}" | jq -c --rawfile journal "${_persist_journal_file}" \
       '. + {attempt_journal: (if $journal == "" then null else $journal end)}' 2>/dev/null)" && [ -n "${_persist_diag}" ]; then
       diagnostics="${_persist_diag}"
+    fi
+  fi
+  # Grouped failures (issue #8427, P8): the owner's diagnostics list the items
+  # paused under it (issue, local id, title, failure key). Switch off, or no entry for
+  # this issue, the diagnostics are unchanged.
+  if [ "${PERSIST_ORCH_FAILURE_GROUPING_ENABLED:-false}" = "true" ] && [ -n "${local_id}" ] && [ "${local_id}" != "null" ] \
+    && [ -n "${PERSIST_ORCH_GROUP_DIAG_JSON:-}" ] && [ "${PERSIST_ORCH_GROUP_DIAG_JSON}" != "{}" ]; then
+    local _persist_group_diag
+    if _persist_group_diag="$(printf '%s' "${diagnostics}" | jq -c --argjson g "${PERSIST_ORCH_GROUP_DIAG_JSON}" --arg n "${issue_num}" \
+      'if ($g[$n] | type) == "array" then . + {grouped_items: $g[$n]} else . end' 2>/dev/null)" && [ -n "${_persist_group_diag}" ]; then
+      diagnostics="${_persist_group_diag}"
     fi
   fi
 
@@ -20527,6 +20715,7 @@ _fetch_candidate_issue_details_graphql() {
       [[ "${n}" =~ ^[0-9]+$ ]] || continue
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
+          title
           state
           body
           author { login }
@@ -20584,6 +20773,7 @@ _fetch_candidate_issue_details_graphql() {
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
             body: .value.body,
+            title: (.value.title // ""),
             author_login: (.value.author.login // ""),
             author_association: (.value.authorAssociation // ""),
             labels: [(.value.labels.nodes // [])[]?.name],
@@ -30825,6 +31015,13 @@ fi
     fi
 
     if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+    # Grouping repeated failures (issue #8427, P8): items whose newest failure
+    # shares a failure key with another open item of this wave are paused
+    # under one owner. Switch off, this only removes leftover state fields.
+    PERSIST_ORCH_GROUP_STATE_CHANGED=false
+    PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
+    PERSIST_ORCH_GROUP_DIAG_JSON='{}'
+    persist_orch_group_failures < /dev/null || true
     # Persistence budget (issue #8427, P6) for the current wave's open
     # issues, before stall detection. Labels and comments come from this
     # cycle's LABELS_JSON / _current_wave_details_json caches; the active-run
@@ -30836,6 +31033,12 @@ fi
     # read as ai:needs-human so check-stalls leaves them alone until the next
     # tick (a re-plan was just posted or an escalation just applied).
     PERSIST_BUDGET_STALL_LABELS_JSON="${LABELS_JSON}"
+    # P8: grouped items read as ai:needs-human in this view too, so
+    # check-stalls skips them (no label is written to GitHub).
+    if [ -n "${PERSIST_ORCH_GROUPED_ISSUES_JSON:-}" ] && [ "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" != "{}" ]; then
+      PERSIST_BUDGET_STALL_LABELS_JSON="$(printf '%s' "${PERSIST_BUDGET_STALL_LABELS_JSON}" | jq -c --argjson g "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" \
+        'reduce ($g | keys[]) as $n (.; .[$n] = ((.[$n] // []) + ["ai:needs-human"]))' 2>/dev/null || printf '%s' "${PERSIST_BUDGET_STALL_LABELS_JSON}")"
+    fi
     if _is_truthy "${PERSIST_BUDGET_ENABLED:-false}" && [ -f scripts/persist_budget.py ]; then
       _load_actions_runs_cached >/dev/null 2>&1 || true
       ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set 2>/dev/null || true)"
@@ -30844,6 +31047,12 @@ fi
         case "${_pb_status}" in
           merged|closed|skipped|not_created) continue ;;
         esac
+        # P8: an item paused under a failure group is not re-triggered.
+        if [ -n "${PERSIST_ORCH_GROUPED_ISSUES_JSON:-}" ] && [ "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" != "{}" ] \
+          && printf '%s' "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" | jq -e --arg n "${_pb_issue}" 'has($n)' >/dev/null 2>&1; then
+          echo "PERSIST governor outcome=skipped reason=grouped issue=${_pb_issue}" >&2
+          continue
+        fi
         _pb_labels="$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${_pb_issue}" '.[$n] // []' 2>/dev/null || echo '[]')"
         # Dedicated-handler phases (DEDICATED_HANDLER_PHASES in
         # orchestrate_lib.py) and human latches are owned elsewhere; the
@@ -31132,7 +31341,7 @@ with open('${STATE_FILE}', 'w') as f:
       fi
     fi
 
-    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${PERSIST_BUDGET_STATE_CHANGED:-false}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${TRACKING_BODY_SYNC_STATE_CHANGED:-false}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${PERSIST_BUDGET_STATE_CHANGED:-false}" = "true" ] || [ "${PERSIST_ORCH_GROUP_STATE_CHANGED:-false}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${TRACKING_BODY_SYNC_STATE_CHANGED:-false}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
       post_state_comment || true
     fi
     if [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ]; then

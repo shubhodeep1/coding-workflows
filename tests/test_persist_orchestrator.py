@@ -368,3 +368,300 @@ def test_plan_path_cli_prints_the_path(tmp_path, capsys):
 def test_switch_defaults_off_in_the_helper():
 	text = SCRIPT.read_text(encoding="utf-8")
 	assert 'os.environ.get("PERSIST_ORCH_CONTEXT_ENABLED", "false") == "true"' in text
+
+
+# --- group (issue #8427, P8) ---------------------------------------------------------
+
+from datetime import datetime, timezone  # noqa: E402
+
+GROUP_NOW = 1_800_000_000
+K1 = "aaaaaaaaaaaa"
+K2 = "bbbbbbbbbbbb"
+
+
+def _iso(epoch: int) -> str:
+	return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _gentry(ago_seconds: int, key: str, run: str, outcome: str = "fail") -> dict:
+	return {"ts": _iso(GROUP_NOW - ago_seconds), "stage": "implement", "run_id": run, "attempt": "1",
+		"outcome": outcome, "failure_key": key, "note": "SECRET_NOTE"}
+
+
+def _gdetails(journals: dict[int, list[dict]], login: str = LOGIN) -> dict:
+	return {str(n): {"comments_available": True, "comments": [_journal_comment(login, entries, cid=n)]} for n, entries in journals.items()}
+
+
+def _gstate(*entries: dict) -> dict:
+	return {"waves": [{"issues": list(entries)}]}
+
+
+def _item(n: int, status: str = "pending", **extra) -> dict:
+	return {"id": f"p{n}", "github_issue": n, "status": status, **extra}
+
+
+def _group(tmp_path: Path, monkeypatch, state: dict, details: dict | None, now: int = GROUP_NOW, env: dict | None = None):
+	monkeypatch.setenv("PERSIST_ORCH_FAILURE_GROUPING_ENABLED", "true")
+	for name, value in (env or {}).items():
+		if value is None:
+			monkeypatch.delenv(name, raising=False)
+		else:
+			monkeypatch.setenv(name, value)
+	state_file = tmp_path / "gstate.json"
+	state_file.write_text(json.dumps(state), encoding="utf-8")
+	out = tmp_path / "group.json"
+	if out.exists():
+		out.unlink()
+	argv = ["group", "--state-file", str(state_file), "--now", str(now), "--wave-index", "0", "--trusted-login", LOGIN, "--out", str(out)]
+	if details is not None:
+		details_file = tmp_path / "gdetails.json"
+		details_file.write_text(json.dumps(details), encoding="utf-8")
+		argv += ["--journals-json", str(details_file)]
+	assert po.main(argv) == 0
+	return json.loads(out.read_text(encoding="utf-8")) if out.exists() else None
+
+
+def test_group_three_items_sharing_a_key_pause_two_under_the_earliest(tmp_path, monkeypatch, capsys):
+	details = _gdetails({
+		10: [_gentry(5 * 3600, K1, "1")],
+		11: [_gentry(3 * 3600, K1, "2")],
+		12: [_gentry(2 * 3600, K1, "3")],
+		13: [_gentry(1 * 3600, K2, "4")],
+	})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11), _item(12, "implementing"), _item(13)), details)
+	assert out["groups"] == [{"key": K1, "owner": 10, "members": [11, 12]}]
+	assert out["new"] == [11, 12]
+	assert out["release"] == [] and out["release_cooldown"] == [] and out["clear_cooldown"] == []
+	err = capsys.readouterr().err
+	assert "PERSIST orch_group outcome=ok reason=evaluated groups=1 grouped=2 released=0" in err
+	assert "SECRET_NOTE" not in json.dumps(out) and "SECRET_NOTE" not in err
+
+
+def test_group_owner_tie_goes_to_the_lower_issue_and_inactive_items_are_not_members(tmp_path, monkeypatch):
+	details = _gdetails({
+		20: [_gentry(3600, K1, "1")],
+		21: [_gentry(3600, K1, "2")],
+		22: [_gentry(3600, K1, "3")],
+	})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(22), _item(21), _item(20, "merged")), details)
+	assert out["groups"] == [{"key": K1, "owner": 21, "members": [22]}]
+
+
+def test_group_existing_owner_is_kept_and_nothing_is_new(tmp_path, monkeypatch):
+	details = _gdetails({
+		10: [_gentry(5 * 3600, K1, "1")],
+		11: [_gentry(3 * 3600, K1, "2")],
+		12: [_gentry(2 * 3600, K1, "3")],
+	})
+	since = GROUP_NOW - 3600
+	state = _gstate(
+		_item(10, grouped_under={"owner": 12, "key": K1, "since": since}),
+		_item(11, grouped_under={"owner": 12, "key": K1, "since": since}),
+		_item(12),
+	)
+	out = _group(tmp_path, monkeypatch, state, details)
+	assert out["groups"] == [{"key": K1, "owner": 12, "members": [10, 11]}]
+	assert out["new"] == [] and out["release"] == []
+
+
+@pytest.mark.parametrize(
+	("owner_entries", "owner_extra", "item_entries", "reason"),
+	[
+		([_gentry(600, K2, "9")], {}, [_gentry(3600, K1, "2")], "owner_key_changed"),
+		([_gentry(5 * 3600, K1, "1")], {"status": "merged", "persist_merged_pr": 99}, [_gentry(3600, K1, "2")], "owner_merged"),
+		([_gentry(5 * 3600, K1, "1")], {"status": "closed"}, [_gentry(3600, K1, "2")], "owner_merged"),
+		([_gentry(5 * 3600, K1, "1")], {}, [_gentry(600, K2, "8")], "key_changed"),
+		([_gentry(5 * 3600, K1, "1")], {}, [_gentry(600, K1, "8", outcome="ok")], "key_changed"),
+	],
+)
+def test_group_release_rules(tmp_path, monkeypatch, capsys, owner_entries, owner_extra, item_entries, reason):
+	details = _gdetails({10: owner_entries, 11: [_gentry(7200, K1, "0")] + item_entries})
+	owner = {**_item(10), **owner_extra}
+	state = _gstate(owner, _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 3600}))
+	out = _group(tmp_path, monkeypatch, state, details)
+	assert out["release"] == [11]
+	assert out["release_reasons"] == {"11": reason}
+	assert out["groups"] == [] and out["new"] == [] and out["release_cooldown"] == []
+
+
+def test_group_releases_after_max_hours_then_cools_down_until_the_key_changes(tmp_path, monkeypatch):
+	journals = {10: [_gentry(20 * 3600, K1, "1")], 11: [_gentry(13 * 3600, K1, "2")]}
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 12 * 3600}))
+	out = _group(tmp_path, monkeypatch, state, _gdetails(journals))
+	assert out["release"] == [11] and out["release_reasons"] == {"11": "max_hours"}
+	assert out["release_cooldown"] == [{"issue": 11, "key": K1}]
+	assert out["groups"] == [] and out["new"] == []
+	# Next tick: the cooldown field blocks re-grouping on the same key.
+	state = _gstate(_item(10), _item(11, persist_group_released_key=K1))
+	out = _group(tmp_path, monkeypatch, state, _gdetails(journals))
+	assert out["groups"] == [] and out["new"] == [] and out["clear_cooldown"] == []
+	# The key changes: the cooldown clears and a new group may form.
+	journals = {10: [_gentry(20 * 3600, K1, "1")], 11: [_gentry(13 * 3600, K1, "2"), _gentry(600, K2, "3")], 12: [_gentry(1200, K2, "4")]}
+	state = _gstate(_item(10), _item(11, persist_group_released_key=K1), _item(12))
+	out = _group(tmp_path, monkeypatch, state, _gdetails(journals))
+	assert out["clear_cooldown"] == [11]
+	assert out["groups"] == [{"key": K2, "owner": 12, "members": [11]}]
+	assert out["new"] == [11]
+
+
+def test_group_max_hours_just_before_the_limit_keeps_the_group(tmp_path, monkeypatch):
+	journals = {10: [_gentry(20 * 3600, K1, "1")], 11: [_gentry(13 * 3600, K1, "2")]}
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 12 * 3600 + 1}))
+	out = _group(tmp_path, monkeypatch, state, _gdetails(journals))
+	assert out["release"] == [] and out["groups"] == [{"key": K1, "owner": 10, "members": [11]}]
+
+
+def test_group_window_boundary_is_inclusive(tmp_path, monkeypatch):
+	journals = {10: [_gentry(24 * 3600, K1, "1")], 11: [_gentry(3600, K1, "2")]}
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), _gdetails(journals))
+	assert out["groups"] == [{"key": K1, "owner": 10, "members": [11]}]
+	journals = {10: [_gentry(24 * 3600 + 1, K1, "1")], 11: [_gentry(3600, K1, "2")]}
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), _gdetails(journals))
+	assert out["groups"] == []
+
+
+def test_group_newest_ok_entry_and_untrusted_journal_are_never_grouped(tmp_path, monkeypatch):
+	journals = {10: [_gentry(3600, K1, "1")], 11: [_gentry(7200, K1, "2"), _gentry(600, K1, "3", outcome="ok")]}
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), _gdetails(journals))
+	assert out["groups"] == []
+	details = _gdetails({10: [_gentry(3600, K1, "1")]})
+	details.update(_gdetails({11: [_gentry(3600, K1, "2")]}, login="attacker"))
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
+	assert out["groups"] == []
+
+
+def test_group_without_a_cache_keeps_existing_fields(tmp_path, monkeypatch, capsys):
+	# A missing details cache means "unknown": the pause is kept, not released.
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 60}))
+	out = _group(tmp_path, monkeypatch, state, None)
+	assert out["groups"] == [] and out["release"] == [] and out["new"] == []
+	assert "PERSIST orch_group outcome=skipped reason=journal_absent released=0" in capsys.readouterr().err
+
+
+def test_group_readable_cache_without_journals_releases_existing_fields(tmp_path, monkeypatch):
+	details = {str(n): {"comments_available": True, "comments": []} for n in (10, 11)}
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 60}))
+	out = _group(tmp_path, monkeypatch, state, details)
+	assert out["release"] == [11] and out["release_reasons"] == {"11": "journal_absent"}
+
+
+@pytest.mark.parametrize("missing", [10, 11])
+def test_group_missing_cache_entry_keeps_the_pause(tmp_path, monkeypatch, missing):
+	journals = {10: [_gentry(5 * 3600, K1, "1")], 11: [_gentry(3600, K1, "2")], 12: [_gentry(600, K2, "3")]}
+	details = _gdetails({n: e for n, e in journals.items() if n != missing})
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 60}), _item(12))
+	out = _group(tmp_path, monkeypatch, state, details)
+	assert out["release"] == [] and out["groups"] == [] and out["new"] == []
+	assert out["clear_cooldown"] == []
+
+
+def test_group_unknown_cache_still_releases_after_max_hours(tmp_path, monkeypatch):
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 12 * 3600}))
+	out = _group(tmp_path, monkeypatch, state, {})
+	assert out["release_reasons"] == {"11": "max_hours"}
+	assert out["release_cooldown"] == [{"issue": 11, "key": K1}]
+
+
+def test_group_exception_is_logged_under_orch_group(tmp_path, monkeypatch, capsys):
+	def boom(*_a, **_k):
+		raise RuntimeError("x")
+	monkeypatch.setattr(po, "group_failures", boom)
+	details = _gdetails({10: [_gentry(3600, K1, "1")]})
+	assert _group(tmp_path, monkeypatch, _gstate(_item(10)), details) is None
+	assert "PERSIST orch_group outcome=error reason=exception_RuntimeError" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", [None, "false", "TRUE ", "1", "yes", "on"])
+def test_group_switch_off_writes_nothing(tmp_path, monkeypatch, capsys, value):
+	details = _gdetails({10: [_gentry(3600, K1, "1")], 11: [_gentry(3600, K1, "2")]})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details, env={"PERSIST_ORCH_FAILURE_GROUPING_ENABLED": value})
+	assert out is None
+	assert "PERSIST orch_group outcome=skipped reason=switch_off" in capsys.readouterr().err
+
+
+def test_group_helper_absent_fails_closed(tmp_path, monkeypatch, capsys):
+	monkeypatch.setattr(po, "_aj", None)
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), {})
+	assert out is None
+	assert "reason=helper_absent" in capsys.readouterr().err
+
+
+def test_group_env_hours_fall_back_to_defaults_and_are_honoured(tmp_path, monkeypatch):
+	journals = {10: [_gentry(20 * 3600, K1, "1")], 11: [_gentry(13 * 3600, K1, "2")]}
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 2 * 3600}))
+	out = _group(tmp_path, monkeypatch, state, _gdetails(journals), env={"PERSIST_ORCH_GROUP_MAX_HOURS": "x", "PERSIST_ORCH_GROUP_WINDOW_HOURS": "-3"})
+	assert out["release"] == []
+	out = _group(tmp_path, monkeypatch, state, _gdetails(journals), env={"PERSIST_ORCH_GROUP_MAX_HOURS": "1", "PERSIST_ORCH_GROUP_WINDOW_HOURS": None})
+	assert out["release_reasons"] == {"11": "max_hours"}
+	out = _group(tmp_path, monkeypatch, state, _gdetails(journals), env={"PERSIST_ORCH_GROUP_MAX_HOURS": None, "PERSIST_ORCH_GROUP_WINDOW_HOURS": "12"})
+	assert out["release_reasons"] == {"11": "key_changed"}
+
+
+@pytest.mark.parametrize(("now", "wave", "reason"), [("x", "0", "args_invalid"), ("0", "0", "args_invalid"), (str(GROUP_NOW), "-1", "args_invalid")])
+def test_group_invalid_arguments_write_nothing(tmp_path, monkeypatch, capsys, now, wave, reason):
+	monkeypatch.setenv("PERSIST_ORCH_FAILURE_GROUPING_ENABLED", "true")
+	state_file = tmp_path / "s.json"
+	state_file.write_text("{}", encoding="utf-8")
+	out = tmp_path / "o.json"
+	assert po.main(["group", "--state-file", str(state_file), "--now", now, "--wave-index", wave, "--out", str(out)]) == 0
+	assert not out.exists() and f"reason={reason}" in capsys.readouterr().err
+
+
+def test_group_switch_and_hours_default_in_the_helper():
+	text = SCRIPT.read_text(encoding="utf-8")
+	assert 'os.environ.get("PERSIST_ORCH_FAILURE_GROUPING_ENABLED", "false") == "true"' in text
+	assert po.GROUP_WINDOW_HOURS_DEFAULT == 24 and po.GROUP_MAX_HOURS_DEFAULT == 12
+	assert '_env_hours("PERSIST_ORCH_GROUP_WINDOW_HOURS", GROUP_WINDOW_HOURS_DEFAULT)' in text
+	assert '_env_hours("PERSIST_ORCH_GROUP_MAX_HOURS", GROUP_MAX_HOURS_DEFAULT)' in text
+
+
+def test_group_reports_the_newest_failure_time_of_new_members(tmp_path, monkeypatch):
+	details = _gdetails({10: [_gentry(5 * 3600, K1, "1")], 11: [_gentry(3 * 3600, K1, "2"), _gentry(3600, K1, "3")]})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
+	assert out["new"] == [11]
+	# The start of the member's newest run of K failures (3 h ago), not its newest entry.
+	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 3 * 3600}
+
+
+def test_group_held_member_keeps_the_recorded_owner(tmp_path, monkeypatch):
+	# Item 11 is paused under 10; its cache entry is missing this tick. Item 12
+	# has an earlier in-window failure than 10, but 10 stays the owner.
+	journals = {10: [_gentry(3600, K1, "1")], 12: [_gentry(5 * 3600, K1, "3")]}
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 60}), _item(12))
+	out = _group(tmp_path, monkeypatch, state, _gdetails(journals))
+	assert out["groups"] == [{"key": K1, "owner": 10, "members": [12]}]
+	assert out["release"] == []
+
+
+def test_group_stored_key_that_is_not_hex12_is_field_invalid(tmp_path, monkeypatch):
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": "not-a-key", "since": GROUP_NOW - 12 * 3600}))
+	out = _group(tmp_path, monkeypatch, state, {})
+	assert out["release_reasons"] == {"11": "field_invalid"} and out["release_cooldown"] == []
+
+
+def test_group_episode_time_takes_the_owner_newest_failure_when_newer(tmp_path, monkeypatch):
+	# Owner 10 failed with K1 again after member 11's newest entry: a regroup
+	# after an owner_key_changed release must not reuse the earlier marker.
+	details = _gdetails({10: [_gentry(5 * 3600, K1, "1"), _gentry(1800, K2, "2"), _gentry(600, K1, "3")], 11: [_gentry(3 * 3600, K1, "4")]})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
+	assert out["groups"] == [{"key": K1, "owner": 10, "members": [11]}]
+	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 600}
+
+
+def test_group_owner_repeating_the_same_key_does_not_move_the_episode_time(tmp_path, monkeypatch):
+	# The pause comment was posted, post_state_comment failed, and owner 10 then
+	# failed again with K1: the episode time stays at the run start, so the
+	# earlier marker still suppresses a second comment.
+	details = _gdetails({10: [_gentry(5 * 3600, K1, "1"), _gentry(600, K1, "2")], 11: [_gentry(3 * 3600, K1, "3")]})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
+	assert out["new"] == [11]
+	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 3 * 3600}
+
+
+def test_group_episode_time_ignores_same_key_failures_from_an_earlier_episode(tmp_path, monkeypatch):
+	# Both item and owner failed with K1 more than a window before failing with
+	# K1 again: the episode starts at the fresh failures, not the aged-out ones.
+	details = _gdetails({10: [_gentry(26 * 3600, K1, "c"), _gentry(1200, K1, "d")], 11: [_gentry(25 * 3600, K1, "a"), _gentry(600, K1, "b")]})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
+	assert out["new"] == [11]
+	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 600}

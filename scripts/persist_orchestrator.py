@@ -40,6 +40,41 @@ plan-path --description-file F [--repo-root .]
 	Prints the first ``*.md`` path named in F that is a regular file inside the
 	repo root reached without any symlink; prints nothing otherwise.
 
+group --state-file F --journals-json D --now EPOCH --wave-index I [--trusted-login L] --out O
+	Pure: no subprocess, no network, zero API calls. Switch:
+	PERSIST_ORCH_FAILURE_GROUPING_ENABLED (default "false"; only the exact
+	value "true" turns it on). Windows: PERSIST_ORCH_GROUP_WINDOW_HOURS
+	(default 24) and PERSIST_ORCH_GROUP_MAX_HOURS (default 12); a value that is
+	not a positive integer falls back to the default. Groups the open items of
+	``state.waves[I].issues[]`` (integer ``github_issue``, status not
+	``merged`` / ``closed`` / ``skipped`` / ``not_created``) whose newest
+	trusted attempt-journal entry (``attempt_journal.parse`` for login ``L``
+	over the per-tick details cache ``D``) is a ``fail`` / ``partial`` /
+	``blocked`` outcome with a 12-hex ``failure_key`` no older than the window.
+	Two or more items with the same key form a group; the owner is the item
+	with the earliest failing entry of that key in the window (ties: lower
+	issue), and an existing ``grouped_under.owner`` that is still in the group
+	is kept. A ``grouped_under`` field is released when the item is no longer
+	open, its key changed or aged out, its owner merged / closed / left or
+	changed key, or ``now - since >= MAX_HOURS``. An item (or its owner)
+	whose details-cache entry is missing or unreadable is "unknown": its field
+	is kept unchanged, and only the MAX_HOURS bound applies. A ``max_hours`` release
+	reports the key under ``release_cooldown`` and the item is not grouped
+	again on that key (``persist_group_released_key``) until its key changes
+	(``clear_cooldown``). Writes, only with the switch on:
+	``{"groups": [{"key", "owner", "members"}], "release": [issue],
+	"release_reasons": {"<issue>": token}, "release_cooldown": [{"issue",
+	"key"}], "clear_cooldown": [issue], "new": [issue],
+	"newest_failure_ts": {"<issue>": epoch}}`` (``members`` omits the owner;
+	``new`` lists members without ``grouped_under`` before;
+	``newest_failure_ts`` gives, for each new member, the later start of its
+	own and its owner's newest unbroken run of same-key failing entries, so the
+	poller can tell a pause comment of this episode from an older one). A stored ``grouped_under.key`` that is not 12 hex characters is
+	released as ``field_invalid``. Model
+	``note`` text is never read. Logs one ``PERSIST orch_group
+	outcome=<ok|skipped|error> reason=<token> [groups=<n>] [grouped=<n>]
+	[released=<n>]`` line (issue #8427, P8).
+
 Logs: one ``PERSIST orch_context outcome=<ok|skipped|partial|error>
 reason=<token> [calls=<n>] [bytes=<n>]`` line on stderr; tokens and numbers
 only, never titles, paths or comment text.
@@ -56,6 +91,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +122,12 @@ _TOKEN_UNSAFE_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 _MD_PATH_RE = re.compile(r"[A-Za-z0-9._/-]+\.md\b")
 _BLOB_URL_PREFIX_RE = re.compile(r"https?://[^\s/]+/[^\s/]+/[^\s/]+/blob/[^\s/]+/")
+# Grouping repeated failures (issue #8427, P8).
+GROUP_WINDOW_HOURS_DEFAULT = 24
+GROUP_MAX_HOURS_DEFAULT = 12
+GROUP_FAIL_OUTCOMES = ("fail", "partial", "blocked")
+GROUP_INACTIVE_STATUSES = ("merged", "closed", "skipped", "not_created")
+_HEX12_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
 def log(outcome: str, reason: str, **extra: int) -> None:
@@ -99,6 +141,23 @@ def enabled() -> bool:
 	# Exactly "true", the same rule as the orchestrate.yml gates and the poller,
 	# so a value like "1", "yes" or "TRUE " is off everywhere.
 	return os.environ.get("PERSIST_ORCH_CONTEXT_ENABLED", "false") == "true"
+
+
+def group_enabled() -> bool:
+	# Exactly "true", the same rule as enabled() and the poller gate.
+	return os.environ.get("PERSIST_ORCH_FAILURE_GROUPING_ENABLED", "false") == "true"
+
+
+def _env_hours(name: str, default: int) -> int:
+	value = _positive_int(os.environ.get(name, str(default)))
+	return value if value is not None else default
+
+
+def log_group(outcome: str, reason: str, **extra: int) -> None:
+	line = f"PERSIST orch_group outcome={outcome} reason={_TOKEN_UNSAFE_RE.sub('_', reason)[:60]}"
+	for key, value in extra.items():
+		line += f" {key}={int(value)}"
+	print(line, file=sys.stderr)
 
 
 def _positive_int(value: Any) -> int | None:
@@ -330,6 +389,239 @@ def cmd_open_projects(args: argparse.Namespace) -> None:
 	log("ok", "rendered", calls=1, bytes=len(text.encode("utf-8")))
 
 
+def _ts_epoch(value: Any) -> int | None:
+	if not isinstance(value, str):
+		return None
+	try:
+		return int(datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
+	except ValueError:
+		return None
+
+
+def _newest_failure(entries: list[dict], now: int, window_s: int) -> tuple[str, int, int] | None:
+	"""(failure_key, earliest failing ts of that key in the window, start ts of
+	the newest unbroken run of failing entries with that key) when the newest
+	entry is a failure inside the window, else None. The run start does not move
+	when the same failure repeats, so it marks when the episode began; a gap
+	longer than the window between two entries of the run ends it."""
+	if not entries:
+		return None
+	ordered = sorted(entries, key=lambda e: e.get("ts", ""))
+	newest = ordered[-1]
+	key = newest.get("failure_key")
+	if newest.get("outcome") not in GROUP_FAIL_OUTCOMES or not isinstance(key, str) or not _HEX12_RE.match(key):
+		return None
+	newest_ts = _ts_epoch(newest.get("ts"))
+	if newest_ts is None or newest_ts < now - window_s:
+		return None
+	stamps = [
+		t for t in (_ts_epoch(e.get("ts")) for e in ordered if e.get("outcome") in GROUP_FAIL_OUTCOMES and e.get("failure_key") == key)
+		if t is not None and t >= now - window_s
+	]
+	run_start = newest_ts
+	prev_t = newest_ts
+	for e in reversed(ordered):
+		if e.get("outcome") not in GROUP_FAIL_OUTCOMES or e.get("failure_key") != key:
+			break
+		t = _ts_epoch(e.get("ts"))
+		if t is None:
+			continue
+		# A gap longer than the window ends the run: an older same-key failure
+		# that had already aged out belongs to an earlier episode.
+		if prev_t - t > window_s:
+			break
+		run_start = min(run_start, t)
+		prev_t = t
+	return key, (min(stamps) if stamps else newest_ts), run_start
+
+
+def group_failures(
+	state: Any, wave_index: int, details: Any, login: str, now: int, window_hours: int, max_hours: int,
+) -> tuple[dict, bool]:
+	"""Grouping decision for state.waves[wave_index] and whether any trusted
+	journal entry was seen."""
+	result: dict = {"groups": [], "release": [], "release_reasons": {}, "release_cooldown": [], "clear_cooldown": [], "new": []}
+	issues: list = []
+	waves = state.get("waves") if isinstance(state, dict) else None
+	if isinstance(waves, list) and 0 <= wave_index < len(waves) and isinstance(waves[wave_index], dict):
+		raw = waves[wave_index].get("issues")
+		issues = raw if isinstance(raw, list) else []
+	window_s = window_hours * 3600
+	max_s = max_hours * 3600
+	items: dict[int, dict] = {}
+	journal_seen = False
+	for entry in issues:
+		if not isinstance(entry, dict):
+			continue
+		gh = _positive_int(entry.get("github_issue"))
+		if gh is None or gh in items:
+			continue
+		active = entry.get("status") not in GROUP_INACTIVE_STATUSES
+		entries: list[dict] = []
+		cached = details.get(str(gh)) if isinstance(details, dict) else None
+		# A missing or unreadable cache entry (a failed GraphQL batch, or the
+		# whole cache reset to {}) means "unknown", not "the failure went away".
+		readable = bool(login) and isinstance(cached, dict) and cached.get("comments_available") is True and isinstance(cached.get("comments"), list)
+		if active and readable:
+			_cid, entries = _aj.parse(cached["comments"], login)
+		journal_seen = journal_seen or bool(entries)
+		failure = _newest_failure(entries, now, window_s) if active else None
+		items[gh] = {
+			"entry": entry,
+			"active": active,
+			"key": failure[0] if failure else None,
+			"earliest": failure[1] if failure else 0,
+			"newest_ts": failure[2] if failure else 0,
+			"has_journal": bool(entries),
+			"unknown": active and not readable,
+		}
+
+	def old_group(gh: int) -> dict | None:
+		value = items[gh]["entry"].get("grouped_under")
+		return value if isinstance(value, dict) else None
+
+	release: dict[int, str] = {}
+	cooldown: dict[int, str] = {}
+	clear: list[int] = []
+	blocked: set[int] = set()
+	held: set[int] = set()
+	for gh, it in items.items():
+		if "persist_group_released_key" not in it["entry"]:
+			continue
+		if it["key"] is not None and it["key"] == it["entry"].get("persist_group_released_key"):
+			blocked.add(gh)
+		elif not it["active"] or it["has_journal"]:
+			clear.append(gh)
+	for gh, it in items.items():
+		if "grouped_under" not in it["entry"]:
+			continue
+		old = old_group(gh)
+		owner = _positive_int(old.get("owner")) if old else None
+		owner_it = items.get(owner) if owner is not None else None
+		since = old.get("since") if old else None
+		if old is None or owner is None or not isinstance(old.get("key"), str) or not _HEX12_RE.match(old["key"]):
+			reason = "field_invalid"
+		elif not it["active"]:
+			reason = "item_inactive"
+		elif owner_it is None:
+			reason = "owner_gone"
+		elif not owner_it["active"] or _positive_int(owner_it["entry"].get("persist_merged_pr")) is not None:
+			reason = "owner_merged"
+		elif it["unknown"] or (owner_it["unknown"] and it["key"] == old.get("key")):
+			# Journal state unknown this tick: keep the field as it is (only the
+			# max_hours bound still applies), so a transient cache gap neither
+			# un-pauses the item nor resets since / re-posts the comment later.
+			if not isinstance(since, bool) and isinstance(since, int) and now - since >= max_s:
+				reason = "max_hours"
+				cooldown[gh] = old["key"]
+			else:
+				held.add(gh)
+				continue
+		elif not journal_seen:
+			reason = "journal_absent"
+		elif it["key"] is None or it["key"] != old.get("key"):
+			reason = "key_changed"
+		elif owner_it["key"] != old.get("key"):
+			reason = "owner_key_changed"
+		elif isinstance(since, bool) or not isinstance(since, int):
+			reason = "field_invalid"
+		elif now - since >= max_s:
+			reason = "max_hours"
+			cooldown[gh] = it["key"]
+		else:
+			continue
+		release[gh] = reason
+
+	buckets: dict[str, list[int]] = {}
+	for gh in sorted(items):
+		it = items[gh]
+		if it["key"] is None or gh in blocked or gh in release or gh in held:
+			continue
+		buckets.setdefault(it["key"], []).append(gh)
+	grouped: set[int] = set()
+	episode_ts: dict[int, int] = {}
+	for key in sorted(buckets):
+		members = buckets[key]
+		if len(members) < 2:
+			continue
+		# Held members (cache entry unknown this tick) still vouch for the
+		# owner they recorded, so a one-tick cache gap does not re-elect it.
+		prior = sorted({
+			o for o in (_positive_int((old_group(g) or {}).get("owner")) for g in members + sorted(held) if (old_group(g) or {}).get("key") == key)
+			if o in members
+		})
+		owner = prior[0] if prior else min(members, key=lambda g: (items[g]["earliest"], g))
+		if "grouped_under" in items[owner]["entry"]:
+			release[owner] = "owner_changed"
+		kept: list[int] = []
+		for gh in members:
+			if gh == owner:
+				continue
+			old = old_group(gh)
+			if "grouped_under" in items[gh]["entry"] and (old is None or _positive_int(old.get("owner")) != owner):
+				release[gh] = "owner_changed"
+				continue
+			kept.append(gh)
+		if not kept:
+			continue
+		grouped.update(kept)
+		result["groups"].append({"key": key, "owner": owner, "members": kept})
+		for gh in kept:
+			if "grouped_under" not in items[gh]["entry"]:
+				result["new"].append(gh)
+				# Episode time: the later start of the member's and the owner's
+				# newest run of same-key failures, so a regroup after the owner
+				# failed again (owner key K -> K2 -> K) is not hidden by the earlier
+				# episode's marker, while the owner repeating K does not move it.
+				episode_ts[gh] = max(items[gh]["newest_ts"], items[owner]["newest_ts"])
+	for gh, it in items.items():
+		if "grouped_under" in it["entry"] and gh not in release and gh not in grouped and gh not in held:
+			release[gh] = "owner_changed"
+	result["release"] = sorted(release)
+	result["release_reasons"] = {str(gh): release[gh] for gh in sorted(release)}
+	result["release_cooldown"] = [{"issue": gh, "key": cooldown[gh]} for gh in sorted(cooldown)]
+	result["clear_cooldown"] = sorted(gh for gh in clear if gh not in cooldown)
+	result["new"] = sorted(result["new"])
+	result["newest_failure_ts"] = {str(gh): episode_ts[gh] for gh in result["new"]}
+	return result, journal_seen
+
+
+def cmd_group(args: argparse.Namespace) -> None:
+	if not group_enabled():
+		log_group("skipped", "switch_off")
+		return
+	if _aj is None:
+		log_group("skipped", "helper_absent")
+		return
+	try:
+		now = int(str(args.now).strip())
+		wave_index = int(str(args.wave_index).strip())
+	except ValueError:
+		log_group("error", "args_invalid")
+		return
+	if now <= 0 or wave_index < 0:
+		log_group("error", "args_invalid")
+		return
+	state = _read_json(args.state_file)
+	if not isinstance(state, dict):
+		log_group("error", "state_unreadable")
+		return
+	details = _read_json(args.journals_json)
+	window_hours = _env_hours("PERSIST_ORCH_GROUP_WINDOW_HOURS", GROUP_WINDOW_HOURS_DEFAULT)
+	max_hours = _env_hours("PERSIST_ORCH_GROUP_MAX_HOURS", GROUP_MAX_HOURS_DEFAULT)
+	result, journal_seen = group_failures(state, wave_index, details, args.trusted_login or "", now, window_hours, max_hours)
+	if not _write(args.out, json.dumps(result, sort_keys=True) + "\n"):
+		log_group("error", "out_unwritable")
+		return
+	if not journal_seen:
+		log_group("skipped", "journal_absent", released=len(result["release"]))
+		return
+	log_group(
+		"ok", "evaluated", groups=len(result["groups"]),
+		grouped=sum(len(g["members"]) for g in result["groups"]), released=len(result["release"]),
+	)
+
+
 def plan_path(description: str, repo_root: str | Path) -> str:
 	try:
 		root = Path(os.path.realpath(repo_root))
@@ -383,16 +675,23 @@ def build_parser() -> argparse.ArgumentParser:
 	plan = sub.add_parser("plan-path")
 	plan.add_argument("--description-file", required=True)
 	plan.add_argument("--repo-root", default=".")
+	group = sub.add_parser("group")
+	group.add_argument("--state-file", required=True)
+	group.add_argument("--journals-json", default=None)
+	group.add_argument("--now", required=True)
+	group.add_argument("--wave-index", required=True)
+	group.add_argument("--trusted-login", default="")
+	group.add_argument("--out", required=True)
 	return parser
 
 
 def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
-	handlers = {"since-note": cmd_since_note, "open-projects": cmd_open_projects, "plan-path": cmd_plan_path}
+	handlers = {"since-note": cmd_since_note, "open-projects": cmd_open_projects, "plan-path": cmd_plan_path, "group": cmd_group}
 	try:
 		handlers[args.cmd](args)
 	except Exception as exc:  # noqa: BLE001 - fail open, never block a tick or the decomposer
-		log("error", "exception_" + type(exc).__name__)
+		(log_group if args.cmd == "group" else log)("error", "exception_" + type(exc).__name__)
 	return 0
 
 
