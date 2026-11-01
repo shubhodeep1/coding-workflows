@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move the existing `Inventory parity` step to the earliest compatible point after checkout, alongside the already-early `Drift check (generated docs)`, while retaining the ordering contract in `tests/test_ci_inventory_parity_order_contract.py`.\" (minimax_minimax-m3 also cites emitting `CI_CHECK_RESULT` with check name, elapsed time and mismatch counts.) Severity disagreement: MAJOR (google_gemini-3_1-flash-lite, minimax_minimax-m3) vs NIT (openai_gpt-6-luna, z-ai_glm-5_3-flash). The highest is MAJOR.\n  expected_change_site: .github/workflows/ci.yml, the `Inventory parity` step (currently line 2160; the early `Drift check (generated docs)` is at line 265)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The `Inventory parity` step remains at ci.yml:2160, after numerous test steps. The PR's only ci.yml hunk adds a new test name to a test list (line 2662). `tests/test_ci_inventory_parity_order_contract.py` pins only shared-job placement and the order before the two coverage gates, not position near checkout. No `CI_CHECK_RESULT` emission was added (minimax_minimax-m3).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Move the existing Inventory parity check to the earliest compatible point after checkout, alongside the early generated-doc drift check.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The Inventory parity step remains at line 2160, after numerous test steps. The PR diff does not contain any hunks that move this step to an earlier position in the workflow job.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move the existing `Inventory parity` step to the earliest compatible point after checkout, alongside the already-early `Drift check (generated docs)`, while retaining the ordering contract in `tests/test_ci_inventory_parity_order_contract.py`. Emit `CI_CHECK_RESULT` with check name, elapsed time, and mismatch counts.\" (analysis/workflow-optimization-2026-09-26-3.md Speed-1 / Reliability-1; ~14\u201318 minutes earlier failure feedback per the analysis)\n  Expected change site: `.github/workflows/ci.yml` `Inventory parity` step (move near `Drift check (generated docs)` at line 265) plus a `CI_CHECK_RESULT` summary\n  Evidence of absence: PR diff `ci.yml` adds only one new test name to a test list (line 2662) and does not move `Inventory parity`. The step remains at line 2160 of ci.yml (1,895 lines after `Drift check (generated docs)` at line 265). The contract test `tests/test_ci_inventory_parity_order_contract.py` only asserts relative ordering against two coverage gates and shared-job placement, not position near checkout. The analysis doc is deleted in this PR (305-line deletion). The processing report's \"already-implemented\" classification relies on the contract test pinning position, which it does not enforce. No `CI_CHECK_RESULT` emission was added.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move the existing `Inventory parity` step to the earliest compatible point after checkout, alongside the already-early `Drift check (generated docs)`.\"\n  Expected change site: `.github/workflows/ci.yml`, the `Inventory parity` step.\n  Evidence of absence: The step remains at line 2160, after numerous test steps. The PR's `.github/workflows/ci.yml` change only adds the child-count test to a test list. The existing order contract checks that Inventory parity precedes two coverage gates, not that it runs near checkout.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Move the existing `Inventory parity` step to the earliest compatible point after checkout, alongside the already-early `Drift check (generated docs)`, while retaining the ordering contract in `tests/test_ci_inventory_parity_order_contract.py`\" (Speed optimization 1 / Exec summary 1 of `analysis/workflow-optimization-2026-09-26-3.md`)\n  Expected change site: `.github/workflows/ci.yml`, the `Inventory parity` step (currently at ci.yml:2160).\n  Evidence of absence: The step remains at `.github/workflows/ci.yml:2160`, deep in its job, while the early `Drift check (generated docs)` step sits at ci.yml:265. The PR's only `ci.yml` hunk adds the new child-count test to a lint test list. `tests/test_ci_inventory_parity_order_contract.py` pins only shared-job placement and order before the two coverage gates, not placement near checkout, so the processing report's \"already-implemented\" classification does not hold. No hunk in the PR moves the step.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6c795ee3d2591844d808f99f587dd5dc0062cc8341beb369bbeea21d592e9e12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8539,
+    "run_id": "41208175088",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41208175088",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031141507_6036afb423",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8539,
+    "run_id": "41208175088"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-31T14:15:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

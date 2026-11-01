@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly three lines (`status: ok`, `run_id: 40876853022`, `updated-by: ai-pipeline`) with a trailing newline, overwriting the existing file completely.\n  expected_change_site: `tests/e2e_smoke_canary.txt`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff shows `run_id: 40876853022` and `updated-by: ai-pipeline` added while `status: ok` existed previously, indicating an incremental patch rather than an overwrite. The reviewer notes this is a minor process deviation (SEVERITY: NIT) and that the final content matches the requirement.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly three lines (`status: ok`, `run_id: 40876853022`, `updated-by: ai-pipeline`) with a trailing newline, overwriting the existing file completely.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The PR diff (original and last run) shows `run_id: 40876853022` and `updated-by: ai-pipeline` were added, but it also shows `status: ok` existed previously. The current content is `status: ok\\nrun_id: 40876853022\\nupdated-by: ai-pipeline\\n`. The requirement was to *overwrite the entire file*. While the final state on disk may be correct, the diff indicates an incremental patch rather than an overwrite, though this is a minor process deviation rather than a runtime failure. The content matches the requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "df796099e8d3951163f81cd8ad1faf7b309c1698ea156fd0e0ea91e7d2535878",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41222733282",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41222733282",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261031171526_d4c9f06dd8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41222733282"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-31T17:15:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
