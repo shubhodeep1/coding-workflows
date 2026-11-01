@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-01T14:36:19Z",
+  "issue_number": 8613,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=tests/test_workflow_checkout_integration_ref_audit.py:66; cited_path=tests/test_workflow_checkout_integration_ref_audit.py; files_touched=changelog.d/8613-filter-log-runtime-lines-unstyled-script.md, scripts/workflow_failure_heal.py, tests/test_workflow_failure_heal.py.",
+  "phase": "review_autofix",
+  "pr_number": 8617,
+  "record_id": "lesson_20261101143619_3e04712076",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_workflow_checkout_integration_ref_audit.py",
+    "changelog.d/8613-filter-log-runtime-lines-unstyled-script.md",
+    "scripts/workflow_failure_heal.py",
+    "tests/test_workflow_failure_heal.py"
+  ]
+}
