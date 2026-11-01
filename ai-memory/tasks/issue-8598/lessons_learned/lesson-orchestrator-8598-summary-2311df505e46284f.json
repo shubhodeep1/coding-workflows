@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-01T19:43:42Z",
+  "issue_number": 8598,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Apply analysis recommendations from workflow-optimization-2026-09-28-2.md\" (#8598) completed only after 1 judge stall cycle(s). Similar projects may need smaller waves or more explicit issue specs.",
+  "phase": "orchestrator_completion",
+  "pr_number": 8609,
+  "record_id": "lesson-orchestrator-8598-summary-2311df505e46284f",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:summary",
+    "project:8598"
+  ]
+}

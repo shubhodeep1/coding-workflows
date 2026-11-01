@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-01T19:43:42Z",
+  "issue_number": 8598,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Apply analysis recommendations from workflow-optimization-2026-09-28-2.md\" (#8598): the security pass reported findings that needed fixes (1 time(s)). Causes: A01:2021-Broken Access Control / STRIDE Tampering in scripts/tg_helpers.sh:301: Trust a tracking comment based on its author, not its text. In the snapshot jq, keep only comments whose `.user.login` e. Build these protections into plans that touch the same files.",
+  "phase": "orchestrator_completion",
+  "pr_number": 8609,
+  "record_id": "lesson-orchestrator-8598-security-finding-724d475094666677",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:security_finding",
+    "project:8598",
+    "file:scripts/tg_helpers.sh"
+  ]
+}
