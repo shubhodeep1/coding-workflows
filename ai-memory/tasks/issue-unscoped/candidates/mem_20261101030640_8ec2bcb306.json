@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.81,
+  "details": "Multiple merged implementation PRs added changelog fragments, and several changes to workflow or agent behavior also added agent-specific documentation. Check these directories when planning behavioral changes, while recognizing that not every change uses both.",
+  "fingerprint": "1301070900741829cfca428eea3b77bd735e46df2a2327d58e346205d3a50c4c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41267457717",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41267457717",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8543",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8544",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8559",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8561",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8567",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8560",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8563",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8568"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261101030640_8ec2bcb306",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Feature work in this repository often includes a `changelog.d/` entry and, for workflow or agent behavior, a matching `agents.d/` document.",
+  "timestamps": {
+    "created_at": "2026-11-01T03:06:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
