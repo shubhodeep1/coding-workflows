@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Behaviour changes an operator would notice get one `changelog.d/<issue>-<slug>.md` fragment (the grant for `files_touched` includes `changelog.d/*`)\n  expected_change_site: changelog.d/8599-merge-train-rename-previous-filename.md\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The PR changes only `scripts/review_merge_train.sh` and `tests/test_review_merge_train.py`, and no `changelog.d/` fragment was added. Severity was NIT in both reviews.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: The repo convention is that a behaviour change an operator would notice gets one `changelog.d/<issue>-<slug>.md` fragment. The linked issue does not list this as a deliverable, but its `files_touched` grant includes `changelog.d/*`.\n  Expected change site: `changelog.d/8599-merge-train-rename-previous-filename.md`\n  Evidence of absence: The PR changes only `scripts/review_merge_train.sh` and `tests/test_review_merge_train.py`, so no changelog fragment was added.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n\nHARDENING_SUGGESTIONS:\n- file: tests/test_review_merge_train.py\n- location: `test_gate_missing_null_or_empty_previous_filename_adds_no_path`\n- issue: The `\"\"` fixture entry adds no assertion beyond the `null` one, because `sed '/^$/d'` already strips blank lines, so the empty-string claim in the docstring is weaker than it reads.\n- suggested minimal fix: Optional. Leave as is, or narrow the docstring.\n- estimated lines changed: 1\n\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: Behaviour changes an operator or consumer would notice (here, the merge-train overlap gate now blocks renames) get exactly one `changelog.d/<issue>-<slug>.md` fragment per CLAUDE.md \u00a720 (\"CHANGELOG Entries (MANDATORY)\"). The orchestrator's `files_touched` grant on this PR includes `changelog.d/*`, signalling the pipeline expected one.\n  Expected change site: `changelog.d/8599-merge-train-rename-previous-filename.md` (or analogous slug) carrying a `<!-- changelog: fixed -->` marker.\n  Evidence of absence: `pr_changed_files.txt` lists only `scripts/review_merge_train.sh` and `tests/test_review_merge_train.py`. No `changelog.d/` fragment is added; no existing fragment mentions the merge-train rename fix. The script change at `scripts/review_merge_train.sh:224-230` does ship the behaviour change but ships no accompanying fragment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cc6ae09167e4751dbaa301bf17496b23938fa1b28af11a50db25e88de508fd89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8603,
+    "run_id": "41289555698",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41289555698",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101091451_3a23d30740",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8603,
+    "run_id": "41289555698"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T09:14:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
