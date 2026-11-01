@@ -530,11 +530,45 @@ def test_group_newest_ok_entry_and_untrusted_journal_are_never_grouped(tmp_path,
 	assert out["groups"] == []
 
 
-def test_group_without_journals_releases_existing_fields(tmp_path, monkeypatch, capsys):
+def test_group_without_a_cache_keeps_existing_fields(tmp_path, monkeypatch, capsys):
+	# A missing details cache means "unknown": the pause is kept, not released.
 	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 60}))
 	out = _group(tmp_path, monkeypatch, state, None)
-	assert out["groups"] == [] and out["release"] == [11] and out["release_reasons"] == {"11": "journal_absent"}
-	assert "PERSIST orch_group outcome=skipped reason=journal_absent released=1" in capsys.readouterr().err
+	assert out["groups"] == [] and out["release"] == [] and out["new"] == []
+	assert "PERSIST orch_group outcome=skipped reason=journal_absent released=0" in capsys.readouterr().err
+
+
+def test_group_readable_cache_without_journals_releases_existing_fields(tmp_path, monkeypatch):
+	details = {str(n): {"comments_available": True, "comments": []} for n in (10, 11)}
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 60}))
+	out = _group(tmp_path, monkeypatch, state, details)
+	assert out["release"] == [11] and out["release_reasons"] == {"11": "journal_absent"}
+
+
+@pytest.mark.parametrize("missing", [10, 11])
+def test_group_missing_cache_entry_keeps_the_pause(tmp_path, monkeypatch, missing):
+	journals = {10: [_gentry(5 * 3600, K1, "1")], 11: [_gentry(3600, K1, "2")], 12: [_gentry(600, K2, "3")]}
+	details = _gdetails({n: e for n, e in journals.items() if n != missing})
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 60}), _item(12))
+	out = _group(tmp_path, monkeypatch, state, details)
+	assert out["release"] == [] and out["groups"] == [] and out["new"] == []
+	assert out["clear_cooldown"] == []
+
+
+def test_group_unknown_cache_still_releases_after_max_hours(tmp_path, monkeypatch):
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 12 * 3600}))
+	out = _group(tmp_path, monkeypatch, state, {})
+	assert out["release_reasons"] == {"11": "max_hours"}
+	assert out["release_cooldown"] == [{"issue": 11, "key": K1}]
+
+
+def test_group_exception_is_logged_under_orch_group(tmp_path, monkeypatch, capsys):
+	def boom(*_a, **_k):
+		raise RuntimeError("x")
+	monkeypatch.setattr(po, "group_failures", boom)
+	details = _gdetails({10: [_gentry(3600, K1, "1")]})
+	assert _group(tmp_path, monkeypatch, _gstate(_item(10)), details) is None
+	assert "PERSIST orch_group outcome=error reason=exception_RuntimeError" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("value", [None, "false", "TRUE ", "1", "yes", "on"])

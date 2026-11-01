@@ -56,7 +56,9 @@ group --state-file F --journals-json D --now EPOCH --wave-index I [--trusted-log
 	issue), and an existing ``grouped_under.owner`` that is still in the group
 	is kept. A ``grouped_under`` field is released when the item is no longer
 	open, its key changed or aged out, its owner merged / closed / left or
-	changed key, or ``now - since >= MAX_HOURS``; a ``max_hours`` release
+	changed key, or ``now - since >= MAX_HOURS``. An item (or its owner)
+	whose details-cache entry is missing or unreadable is "unknown": its field
+	is kept unchanged, and only the MAX_HOURS bound applies. A ``max_hours`` release
 	reports the key under ``release_cooldown`` and the item is not grouped
 	again on that key (``persist_group_released_key``) until its key changes
 	(``clear_cooldown``). Writes, only with the switch on:
@@ -435,7 +437,10 @@ def group_failures(
 		active = entry.get("status") not in GROUP_INACTIVE_STATUSES
 		entries: list[dict] = []
 		cached = details.get(str(gh)) if isinstance(details, dict) else None
-		if active and login and isinstance(cached, dict) and cached.get("comments_available") is True and isinstance(cached.get("comments"), list):
+		# A missing or unreadable cache entry (a failed GraphQL batch, or the
+		# whole cache reset to {}) means "unknown", not "the failure went away".
+		readable = bool(login) and isinstance(cached, dict) and cached.get("comments_available") is True and isinstance(cached.get("comments"), list)
+		if active and readable:
 			_cid, entries = _aj.parse(cached["comments"], login)
 		journal_seen = journal_seen or bool(entries)
 		failure = _newest_failure(entries, now, window_s) if active else None
@@ -445,6 +450,7 @@ def group_failures(
 			"key": failure[0] if failure else None,
 			"earliest": failure[1] if failure else 0,
 			"has_journal": bool(entries),
+			"unknown": active and not readable,
 		}
 
 	def old_group(gh: int) -> dict | None:
@@ -455,6 +461,7 @@ def group_failures(
 	cooldown: dict[int, str] = {}
 	clear: list[int] = []
 	blocked: set[int] = set()
+	held: set[int] = set()
 	for gh, it in items.items():
 		if "persist_group_released_key" not in it["entry"]:
 			continue
@@ -473,14 +480,24 @@ def group_failures(
 			reason = "field_invalid"
 		elif not it["active"]:
 			reason = "item_inactive"
-		elif not journal_seen:
-			reason = "journal_absent"
-		elif it["key"] is None or it["key"] != old.get("key"):
-			reason = "key_changed"
 		elif owner_it is None:
 			reason = "owner_gone"
 		elif not owner_it["active"] or _positive_int(owner_it["entry"].get("persist_merged_pr")) is not None:
 			reason = "owner_merged"
+		elif it["unknown"] or (owner_it["unknown"] and it["key"] == old.get("key")):
+			# Journal state unknown this tick: keep the field as it is (only the
+			# max_hours bound still applies), so a transient cache gap neither
+			# un-pauses the item nor resets since / re-posts the comment later.
+			if not isinstance(since, bool) and isinstance(since, int) and now - since >= max_s:
+				reason = "max_hours"
+				cooldown[gh] = old["key"]
+			else:
+				held.add(gh)
+				continue
+		elif not journal_seen:
+			reason = "journal_absent"
+		elif it["key"] is None or it["key"] != old.get("key"):
+			reason = "key_changed"
 		elif owner_it["key"] != old.get("key"):
 			reason = "owner_key_changed"
 		elif isinstance(since, bool) or not isinstance(since, int):
@@ -495,7 +512,7 @@ def group_failures(
 	buckets: dict[str, list[int]] = {}
 	for gh in sorted(items):
 		it = items[gh]
-		if it["key"] is None or gh in blocked or gh in release:
+		if it["key"] is None or gh in blocked or gh in release or gh in held:
 			continue
 		buckets.setdefault(it["key"], []).append(gh)
 	grouped: set[int] = set()
@@ -525,7 +542,7 @@ def group_failures(
 		result["groups"].append({"key": key, "owner": owner, "members": kept})
 		result["new"].extend(gh for gh in kept if "grouped_under" not in items[gh]["entry"])
 	for gh, it in items.items():
-		if "grouped_under" in it["entry"] and gh not in release and gh not in grouped:
+		if "grouped_under" in it["entry"] and gh not in release and gh not in grouped and gh not in held:
 			release[gh] = "owner_changed"
 	result["release"] = sorted(release)
 	result["release_reasons"] = {str(gh): release[gh] for gh in sorted(release)}
@@ -640,7 +657,7 @@ def main(argv: list[str] | None = None) -> int:
 	try:
 		handlers[args.cmd](args)
 	except Exception as exc:  # noqa: BLE001 - fail open, never block a tick or the decomposer
-		log("error", "exception_" + type(exc).__name__)
+		(log_group if args.cmd == "group" else log)("error", "exception_" + type(exc).__name__)
 	return 0
 
 

@@ -29859,7 +29859,9 @@ def test_persist_orch_group_is_defined_gated_and_placed():
 	assert body.index("python3 -B scripts/persist_orchestrator.py group") < body.index('mv "${pog_tmp}" "${STATE_FILE}"')
 	# Comments are posted only after the state write landed.
 	assert body.index('mv "${pog_tmp}" "${STATE_FILE}"') < body.index('issues/${pog_issue}/comments')
-	assert "<!-- AI_PERSIST_GROUPED_V1 -->" in body and "## Paused: same failure as another project item" in body
+	assert "<!-- AI_PERSIST_GROUPED_V1 key=%s owner=%s -->" in body and "## Paused: same failure as another project item" in body
+	# A cached pipeline comment with the same marker suppresses a second post.
+	assert body.index('AI_PERSIST_GROUPED_V1 key=${pog_key} owner=${pog_owner} ') < body.index('issues/${pog_issue}/comments')
 	# The call sits in the not-stuck branch, before the P6 governor block.
 	call = script.index("    persist_orch_group_failures < /dev/null || true\n")
 	managed = script.index("    PERSIST_BUDGET_STATE_CHANGED=false\n")
@@ -29934,7 +29936,9 @@ def test_persist_orch_group_switch_on_groups_comments_once_and_hides_members_fro
 		assert proc.returncode == 0, proc.stderr
 		assert out["CHANGED"] == "true" and starts == 1
 		assert json.loads(out["GROUPED"]) == {"11": 10, "12": 10}
-		assert json.loads(out["DIAG"]) == {"10": [{"issue": 11, "id": "p11", "key": _POG_KEY}, {"issue": 12, "id": "p12", "key": _POG_KEY}]}
+		assert json.loads(out["DIAG"]) == {"10": [
+			{"issue": 11, "id": "p11", "title": "", "key": _POG_KEY}, {"issue": 12, "id": "p12", "title": "", "key": _POG_KEY},
+		]}
 		by_issue = {i["github_issue"]: i for i in after["waves"][0]["issues"]}
 		assert by_issue[11]["grouped_under"]["owner"] == 10 and by_issue[11]["grouped_under"]["key"] == _POG_KEY
 		assert isinstance(by_issue[11]["grouped_under"]["since"], int)
@@ -29942,7 +29946,8 @@ def test_persist_orch_group_switch_on_groups_comments_once_and_hides_members_fro
 		assert len(posted) == 2
 		assert sorted(p.split(" ")[2] for p in posted) == ["repos/owner/repo/issues/11/comments", "repos/owner/repo/issues/12/comments"]
 		for body in posted:
-			assert "## Paused: same failure as another project item" in body and "<!-- AI_PERSIST_GROUPED_V1 -->" in body
+			assert "## Paused: same failure as another project item" in body
+			assert f"<!-- AI_PERSIST_GROUPED_V1 key={_POG_KEY} owner=10 -->" in body
 			assert "as issue 10." in body and "or 12 hours pass." in body
 			assert not re.search(r"#\d", body) and "SECRET_NOTE" not in body
 		assert "PERSIST orch_group outcome=grouped issue=11 owner=10" in proc.stderr
@@ -29955,6 +29960,27 @@ def test_persist_orch_group_switch_on_groups_comments_once_and_hides_members_fro
 		assert out["CHANGED"] == "false" and json.loads(out["GROUPED"]) == {"11": 10, "12": 10}
 		assert len(posted) == 2  # the calls file still holds only the first tick's two posts
 		assert {i["github_issue"]: i for i in after["waves"][0]["issues"]}[11]["grouped_under"]["since"] == since
+
+
+def test_persist_orch_group_cached_marker_skips_the_repost_and_titles_reach_diagnostics():
+	details = _pog_journal_details({10: [(5 * 3600, _POG_KEY, "1", "fail")], 11: [(3600, _POG_KEY, "2", "fail")], 12: [(600, _POG_KEY, "3", "fail")]})
+	# Issue 11 already carries the pause comment (state sync failed on an earlier tick).
+	details["11"]["comments"].append({"id": 99, "user": {"login": "pipeline-bot"},
+		"body": f"## Paused\n\n<!-- AI_PERSIST_GROUPED_V1 key={_POG_KEY} owner=10 -->\n"})
+	# A forged marker from another login does not count.
+	details["12"]["comments"].append({"id": 98, "user": {"login": "outsider"},
+		"body": f"<!-- AI_PERSIST_GROUPED_V1 key={_POG_KEY} owner=10 -->"})
+	details["11"]["title"] = "Fix \x01 the <!-- thing -->" + "x" * 200
+	state = _pog_state(*({"id": f"p{n}", "github_issue": n, "status": "pending"} for n in (10, 11, 12)))
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, out, posted, _starts, _after = _pog_run(Path(tmp), state, details, "true")
+		assert proc.returncode == 0, proc.stderr
+		assert json.loads(out["GROUPED"]) == {"11": 10, "12": 10}
+		assert [p.split(" ")[2] for p in posted] == ["repos/owner/repo/issues/12/comments"]
+		diag = {i["issue"]: i for i in json.loads(out["DIAG"])["10"]}
+		assert diag[11]["title"].startswith("Fix   the  thing ") and len(diag[11]["title"]) == 120
+		assert "<!--" not in diag[11]["title"] and "\x01" not in diag[11]["title"]
+		assert not list((Path(tmp) / "rt").iterdir())
 
 
 def test_persist_orch_group_failed_state_write_posts_nothing_and_pauses_nothing():

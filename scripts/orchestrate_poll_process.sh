@@ -19840,7 +19840,8 @@ persist_orch_record_merged_pr() {
 # write (grouped_under = {owner, key, since}; since is kept while owner and key
 # stay the same), and only after that write lands posts one
 # `## Paused: same failure as another project item` comment
-# (AI_PERSIST_GROUPED_V1) per newly grouped item. Then exports the tick-local
+# (AI_PERSIST_GROUPED_V1 key=<k> owner=<n>; skipped when the cached comments
+# already hold that marker from the pipeline login) per newly grouped item. Then exports the tick-local
 # maps PERSIST_ORCH_GROUPED_ISSUES_JSON ({member: owner}; the caller hides
 # members from check-stalls and the P6 governor) and
 # PERSIST_ORCH_GROUP_DIAG_JSON ({owner: [{issue, id, key}]}; read by
@@ -19882,23 +19883,24 @@ persist_orch_group_failures() {
   [[ "${pog_max}" =~ ^[1-9][0-9]*$ ]] || pog_max=12
   pog_base="${RUNTIME_DIR:-/tmp}"
   [ -d "${pog_base}" ] || pog_base="/tmp"
-  pog_details="${pog_base}/persist_orch_group_details.json"
-  pog_out="${pog_base}/persist_orch_group_out.json"
   pog_tmp="${STATE_FILE}.persist_group.tmp"
-  if ! printf '%s' "${_current_wave_details_json:-}" > "${pog_details}" 2>/dev/null; then
+  # Private scratch files (mktemp), so overlapping runs never share them.
+  pog_details="$(mktemp "${pog_base}/persist_orch_group_details.XXXXXX" 2>/dev/null)" || pog_details=""
+  pog_out="$(mktemp "${pog_base}/persist_orch_group_out.XXXXXX" 2>/dev/null)" || pog_out=""
+  if [ -z "${pog_details}" ] || [ -z "${pog_out}" ] \
+    || ! printf '%s' "${_current_wave_details_json:-}" > "${pog_details}" 2>/dev/null; then
+    rm -f "${pog_details}" "${pog_out}"
     echo "PERSIST orch_group outcome=error reason=scratch_unwritable" >&2
     return 0
   fi
   jq -e 'type == "object"' "${pog_details}" >/dev/null 2>&1 || printf '{}' > "${pog_details}"
-  : > "${pog_out}" 2>/dev/null || true
   pog_now="$(date -u +%s)"
   PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py group --state-file "${STATE_FILE}" \
     --journals-json "${pog_details}" --now "${pog_now}" --wave-index "${WAVE_IDX}" \
     --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" --out "${pog_out}" < /dev/null || true
-  rm -f "${pog_details}"
   if [ ! -s "${pog_out}" ] || ! jq -e 'type == "object" and (.groups | type) == "array"' "${pog_out}" >/dev/null 2>&1; then
     # The helper logged why (switch, helper_absent, state_unreadable, ...).
-    rm -f "${pog_out}"
+    rm -f "${pog_out}" "${pog_details}"
     return 0
   fi
   if ! jq --argjson wi "${WAVE_IDX}" --argjson now "${pog_now}" --slurpfile g "${pog_out}" '
@@ -19922,7 +19924,7 @@ persist_orch_group_failures() {
         | (if $cool[$n] != null then .persist_group_released_key = $cool[$n]
           elif ($n | IN($clr[])) then del(.persist_group_released_key) else . end)
         end)' "${STATE_FILE}" > "${pog_tmp}" 2>/dev/null || [ ! -s "${pog_tmp}" ]; then
-    rm -f "${pog_tmp}" "${pog_out}"
+    rm -f "${pog_tmp}" "${pog_out}" "${pog_details}"
     echo "PERSIST orch_group outcome=error reason=state_write_failed" >&2
     return 0
   fi
@@ -19931,7 +19933,7 @@ persist_orch_group_failures() {
   elif mv "${pog_tmp}" "${STATE_FILE}" 2>/dev/null; then
     PERSIST_ORCH_GROUP_STATE_CHANGED=true
   else
-    rm -f "${pog_tmp}" "${pog_out}"
+    rm -f "${pog_tmp}" "${pog_out}" "${pog_details}"
     echo "PERSIST orch_group outcome=error reason=state_write_failed" >&2
     return 0
   fi
@@ -19946,11 +19948,16 @@ persist_orch_group_failures() {
     | {key: (.github_issue | tostring), value: .grouped_under.owner}] | from_entries' "${STATE_FILE}" 2>/dev/null)" \
     || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
   [ -n "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" ] || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
-  PERSIST_ORCH_GROUP_DIAG_JSON="$(jq -c --argjson wi "${WAVE_IDX}" '[.waves[$wi].issues[]?
+  # Titles come from the details cache (issue-author text): control characters
+  # and comment delimiters are stripped and the length is capped at 120.
+  PERSIST_ORCH_GROUP_DIAG_JSON="$(jq -c --argjson wi "${WAVE_IDX}" --slurpfile d "${pog_details}" '($d[0] // {}) as $cache
+    | [.waves[$wi].issues[]?
     | select(type == "object" and (.grouped_under | type) == "object" and (.github_issue | type) == "number")
     | select((.grouped_under.owner | type) == "number")
     | {owner: (.grouped_under.owner | tostring),
        item: {issue: .github_issue, id: ((.id // "item") | tostring | gsub("[^A-Za-z0-9._-]"; "_") | .[0:40]),
+              title: (($cache[.github_issue | tostring].title? // "") | tostring
+                | gsub("\\p{Cc}|\\p{Zl}|\\p{Zp}"; " ") | gsub("<!--|-->"; "") | .[0:120]),
               key: ((.grouped_under.key // "") | tostring | gsub("[^0-9a-f]"; "") | .[0:12])}}]
     | group_by(.owner) | map({key: .[0].owner, value: map(.item)}) | from_entries' "${STATE_FILE}" 2>/dev/null)" \
     || PERSIST_ORCH_GROUP_DIAG_JSON='{}'
@@ -19958,11 +19965,20 @@ persist_orch_group_failures() {
   while IFS=$'\t' read -r pog_issue pog_owner pog_key; do
     [[ "${pog_issue}" =~ ^[1-9][0-9]*$ ]] && [[ "${pog_owner}" =~ ^[1-9][0-9]*$ ]] && [[ "${pog_key}" =~ ^[0-9a-f]{12}$ ]] || continue
     echo "PERSIST orch_group outcome=grouped issue=${pog_issue} owner=${pog_owner}" >&2
-    pog_body="$(printf '## Paused: same failure as another project item\n\nThe newest failure of this item has the same failure key (`%s`) as issue %s. Stall recovery and re-triggers are paused until that item'"'"'s failure changes, its pull request merges, or %s hours pass.\n\n<!-- AI_PERSIST_GROUPED_V1 -->\n' \
-      "${pog_key}" "${pog_owner}" "${pog_max}")"
+    # The grouping state reaches the tracking issue only later in the tick
+    # (post_state_comment), so a cached pipeline comment with the same marker
+    # (key and owner) means this pause was already announced: skip the post.
+    if jq -e --arg n "${pog_issue}" --arg login "${PERSIST_JOURNAL_LOGIN_CACHE}" \
+      --arg m "AI_PERSIST_GROUPED_V1 key=${pog_key} owner=${pog_owner} " \
+      'any((.[$n].comments? // [])[]?; type == "object" and ((.user.login? // "") == $login) and ((.body // "") | tostring | contains($m)))' \
+      "${pog_details}" >/dev/null 2>&1; then
+      continue
+    fi
+    pog_body="$(printf '## Paused: same failure as another project item\n\nThe newest failure of this item has the same failure key (`%s`) as issue %s. Stall recovery and re-triggers are paused until that item'"'"'s failure changes, its pull request merges, or %s hours pass.\n\n<!-- AI_PERSIST_GROUPED_V1 key=%s owner=%s -->\n' \
+      "${pog_key}" "${pog_owner}" "${pog_max}" "${pog_key}" "${pog_owner}")"
     if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pog_issue}/comments" -f body="${pog_body}" >/dev/null 2>&1; then
-      # The state already holds grouped_under, so the comment is never re-posted;
-      # the pause is still bounded by PERSIST_ORCH_GROUP_MAX_HOURS.
+      # Not retried: the item stays paused, and the pause is still bounded by
+      # PERSIST_ORCH_GROUP_MAX_HOURS.
       echo "PERSIST orch_group outcome=error reason=comment_failed issue=${pog_issue}" >&2
     fi
   done < <(jq -r --argjson wi "${WAVE_IDX}" --slurpfile g "${pog_out}" '
@@ -19970,7 +19986,7 @@ persist_orch_group_failures() {
     | .waves[$wi].issues[]?
     | select(type == "object" and (.grouped_under | type) == "object" and ((.github_issue | tostring) | IN($new[])))
     | [(.github_issue | tostring), (.grouped_under.owner | tostring), (.grouped_under.key | tostring)] | @tsv' "${STATE_FILE}" 2>/dev/null || true)
-  rm -f "${pog_out}"
+  rm -f "${pog_out}" "${pog_details}"
   return 0
 }
 
@@ -20686,6 +20702,7 @@ _fetch_candidate_issue_details_graphql() {
       [[ "${n}" =~ ^[0-9]+$ ]] || continue
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
+          title
           state
           body
           author { login }
@@ -20743,6 +20760,7 @@ _fetch_candidate_issue_details_graphql() {
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
             body: .value.body,
+            title: (.value.title // ""),
             author_login: (.value.author.login // ""),
             author_association: (.value.authorAssociation // ""),
             labels: [(.value.labels.nodes // [])[]?.name],
