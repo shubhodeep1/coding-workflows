@@ -3771,7 +3771,7 @@ _heal_code_ref_route()
 		code_ref_requests_json="$(python3 "${HEAL_PY}" code-ref-requests --log-files "${code_ref_logs[@]}" --repo "${SOURCE_REPO}" \
 			--exclude-run-ids "${code_ref_exclude_ids}" --linked-dir "${RUNTIME_DIR}/linked_runs" 2>/dev/null)" || code_ref_requests_json='[]'
 		jq -e 'type == "array"' <<< "${code_ref_requests_json}" >/dev/null 2>&1 || code_ref_requests_json='[]'
-		mkdir -p "${code_ref_dir}" || return 0
+		mkdir -p "${code_ref_dir}" || { CODE_REF_OUTCOME=partial; CODE_REF_REASON=helper_failed; return 0; }
 		while IFS= read -r code_ref_id; do
 			[[ "${code_ref_id}" =~ ^[0-9]+$ ]] || continue
 			if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${code_ref_dir}/run-${code_ref_id}.json" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${code_ref_id}" 2>/dev/null; then
@@ -3784,6 +3784,7 @@ _heal_code_ref_route()
 				'type == "object" and ((.id | tostring) == $id) and (.repository.full_name | type == "string") and ((.repository.full_name | ascii_downcase) == ($repo | ascii_downcase))' \
 				"${code_ref_dir}/run-${code_ref_id}.json" >/dev/null 2>&1; then
 				rm -f "${code_ref_dir}/run-${code_ref_id}.json"
+				code_ref_extra_args=(--lookup-failed)
 			fi
 		done < <(jq -r '.[:3][] | tostring' <<< "${code_ref_requests_json}" 2>/dev/null)
 	fi

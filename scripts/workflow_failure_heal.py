@@ -7394,6 +7394,17 @@ def _code_ref_jobs_list(jobs: Any) -> list[Any]:
 	return jobs if isinstance(jobs, list) else []
 
 
+def _code_ref_run_path(run: dict[str, Any]) -> str | None:
+	"""The run's workflow ``path`` without an ``@ref`` suffix, when it is a valid workflow path."""
+	path = run.get("path")
+	if not isinstance(path, str):
+		return None
+	path = path.split("@", 1)[0]
+	if not path.startswith(".github/workflows/") or not is_valid_repo_path(path):
+		return None
+	return path
+
+
 def code_ref_run_eligible(run: Any, jobs: Any = None, *, repo: str, mirror_branch: str = "") -> bool:
 	"""A child run whose code ref may route the heal.
 
@@ -7401,8 +7412,9 @@ def code_ref_run_eligible(run: Any, jobs: Any = None, *, repo: str, mirror_branc
 	a fork pull request's ``head_branch`` never names a branch here), carry a
 	valid ``head_branch`` / ``head_sha`` and a ``.github/workflows/`` path, sit
 	on a branch that is not transient (:func:`_code_ref_branch_denied`), and
-	have failed or stalled: a failed conclusion, not completed, or a job or
-	step of ``jobs`` with a failed conclusion.
+	have failed or stalled: a failed conclusion, still ``in_progress``, or a job
+	or step of ``jobs`` with a failed conclusion. An ``@ref`` suffix on ``path``
+	is ignored.
 	"""
 	if not isinstance(run, dict):
 		return False
@@ -7421,12 +7433,14 @@ def code_ref_run_eligible(run: Any, jobs: Any = None, *, repo: str, mirror_branc
 	sha = str(run.get("head_sha") or "").lower()
 	if not is_valid_branch(branch) or not is_valid_sha(sha):
 		return False
-	path = run.get("path")
-	if not isinstance(path, str) or not path.startswith(".github/workflows/") or not is_valid_repo_path(path):
+	path = _code_ref_run_path(run)
+	if path is None:
 		return False
 	if _code_ref_branch_denied(branch, mirror_branch):
 		return False
-	if run.get("conclusion") in _CODE_REF_FAILED_CONCLUSIONS or run.get("status") != "completed":
+	# A still-running child counts as stalled; a queued / waiting / pending /
+	# requested one has run no code yet, so it names no branch the code ran from.
+	if run.get("conclusion") in _CODE_REF_FAILED_CONCLUSIONS or run.get("status") == "in_progress":
 		return True
 	for job in _code_ref_jobs_list(jobs):
 		if not isinstance(job, dict):
@@ -7485,7 +7499,8 @@ def code_ref(
 	Returns ``{outcome, reason, branch, sha, run_id, path, retarget, line}``:
 	``ok`` with ``same_branch`` / ``out_of_scope`` / ``retarget``; ``partial``
 	with ``routing_rejected`` / ``scope_unavailable`` / ``lookup_failed`` /
-	``script_ref_only``; ``skipped`` with ``no_child_run``.
+	``script_ref_only``; ``skipped`` with ``no_child_run``. ``lookup_failed``
+	(a run read failed or was malformed) blocks any retarget; the line is kept.
 	"""
 	result: dict[str, Any] = {
 		"outcome": "skipped", "reason": "no_child_run", "branch": None, "sha": None,
@@ -7539,18 +7554,23 @@ def code_ref(
 	branch = candidate["head_branch"]
 	sha = str(candidate["head_sha"]).lower()
 	run_id = candidate.get("id") if isinstance(candidate.get("id"), int) and not isinstance(candidate.get("id"), bool) else None
-	result.update(branch=branch, sha=sha, run_id=run_id, path=candidate["path"], line=f"{branch}@{sha}")
+	candidate_path = _code_ref_run_path(candidate)
+	result.update(branch=branch, sha=sha, run_id=run_id, path=candidate_path, line=f"{branch}@{sha}")
 	if branch in (failed_head_branch, current_target):
 		result.update(outcome="ok", reason="same_branch")
 		return result
 	if scope_paths is None:
 		result.update(outcome="partial", reason="scope_unavailable")
 		return result
-	if candidate["path"] not in {path for path in scope_paths if isinstance(path, str)}:
+	if candidate_path not in {path for path in scope_paths if isinstance(path, str)}:
 		result.update(outcome="ok", reason="out_of_scope")
 		return result
 	if _code_ref_routing_probe(branch, integration_branch or None):
 		result.update(outcome="partial", reason="routing_rejected")
+		return result
+	if lookup_failed:
+		# A newer child run may be the one that failed: never retarget on incomplete data.
+		result.update(outcome="partial", reason="lookup_failed")
 		return result
 	result.update(outcome="ok", reason="retarget", retarget=True)
 	return result

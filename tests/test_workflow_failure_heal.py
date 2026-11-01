@@ -12145,6 +12145,17 @@ def test_code_ref_candidate_order_and_script_ref_fallback() -> None:
 	assert _code_ref(issue_runs=[], script_ref="bogus")["reason"] == "no_child_run"
 	failed = _code_ref(issue_runs=[], lookup_failed=True)
 	assert (failed["outcome"], failed["reason"]) == ("partial", "lookup_failed")
+	# A failed lookup blocks the retarget even with an eligible candidate; the line stays.
+	blocked = _code_ref(lookup_failed=True)
+	assert (blocked["outcome"], blocked["reason"], blocked["retarget"], blocked["line"]) == ("partial", "lookup_failed", False, f"main@{CODE_REF_IMPLEMENT_SHA}")
+
+
+def test_code_ref_ignores_ref_suffix_and_queued_runs() -> None:
+	suffixed = _code_ref(issue_runs=_code_ref_issue_runs(_code_ref_child(path=f"{CODE_REF_IMPLEMENT_PATH}@refs/heads/main")))
+	assert (suffixed["reason"], suffixed["retarget"], suffixed["path"]) == ("retarget", True, CODE_REF_IMPLEMENT_PATH)
+	for status in ("queued", "waiting", "pending", "requested"):
+		queued = _code_ref(issue_runs=_code_ref_issue_runs(_code_ref_child(status=status, conclusion=None)))
+		assert queued["reason"] == "no_child_run", status
 
 
 def test_code_ref_requests_skips_cached_and_caps_at_three() -> None:
@@ -12291,7 +12302,17 @@ def test_intake_code_ref_without_evidence_pack_gets_at_most_three_runs() -> None
 	assert "Code ran from" not in on_state["composed_issue"]["body"]
 	child = dict(_p1_linked_run(602), head_branch="main", head_sha=CODE_REF_IMPLEMENT_SHA, path=CODE_REF_IMPLEMENT_PATH,
 		head_repository={"full_name": SELF_REPO})
+	# Newer run 603 unreadable: an eligible older child never retargets on incomplete data.
 	result, state, _ = _run_p1_issue_intake(_code_ref_p1_off_state(eligible=child), {**p1_off, **CODE_REF_ENV_ON})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert _code_ref_log(result) == ["WORKFLOW_HEAL code_ref outcome=partial reason=lookup_failed"], result.stdout
+	assert _code_ref_target(state) == "stable"
+	assert "reason=code_ref" not in result.stdout
+	assert f"- **Code ran from:** main@{CODE_REF_IMPLEMENT_SHA}\n" in state["composed_issue"]["body"]
+	# Every lookup readable: the child's branch wins.
+	readable = _code_ref_p1_off_state(eligible=child)
+	readable["run_details"]["603"] = _p1_linked_run(603)
+	result, state, _ = _run_p1_issue_intake(readable, {**p1_off, **CODE_REF_ENV_ON})
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert _code_ref_log(result) == ["WORKFLOW_HEAL code_ref outcome=ok reason=retarget"], result.stdout
 	assert _code_ref_target(state) == "main"
