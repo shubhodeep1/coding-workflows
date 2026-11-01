@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "When changing a workflow, script, or automation behavior, look for the corresponding tests and add or update focused coverage alongside the implementation. Merged changes frequently also include a `changelog.d/` entry, so check the repository\u2019s changelog conventions during planning.",
+  "fingerprint": "fadd080029521e9cadb28b68a7ad83c21bd68a75d600292d576010179d8a2568",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41259949352",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41259949352",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8530",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8543",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8544",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8559",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8561",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8537",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8560",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8563"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261101011435_45cc922687",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and automation changes in this repository are commonly paired with focused tests and a changelog entry.",
+  "timestamps": {
+    "created_at": "2026-11-01T01:14:35Z",
+    "promoted_at": "2026-11-01T01:15:13Z",
+    "superseded_at": null
+  }
+}

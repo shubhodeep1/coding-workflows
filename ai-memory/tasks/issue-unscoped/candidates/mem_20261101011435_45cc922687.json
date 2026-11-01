@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "Workflow and automation changes in this repository are commonly paired with focused tests and a changelog entry.",
   "timestamps": {
     "created_at": "2026-11-01T01:14:35Z",
-    "promoted_at": null,
+    "promoted_at": "2026-11-01T01:15:13Z",
     "superseded_at": null
   }
 }
