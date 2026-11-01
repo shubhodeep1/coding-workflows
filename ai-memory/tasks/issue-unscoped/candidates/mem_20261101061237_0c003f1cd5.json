@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The implementation breaks `tests/test_implement_post_codex_recovery.py`, causing a regression in the test suite.\n  WHY: The CI pre-push gate fails, blocking the PR from being merged safely. The source gave no explicit severity for this entry, so medium is inferred from the reviewer's wording.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  expected_change_site: tests/test_implement_post_codex_recovery.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The task forbids modifying any file other than `tests/e2e_smoke_canary.txt`, but the change causes failures in `tests/test_implement_post_codex_recovery.py`, which suggests the test suite expects the old canary content and needs a matching update. The reviewer said the work cannot be merged without breaking tests, and the constraint blocks the fix. Reviewer severity: MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:unspecified | confidence=5\n  PROBLEM: The implementation breaks `tests/test_implement_post_codex_recovery.py`, causing a regression in the test suite.\n  WHY: The CI pre-push gate fails, blocking the PR from being merged safely.\n- TASK_GAP\n  Requirement: \"Only modify tests/e2e_smoke_canary.txt \u2014 do not touch any other file.\"\n  Expected change site: tests/test_implement_post_codex_recovery.py\n  Evidence of absence: The task forbids modifying any file other than `tests/e2e_smoke_canary.txt`. The implementation causes failures in `tests/test_implement_post_codex_recovery.py`, which suggests the test suite expects the old canary content and needs a matching update. The implementation cannot be merged without breaking tests, and the constraint prevents the fix.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "12d0b46aa3fa6043d79d5c8ec1db9187582dc77f2b6041e3e7849733d772199d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41279098536",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41279098536",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101061237_0c003f1cd5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41279098536"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T06:12:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
