@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8600,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8600\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8605\",\"pr_number\":8605,\"branch\":\"ai/issue-8600\",\"run_id\":\"41287552892\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41287552892\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/8600-tg-cleanup-snapshot-retain.md\",\"scripts/tg_helpers.sh\",\"tests/test_tg_helpers_cleanup.py\"]}",
+  "fingerprint": "850b500e860b1881da8bb64ca69fc28803a1d588db7a8a57d0fafbbf9fc15389",
+  "lineage": {
+    "issue_number": 8600,
+    "parent_ids": [],
+    "pr_number": 8605,
+    "run_id": "41287552892",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41287552892",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8605"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261101084624_4a244bd669",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8600,
+    "level": "run",
+    "pr_number": 8605,
+    "run_id": "41287552892"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8600: https://github.com/shubhodeep1/coding-workflows/pull/8605",
+  "timestamps": {
+    "created_at": "2026-11-01T08:46:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
