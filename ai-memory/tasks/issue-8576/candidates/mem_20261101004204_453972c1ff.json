@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update the smoke canary file\n\nPlanning ref: `orchestrator/project-8575` at `981afbb0b0b4a6ed56c6fb0f3cd14873d4975504` (integration branch mismatch: false).\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for one data-file edit and says no other file may change. The test files listed in \"Expected files\" mention the canary path but do not contain the old run ID `40427433026`. Only `tests/e2e_smoke_canary.txt` and `tests/e2e_smoke_canary_b.txt` contain it, so no test needs updating. That makes the full change the same as the smallest one: replace one line.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- None. This is a data-only edit. Replace line 2, `decompose-run: 40427433026`, with `decompose-run: 41256930545`. Keep line 1 as `status: ok` and keep the single trailing newline.\n\n## Data structures affected\n- `tests/e2e_smoke_canary.txt`: two plain-text lines ending in a newline. The final content is exactly `status: ok\\ndecompose-run: 41256930545\\n`.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Leave the advisory test files unchanged\n- Chosen: Edit only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: Also edit the 11 test files in the decomposition's \"Expected files\" list.\n- Why: Those tests refer to the canary path but not to the run-ID value; a search for the old ID found no match in them. The issue also explicitly limits the change to this one file.\n\n## Security considerations\n- No trust boundary, endpoint, external input, secret or money state is touched. The only possible misuse is a wider edit than allowed, which the scope lock and the `git diff --stat` acceptance check prevent.\n\n## Risks and edge cases\n- Conflict: the \"Expected files\" list names 11 test files, but the issue body says to touch only the canary file. The issue body wins, as D1 records.\n- Do not edit `tests/e2e_smoke_canary_b.txt`, even though it holds the same old run ID.\n- The file needs exactly one trailing newline: no CRLF line endings and no extra blank line.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 41256930545`.\n- `wc -l tests/e2e_smoke_canary.txt` reports 2.\n- `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n- Optionally, run the listed tests that read the canary file to confirm they still pass. They depend on the path, not the value.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "d476441ed1cd265610c8424c604856055f6c4f044124a48645351198d7ec77ae",
+  "lineage": {
+    "issue_number": 8576,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41257563251",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41257563251",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8576"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261101004204_453972c1ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8576,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41257563251"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8576",
+  "timestamps": {
+    "created_at": "2026-11-01T00:42:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
