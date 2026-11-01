@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1790 | severity=low | confidence=3\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The added paragraph expands the repository instructions loaded by the Copilot PR reviewer, which failed with `custom_instructions_too_large` on this PR head.\n  WHY: The reviewer cannot produce a review when its assembled prompt exceeds its limit. The run does not establish whether this paragraph alone crossed the limit. Source severity was NIT.\n- (CI check-run `copilot-pull-request-reviewer`, run 41316554599; not a diff file):head SHA 0ca3e1286efcf2ad311296be97f6709996cf74a7 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer check fails with `Error creating PR review request: Prompt too big after adding system message (errorCode: custom_instructions_too_large, statusCode 422)`.\n  WHY: The failure is a pre-existing property of the repository's AGENTS.md and CLAUDE.md instruction files, not of any hunk in this PR, and this PR's four files cannot fix it. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:1790 | severity=NIT | confidence=3\n  PROBLEM: The added paragraph expands the repository instructions loaded by the Copilot PR reviewer. On this PR head, that check failed with `custom_instructions_too_large` before completing its review.\n  WHY: The reviewer cannot produce a review when its assembled prompt exceeds its limit. The run confirms the failure on this head, though it does not establish whether this paragraph alone crossed the limit.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (CI check-run `copilot-pull-request-reviewer`, run 41316554599; not a diff file):head SHA 0ca3e1286efcf2ad311296be97f6709996cf74a7 | severity=NIT | confidence=4\n  PROBLEM: The Copilot reviewer check fails with `Error creating PR review request: Prompt too big after adding system message (errorCode: custom_instructions_too_large, statusCode 422)`. The log shows the reviewer builds custom instructions from the repo's `AGENTS.md` and `CLAUDE.md` and aborts before reviewing.\n  WHY: The failure is a pre-existing property of the repository's instruction files, not of any hunk here. This PR adds about 10 lines of mandated assembler fold output to an agents.md that is already 5,410 lines. The diff cannot be edited to fix the budget. It is reviewer-infrastructure configuration, not a defect in the change set.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0fa6c7d2dd1b52edd2722c5700bf05083832d90db4deda03a42479bc0cfe7d19",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8628,
+    "run_id": "41316542772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41316542772",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101150353_1d9ff37fd1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8628,
+    "run_id": "41316542772"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T15:03:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
