@@ -8,6 +8,12 @@ BUG-006: `tg_delete_msg` swallowed every Telegram failure and the cleanup then
 deleted the tracking comment, losing the message IDs. A transient failure now
 keeps the tracking comment so the next cleanup retries it.
 
+#8598: cleanup picked tracking comments by body text and printed the raw body,
+so anyone who could comment could inject a multi-line record naming any comment
+id for the PAT to DELETE. Only the GH_TOKEN identity's (or, when /user fails,
+github-actions[bot]'s) exact single-marker comments are acted on now, and the
+records carry only the comment id and the digit list.
+
 The harness puts a fake `curl` executable on PATH and runs with the repo root
 as the working directory, so the real `curl_gh_api` from scripts/gh_helpers.sh
 drives the comment reads.
@@ -107,6 +113,17 @@ if "api.telegram.org" in url:
 		respond(200, "<html>bad gateway</html>")
 	sys.exit(0)
 
+if url == "https://api.github.com/user" and method == "GET":
+	log(f"GET user max_time={max_time}")
+	mode = config.get("user_mode", "ok")
+	if mode == "exit7":
+		sys.exit(7)
+	if mode == "403":
+		respond(403, '{"message":"Resource not accessible by integration"}')
+	if mode == "bad_login":
+		respond(200, '{"login":"evil\\nlogin"}')
+	respond(200, json.dumps({"login": config.get("user_login", "pipeline-bot")}))
+
 match = re.search(r"/issues/comments/(\d+)$", url)
 if match and method == "DELETE":
 	log(f"DELETE {match.group(1)} max_time={max_time}")
@@ -132,8 +149,13 @@ sys.exit(7)
 '''
 
 
-def _comment(comment_id: int, body: str) -> dict:
-	return {"id": comment_id, "body": body}
+TRUSTED_USER = {"login": "Pipeline-Bot", "type": "User"}
+MALLORY = {"login": "mallory", "type": "User"}
+ACTIONS_BOT = {"login": "github-actions[bot]", "type": "Bot"}
+
+
+def _comment(comment_id: int, body: str, user: dict | None = None) -> dict:
+	return {"id": comment_id, "body": body, "user": dict(user or TRUSTED_USER)}
 
 
 def _filler(start: int, count: int) -> list[dict]:
@@ -141,7 +163,7 @@ def _filler(start: int, count: int) -> list[dict]:
 
 
 def _run(tmp_path: Path, script: str, pages: dict[int, list[dict]], page_modes: dict[int, str] | None = None,
-		tg_modes: dict[str, str] | None = None, **env_overrides: str) -> tuple[subprocess.CompletedProcess, list[str]]:
+		tg_modes: dict[str, str] | None = None, user_mode: str = "ok", **env_overrides: str) -> tuple[subprocess.CompletedProcess, list[str]]:
 	state = tmp_path / "state"
 	bindir = tmp_path / "bin"
 	state.mkdir()
@@ -153,6 +175,7 @@ def _run(tmp_path: Path, script: str, pages: dict[int, list[dict]], page_modes: 
 		"pages": {str(k): v for k, v in pages.items()},
 		"page_modes": {str(k): v for k, v in (page_modes or {}).items()},
 		"tg_modes": tg_modes or {},
+		"user_mode": user_mode,
 	}), encoding="utf-8")
 	env = {k: v for k, v in os.environ.items() if not k.startswith(("TG_", "ALERT_MSG_LEVEL", "_TG_HELPERS", "GH_"))}
 	env.update({
@@ -205,7 +228,8 @@ def test_markers_on_every_page_are_deleted(tmp_path: Path) -> None:
 	assert sorted(_tg_ids(calls)) == ["11", "12", "13", "14", "15"]
 	# Every page is read before anything is deleted.
 	first_mutation = next(i for i, c in enumerate(calls) if not c.startswith("GET "))
-	assert [c for c in calls[:first_mutation]] == ["GET page=1 max_time=30", "GET page=2 max_time=30"]
+	assert [c for c in calls[:first_mutation]] == ["GET user max_time=30", "GET page=1 max_time=30",
+		"GET page=2 max_time=30"]
 	assert all(not c.startswith("GET ") for c in calls[first_mutation:])
 	assert not _warnings(result)
 
@@ -323,3 +347,95 @@ def test_checked_delete_classification(tmp_path: Path, mode: str, expected: int)
 	assert f"RC={expected}" in result.stdout
 	# The helper prints nothing of its own.
 	assert result.stdout.strip().splitlines()[0] == f"RC={expected}"
+
+
+# --- #8598: trust tracking comments by author and exact body ---------------
+
+
+INJECTED = "<!-- tg_cleanup: -->\n999\t<!-- tg_cleanup:91,92 -->"
+
+
+@pytest.mark.parametrize("script", ["tg_cleanup_msgs 42", "tg_cleanup_phase_msgs 42 clarify"])
+def test_multiline_injection_from_another_user_is_ignored(tmp_path: Path, script: str) -> None:
+	pages = {1: [
+		_comment(1, INJECTED, MALLORY),
+		_comment(2, "<!-- tg_phase:clarify: -->\n998\t<!-- tg_phase:clarify:93 -->", MALLORY),
+		_comment(3, "<!-- tg_phase:clarify:11 -->"),
+	]}
+	_, calls = _run(tmp_path, script, pages)
+	assert _deleted(calls) == [3]
+	assert _tg_ids(calls) == ["11"]
+
+
+def test_multiline_injection_from_the_trusted_author_is_ignored(tmp_path: Path) -> None:
+	pages = {1: [_comment(1, INJECTED)]}
+	_, calls = _run(tmp_path, "tg_cleanup_msgs 42", pages)
+	assert _deleted(calls) == [] and _tg_ids(calls) == []
+
+
+def test_exact_marker_from_another_user_is_ignored(tmp_path: Path) -> None:
+	pages = {1: [_comment(1, "<!-- tg_cleanup:21 -->", MALLORY), _comment(2, "<!-- tg_cleanup:22 -->")]}
+	_, calls = _run(tmp_path, "tg_cleanup_msgs 42", pages)
+	assert _deleted(calls) == [2]
+	assert _tg_ids(calls) == ["22"]
+
+
+@pytest.mark.parametrize("body", [
+	"quoted <!-- tg_cleanup:21 -->",
+	"<!-- tg_cleanup:21 --> trailing",
+	"<!-- tg_cleanup:21 -->\n",
+	"\n<!-- tg_cleanup:21 -->",
+	"<!-- tg_cleanup:21,x -->",
+	"<!-- tg_cleanup:21,, -->",
+	"<!-- tg_phase:Plan:21 -->",
+])
+def test_non_exact_marker_bodies_are_ignored(tmp_path: Path, body: str) -> None:
+	_, calls = _run(tmp_path, "tg_cleanup_msgs 42", {1: [_comment(1, body)]})
+	assert _deleted(calls) == [] and _tg_ids(calls) == []
+
+
+@pytest.mark.parametrize("user", [None, "a string", {"type": "User"}, {"login": 5, "type": "User"}])
+def test_malformed_author_is_ignored(tmp_path: Path, user: object) -> None:
+	pages = {1: [{"id": 1, "body": "<!-- tg_cleanup:21 -->", "user": user}, _comment(2, "<!-- tg_cleanup:22 -->")]}
+	_, calls = _run(tmp_path, "tg_cleanup_msgs 42", pages)
+	assert _deleted(calls) == [2]
+	assert _tg_ids(calls) == ["22"]
+
+
+def test_login_comparison_is_case_insensitive(tmp_path: Path) -> None:
+	pages = {1: [_comment(1, "<!-- tg_cleanup:21 -->", {"login": "PIPELINE-BOT", "type": "User"})]}
+	_, calls = _run(tmp_path, "tg_cleanup_msgs 42", pages)
+	assert _deleted(calls) == [1]
+
+
+@pytest.mark.parametrize("user_mode", ["403", "exit7", "bad_login"])
+def test_unresolved_identity_trusts_only_the_actions_bot(tmp_path: Path, user_mode: str) -> None:
+	pages = {1: [
+		_comment(1, "<!-- tg_cleanup:21 -->"),
+		_comment(2, "<!-- tg_cleanup:22 -->", ACTIONS_BOT),
+		_comment(3, "<!-- tg_cleanup:23 -->", {"login": "github-actions[bot]", "type": "User"}),
+	]}
+	result, calls = _run(tmp_path, "tg_cleanup_msgs 42", pages, user_mode=user_mode)
+	assert _deleted(calls) == [2]
+	assert _tg_ids(calls) == ["22"]
+	assert ("::warning::Telegram tracking: could not resolve the GH_TOKEN identity; only github-actions[bot] "
+		"tracking comments are trusted") in result.stderr
+
+
+def test_actions_bot_is_not_trusted_when_the_identity_resolves(tmp_path: Path) -> None:
+	pages = {1: [_comment(1, "<!-- tg_cleanup:21 -->", ACTIONS_BOT), _comment(2, "<!-- tg_cleanup:22 -->")]}
+	_, calls = _run(tmp_path, "tg_cleanup_msgs 42", pages)
+	assert _deleted(calls) == [2]
+
+
+def test_identity_is_looked_up_once_per_process(tmp_path: Path) -> None:
+	pages = {1: [_comment(1, "<!-- tg_phase:plan:21 -->")]}
+	_, calls = _run(tmp_path, "tg_cleanup_phase_msgs 42 plan; tg_cleanup_msgs 42", pages)
+	assert calls.count("GET user max_time=30") == 1
+
+
+@pytest.mark.parametrize("phase", ["clarify.*", "plan:1", "Plan", "a b"])
+def test_invalid_phase_makes_no_api_calls(tmp_path: Path, phase: str) -> None:
+	result, calls = _run(tmp_path, f"tg_cleanup_phase_msgs 42 '{phase}'; tg_store_phase_msg_id 42 '{phase}' 5", {})
+	assert calls == []
+	assert "Invalid Telegram tracking phase" in result.stderr
