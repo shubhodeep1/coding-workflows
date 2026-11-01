@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-01T15:20:16Z",
+  "issue_number": 8604,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=(check run copilot-pull-request-reviewer):0; cited_path=AGENTS.md, CLAUDE.md (Copilot custom-instructions size); files_touched=.github/workflows/orchestrate_poll.yml, agents.d/8427-p8-persist-failure-grouping.md, changelog.d/8427-p8-persist-failure-grouping.md, scripts/orchestrate_poll_process.sh, scripts/persist_orchestrator.py, tests/test_orchestrate_poll_process.py, tests/test_orchestrate_poll_workflow_contract.py, tests/test_persist_orchestrator.py.",
+  "phase": "review_autofix",
+  "pr_number": 8608,
+  "record_id": "lesson_20261101152016_cc0421678a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md, CLAUDE.md (Copilot custom-instructions size)",
+    "(check run copilot-pull-request-reviewer)",
+    ".github/workflows/orchestrate_poll.yml",
+    "agents.d/8427-p8-persist-failure-grouping.md",
+    "changelog.d/8427-p8-persist-failure-grouping.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/persist_orchestrator.py",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_orchestrate_poll_workflow_contract.py",
+    "tests/test_persist_orchestrator.py"
+  ]
+}
