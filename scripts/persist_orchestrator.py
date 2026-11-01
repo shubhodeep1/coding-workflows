@@ -10,13 +10,13 @@ since-note --state-file F --current-wave N [--details-file D] [--trusted-login L
 	Pure: no subprocess, no network, zero API calls. Renders the
 	``## Since this plan was decomposed`` section for a wave-N issue body from
 	the orchestrator state only:
-	  * merged items of waves 1..N-1 (issue, ``persist_merged_pr``, safe
-	    ``files_touched`` paths, at most 10 per item);
-	  * judge-added items of waves 1..N-1 (entries without ``title``), any status;
-	  * the newest attempt-journal step/outcome (host fields only, never
-	    ``note``) of an item whose comments are in the per-tick details cache
-	    ``D`` (``comments_available: true``), parsed by ``attempt_journal.parse``
-	    for the pipeline login ``L`` only.
+		* merged items of waves 1..N-1 (issue, ``persist_merged_pr``, safe
+			``files_touched`` paths, at most 10 per item);
+		* judge-added items of waves 1..N-1 (entries without ``title``), any status;
+		* the newest attempt-journal step/outcome (host fields only, never
+			``note``) of an item whose comments are in the per-tick details cache
+			``D`` (``comments_available: true``), parsed by ``attempt_journal.parse``
+			for the pipeline login ``L`` only.
 	Issue / PR numbers are plain (``issue 123``), never ``#123``: a ``#N``
 	creates cross-reference timeline events the poller reads to find linked
 	PRs, and risks auto-close phrasing. Every data line goes through
