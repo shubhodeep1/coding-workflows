@@ -1053,6 +1053,185 @@ def test_error_signature_uses_executed_errors_not_the_echoed_script() -> None:
 	assert heal.error_signature(heal.filter_log(other)) != signature
 
 
+# btc_sweeper#248 shapes (Refs #8602): the runner echoed the step script
+# without ANSI colour, so `echo "::error::..."` source lines looked like output,
+# and the runtime lines (`##[warning]`, a failed `CLAUDE_POOL run`,
+# `AI_ENGINE_FALLBACK`, `exited with code`) fell outside the tail.
+BTC_SWEEPER_WARNING_LINE = "2026-10-31T09:12:01.1000000Z ##[warning]Claude pool account TEAM1 at capacity; trying next account"
+BTC_SWEEPER_ERROR_LINE = "2026-10-31T09:40:12.2000000Z ##[error]Process completed with exit code 1."
+BTC_SWEEPER_POOL_CRASHED_LINE = (
+	"2026-10-31T09:12:02.1000000Z CLAUDE_POOL run role=implement account=TEAM1 outcome=crashed reason=relay_unavailable exit_code=1"
+)
+BTC_SWEEPER_POOL_REFUSED_LINE = (
+	"2026-10-31T09:12:03.1000000Z CLAUDE_POOL run role=implement account=TEAM2 outcome=refused reason=capacity exit_code=1"
+)
+BTC_SWEEPER_POOL_UNAVAILABLE_LINE = (
+	"2026-10-31T09:12:04.1000000Z CLAUDE_POOL run role=implement account=TEAM3 outcome=unavailable reason=no_token exit_code=1"
+)
+BTC_SWEEPER_POOL_SUCCESS_LINE = (
+	"2026-10-31T09:12:05.1000000Z CLAUDE_POOL run role=plan account=TEAM1 outcome=success reason=ok exit_code=0"
+)
+BTC_SWEEPER_FALLBACK_LINE = "2026-10-31T09:12:06.1000000Z AI_ENGINE_FALLBACK role=IMPLEMENT reason=capacity"
+BTC_SWEEPER_EXITED_LINE = "2026-10-31T09:12:07.1000000Z claude exited with code 1"
+BTC_SWEEPER_UNSTYLED_STEP_LOG = (
+	"2026-10-31T09:10:00.0000000Z ##[group]Run set -euo pipefail\n"
+	"2026-10-31T09:10:00.0000100Z set -euo pipefail\n"
+	"2026-10-31T09:10:00.0000200Z if [ \"${rc}\" -ne 0 ]; then\n"
+	"2026-10-31T09:10:00.0000300Z   echo \"::error::implement attempt failed for issue ${ISSUE_NUMBER}\"\n"
+	"2026-10-31T09:10:00.0000400Z   echo \"retry budget exhausted\"\n"
+	"2026-10-31T09:10:00.0000500Z fi\n"
+	"2026-10-31T09:10:00.0000600Z shell: /usr/bin/bash -e {0}\n"
+	"2026-10-31T09:10:00.0000700Z env:\n"
+	"2026-10-31T09:10:00.0000800Z   ISSUE_NUMBER: 248\n"
+	"2026-10-31T09:10:00.0000900Z ##[endgroup]\n"
+	"2026-10-31T09:10:01.0000000Z retry budget exhausted\n"
+	f"{BTC_SWEEPER_ERROR_LINE}\n"
+)
+
+
+def test_filter_log_keeps_runtime_lines_outside_tail() -> None:
+	lines = [f"line {i}" for i in range(1000)]
+	early = {
+		10: BTC_SWEEPER_WARNING_LINE,
+		11: BTC_SWEEPER_ERROR_LINE,
+		12: BTC_SWEEPER_POOL_CRASHED_LINE,
+		13: BTC_SWEEPER_POOL_REFUSED_LINE,
+		14: BTC_SWEEPER_POOL_UNAVAILABLE_LINE,
+		15: BTC_SWEEPER_FALLBACK_LINE,
+		16: BTC_SWEEPER_EXITED_LINE,
+		17: BTC_SWEEPER_POOL_SUCCESS_LINE,
+	}
+	for index, text in early.items():
+		lines[index] = text
+	filtered = heal.filter_log("\n".join(lines), max_lines=50, max_bytes=100_000)
+	for kept_line in (
+		BTC_SWEEPER_WARNING_LINE,
+		BTC_SWEEPER_ERROR_LINE,
+		BTC_SWEEPER_POOL_CRASHED_LINE,
+		BTC_SWEEPER_POOL_REFUSED_LINE,
+		BTC_SWEEPER_POOL_UNAVAILABLE_LINE,
+		BTC_SWEEPER_FALLBACK_LINE,
+		BTC_SWEEPER_EXITED_LINE,
+	):
+		assert kept_line in filtered
+	# A successful pool run and plain filler before the tail are not kept.
+	assert "outcome=success" not in filtered
+	assert "line 20\n" not in filtered and "line 500" not in filtered
+	assert "line 999" in filtered
+	# Only the stable fallback line is kept, not the report bookkeeping.
+	report = ["filler"] * 100
+	report[0] = "AI_ENGINE_FALLBACK_REPORT role=IMPLEMENT entries=2"
+	assert "AI_ENGINE_FALLBACK_REPORT" not in heal.filter_log("\n".join(report), max_lines=10)
+
+
+def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
+	dropped = heal._drop_step_script_lines(BTC_SWEEPER_UNSTYLED_STEP_LOG)
+	assert "set -euo pipefail\n" not in dropped.split("##[group]Run set -euo pipefail", 1)[1]
+	assert "implement attempt failed" not in dropped
+	assert "if [ " not in dropped and "\nfi" not in dropped
+	# Header line, `shell:` / `env:` block and all output after the close stay.
+	assert "##[group]Run set -euo pipefail" in dropped
+	assert "2026-10-31T09:10:00.0000600Z shell: /usr/bin/bash -e {0}" in dropped
+	assert "2026-10-31T09:10:00.0000800Z   ISSUE_NUMBER: 248" in dropped
+	assert "2026-10-31T09:10:00.0000900Z ##[endgroup]" in dropped
+	# Output with the same text as a script line is kept; the script copy is not.
+	assert dropped.count("retry budget exhausted") == 1
+	assert "2026-10-31T09:10:01.0000000Z retry budget exhausted" in dropped
+	assert BTC_SWEEPER_ERROR_LINE in dropped
+	filtered = heal.filter_log(BTC_SWEEPER_UNSTYLED_STEP_LOG)
+	assert "ISSUE_NUMBER: [redacted]" in filtered
+	assert "ISSUE_NUMBER: 248" not in filtered
+	assert "implement attempt failed" not in filtered
+	assert "##[error]Process completed with exit code 1." in filtered
+
+
+def test_drop_step_script_lines_drops_mixed_cyan_and_unstyled_script() -> None:
+	log = (
+		"2026-10-31T09:10:00Z ##[group]Run ./sweep.sh\n"
+		"2026-10-31T09:10:00Z \x1b[36;1m./sweep.sh --cyan-line\x1b[0m\n"
+		"2026-10-31T09:10:00Z ./sweep.sh --plain-line\n"
+		"2026-10-31T09:10:00Z shell: /usr/bin/bash -e {0}\n"
+		"2026-10-31T09:10:00Z ##[endgroup]\n"
+		"2026-10-31T09:10:01Z sweep output\n"
+	)
+	dropped = heal._drop_step_script_lines(log)
+	assert "--cyan-line" not in dropped
+	assert "--plain-line" not in dropped
+	assert "shell: /usr/bin/bash -e {0}" in dropped
+	assert "sweep output" in dropped
+
+
+def test_drop_step_script_lines_keeps_uses_step_header() -> None:
+	log = (
+		"2026-10-31T09:10:00Z ##[group]Run actions/checkout@v4\n"
+		"2026-10-31T09:10:00Z with:\n"
+		"2026-10-31T09:10:00Z   repository: x\n"
+		"2026-10-31T09:10:00Z ##[endgroup]\n"
+		"2026-10-31T09:10:01Z checkout output\n"
+	)
+	assert heal._drop_step_script_lines(log) == log
+	# A header with no sections closes at once and is unchanged.
+	bare = "2026-10-31T09:10:00Z ##[group]Run true\n2026-10-31T09:10:00Z ##[endgroup]\nout\n"
+	assert heal._drop_step_script_lines(bare) == bare
+
+
+def test_drop_step_script_lines_keeps_unconfirmed_header_lines() -> None:
+	# A header that never reaches a section key or a close keeps its lines.
+	unterminated = (
+		"2026-10-31T09:10:00Z ##[group]Run codex\n"
+		"2026-10-31T09:10:01Z ::error::step output from a cut log\n"
+	)
+	assert heal._drop_step_script_lines(unterminated) == unterminated
+	# A second header that opens before the first is confirmed flushes the
+	# first header's lines (fail open); the second header's script is dropped.
+	reopened = (
+		"2026-10-31T09:10:00Z ##[group]Run first\n"
+		"2026-10-31T09:10:00Z first-header-line\n"
+		"2026-10-31T09:10:01Z ##[group]Run second\n"
+		"2026-10-31T09:10:01Z second-script-line\n"
+		"2026-10-31T09:10:01Z shell: /usr/bin/bash -e {0}\n"
+		"2026-10-31T09:10:01Z ##[endgroup]\n"
+		"2026-10-31T09:10:02Z second output\n"
+	)
+	dropped = heal._drop_step_script_lines(reopened)
+	assert "first-header-line" in dropped
+	assert "second-script-line" not in dropped
+	assert "second output" in dropped
+	# Text without a Run header comes back byte-for-byte.
+	plain = "line one\n##[endgroup]\nshell: x\n\x1b[36;1mcyan\x1b[0m\n"
+	assert heal._drop_step_script_lines(plain) == plain
+
+
+def test_drop_step_script_lines_never_removes_env_block_context() -> None:
+	# A timestamp-shaped `##[endgroup]` / `##[group]Run` env value followed by
+	# an unstamped continuation is a value line for _strip_step_env_values; the
+	# drop pass must not treat it as a header boundary and remove lines that
+	# bound the env block, or filter_log would keep part of the value.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"2026-01-01T00:00:00Z ##[endgroup]\n"
+		"leaked-after-close\n"
+		"2026-01-01T00:00:00Z ##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	assert heal._drop_step_script_lines(log) == log
+	filtered = heal.filter_log(log)
+	for secret in ("leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry", "2026-01-01"):
+		assert secret not in filtered
+	assert "step output kept" in filtered
+
+
+def test_error_signature_ignores_unstyled_echoed_script() -> None:
+	signature = heal.error_signature(heal.filter_log(BTC_SWEEPER_UNSTYLED_STEP_LOG))
+	assert "implement attempt failed" not in signature
+	assert signature == "##[error]process completed with exit code <n>."
+
+
 def _heal_issue(number: int, *, state: str, fp: str, gen: int = 1, root: str | None = None, created: datetime | None = None) -> dict:
 	created = created or datetime(2026, 9, 1, tzinfo=timezone.utc)
 	return {
