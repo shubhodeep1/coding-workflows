@@ -255,6 +255,22 @@ def test_persist_budget_env_defaults_are_declared() -> None:
 	assert '_flag("PERSIST_BUDGET_ENABLED")' in helper
 
 
+def test_persist_orch_failure_grouping_env_defaults_are_declared() -> None:
+	"""Refs #8427 P8: the grouping switch and windows default in the workflow env."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for line in (
+		"PERSIST_ORCH_FAILURE_GROUPING_ENABLED: ${{ vars.PERSIST_ORCH_FAILURE_GROUPING_ENABLED || 'false' }}",
+		"PERSIST_ORCH_GROUP_WINDOW_HOURS: ${{ vars.PERSIST_ORCH_GROUP_WINDOW_HOURS || '24' }}",
+		"PERSIST_ORCH_GROUP_MAX_HOURS: ${{ vars.PERSIST_ORCH_GROUP_MAX_HOURS || '12' }}",
+	):
+		assert wf.count(line) == 1, line
+	env = yaml.safe_load(wf)["env"]
+	assert env["PERSIST_ORCH_FAILURE_GROUPING_ENABLED"] == "${{ vars.PERSIST_ORCH_FAILURE_GROUPING_ENABLED || 'false' }}"
+	helper = (REPO_ROOT / "scripts" / "persist_orchestrator.py").read_text(encoding="utf-8")
+	assert 'os.environ.get("PERSIST_ORCH_FAILURE_GROUPING_ENABLED", "false") == "true"' in helper
+	assert "GROUP_WINDOW_HOURS_DEFAULT = 24" in helper and "GROUP_MAX_HOURS_DEFAULT = 12" in helper
+
+
 WIDENED_GATE = (
 	"(steps.find_tracking.outputs.has_work == 'true' || "
 	"steps.find_tracking.outputs.standalone_recovery == 'true')"
@@ -617,6 +633,7 @@ def test_standalone_stall_probe_log_prefix_is_registered() -> None:
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_persist_budget_env_defaults_are_declared()
+	test_persist_orch_failure_grouping_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()

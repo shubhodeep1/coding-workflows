@@ -50,6 +50,10 @@ env:
   PERSIST_REPLAN_AFTER_FAILED_ROUNDS: ${{ vars.PERSIST_REPLAN_AFTER_FAILED_ROUNDS || '3' }}
   # Orchestrator context (issue #8427, P7): default off; see scripts/persist_orchestrator.py.
   PERSIST_ORCH_CONTEXT_ENABLED: ${{ vars.PERSIST_ORCH_CONTEXT_ENABLED || 'false' }}
+  # Grouping repeated failures (issue #8427, P8): default off; see scripts/persist_orchestrator.py.
+  PERSIST_ORCH_FAILURE_GROUPING_ENABLED: ${{ vars.PERSIST_ORCH_FAILURE_GROUPING_ENABLED || 'false' }}
+  PERSIST_ORCH_GROUP_WINDOW_HOURS: ${{ vars.PERSIST_ORCH_GROUP_WINDOW_HOURS || '24' }}
+  PERSIST_ORCH_GROUP_MAX_HOURS: ${{ vars.PERSIST_ORCH_GROUP_MAX_HOURS || '12' }}
   WORKFLOW_HEAL_VERIFY_ENABLED: ${{ vars.WORKFLOW_HEAL_VERIFY_ENABLED || 'false' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: orchestrate_poll
