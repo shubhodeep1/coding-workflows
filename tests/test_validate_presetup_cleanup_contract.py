@@ -24,6 +24,7 @@ VALIDATE_RUN_IF = (
 	" && steps.workspace_before_run_hook.outcome != 'failure'"
 	" && steps.authorized_target.outcome == 'success'"
 	" && steps.runtime.outcome == 'success'"
+	" && steps.support_staging.outcome == 'success'"
 )
 FINALIZE_IF = "env.CLAUDE_CAPACITY_WAIT != 'true' && (always())"
 
@@ -97,7 +98,7 @@ def test_authorization_step_is_unchanged_and_fail_closed() -> None:
 	assert "exit 1" in _run_text(step)
 
 
-def test_validate_run_requires_authorization_and_runtime() -> None:
+def test_validate_run_requires_authorization_runtime_and_support() -> None:
 	step = _step_by_id("validate_run")
 	assert step.get("name") == "Run validation process"
 	assert step.get("if") == VALIDATE_RUN_IF
@@ -191,9 +192,9 @@ def test_before_remove_hook_skips_without_staged_helper() -> None:
 def test_checkout_dependent_finalize_steps_are_gated() -> None:
 	for name in ("Record validation candidate", "Record validation run end"):
 		condition = str(_step_by_name(name).get("if"))
-		assert condition == f"{FINALIZE_IF} && steps.runtime.outcome == 'success'", name
+		assert condition == f"{FINALIZE_IF} && steps.runtime.outcome == 'success' && steps.support_staging.outcome == 'success'", name
 	force_tick = str(_step_by_name("Force orchestrate poll after validation finalization").get("if"))
-	assert force_tick == f"{FINALIZE_IF} && steps.authorized_target.outcome == 'success'"
+	assert force_tick == f"{FINALIZE_IF} && steps.authorized_target.outcome == 'success' && steps.support_staging.outcome == 'success'"
 
 
 def test_not_initialized_marker_and_no_setup_state_output() -> None:
