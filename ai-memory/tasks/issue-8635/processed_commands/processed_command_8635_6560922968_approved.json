@@ -5,13 +5,30 @@
   "entry_id": "processed_command_8635_6560922968_approved",
   "issue_number": 8635,
   "metadata": {
+    "branch": "ai/issue-8635",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/issue_pr_status.yml",
+      "agents.d/heal-port-to-default.md",
+      "changelog.d/heal-port-to-default.md",
+      "docs/scripts-pending-removal.md",
+      "scripts/heal_port_to_default.sh",
+      "scripts/workflow_failure_heal.py",
+      "tests/inventory_exemptions.txt",
+      "tests/test_heal_port_to_default.py"
+    ],
+    "issue_number": 8635,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8635",
+    "pr_number": 8636,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8636",
+    "run_attempt": "1",
+    "run_id": "41328339240",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41328339240"
   },
   "run_attempt": 1,
   "run_id": "41328339240",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-01T16:51:44Z",
+  "status": "completed",
+  "timestamp": "2026-11-01T18:06:32Z",
   "workflow": "implement"
 }
