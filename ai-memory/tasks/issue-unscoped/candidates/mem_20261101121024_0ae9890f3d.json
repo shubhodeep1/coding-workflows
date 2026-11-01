@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_clarify_blocked_output.py:_clarify_loop() (lines 595-600) | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The legacy loop extraction starts at `max_attempts=3`, which now sits below the new helper definitions, so the older loop tests call the helpers as undefined commands and the `|| true` guards hide the resulting errors.\n  WHY: The legacy tests pass without exercising the capture/emit code, which is a coverage-intent drift and not a runtime defect. Severity is NIT in the sources, and Sonnet 5.5 gave it no confidence value, so the confidence is GLM's 4.\n- (no file) external check run `copilot-pull-request-reviewer` (job 124825825183) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The external Copilot reviewer fails with HTTP 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\") because of the size of AGENTS.md and CLAUDE.md.\n  WHY: The failure is unrelated to the PR content. This PR touches neither file, and trimming them would make main diverge from stable. Sources rate it NIT, with confidence 2 from Sonnet 5.5 and 5 from GLM. minimax_minimax-m3 noted the same failure as an observation and required no action.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (no file) external check run `copilot-pull-request-reviewer` (job 124825825183) | severity=NIT | confidence=2\n  PROBLEM: The external Copilot reviewer rejected the repository's `AGENTS.md` and `CLAUDE.md` as too large (`custom_instructions_too_large`, HTTP 422).\n  WHY: The job exits 1 before reviewing anything, whatever the PR contains. This PR touches neither file, and trimming them would make `main` diverge from `stable`.\n- HARDENING: tests/test_plan_clarify_blocked_output.py `_clarify_loop()` and `_run_clarify_loop()` extract the loop from `max_attempts=3`, which now sits below the new helper definitions, so the older loop tests run without the helpers and `|| true` hides the errors. Suggested fix: optionally start the extraction from the `# Issue #8602` comment line (about 3 lines). HARDENING_RISK_SCORE: 1\n- All other checklist sections (security, correctness, concurrency, error paths, performance, DB, naming, implicit execution, task completeness): NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_plan_clarify_blocked_output.py:595-600 | severity=NIT | confidence=4\n  PROBLEM: The legacy loop extraction starts at `max_attempts=3`, which now sits below the new helper definitions. `_run_clarify_loop()` therefore calls `_clarify_attempt_stderr_capture_start`, `_stop` and `_clarify_emit_attempt_failed` as undefined commands, and `|| true` swallows status 127.\n  WHY: The legacy loop tests pass without exercising the capture/emit code, so they can no longer detect a regression in the helper wiring. This is a coverage-intent drift and not a runtime defect.\n- (no file) .github/workflows/clarify.yml (no hunk maps; failure is external), check run `copilot-pull-request-reviewer`, job 124825825183 | severity=NIT | confidence=5\n  PROBLEM: The job fails with HTTP 422 `custom_instructions_too_large` before reviewing anything, because of the size of AGENTS.md and CLAUDE.md.\n  WHY: This is an external reviewer instruction budget issue and not PR content. This PR touches neither file, and trimming them would diverge main from stable mid-forward-merge.\n- HARDENING 1: tests/test_plan_clarify_blocked_output.py `_clarify_loop()` line 598 \u2014 start the extraction at the `# Issue #8602` comment, the same anchor `_clarify_attempt_script()` uses (about 3 lines). HARDENING_RISK_SCORE: 1\n- HARDENING 2: .github/workflows/clarify.yml `_clarify_attempt_stderr_capture_start` line 1668 \u2014 on a bash that does not set `$!` for process substitutions, the flush wait becomes a no-op and the pool-line grep can race tee's flush. Suggested fix: emit a fixed-text `::warning::CLARIFY_ENGINE_TEE_PID_UNCAPTURED` line in the else-branch (about 2 lines). HARDENING_RISK_SCORE: 1\n- All other checklist sections: NONE. Task completeness: none, since the PR intent is fully delivered.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e54db1a659de55a69add66a8c4959c019fb0d0064c13e000dc51072e217860c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8610,
+    "run_id": "41301991878",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41301991878",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101121024_0ae9890f3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8610,
+    "run_id": "41301991878"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T12:10:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
