@@ -109,7 +109,7 @@ if "api.telegram.org" in url:
 
 match = re.search(r"/issues/comments/(\d+)$", url)
 if match and method == "DELETE":
-	log(f"DELETE {match.group(1)}")
+	log(f"DELETE {match.group(1)} max_time={max_time}")
 	sys.exit(0)
 
 match = re.search(r"/issues/(\d+)/comments\?per_page=100&page=(\d+)$", url)
@@ -247,6 +247,7 @@ def test_transient_telegram_failure_keeps_only_that_comment(tmp_path: Path, mode
 	assert _deleted(calls) == [1, 3]
 	assert _tg_ids(calls) == ["21", "22", "23", "24"]
 	assert all("max_time=10" in c for c in calls if c.startswith("TG "))
+	assert all("max_time=10" in c for c in calls if c.startswith("DELETE "))
 	warnings = _warnings(result)
 	assert warnings == ["::warning::Telegram cleanup kept 1 tracking comment(s) on issue #42: 1 message ID(s) hit a "
 		"transient Telegram failure; the next cleanup retries them"]
@@ -294,8 +295,9 @@ def test_breaker_stops_telegram_calls_after_three_transient_failures(tmp_path: P
 	result, calls = _run(tmp_path, "tg_cleanup_msgs 42", pages, tg_modes=tg_modes)
 	assert _tg_ids(calls) == ["51", "52", "53"]
 	assert _deleted(calls) == []
-	assert _warnings(result) == ["::warning::Telegram cleanup kept 5 tracking comment(s) on issue #42: 5 message ID(s) "
-		"hit a transient Telegram failure; the next cleanup retries them"]
+	# Skipped IDs are reported apart from the three that really failed.
+	assert _warnings(result) == ["::warning::Telegram cleanup kept 5 tracking comment(s) on issue #42: 3 message ID(s) "
+		"hit a transient Telegram failure (2 more not tried after 3 failures in a row); the next cleanup retries them"]
 
 
 def test_missing_telegram_secret_still_deletes_comments(tmp_path: Path) -> None:

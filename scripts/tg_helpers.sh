@@ -520,11 +520,11 @@ tg_cleanup_phase_msgs()
 	local tracking_entries
 	tracking_entries=$(_tg_snapshot_tracking_entries "${issue_num}" "${phase}") || return 0
 
-	local kept_comments=0 failed_ids_total=0 consecutive=0
+	local kept_comments=0 failed_ids_total=0 skipped_ids_total=0 consecutive=0
 	local comment_id comment_body
 	while IFS=$'\t' read -r comment_id comment_body; do
 		[[ "${comment_id}" =~ ^[0-9]+$ ]] || continue
-		local id_list failed=0
+		local id_list failed=0 skipped=0
 		id_list=$(printf '%s' "${comment_body}" | \
 			sed -n "s/.*<!-- tg_phase:${phase}:\([0-9,]*\) -->.*/\1/p")
 		if [ -n "${id_list}" ] && [ -n "${chat_id}" ] && [ -n "${TG_BOT_SECRET:-}" ]; then
@@ -535,7 +535,7 @@ tg_cleanup_phase_msgs()
 				# Breaker: after 3 consecutive transient failures stop calling
 				# Telegram for this cleanup and keep the remaining comments.
 				if [ "${consecutive}" -ge 3 ]; then
-					failed=$((failed + 1))
+					skipped=$((skipped + 1))
 				elif _tg_delete_msg_checked "${tg_id}"; then
 					consecutive=0
 				else
@@ -545,8 +545,8 @@ tg_cleanup_phase_msgs()
 			done
 			IFS="${old_ifs}"
 		fi
-		if [ "${failed}" -eq 0 ]; then
-			curl -s -X DELETE \
+		if [ "${failed}" -eq 0 ] && [ "${skipped}" -eq 0 ]; then
+			curl -s --max-time 10 -X DELETE \
 				-H "Authorization: token ${GH_TOKEN}" \
 				-H "Accept: application/vnd.github.v3+json" \
 				"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
@@ -555,11 +555,16 @@ tg_cleanup_phase_msgs()
 			# Keep the tracking comment so the next cleanup retries its IDs (BUG-006).
 			kept_comments=$((kept_comments + 1))
 			failed_ids_total=$((failed_ids_total + failed))
+			skipped_ids_total=$((skipped_ids_total + skipped))
 		fi
 	done <<< "${tracking_entries}"
 
+	local skipped_note=""
+	if [ "${skipped_ids_total}" -gt 0 ]; then
+		skipped_note=" (${skipped_ids_total} more not tried after 3 failures in a row)"
+	fi
 	if [ "${kept_comments}" -gt 0 ]; then
-		echo "::warning::Telegram cleanup kept ${kept_comments} tracking comment(s) on issue #${issue_num} (phase ${phase}): ${failed_ids_total} message ID(s) hit a transient Telegram failure; the next cleanup retries them" >&2
+		echo "::warning::Telegram cleanup kept ${kept_comments} tracking comment(s) on issue #${issue_num} (phase ${phase}): ${failed_ids_total} message ID(s) hit a transient Telegram failure${skipped_note}; the next cleanup retries them" >&2
 	fi
 	return 0
 }
@@ -590,12 +595,12 @@ tg_cleanup_msgs()
 	local tracking_entries
 	tracking_entries=$(_tg_snapshot_tracking_entries "${issue_num}" "") || return 0
 
-	local kept_comments=0 failed_ids_total=0 consecutive=0
+	local kept_comments=0 failed_ids_total=0 skipped_ids_total=0 consecutive=0
 	local comment_id comment_body
 	while IFS=$'\t' read -r comment_id comment_body; do
 		[[ "${comment_id}" =~ ^[0-9]+$ ]] || continue
 		# Extract comma-separated message IDs (general or phase tags)
-		local id_list failed=0
+		local id_list failed=0 skipped=0
 		id_list=$(printf '%s' "${comment_body}" | \
 			sed -n 's/.*<!-- tg_\(cleanup\|phase:[a-z_]*\):\([0-9,]*\) -->.*/\2/p')
 		if [ -n "${id_list}" ] && [ -n "${chat_id}" ] && [ -n "${TG_BOT_SECRET:-}" ]; then
@@ -606,7 +611,7 @@ tg_cleanup_msgs()
 				# Breaker: after 3 consecutive transient failures stop calling
 				# Telegram for this cleanup and keep the remaining comments.
 				if [ "${consecutive}" -ge 3 ]; then
-					failed=$((failed + 1))
+					skipped=$((skipped + 1))
 				elif _tg_delete_msg_checked "${tg_id}"; then
 					consecutive=0
 				else
@@ -616,9 +621,9 @@ tg_cleanup_msgs()
 			done
 			IFS="${old_ifs}"
 		fi
-		if [ "${failed}" -eq 0 ]; then
+		if [ "${failed}" -eq 0 ] && [ "${skipped}" -eq 0 ]; then
 			# Remove the tracking comment from GitHub
-			curl -s -X DELETE \
+			curl -s --max-time 10 -X DELETE \
 				-H "Authorization: token ${GH_TOKEN}" \
 				-H "Accept: application/vnd.github.v3+json" \
 				"https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
@@ -627,11 +632,16 @@ tg_cleanup_msgs()
 			# Keep the tracking comment so the next cleanup retries its IDs (BUG-006).
 			kept_comments=$((kept_comments + 1))
 			failed_ids_total=$((failed_ids_total + failed))
+			skipped_ids_total=$((skipped_ids_total + skipped))
 		fi
 	done <<< "${tracking_entries}"
 
+	local skipped_note=""
+	if [ "${skipped_ids_total}" -gt 0 ]; then
+		skipped_note=" (${skipped_ids_total} more not tried after 3 failures in a row)"
+	fi
 	if [ "${kept_comments}" -gt 0 ]; then
-		echo "::warning::Telegram cleanup kept ${kept_comments} tracking comment(s) on issue #${issue_num}: ${failed_ids_total} message ID(s) hit a transient Telegram failure; the next cleanup retries them" >&2
+		echo "::warning::Telegram cleanup kept ${kept_comments} tracking comment(s) on issue #${issue_num}: ${failed_ids_total} message ID(s) hit a transient Telegram failure${skipped_note}; the next cleanup retries them" >&2
 	fi
 	return 0
 }
