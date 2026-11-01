@@ -122,12 +122,13 @@ heal_port_cleanup()
 	if [ -n "${heal_port_worktree_added}" ]
 	then
 		git worktree remove --force "${heal_port_work}/default" >/dev/null 2>&1 || true
-		git worktree prune >/dev/null 2>&1 || true
 	fi
 	if [ -n "${heal_port_work}" ] && [ -d "${heal_port_work}" ]
 	then
 		# Only the temporary directory this script created.
 		rm -rf "${heal_port_work}"
+		# Also drops the entry a partly failed `git worktree add` can leave.
+		git worktree prune >/dev/null 2>&1 || true
 	fi
 }
 trap heal_port_cleanup EXIT
@@ -145,7 +146,10 @@ then
 	heal_port_warn "lookup_failed"
 fi
 heal_port_query='query($owner:String!,$name:String!,$number:Int!,$q:String!){viewer{login} repository(owner:$owner,name:$name){issue(number:$number){number title body lastEditedAt author{login} labels(first:50){nodes{name}}}} search(query:$q,type:ISSUE,first:10){nodes{... on Issue{number body author{login}}}}}'
-if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api graphql \
+# One attempt: gh_retry waits for a rate-limit reset (or 60s for a secondary
+# limit) only before a further attempt, so this cannot outlast the step and job
+# timeouts; any failure takes the lookup_failed warning path.
+if ! GH_RETRY_MAX_ATTEMPTS=1 GH_RETRY_IDEMPOTENT=true gh_retry gh api graphql \
 	-f query="${heal_port_query}" \
 	-f owner="${REPOSITORY%%/*}" \
 	-f name="${REPOSITORY#*/}" \

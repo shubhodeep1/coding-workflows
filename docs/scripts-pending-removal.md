@@ -384,7 +384,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/heal_port_to_default.sh`
 
-- **Introduced in:** PR for #8635 (2026-11-01), Refs #8434
+- **Introduced in:** PR #8636 (2026-11-01), for #8635, Refs #8434
 - **Type:** long-running
 - **Removal trigger:** permanent — review annually. It is the post-merge port check (plan P6 step 2, decision D4) that files a heal issue on the default branch when a heal merged into `stable` still applies there; the "Open heal port issue on the default branch" step of `.github/workflows/issue_pr_status.yml` runs it, in this repository only, behind `WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED`.
 - **Removal preflight checks:**
