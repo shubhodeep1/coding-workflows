@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-01T19:05:49Z",
+  "issue_number": 8635,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=tests/test_changelog_fragment_contract.py:suite; cited_path=.gitattributes, changelog.d/.gitkeep; files_touched=.github/workflows/ci.yml, .github/workflows/issue_pr_status.yml, agents.d/heal-port-to-default.md, changelog.d/heal-port-to-default.md, docs/scripts-pending-removal.md, scripts/heal_port_to_default.sh, scripts/workflow_failure_heal.py, tests/inventory_exemptions.txt, tests/test_heal_port_to_default.py.",
+  "phase": "review_autofix",
+  "pr_number": 8636,
+  "record_id": "lesson_20261101190549_ad77e50936",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".gitattributes, changelog.d/.gitkeep",
+    "tests/test_changelog_fragment_contract.py",
+    ".github/workflows/ci.yml",
+    ".github/workflows/issue_pr_status.yml",
+    "agents.d/heal-port-to-default.md",
+    "changelog.d/heal-port-to-default.md",
+    "docs/scripts-pending-removal.md",
+    "scripts/heal_port_to_default.sh",
+    "scripts/workflow_failure_heal.py",
+    "tests/inventory_exemptions.txt",
+    "tests/test_heal_port_to_default.py"
+  ]
+}
