@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Several merged changes for failure-shape analysis, suspect-commit comparison, runtime trends, and cause grouping touched the shared Python module and often `scripts/workflow_failure_heal_intake.sh`. When changing this subsystem, check whether the intake workflow and fixture-based tests need corresponding updates.",
+  "fingerprint": "242d5bf7c29be3e11d0b421f7ece663542c84ede9ec30d2706ead0f7710177f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41267457717",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41267457717",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8543",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8544",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8559",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8561",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8567",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8560",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8563",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8568"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261101030424_8d41947881",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow-failure-healing features commonly extend the shared `scripts/workflow_failure_heal.py` implementation and intake shell script, with focused fixtures and tests.",
+  "timestamps": {
+    "created_at": "2026-11-01T03:04:24Z",
+    "promoted_at": "2026-11-01T03:05:00Z",
+    "superseded_at": null
+  }
+}
