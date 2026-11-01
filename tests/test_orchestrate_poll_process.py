@@ -29999,6 +29999,20 @@ def test_persist_orch_group_marker_from_an_earlier_episode_does_not_skip_the_pos
 		assert [p.split(" ")[2] for p in posted] == ["repos/owner/repo/issues/11/comments"]
 
 
+def test_persist_orch_group_marker_text_without_comment_opener_does_not_skip_the_post():
+	details = _pog_journal_details({10: [(5 * 3600, _POG_KEY, "1", "fail")], 11: [(3600, _POG_KEY, "2", "fail")]})
+	# A pipeline-login comment that only quotes the marker text (as a journal
+	# note row would) is not the pause comment.
+	recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+	details["11"]["comments"].append({"id": 99, "user": {"login": "pipeline-bot"}, "created_at": recent,
+		"body": f"| UNTRUSTED_DATA: AI_PERSIST_GROUPED_V1 key={_POG_KEY} owner=10 x |"})
+	state = _pog_state(*({"id": f"p{n}", "github_issue": n, "status": "pending"} for n in (10, 11)))
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _out, posted, _starts, _after = _pog_run(Path(tmp), state, details, "true")
+		assert proc.returncode == 0, proc.stderr
+		assert [p.split(" ")[2] for p in posted] == ["repos/owner/repo/issues/11/comments"]
+
+
 def test_persist_orch_group_failed_state_write_posts_nothing_and_pauses_nothing():
 	details = _pog_journal_details({10: [(5 * 3600, _POG_KEY, "1", "fail")], 11: [(3600, _POG_KEY, "2", "fail")]})
 	state = _pog_state(*({"id": f"p{n}", "github_issue": n, "status": "pending"} for n in (10, 11)))

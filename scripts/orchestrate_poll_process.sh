@@ -19852,7 +19852,7 @@ persist_orch_record_merged_pr() {
 # read shared through PERSIST_JOURNAL_LOGIN_CACHE, and one comment write per
 # newly grouped item. Always returns 0.
 persist_orch_group_failures() {
-  local pog_base pog_details pog_out pog_now pog_max pog_tmp pog_issue pog_owner pog_key pog_reason pog_body
+  local pog_base pog_details pog_out pog_now pog_max pog_tmp pog_issue pog_owner pog_key pog_reason pog_body pog_ts
   [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
   if [ "${PERSIST_ORCH_FAILURE_GROUPING_ENABLED:-false}" != "true" ]; then
     jq -e 'any(.waves[]?.issues[]?; type == "object" and (has("grouped_under") or has("persist_group_released_key")))' \
@@ -19975,7 +19975,7 @@ persist_orch_group_failures() {
     # from an earlier episode (older than the failure that regrouped the item)
     # does not count.
     if jq -e --arg n "${pog_issue}" --arg login "${PERSIST_JOURNAL_LOGIN_CACHE}" \
-      --arg m "AI_PERSIST_GROUPED_V1 key=${pog_key} owner=${pog_owner} " --argjson ts "${pog_ts}" \
+      --arg m "<!-- AI_PERSIST_GROUPED_V1 key=${pog_key} owner=${pog_owner} " --argjson ts "${pog_ts}" \
       'any((.[$n].comments? // [])[]?; type == "object" and ((.user.login? // "") == $login) and ((.body // "") | tostring | contains($m))
         and (((.created_at // "") | tostring | (try fromdateiso8601 catch -1)) >= $ts))' \
       "${pog_details}" >/dev/null 2>&1; then

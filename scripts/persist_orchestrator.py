@@ -67,9 +67,9 @@ group --state-file F --journals-json D --now EPOCH --wave-index I [--trusted-log
 	"key"}], "clear_cooldown": [issue], "new": [issue],
 	"newest_failure_ts": {"<issue>": epoch}}`` (``members`` omits the owner;
 	``new`` lists members without ``grouped_under`` before;
-	``newest_failure_ts`` gives each new member's newest journal entry time,
-	so the poller can tell a pause comment of this episode from an older
-	one). A stored ``grouped_under.key`` that is not 12 hex characters is
+	``newest_failure_ts`` gives, for each new member, the newer of its own
+	and its owner's newest journal entry time, so the poller can tell a pause
+	comment of this episode from an older one). A stored ``grouped_under.key`` that is not 12 hex characters is
 	released as ``field_invalid``. Model
 	``note`` text is never read. Logs one ``PERSIST orch_group
 	outcome=<ok|skipped|error> reason=<token> [groups=<n>] [grouped=<n>]
@@ -522,6 +522,7 @@ def group_failures(
 			continue
 		buckets.setdefault(it["key"], []).append(gh)
 	grouped: set[int] = set()
+	episode_ts: dict[int, int] = {}
 	for key in sorted(buckets):
 		members = buckets[key]
 		if len(members) < 2:
@@ -548,7 +549,13 @@ def group_failures(
 			continue
 		grouped.update(kept)
 		result["groups"].append({"key": key, "owner": owner, "members": kept})
-		result["new"].extend(gh for gh in kept if "grouped_under" not in items[gh]["entry"])
+		for gh in kept:
+			if "grouped_under" not in items[gh]["entry"]:
+				result["new"].append(gh)
+				# Episode time: the newer of the member's and the owner's newest
+				# failure, so a regroup after the owner failed again (owner key
+				# K -> K2 -> K) is not hidden by the earlier episode's marker.
+				episode_ts[gh] = max(items[gh]["newest_ts"], items[owner]["newest_ts"])
 	for gh, it in items.items():
 		if "grouped_under" in it["entry"] and gh not in release and gh not in grouped and gh not in held:
 			release[gh] = "owner_changed"
@@ -557,7 +564,7 @@ def group_failures(
 	result["release_cooldown"] = [{"issue": gh, "key": cooldown[gh]} for gh in sorted(cooldown)]
 	result["clear_cooldown"] = sorted(gh for gh in clear if gh not in cooldown)
 	result["new"] = sorted(result["new"])
-	result["newest_failure_ts"] = {str(gh): items[gh]["newest_ts"] for gh in result["new"]}
+	result["newest_failure_ts"] = {str(gh): episode_ts[gh] for gh in result["new"]}
 	return result, journal_seen
 
 

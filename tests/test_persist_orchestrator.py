@@ -636,3 +636,12 @@ def test_group_stored_key_that_is_not_hex12_is_field_invalid(tmp_path, monkeypat
 	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": "not-a-key", "since": GROUP_NOW - 12 * 3600}))
 	out = _group(tmp_path, monkeypatch, state, {})
 	assert out["release_reasons"] == {"11": "field_invalid"} and out["release_cooldown"] == []
+
+
+def test_group_episode_time_takes_the_owner_newest_failure_when_newer(tmp_path, monkeypatch):
+	# Owner 10 failed with K1 again after member 11's newest entry: a regroup
+	# after an owner_key_changed release must not reuse the earlier marker.
+	details = _gdetails({10: [_gentry(5 * 3600, K1, "1"), _gentry(1800, K2, "2"), _gentry(600, K1, "3")], 11: [_gentry(3 * 3600, K1, "4")]})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
+	assert out["groups"] == [{"key": K1, "owner": 10, "members": [11]}]
+	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 600}
