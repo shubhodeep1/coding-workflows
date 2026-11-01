@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-01T10:46:26Z",
+  "issue_number": 8600,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=External GitHub check run (no repository file):1; cited_path=External GitHub check run (run 41297481606, job 124821271276); files_touched=.github/workflows/ci.yml, changelog.d/8600-tg-cleanup-snapshot-retain.md, scripts/tg_helpers.sh, tests/test_tg_helpers_cleanup.py.",
+  "phase": "review_autofix",
+  "pr_number": 8605,
+  "record_id": "lesson_20261101104626_f9d2d2d4f9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "External GitHub check run (run 41297481606, job 124821271276)",
+    "External GitHub check run (no repository file)",
+    ".github/workflows/ci.yml",
+    "changelog.d/8600-tg-cleanup-snapshot-retain.md",
+    "scripts/tg_helpers.sh",
+    "tests/test_tg_helpers_cleanup.py"
+  ]
+}
