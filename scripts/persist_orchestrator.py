@@ -10,13 +10,14 @@ since-note --state-file F --current-wave N [--details-file D] [--trusted-login L
 	Pure: no subprocess, no network, zero API calls. Renders the
 	``## Since this plan was decomposed`` section for a wave-N issue body from
 	the orchestrator state only:
-		* merged items of waves 1..N-1 (issue, ``persist_merged_pr``, safe
-			``files_touched`` paths, at most 10 per item);
-		* judge-added items of waves 1..N-1 (entries without ``title``), any status;
-		* the newest attempt-journal step/outcome (host fields only, never
-			``note``) of an item whose comments are in the per-tick details cache
-			``D`` (``comments_available: true``), parsed by ``attempt_journal.parse``
-			for the pipeline login ``L`` only.
+	- merged items of waves 1..N-1 (issue, ``persist_merged_pr``, safe
+		``files_touched`` paths, at most 10 per item);
+	- judge-added items of waves 1..N-1 (entries the poller marked
+		``persist_judge_added: true`` when the wave judge added them), any status;
+	- the newest attempt-journal step/outcome (host fields only, never
+		``note``) of an item whose comments are in the per-tick details cache
+		``D`` (``comments_available: true``), parsed by ``attempt_journal.parse``
+		for the pipeline login ``L`` only.
 	Issue / PR numbers are plain (``issue 123``), never ``#123``: a ``#N``
 	creates cross-reference timeline events the poller reads to find linked
 	PRs, and risks auto-close phrasing. Every data line goes through
@@ -28,7 +29,8 @@ open-projects --repo R --out O
 	Exactly one REST read through ``gh_api_retry.call(optional=True)`` (honours
 	the rate-limit breaker): open ``ai:orchestrator-tracking`` issues, first page
 	of 50. Pull requests and authors whose ``author_association`` is not
-	OWNER / MEMBER / COLLABORATOR are dropped; at most 20 titles, each without
+	OWNER / MEMBER / COLLABORATOR are dropped; at most 20 titles (titles only,
+	no issue numbers), each without
 	control characters, cut to 120 characters and scrubbed, inside the
 	``=== BEGIN/END UNTRUSTED OTHER OPEN PROJECTS ===`` fence. Any failure
 	writes ``(open projects unavailable: <reason>)`` inside the fence.
@@ -83,6 +85,7 @@ _ID_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 _TOKEN_UNSAFE_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 _MD_PATH_RE = re.compile(r"[A-Za-z0-9._/-]+\.md\b")
+_BLOB_URL_PREFIX_RE = re.compile(r"https?://[^\s/]+/[^\s/]+/[^\s/]+/blob/[^\s/]+/")
 
 
 def log(outcome: str, reason: str, **extra: int) -> None:
@@ -170,7 +173,9 @@ def since_lines(state: Any, current_wave: int, details: Any = None, login: str =
 			if not isinstance(entry, dict):
 				continue
 			status = entry.get("status")
-			judge_added = "title" not in entry
+			# Explicit marker written at the wave-judge additions in
+			# orchestrate_poll_process.sh; state entries never carry a title.
+			judge_added = entry.get("persist_judge_added") is True
 			if status != "merged" and not judge_added:
 				continue
 			gh = _positive_int(entry.get("github_issue"))
@@ -270,7 +275,7 @@ def open_project_lines(payload: Any) -> list[str]:
 		title = item.get("title")
 		if number is None or not isinstance(title, str):
 			continue
-		lines.append(f"- {number}: {_clean_title(title)}")
+		lines.append(f"- {_clean_title(title)}")
 	return lines
 
 
@@ -328,6 +333,8 @@ def plan_path(description: str, repo_root: str | Path) -> str:
 		root = Path(os.path.realpath(repo_root))
 	except (OSError, ValueError):
 		return ""
+	# A GitHub blob URL names the repo-relative path after /blob/<ref>/.
+	description = _BLOB_URL_PREFIX_RE.sub("", description)
 	for match in _MD_PATH_RE.finditer(description):
 		token = match.group(0)
 		while token.startswith("./"):

@@ -29711,5 +29711,26 @@ def test_persist_orch_context_switch_and_staging_in_poller_workflow():
 	assert " persist_budget.py persist_orchestrator.py " in workflow
 
 
+def test_persist_judge_added_marker_is_written_only_at_wave_judge_additions_and_gated():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	marker = '+ (if $pja then {"persist_judge_added": true} else {} end)]'
+	arg = '--argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)"'
+	assert script.count(marker) == 4 and script.count(arg) == 4
+	fixup = _extract_bash_function(script, "create_judge_fixup_issues_from_verdict() {")
+	assert fixup.count(marker) == 2
+	judge_block = script[script.index("      # Create new issues if judge found gaps"):]
+	assert judge_block.count(marker) == 2
+	helper = _extract_bash_function(script, "persist_orch_judge_added_json() {")
+	assert _POS_GUARD in helper
+	for persist, expected in ((None, "false"), ("false", "false"), ("true", "true")):
+		env = {k: v for k, v in os.environ.items() if not k.startswith("PERSIST_")}
+		if persist is not None:
+			env["PERSIST_ORCH_CONTEXT_ENABLED"] = persist
+		harness = "set -euo pipefail\n" + _extract_bash_function(script, "_is_truthy() {") + helper + "persist_orch_judge_added_json\n"
+		proc = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, timeout=60, check=False)
+		assert proc.returncode == 0, proc.stderr
+		assert proc.stdout.strip() == expected, persist
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

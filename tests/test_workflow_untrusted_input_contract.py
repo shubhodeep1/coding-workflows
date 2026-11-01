@@ -923,6 +923,10 @@ def test_orch_context_build_step_is_gated_token_scoped_and_fail_open() -> None:
 	stage = _text_step("orchestrate.yml", "Stage workflow support files")
 	assert re.search(r"(?m)^\s+for f in persist_orchestrator\.py evidence_pack\.py attempt_journal\.py targeted_file_context\.py gh_api_retry\.py; do$", stage)
 	assert "Optional orchestrator-context helper ${f} unavailable" in stage
+	# Staged only with the switch on, so the decomposer workspace is unchanged while it is off.
+	loop_gate = stage.index('          if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then\n            for f in persist_orchestrator.py ')
+	assert loop_gate < stage.index("            done\n          fi\n", loop_gate)
+	assert 'timeout 120 python3 -B scripts/persist_orchestrator.py open-projects' in run
 	assert stage.index("persist_orchestrator.py evidence_pack.py") < stage.index('printf \'%s\\n\' "${_fetched_scripts[@]}" .gitignore')
 
 

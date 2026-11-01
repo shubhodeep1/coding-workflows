@@ -503,19 +503,22 @@ jobs:
           done
 
           # Orchestrator-context helpers (issue #8427, P7): optional, so a support
-          # ref without them never fails decomposition while PERSIST_ORCH_CONTEXT_ENABLED is off.
-          for f in persist_orchestrator.py evidence_pack.py attempt_journal.py targeted_file_context.py gh_api_retry.py; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
-            fi
-            if [ ! -f "${src}" ]; then
-              echo "::notice::Optional orchestrator-context helper ${f} unavailable on ${SCRIPT_REF}; the decomposer prompt carries no persistence context from it."
-              continue
-            fi
-            install -m 0755 "${src}" "scripts/${f}"
-            _fetched_scripts+=("${f}")
-          done
+          # ref without them never fails decomposition; staged only with
+          # PERSIST_ORCH_CONTEXT_ENABLED on, so the workspace is unchanged while it is off.
+          if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then
+            for f in persist_orchestrator.py evidence_pack.py attempt_journal.py targeted_file_context.py gh_api_retry.py; do
+              src=".codex-workflow-src/scripts/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+                src=".codex-workflow-src-main/scripts/${f}"
+              fi
+              if [ ! -f "${src}" ]; then
+                echo "::notice::Optional orchestrator-context helper ${f} unavailable on ${SCRIPT_REF}; the decomposer prompt carries no persistence context from it."
+                continue
+              fi
+              install -m 0755 "${src}" "scripts/${f}"
+              _fetched_scripts+=("${f}")
+            done
+          fi
 
           mkdir -p ai-memory/schemas
           for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
@@ -810,7 +813,7 @@ jobs:
           persist_desc="${RUNTIME_DIR}/persist_description.txt"
           printf '%s\n' "${PROJECT_DESCRIPTION}" > "${persist_desc}" || true
           if [ -f scripts/persist_orchestrator.py ]; then
-            python3 -B scripts/persist_orchestrator.py open-projects --repo "${GITHUB_REPOSITORY}" \
+            timeout 120 python3 -B scripts/persist_orchestrator.py open-projects --repo "${GITHUB_REPOSITORY}" \
               --out "${RUNTIME_DIR}/persist_open_projects.txt" || true
           fi
           if [ -f scripts/evidence_pack.py ]; then
