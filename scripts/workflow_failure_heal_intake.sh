@@ -3376,8 +3376,11 @@ _heal_run_reproduction()
 	fi
 	[[ "${repro_workflow_id}" =~ ^[1-9][0-9]{0,19}$ ]] || repro_workflow_id=""
 	[[ "${repro_before}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || repro_before=""
+	# The handoff stores the branch validated as _heal_scope_suspect_paths does (empty otherwise).
+	local repro_handoff_branch=""
+	[[ "${HEAD_BRANCH:-}" =~ ^[A-Za-z0-9._/-]{1,255}$ ]] && repro_handoff_branch="${HEAD_BRANCH}"
 	if [ -n "${repro_workflow_id}" ] && [ -n "${repro_before}" ] && [ -s "${SUSPECT_SCOPE_HANDOFF_FILE:-}" ] \
-		&& jq -e --arg repo "${SELF_REPO,,}" --arg workflow_id "${repro_workflow_id}" --arg branch "${HEAD_BRANCH:-}" --arg sha "${HEAD_SHA}" \
+		&& jq -e --arg repo "${SELF_REPO,,}" --arg workflow_id "${repro_workflow_id}" --arg branch "${repro_handoff_branch}" --arg sha "${HEAD_SHA}" \
 			'((.repo // "") | ascii_downcase) == $repo and .workflow_id == $workflow_id and .branch == $branch and .failing_sha == $sha and (.last_green | type == "object")' \
 			"${SUSPECT_SCOPE_HANDOFF_FILE}" >/dev/null 2>&1; then
 		# Reuse the suspect-scope step's last-green lookup (P4 handoff, same keys): no call.
