@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8615,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8615\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8624\",\"pr_number\":8624,\"branch\":\"ai/issue-8615\",\"run_id\":\"41307642511\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41307642511\",\"changed_files\":[\"changelog.d/8598-tg-tracking-comment-author-trust.md\",\"scripts/tg_helpers.sh\",\"tests/test_tg_helpers_cleanup.py\",\"tests/test_tracking_comment_cap.py\"]}",
+  "fingerprint": "ceab13854441635dc8d88dc0f0d71d33df0eb26bd8ba53336955012d553dd497",
+  "lineage": {
+    "issue_number": 8615,
+    "parent_ids": [],
+    "pr_number": 8624,
+    "run_id": "41307642511",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41307642511",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8624"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261101131628_5844b2a7ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8615,
+    "level": "run",
+    "pr_number": 8624,
+    "run_id": "41307642511"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8615: https://github.com/shubhodeep1/coding-workflows/pull/8624",
+  "timestamps": {
+    "created_at": "2026-11-01T13:16:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
