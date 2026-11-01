@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:entire file | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The added contract tests do not correctly exercise the new concurrent implementation, causing test failures.\n  WHY: The tests fail to validate the concurrent execution, reaping, and judgment logic introduced in ci.yml (reported as BLOCKER; other reviewers statically verified the assertions match the shipped body).\n- tests/test_gh_api_write_guard.py:test_dispatchable_workflows_match_the_gh_workflow_run_allow_rules and others | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Contract tests for gh_api_write_guard fail after the ci.yml structure change.\n  WHY: The background-task-based implementation in ci.yml is claimed to prevent the guard from validating the step properly (reported as BLOCKER; disputed by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, who found no causal path).\n- tests/test_pr_watch_guard.py:contract test for pr_watch_guard | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The contract test fails to parse the new shell structure in ci.yml.\n  WHY: The test is claimed to expect a sequential step body and to break on the new sf_modules structure (reported as BLOCKER; disputed by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash).\n- tests/test_workflow_checkout_integration_ref_audit.py:workflow checkout audit test | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The audit fails to recognize the new variable-based module paths in the sf_modules array.\n  WHY: The test is claimed to fail to verify ref integrity for the modules, causing a CI failure (reported as MAJOR; disputed by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add contract tests to tests/test_ci_poll_test_sharding.py ... Keep every existing assertion in that file passing.\n  expected_change_site: tests/test_ci_poll_test_sharding.py\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The existing assertions and the new test integration are causing test failures, so the requirement to keep existing assertions passing and implement new ones correctly is not met (reported as BLOCKER).\n- requirement: Register the three new log prefixes.\n  expected_change_site: agents.d/wfopt-2026-09-28-ci-subtest-timing.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: tests/test_agents_fragment_contract.py::test_instructions_point_at_fragments is failing, indicating the fragment is not correctly pointed to or structured for the registry checker (reported as MAJOR).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_poll_test_sharding.py:entire test file integration | severity=BLOCKER | confidence=4\n  PROBLEM: The added contract tests do not correctly exercise the new concurrent implementation, causing test failures.\n  WHY: The tests fail to validate the concurrent execution, reaping, and judgment logic introduced in ci.yml, leading to false negatives and breaking the contract for this step.\n- tests/test_gh_api_write_guard.py:test_dispatchable_workflows_match_the_gh_workflow_run_allow_rules and others | severity=BLOCKER | confidence=4\n  PROBLEM: Contract tests for gh_api_write_guard fail after the ci.yml structure change.\n  WHY: The background-task-based implementation in ci.yml prevents the guard from validating the step properly, breaking security compliance for this step.\n- tests/test_pr_watch_guard.py:contract test for pr_watch_guard | severity=BLOCKER | confidence=4\n  PROBLEM: Contract test fails to parse the new shell structure in ci.yml.\n  WHY: The test expects a sequential step body and breaks on the new sf_modules structure, disabling the watch guard for this CI step.\n- tests/test_workflow_checkout_integration_ref_audit.py:workflow checkout audit test | severity=MAJOR | confidence=4\n  PROBLEM: The audit fails to recognize the new variable-based module paths in sf_modules array.\n  WHY: The test fails to verify ref integrity for the modules, causing a CI failure.\n- TASK_GAP: tests/test_ci_poll_test_sharding.py | severity=BLOCKER | confidence=4\n  Requirement: Add contract tests to tests/test_ci_poll_test_sharding.py ... Keep every existing assertion in that file passing.\n  Expected change site: tests/test_ci_poll_test_sharding.py\n  Evidence of absence: The existing assertions and the new test integration are causing test failures, meaning the requirement to keep existing assertions passing and correctly implement new ones is not met.\n- TASK_GAP: agents.d/wfopt-2026-09-28-ci-subtest-timing.md | severity=MAJOR | confidence=4\n  Requirement: Register the three new log prefixes.\n  Expected change site: agents.d/wfopt-2026-09-28-ci-subtest-timing.md\n  Evidence of absence: tests/test_agents_fragment_contract.py::test_instructions_point_at_fragments is failing, indicating the fragment is not correctly pointed to or structured for the registry checker, meaning the registration requirement is not fully met.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4368ef98305d8b46dc4c54b20651fc9733938aa13272626221decd92219736be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8590,
+    "run_id": "41270479044",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41270479044",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101040721_dcec84df6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8590,
+    "run_id": "41270479044"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T04:07:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
