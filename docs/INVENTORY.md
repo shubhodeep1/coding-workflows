@@ -370,6 +370,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workflow_failure_heal_recovery_scan.sh` — Hourly heal-scope recovery scan: rebuild the report of an open, pipeline-authored heal issue without a scope marker and run the intake on it (issue #7333).
 - `scripts/workflow_failure_heal_pr_reconcile.sh` — When a coding-workflows pull request closes, close the heal PRs stacked on its head branch (source not merged) or move their heal commits onto the source base and re-point them (source merged).
 - `scripts/workflow_failure_heal_report.sh` — Report a human-needed escalation from a consumer (or this repo) to coding-workflows with linked failed runs and the wrapper release pin.
+- `scripts/workflow_failure_heal_verify.sh` — Hourly post-merge verification of closed heal issues (`heal-verify` job, off by default): the first decisive run after the fix merged posts a `held` marker, or reopens the heal with `## Fix did not hold` and escalates a second recurrence (P7, Refs #8434).
 - `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
 - `scripts/workflow_retro_fanout.sh` — Post weekly workflow retros to consumer repositories from the centralized fan-out job.
 - `scripts/workflow_wrapper_refs.py` — Render consumer workflow wrappers with immutable reusable-workflow references.
