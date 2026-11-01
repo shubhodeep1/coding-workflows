@@ -340,6 +340,22 @@ def test_shallow_clone_is_deepened(h: Env) -> None:
 	h.assert_clean(err, repo=clone)
 
 
+def test_shallow_worktree_head_is_deepened(h: Env) -> None:
+	# The implement repro tree is a fetch-depth 1 checkout whose HEAD is newer
+	# than the baseline: the ladder must deepen HEAD too, not only the baseline.
+	(h.src / "tests" / "test_b.py").write_text("def test_y():\n\tassert 1\n", encoding="utf-8")
+	_git(h.src, "commit", "-q", "-am", "later")
+	head = _git(h.src, "rev-parse", "HEAD")
+	clone = h.tmp / "shallow-tree"
+	_git(h.tmp, "clone", "-q", "--depth", "1", "--no-local", f"file://{h.src}", str(clone))
+	assert _git(clone, "rev-parse", "--is-shallow-repository") == "true"
+	h.gate(_gate("fail", failures=[_fail()]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x"), "--worktree", str(clone), sha=None,
+		baseline=h.failing, repo=clone)
+	assert "phase=fetch outcome=ok depth=50" in err
+	assert (data["status"], data["failing_at"], data["passing_at"]) == ("reproduced", head, h.failing)
+
+
 def test_empty_list_is_no_tests(h: Env) -> None:
 	h.gate(_gate("fail", failures=[_fail()]))
 	data, err = h.run(h.tests_file("# comment only", ""))
@@ -386,13 +402,21 @@ def test_whole_list_rejection_carries_gate_reason(h: Env) -> None:
 	h.assert_clean(err)
 
 
-def test_inherited_unit_keeps_pre_existing_for_unparsed_names(h: Env) -> None:
-	# Inherited entries carry no tail, so a missing name is not proof of a pass.
+def test_inherited_unit_keeps_pre_existing_only_for_parsed_names(h: Env) -> None:
+	# Inherited entries carry no tail: a missing name proves neither a pass nor
+	# a failure, so only the parsed name counts as pre_existing.
 	h.gate(_gate("pass", inherited=[{"test": "tests/test_a.py", "file": "tests/test_a.py",
 		"names": ["tests/test_a.py::test_other"]}]))
 	data, err = h.run(h.tests_file("tests/test_a.py::test_x", "tests/test_a.py::test_other"))
 	assert [(t["status"], t["reason"]) for t in data["tests"]] == [
-		("not_reproduced", "pre_existing"), ("not_reproduced", "pre_existing")]
+		("unverified", "names_incomplete"), ("not_reproduced", "pre_existing")]
+	h.assert_clean(err)
+
+
+def test_named_entry_in_failed_unit_without_names_is_unverified(h: Env) -> None:
+	h.gate(_gate("fail", failures=[_fail(names=[])]))
+	data, err = h.run(h.tests_file("tests/test_a.py::test_x"))
+	assert (data["status"], data["reason"]) == ("unverified", "names_incomplete")
 	h.assert_clean(err)
 
 

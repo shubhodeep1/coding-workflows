@@ -101,7 +101,11 @@ if method == "POST" and route.endswith("/comments"):
 		fail()
 	body_arg = next(a for a in args if a.startswith("body=@"))
 	state.setdefault("comments", []).append({"issue": number, "body": open(body_arg[len("body=@"):]).read()})
+	if "comment_stored" in fails:
+		fail()
 	out("{}")
+if method == "GET" and route.endswith("/comments") and "list_comments" in state:
+	out([{"user": {"login": state["list_comments"]}, "body": c["body"]} for c in state.get("comments", []) if c["issue"] == number])
 if method == "POST" and route.endswith("/labels"):
 	if "label" in fails:
 		fail()
@@ -509,6 +513,27 @@ def test_comment_failure_after_reopen_closes_the_heal_again(tmp_path: Path) -> N
 	assert "outcome=error issue=10 reason=comment_failed reclosed=true" in result.stdout
 	assert "outcome=recurred" not in result.stdout
 	assert state.get("labels") is None and curl == []
+
+
+def test_recurred_comment_stored_despite_errors_keeps_the_heal_open(tmp_path: Path) -> None:
+	state_in = _state([_closed(10)], runs=[_run(2, MERGE_SHA, "failure", 10)], jobs={"2": _jobs()},
+		fail=["comment_stored"])
+	state_in["list_comments"] = LOGIN
+	result, state, _ = _execute(tmp_path, state_in)
+	assert result.returncode == 0, result.stderr
+	assert state["reopened"] == [10]
+	assert state.get("reclosed") is None
+	assert "outcome=recurred issue=10 run=2" in result.stdout
+
+
+def test_recurred_marker_by_another_login_still_recloses(tmp_path: Path) -> None:
+	state_in = _state([_closed(10)], runs=[_run(2, MERGE_SHA, "failure", 10)], jobs={"2": _jobs()},
+		fail=["comment_stored"])
+	state_in["list_comments"] = "someone-else"
+	result, state, _ = _execute(tmp_path, state_in)
+	assert result.returncode == 0, result.stderr
+	assert state["reclosed"] == [[10, ["state=closed", "state_reason=completed"]]]
+	assert "outcome=error issue=10 reason=comment_failed reclosed=true" in result.stdout
 
 
 def test_heal_without_a_recorded_step_is_skipped(tmp_path: Path) -> None:

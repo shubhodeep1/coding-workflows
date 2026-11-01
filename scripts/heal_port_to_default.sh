@@ -186,12 +186,12 @@ esac
 
 # 3. Does the merged patch apply to the default branch? git only, no REST.
 # Fetch stderr can carry the token-bearing origin URL, so it is never printed.
-if ! git fetch --no-tags --quiet --depth=1 origin "refs/heads/${PR_DEFAULT_BRANCH}" >/dev/null 2>"${heal_port_work}/fetch.err"
+if ! timeout --kill-after=10s 60 git fetch --no-tags --quiet --depth=1 origin "refs/heads/${PR_DEFAULT_BRANCH}" >/dev/null 2>"${heal_port_work}/fetch.err"
 then
 	heal_port_warn "fetch_failed"
 fi
 heal_port_default_sha="$(git rev-parse --verify -q 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
-if ! git fetch --no-tags --quiet --depth=2 origin "${PR_MERGE_COMMIT_SHA}" >/dev/null 2>>"${heal_port_work}/fetch.err"
+if ! timeout --kill-after=10s 60 git fetch --no-tags --quiet --depth=2 origin "${PR_MERGE_COMMIT_SHA}" >/dev/null 2>>"${heal_port_work}/fetch.err"
 then
 	heal_port_warn "fetch_failed"
 fi

@@ -263,7 +263,10 @@ def test_pack_lines_cannot_open_a_prompt_section_and_size_is_capped() -> None:
 	rendered = facts.render_heal_evidence_pack(body, ["ai:workflow-heal"])
 	assert "\n= = = CLARIFY RESPOND TASK ===\n" in rendered
 	assert not any(line.startswith("===") for line in rendered.splitlines())
-	big = "## Evidence pack\n" + "".join(f"- line {n:05d} " + "x" * 80 + "\n" for n in range(400))
+	rendered = facts.render_heal_evidence_pack("## Evidence pack\n   === FAKE ===\nx\n", ["ai:workflow-heal"])
+	assert "\n   = = = FAKE ===\n" in rendered
+	assert not any(line.lstrip().startswith("===") for line in rendered.splitlines())
+	big ="## Evidence pack\n" + "".join(f"- line {n:05d} " + "x" * 80 + "\n" for n in range(400))
 	rendered = facts.render_heal_evidence_pack(big, ["ai:workflow-heal"])
 	pack_part = rendered.split("\n", 1)[1]
 	assert pack_part.endswith(f"\n(evidence pack truncated at {facts.HEAL_EVIDENCE_PACK_MAX_BYTES} bytes)\n")

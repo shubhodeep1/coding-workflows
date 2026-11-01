@@ -336,6 +336,7 @@ def cmd_select(list_file, out_file):
 			"prior_recurred": prior_recurred,
 			"lineage": lineage,
 			"closed_at": node["closedAt"],
+			"viewer": viewer,
 		})
 	candidates.sort(key=lambda item: (item["closed_at"], item["number"]))
 	with open(out_file, "w", encoding="utf-8") as handle:
@@ -433,6 +434,22 @@ _post_comment()
 	local number="$1" body_file="$2"
 	TOTAL_WRITES=$((TOTAL_WRITES + 1))
 	gh_retry gh api --method POST "repos/${SELF_REPO}/issues/${number}/comments" -F body=@"${body_file}" >/dev/null 2>&1
+}
+
+# A POST that errored can still have been stored. Read the comments posted
+# since the merge once (TOTAL_READS) and look for this run's recurred marker
+# by the pipeline login; any read error counts as not landed.
+_recurred_marker_landed()
+{
+	local number="$1" since="$2" viewer="$3" run_id="$4" since_enc
+	[ -n "${viewer}" ] || return 1
+	since_enc="$(jq -rn --arg value "${since}" '$value | @uri')" || return 1
+	TOTAL_READS=$((TOTAL_READS + 1))
+	gh_retry gh api "repos/${SELF_REPO}/issues/${number}/comments?since=${since_enc}&per_page=100" 2>/dev/null \
+		| jq -e --arg viewer "${viewer}" --arg marker "<!-- workflow-failure-heal:verified:v1 outcome=recurred run=${run_id} -->" \
+			'[.[]? | select(((.user.login // "") | ascii_downcase) == ($viewer | ascii_downcase))
+				| select(((.body // "") | sub("\\s+$"; "") | split("\n") | last | sub("^\\s+"; "")) == $marker)] | length > 0' \
+			>/dev/null 2>&1
 }
 
 _verify_one()
@@ -623,9 +640,12 @@ _verify_one()
 	fi
 	local run_url="https://github.com/${SELF_REPO}/actions/runs/${picked_id}"
 	local heal_url="https://github.com/${SELF_REPO}/issues/${number}"
-	if ! _post_comment "${number}" "${comment_file}" && ! _post_comment "${number}" "${comment_file}"; then
+	if ! _post_comment "${number}" "${comment_file}" && ! _post_comment "${number}" "${comment_file}" \
+		&& ! _recurred_marker_landed "${number}" "${merged_at}" "$(jq -r '.viewer // ""' "${cand_file}")" "${picked_id}"; then
 		# Later ticks list closed heals only, so close the heal again (as
-		# completed) and let the next tick redo the whole check.
+		# completed) and let the next tick redo the whole check. A marker that
+		# landed despite the error would make that tick skip the heal as
+		# already verified, so it keeps the heal open instead (checked above).
 		TOTAL_WRITES=$((TOTAL_WRITES + 1))
 		if gh_retry gh api --method PATCH "repos/${SELF_REPO}/issues/${number}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
 			log "outcome=error issue=${number} reason=comment_failed reclosed=true"

@@ -135,7 +135,11 @@ def render_heal_evidence_pack(body: str, labels: list[str]) -> str:
 	if not "".join(pack_lines[1:]).strip():
 		return ""
 	# A pack line must not open a fake prompt section such as `=== ... ===`.
-	pack = "\n".join("= = =" + line[3:] if line.startswith("===") else line for line in pack_lines).rstrip("\n")
+	# Indented look-alikes too: the indentation is kept, only the `===` changes.
+	pack = "\n".join(
+		line[: len(line) - len(line.lstrip())] + "= = =" + line.lstrip()[3:] if line.lstrip().startswith("===") else line
+		for line in pack_lines
+	).rstrip("\n")
 	encoded = pack.encode("utf-8")
 	if len(encoded) > HEAL_EVIDENCE_PACK_MAX_BYTES:
 		cut = encoded[:HEAL_EVIDENCE_PACK_MAX_BYTES].decode("utf-8", errors="ignore")

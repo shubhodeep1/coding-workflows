@@ -217,12 +217,25 @@ def map_entry(data, number, test_path, name):
 						return "unverified", "names_incomplete"
 					# The named test passed at the failing SHA (a sibling failed).
 					return "not_reproduced", "passes_at_failing_sha"
+			if name is not None and not names:
+				# A listed name in a failed unit with no parsed names: the unit
+				# failed, but nothing shows this test did.
+				return "unverified", "names_incomplete"
 			return "reproduced", "regression"
 	for item in items(data, "inherited"):
 		if item.get("test") == test_path:
-			# Inherited entries carry no output tail, so a name missing from
-			# their parsed names proves nothing; keep the unit-level verdict.
-			return "not_reproduced", "pre_existing"
+			if name is None:
+				return "not_reproduced", "pre_existing"
+			# Inherited entries carry no output tail, so only a listed name the
+			# gate parsed proves this test failed on both trees; otherwise the
+			# unit-level failure proves nothing about it.
+			names = [n for n in (item.get("names") or []) if isinstance(n, str)]
+			node = f"{test_path}::{name}"
+			short = name.split("::")[-1]
+			matched = any(n == node or n.startswith(node + "[") for n in names) or (
+				"::" not in name and names and not any("::" in n for n in names)
+				and any(n == short or n.startswith(short + "[") for n in names))
+			return ("not_reproduced", "pre_existing") if matched else ("unverified", "names_incomplete")
 	ran = data.get("ran") if isinstance(data.get("ran"), list) else []
 	if test_path in ran:
 		return "not_reproduced", "passes_at_failing_sha"
@@ -431,11 +444,26 @@ heal_repro_inner()
 			fetch_args=(fetch --quiet --no-tags)
 			[ "${depth}" = full ] || fetch_args+=(--depth "${depth}")
 			fetch_args+=(-- "${heal_repro_remote}")
-			[ -n "${heal_repro_worktree}" ] || fetch_args+=("${heal_repro_sha}")
+			if [ -z "${heal_repro_worktree}" ]; then
+				fetch_args+=("${heal_repro_sha}")
+			elif [[ "${tested}" =~ ^[0-9a-f]{40}$ ]]; then
+				# A shallow worktree HEAD (fetch-depth 1) has no parents, so
+				# deepen it too, or no merge-base can ever be found.
+				fetch_args+=("${tested}")
+			fi
 			fetch_args+=("${heal_repro_baseline}")
 			rc=0
 			timeout --kill-after=10s 120 git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "${heal_repro_repo}" \
 				"${fetch_args[@]}" </dev/null >/dev/null 2>&1 || rc=$?
+			if [ "${rc}" -ne 0 ] && [ -n "${heal_repro_worktree}" ] && [[ "${tested}" =~ ^[0-9a-f]{40}$ ]]; then
+				# The worktree HEAD may exist only locally; fetch the baseline alone.
+				rc=0
+				fetch_args=(fetch --quiet --no-tags)
+				[ "${depth}" = full ] || fetch_args+=(--depth "${depth}")
+				fetch_args+=(-- "${heal_repro_remote}" "${heal_repro_baseline}")
+				timeout --kill-after=10s 120 git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "${heal_repro_repo}" \
+					"${fetch_args[@]}" </dev/null >/dev/null 2>&1 || rc=$?
+			fi
 			if [ "${rc}" -eq 0 ]; then
 				heal_repro_log "phase=fetch outcome=ok depth=${depth}"
 			else
