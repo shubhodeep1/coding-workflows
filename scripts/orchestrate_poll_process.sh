@@ -19802,7 +19802,11 @@ persist_orch_judge_added_json() {
 persist_orch_record_merged_pr() {
   local porm_wi="${1:-}" porm_issue="${2:-}" porm_pr="${3:-}"
   [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] || return 0
-  [[ "${porm_wi}" =~ ^[0-9]+$ ]] && [[ "${porm_issue}" =~ ^[0-9]+$ ]] && [[ "${porm_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
+  [[ "${porm_wi}" =~ ^[0-9]+$ ]] && [[ "${porm_issue}" =~ ^[0-9]+$ ]] || return 0
+  if ! [[ "${porm_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "PERSIST orch_context outcome=skipped reason=pr_unknown issue=${porm_issue}" >&2
+    return 0
+  fi
   [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
   if jq -e --argjson wi "${porm_wi}" --arg inum "${porm_issue}" \
     'any(.waves[$wi].issues[]; (.github_issue | tostring) == $inum and has("persist_merged_pr"))' "${STATE_FILE}" >/dev/null 2>&1; then
@@ -27626,10 +27630,10 @@ The poller will resume processing on the next cycle."
             fi
             _pom_bws_pr="${_bws_pr}"
             unset _bws_pr
-          elif [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then
-            # persist_merged_pr (issue #8427, P7): one lookup, only with the switch on.
-            _pom_bws_pr="$(_subissue_closing_pr_number "${pw_inum}" 2>/dev/null || echo "")"
           fi
+          # persist_merged_pr (issue #8427, P7): reuses the lookup above only; no
+          # integration branch means no PR number here (no new API call), so the
+          # since-note renders "PR unknown" for this item.
           unset _bws_integ
           persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${_pom_bws_pr}"
           unset _pom_bws_pr

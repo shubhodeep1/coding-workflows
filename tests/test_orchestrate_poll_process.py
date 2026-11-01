@@ -29739,6 +29739,8 @@ def test_persist_orch_record_merged_pr_covers_backward_scan_merges():
 	# Both prior-wave backward-scan merge paths call it; the ready-to-merge path reuses PW_PR.
 	assert script.count('persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${_pom_bws_pr}"') == 1
 	assert script.count('persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${PW_PR}"') == 1
+	# No new API lookup for a project without an integration branch (P7 zero-new-calls budget).
+	assert '_pom_bws_pr="$(_subissue_closing_pr_number' not in script
 	issues = [
 		{"id": "a", "github_issue": 12, "status": "merged"},
 		{"id": "b", "github_issue": 13, "status": "merged", "persist_merged_pr": 99},
@@ -29765,6 +29767,7 @@ def test_persist_orch_record_merged_pr_covers_backward_scan_merges():
 				assert f"PERSIST orch_context outcome=recorded issue=12 pr={expected}" in proc.stderr
 			else:
 				assert "outcome=recorded" not in proc.stderr
+			assert ("reason=pr_unknown issue=12" in proc.stderr) == (persist == "true" and pr == ""), (persist, issue, pr)
 
 
 if __name__ == "__main__":

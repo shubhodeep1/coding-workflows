@@ -224,7 +224,7 @@ def test_four_kib_cap_cuts_at_item_boundaries_with_a_trailer(tmp_path):
 	assert trailer
 	shown = [line for line in lines if line.startswith("- `p")]
 	assert len(shown) + int(trailer.group(1)) == 40
-	assert all(line.endswith(".py`") or line.endswith("more") for line in shown)
+	assert all(line.endswith((".py`", "more")) for line in shown)
 
 
 def test_render_since_fits_without_trailer_when_small():
