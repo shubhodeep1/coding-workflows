@@ -296,7 +296,8 @@ _tg_valid_phase()
 # A resolved login is lowercased and cached in _TG_TRACKING_AUTHOR_LOGIN
 # for the rest of the process. On any failure (transport, 403 for an
 # installation token, non-JSON, missing or malformed login) the result is
-# "github-actions[bot]", nothing is cached (a later call retries) and one
+# "github-actions[bot]", the fallback is cached in
+# _TG_TRACKING_AUTHOR_FALLBACK (later calls skip the lookup) and one
 # ::warning:: is printed. Never logs the token or the response body.
 # Usage: _tg_tracking_author_login; login="${_TG_TRACKING_AUTHOR_CURRENT}"
 # ---------------------------------------------------------------
@@ -304,6 +305,10 @@ _tg_tracking_author_login()
 {
 	if [ -n "${_TG_TRACKING_AUTHOR_LOGIN:-}" ]; then
 		_TG_TRACKING_AUTHOR_CURRENT="${_TG_TRACKING_AUTHOR_LOGIN}"
+		return 0
+	fi
+	if [ "${_TG_TRACKING_AUTHOR_FALLBACK:-}" = "1" ]; then
+		_TG_TRACKING_AUTHOR_CURRENT="github-actions[bot]"
 		return 0
 	fi
 	local user_json="" login="" attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
@@ -326,6 +331,7 @@ _tg_tracking_author_login()
 		return 0
 	fi
 	echo "::warning::Telegram tracking: could not resolve the GH_TOKEN identity; only github-actions[bot] tracking comments are trusted" >&2
+	_TG_TRACKING_AUTHOR_FALLBACK=1
 	_TG_TRACKING_AUTHOR_CURRENT="github-actions[bot]"
 	return 0
 }

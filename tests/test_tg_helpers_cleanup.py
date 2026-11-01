@@ -439,3 +439,10 @@ def test_invalid_phase_makes_no_api_calls(tmp_path: Path, phase: str) -> None:
 	result, calls = _run(tmp_path, f"tg_cleanup_phase_msgs 42 '{phase}'; tg_store_phase_msg_id 42 '{phase}' 5", {})
 	assert calls == []
 	assert "Invalid Telegram tracking phase" in result.stderr
+
+
+def test_unresolved_identity_is_looked_up_once_per_process(tmp_path: Path) -> None:
+	pages = {1: [_comment(1, "<!-- tg_phase:plan:21 -->", ACTIONS_BOT)]}
+	result, calls = _run(tmp_path, "tg_cleanup_phase_msgs 42 plan; tg_cleanup_msgs 42", pages, user_mode="403")
+	assert sum(1 for c in calls if c.startswith("GET user")) <= 2
+	assert result.stderr.count("could not resolve the GH_TOKEN identity") == 1
