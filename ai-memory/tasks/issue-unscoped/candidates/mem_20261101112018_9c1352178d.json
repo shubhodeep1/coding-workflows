@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:1694,1740-1746,1757-1760 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: A Claude attempt that exits rc=75 is switched to CLARIFY_ENGINE=\"codex\" with rc=0 before the emit gate runs, so no CLARIFY_ENGINE_ATTEMPT_FAILED line carries that attempt's pool cause, and later lines read pool_*=unknown.\n  WHY: The heal evidence loses the Claude-side cause, and the comment at 1650-1651 says each failed attempt prints such a line. All reviewers rated this NIT (diagnostic only). Suggested fix: call `_clarify_emit_attempt_failed 75 nonzero_exit` before the engine switch.\n- .github/workflows/clarify.yml:1662,1671-1687,1727,1697 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: If tee outlives the bounded 10-second wait, the next attempt's truncation at 1727 races with it, and the grep for the CLAUDE_POOL line can pick a stale or overwritten pool line.\n  WHY: Only the diagnostic pool fields could be wrong, and the precondition is unlikely. Both reviewers rated this NIT. Sonnet-5_5 considered the same scenario and chose not to report it.\n- scripts/workflow_failure_heal.py:3157-3161,563-568 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: _ENGINE_LEAD_RE does not normalise `engine=Claude` or `engine=Codex` on the new CLARIFY_ENGINE_ATTEMPT_FAILED line, so the `*_FAILED` signature bucket produces different error_signature values per engine.\n  WHY: Cross-engine dedup of heal lineage may split. Reviewers rated this NIT, and it is reached only when no `::error::` line exists. minimax gave confidence 3, glm gave 2.\n- .github/workflows/clarify.yml:1662,1720,1727 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The stderr capture helper does not verify that clarify_attempt_stderr_file under ${RUNTIME_DIR} is writable, so a misconfigured runtime dir can silently produce pool_*=unknown.\n  WHY: The diagnostic line would show the failure mode this change was meant to fix. Rated NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/clarify.yml:1694,1740-1746,1757-1760 | severity=NIT | confidence=3\n  PROBLEM: An rc=75 Claude attempt switches CLARIFY_ENGINE to codex and sets rc=0 before the emit gate, so pool fields read `unknown` and no kept line carries the Claude cause.\n  WHY: Diagnostic only and documented as designed. Optional fix: emit `_clarify_emit_attempt_failed 75 nonzero_exit` before the switch.\n- HARDENING_SUGGESTIONS: .github/workflows/clarify.yml lines 1740-1746, call `_clarify_emit_attempt_failed 75 nonzero_exit || true` before the engine switch (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/clarify.yml:1650-1651,1740-1746 | severity=NIT | confidence=4\n  PROBLEM: When the Claude path exits 75, the loop sets CLARIFY_ENGINE=\"codex\" and rc=0 before the failure branches, so that attempt emits no CLARIFY_ENGINE_ATTEMPT_FAILED line, contrary to the block comment.\n  WHY: The Claude-side cause is unreachable through the new heal-evidence path, and the helper docstring misrepresents the behaviour.\n- scripts/workflow_failure_heal.py:3157-3161,563-568 | severity=NIT | confidence=3\n  PROBLEM: _ENGINE_LEAD_RE normalises the engine word only after workflow-command prefixes, so `engine=Claude` on the new line is left untouched and the signature differs from `engine=Codex`.\n  WHY: Cross-engine dedup of the lineage breaks when bucket 1 is the first matching bucket.\n- .github/workflows/clarify.yml:1671-1687,1727 | severity=NIT | confidence=2\n  PROBLEM: If tee outlives the 10-second bounded wait, the next attempt's truncation races with it and a stale CLAUDE_POOL line can be picked by `tail -n 1`.\n  WHY: The heal evidence could carry the wrong pool_role, pool_outcome or pool_reason, while the step itself still completes correctly.\n- .github/workflows/clarify.yml:1662,1720 | severity=NIT | confidence=2\n  PROBLEM: The helper does not verify that clarify_attempt_stderr_file is a writable regular file, and an empty or invalid ${RUNTIME_DIR} could send the capture to the wrong place.\n  WHY: Every failed Claude attempt would then emit pool_*=unknown.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml:1694,1740-1745 | severity=NIT | confidence=4\n  PROBLEM: When a Claude attempt exits 75, the workflow switches CLARIFY_ENGINE to codex before emitting a failure line, so the emitter skips reading the captured Claude stderr.\n  WHY: If Codex then fails, the retained lines show only Codex failures with unknown pool fields, and the Claude cause is omitted from heal evidence.\n- HARDENING_SUGGESTIONS: .github/workflows/clarify.yml 1740-1745, emit a failure line for the Claude attempt before setting CLARIFY_ENGINE=\"codex\" (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/clarify.yml:1740-1746,1694,1757-1760 | severity=NIT | confidence=4\n  PROBLEM: A Claude attempt that exits 75 is switched to Codex with rc=0 before the emit gate, so no CLARIFY_ENGINE_ATTEMPT_FAILED line is printed for it, and later lines read pool_*=unknown.\n  WHY: The Claude-side cause is lost from heal evidence, because the raw stderr line falls outside the 400-line tail. This is diagnostic only. Fix: call `_clarify_emit_attempt_failed 75 nonzero_exit` before the switch.\n- .github/workflows/clarify.yml:1662,1671-1686,1727,1697 | severity=NIT | confidence=2\n  PROBLEM: If tee is alive after the bounded 10-second wait, the next attempt's truncation races with it and the grep can select a stale or overwritten pool line.\n  WHY: Only the diagnostic pool fields can be stale, and the precondition is unlikely.\n- .github/workflows/clarify.yml:1715 with scripts/workflow_failure_heal.py:3157-3161,3181-3195 | severity=NIT | confidence=2\n  PROBLEM: _ENGINE_LEAD_RE does not normalise `engine=Claude` or `engine=Codex` on the new line, so the `*_FAILED` bucket can yield different signatures per engine.\n  WHY: Bucket 2 is reached only when the log has no `::error::` line, so the split is rare and diagnostic only.\n- HARDENING_SUGGESTIONS: .github/workflows/clarify.yml 1740-1746, call `_clarify_emit_attempt_failed 75 nonzero_exit` before `CLARIFY_ENGINE=\"codex\"` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b958154cbef80cb4e78a7f8bde4242a391580f94f1b2a43b9d90a12a8dd6d6c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8610,
+    "run_id": "41298985589",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41298985589",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101112018_9c1352178d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8610,
+    "run_id": "41298985589"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T11:20:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
