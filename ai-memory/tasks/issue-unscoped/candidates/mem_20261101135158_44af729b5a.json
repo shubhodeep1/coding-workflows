@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "For changes to repository automation scripts or workflows, check the matching `changelog.d/` entry as part of the implementation. When adding or removing scripts, also check whether `docs/INVENTORY.md` or `docs/scripts-pending-removal.md` needs updating.",
+  "fingerprint": "5e468a51212c882579cba904fae1184e78ba908591bfc8c846d256241b74767f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41312662292",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41312662292",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8596",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8599",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8600",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8601",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8612",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8597",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8603",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8605",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8607",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8614"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261101135158_44af729b5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Operational workflow and script changes commonly include a changelog entry.",
+  "timestamps": {
+    "created_at": "2026-11-01T13:51:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
