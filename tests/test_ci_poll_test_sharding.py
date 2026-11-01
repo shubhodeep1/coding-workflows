@@ -2909,5 +2909,204 @@ class PromoteCycleStepContractTest(unittest.TestCase):
 		self.assertNotIn("shard 3", result.stdout)
 
 
+
+SINGLE_FILE_STEP_ARRAY_RE = re.compile(r"^sf_modules=\((?P<mods>[^)]*)\)$", re.MULTILINE)
+SINGLE_FILE_STEP_CLOCK_RE = re.compile(r"^sf_now_ms\(\) \{[^\n]*\}$", re.MULTILINE)
+SINGLE_FILE_STEP_TRAP_RE = re.compile(r"""trap '[^']*kill "\$\{sf_heartbeat_pid\}"[^']*' EXIT""")
+# A fake module for the whole-body run: it records its start, waits up to
+# 10s until all three fakes have started, records how many it saw, then
+# exits with the chosen code. Seeing 3 proves the modules overlapped,
+# with no timing threshold.
+SINGLE_FILE_FAKE_MODULE = """import pathlib
+import sys
+import time
+
+markers = pathlib.Path({markers!r})
+markers.joinpath("started_{n}").write_text("1")
+deadline = time.monotonic() + 10
+while time.monotonic() < deadline and len(list(markers.glob("started_*"))) < 3:
+	time.sleep(0.05)
+markers.joinpath("saw_{n}").write_text(str(len(list(markers.glob("started_*")))))
+time.sleep(0.8)
+print("::error::forged {n}" if {rc} else "ok {n}")
+sys.exit({rc})
+"""
+
+
+def run_single_file_step_judge(step_run: str, files: dict[int, dict[str, str]]) -> subprocess.CompletedProcess:
+	"""Run the single-file step's judgment part against fake module files.
+
+	`files` maps a module index to the files it left (`log`, `rc`,
+	`start_ms`, `end_ms`). The cut starts after the reap loop and ends at
+	the final exit, so the shipped shell is exercised, pointed at a temp dir.
+	"""
+	start = step_run.index("sf_failed=()")
+	end = step_run.index("\nfi\n", step_run.index("single-file module tests failed")) + len("\nfi\n")
+	array_line = SINGLE_FILE_STEP_ARRAY_RE.search(step_run).group(0)
+	clock_line = SINGLE_FILE_STEP_CLOCK_RE.search(step_run).group(0)
+	with tempfile.TemporaryDirectory(prefix="test_sf_judge_") as tmp:
+		for index, module_files in files.items():
+			for suffix, content in module_files.items():
+				Path(tmp, f"single_file_step_{index}.{suffix}").write_text(content, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/single_file_step_", f"{tmp}/single_file_step_")
+		return subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{array_line}\n{clock_line}\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+
+def run_single_file_step_body(step_run: str, fake_modules: list[str], tmp: str) -> subprocess.CompletedProcess:
+	"""Run the whole single-file step body with fake modules.
+
+	The module array points at `fake_modules`, temp files go to `tmp`, and
+	the 30s heartbeat interval becomes 0.2s. Everything else is the shipped
+	shell, run the way GitHub runs a bash step.
+	"""
+	array_line = SINGLE_FILE_STEP_ARRAY_RE.search(step_run).group(0)
+	script = step_run.replace(array_line, "sf_modules=(" + " ".join(fake_modules) + ")")
+	script = script.replace("/tmp/single_file_step_", f"{tmp}/single_file_step_")
+	if "sleep 30 " not in script:
+		raise AssertionError("heartbeat interval `sleep 30 ` not found in the single-file step body")
+	script = script.replace("sleep 30 ", "sleep 0.2 ")
+	return subprocess.run(
+		["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=120,
+	)
+
+
+class SingleFileModulesConcurrencyContractTest(unittest.TestCase):
+	"""The group-3 single-file step runs its three modules concurrently.
+
+	Workflow-optimization recommendation Speed 1 / Reliability 1 / Cost 1
+	(2026-09-28): the ledger module waits for its 120s default emit bound,
+	so the modules now overlap. Each must still run once, every process is
+	reaped before any is judged, a failing module or a missing or
+	non-numeric rc fails the step, and CI_SUBTEST_START/END/HEARTBEAT lines
+	time the modules. The heartbeat loop is killed by an EXIT trap.
+	"""
+
+	def setUp(self) -> None:
+		self.step = poll_job_step(SINGLE_FILE_MODULES_STEP)
+		self.run = self.step["run"]
+
+	def green(self) -> dict[int, dict[str, str]]:
+		return {
+			n: {"log": f"ok {n}\n", "rc": "0\n", "start_ms": "1000\n", "end_ms": f"{3500 + n}\n"}
+			for n in range(3)
+		}
+
+	def test_step_keeps_name_and_group_three_guard(self) -> None:
+		self.assertEqual(self.step["if"], "strategy.job-index == 3")
+		self.assertIn(SINGLE_FILE_MODULES_STEP, POLL_GROUP_THREE_8472_REMAINING_STEPS)
+
+	def test_module_array_matches_the_module_table(self) -> None:
+		array = SINGLE_FILE_STEP_ARRAY_RE.search(self.run)
+		self.assertIsNotNone(array)
+		self.assertEqual(array.group("mods").split(), list(SINGLE_FILE_MODULES))
+
+	def test_modules_launch_in_the_background(self) -> None:
+		self.assertIn('PYTHONDONTWRITEBYTECODE=1 python3 "${sf_module}"', self.run)
+		self.assertIn(") &", self.run)
+		self.assertIn('sf_pids+=("$!")', self.run)
+		for line in self.run.splitlines():
+			with self.subTest(line=line):
+				self.assertFalse(line.strip().startswith("PYTHONDONTWRITEBYTECODE=1 python3 tests/"))
+
+	def test_stale_files_removed_before_launch(self) -> None:
+		self.assertLess(self.run.index("rm -f /tmp/single_file_step_"), self.run.index(") &"))
+
+	def test_every_process_is_reaped_before_any_is_judged(self) -> None:
+		reap = self.run.index('wait "${sf_pid}" || true')
+		self.assertLess(reap, self.run.index("sf_failed=()"))
+		self.assertLess(reap, self.run.index('.rc" 2>/dev/null'))
+
+	def test_structured_subtest_lines(self) -> None:
+		self.assertIn("CI_SUBTEST_START subtest=${sf_module}", self.run)
+		self.assertRegex(self.run, r"CI_SUBTEST_END subtest=\$\{sf_module\} elapsed_ms=\S+ rc=\$\{sf_rc\}")
+		self.assertRegex(self.run, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=")
+		self.assertIn("sleep 30 ", self.run)
+
+	def test_heartbeat_is_killed_by_an_exit_trap(self) -> None:
+		trap = SINGLE_FILE_STEP_TRAP_RE.search(self.run)
+		self.assertIsNotNone(trap)
+		self.assertNotIn("exit", trap.group(0).replace(" EXIT", ""))
+		self.assertLess(trap.start(), self.run.index('wait "${sf_pid}"'))
+
+	def test_all_green_passes(self) -> None:
+		result = run_single_file_step_judge(self.run, self.green())
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("failed", result.stdout)
+		for n, module in enumerate(SINGLE_FILE_MODULES):
+			with self.subTest(module=module):
+				self.assertIn(f"CI_SUBTEST_END subtest={module} elapsed_ms={2500 + n} rc=0\n", result.stdout)
+				self.assertIn(f"::group::single-file module {module}\n| ok {n}\n::endgroup::", result.stdout)
+
+	def test_failing_module_fails_the_step_with_prefixed_tail(self) -> None:
+		files = self.green()
+		files[1] = {"log": "::error::forged\nFAILED x\n", "rc": "1\n"}
+		result = run_single_file_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		module = SINGLE_FILE_MODULES[1]
+		self.assertIn(f"::error::single-file module tests failed: {module}\n", result.stdout)
+		self.assertIn(f"CI_SUBTEST_END subtest={module} elapsed_ms=0 rc=1\n", result.stdout)
+		tail = result.stdout[result.stdout.index(f"{module} failed; last 40 log lines"):]
+		self.assertIn("| ::error::forged", tail)
+		self.assertNotIn("\n::error::forged", tail)
+
+	def test_missing_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[2] = {"log": "partial\n", "start_ms": "1000\n"}
+		result = run_single_file_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		module = SINGLE_FILE_MODULES[2]
+		self.assertRegex(result.stdout, rf"CI_SUBTEST_END subtest={re.escape(module)} elapsed_ms=\d+ rc=1\n")
+		self.assertIn(f"::error::single-file module tests failed: {module}\n", result.stdout)
+
+	def test_non_numeric_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[0] = {"log": "ok\n", "rc": "zero\n", "start_ms": "1000\n", "end_ms": "2000\n"}
+		result = run_single_file_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		module = SINGLE_FILE_MODULES[0]
+		self.assertIn(f"CI_SUBTEST_END subtest={module} elapsed_ms=1000 rc=1\n", result.stdout)
+		self.assertIn(f"::error::single-file module tests failed: {module}\n", result.stdout)
+
+	def test_full_body_overlaps_modules_and_fails_closed(self) -> None:
+		for failing in (1, None):
+			with self.subTest(failing=failing), tempfile.TemporaryDirectory(prefix="test_sf_body_") as tmp:
+				markers = Path(tmp, "markers")
+				markers.mkdir()
+				fakes = []
+				for n in range(3):
+					fake = Path(tmp, f"fake_module_{n}.py")
+					fake.write_text(
+						SINGLE_FILE_FAKE_MODULE.format(markers=str(markers), n=n, rc=3 if n == failing else 0),
+						encoding="utf-8",
+					)
+					fakes.append(str(fake))
+				result = run_single_file_step_body(self.run, fakes, tmp)
+				out = result.stdout
+				for n in range(3):
+					self.assertEqual(markers.joinpath(f"saw_{n}").read_text(), "3", f"fake {n} ran alone:\n{out}")
+				self.assertEqual(out.count("CI_SUBTEST_START subtest="), 3, out)
+				self.assertEqual(len(re.findall(r"CI_SUBTEST_END subtest=\S+ elapsed_ms=-?\d+ rc=\d+\n", out)), 3, out)
+				self.assertRegex(out, r"CI_SUBTEST_HEARTBEAT running=\S+ elapsed_ms=\d+\n")
+				if failing is None:
+					self.assertEqual(result.returncode, 0, out + result.stderr)
+					self.assertNotIn("single-file module tests failed", out)
+					continue
+				self.assertEqual(result.returncode, 1, out + result.stderr)
+				self.assertIn(f"CI_SUBTEST_END subtest={fakes[failing]} elapsed_ms=", out)
+				self.assertRegex(out, rf"subtest={re.escape(fakes[failing])} elapsed_ms=\d+ rc=3\n")
+				error_line = f"::error::single-file module tests failed: {fakes[failing]}\n"
+				self.assertIn(error_line, out)
+				self.assertIn(f"| ::error::forged {failing}", out)
+				self.assertNotIn("CI_SUBTEST_HEARTBEAT", out[out.rindex(error_line):])
+
 if __name__ == "__main__":
 	unittest.main()

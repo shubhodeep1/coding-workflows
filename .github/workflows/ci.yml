@@ -2858,13 +2858,120 @@ jobs:
       # unit tests", the slower of the two steps group 3 gained, to
       # static-checks; group 3 then runs this step, its slice and the two
       # steps below.
+      # Overlapped in place (workflow-optimization recommendation Speed 1 /
+      # Reliability 1 / Cost 1, 2026-09-28): the ledger module took 139s
+      # locally because test_invalid_emit_timeout_literals_keep_the_default_bound
+      # waits for the 120s default LEDGER_EMIT_TIMEOUT_SECONDS bound, and the
+      # three modules ran one after another. They now run concurrently and
+      # fail closed, following the unblock step pattern above: each writes its
+      # own log and rc file, every process is reaped before any is judged, and
+      # a missing or non-numeric rc counts as a failure. CI_SUBTEST_START/END
+      # lines time each module and CI_SUBTEST_HEARTBEAT lines (about every
+      # 30s, from a loop an EXIT trap kills) name the ones still running. The
+      # saving (about the two shorter modules, up to about 2 minutes) is an
+      # estimate pending a timed CI run, not a measurement. Concurrency check:
+      # the modules share no fixed /tmp, RUNNER_TEMP or repo-root write path
+      # (each uses its own temp dirs; the ledger module points RUNNER_TEMP and
+      # LEDGER_SUBSTATES_SEEN_FILE at temp paths), so all three run
+      # concurrently rather than as a two-module chain. Rollback: restore the
+      # sequential three-line body if a timed run shows interference.
       - name: Orchestrate poll single-file module tests
         if: strategy.job-index == 3
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
+          sf_modules=(tests/test_orchestrate_poll_noop_suspicious_recovery.py tests/test_state_snapshot.py tests/test_run_substate_ledger.py)
+          rm -f /tmp/single_file_step_*.log /tmp/single_file_step_*.rc \
+            /tmp/single_file_step_*.start_ms /tmp/single_file_step_*.end_ms
+          sf_now_ms() { date +%s%3N; }
+          sf_step_start_ms="$(sf_now_ms || true)"
+          case "${sf_step_start_ms}" in
+            ''|*[!0-9]*)
+              sf_step_start_ms=0
+              echo "::warning::CI_SUBTEST clock unavailable; heartbeat elapsed_ms values will read 0" ;;
+          esac
+          sf_pids=()
+          for sf_i in "${!sf_modules[@]}"; do
+            sf_module="${sf_modules[${sf_i}]}"
+            echo "CI_SUBTEST_START subtest=${sf_module}"
+            sf_now_ms > "/tmp/single_file_step_${sf_i}.start_ms" || true
+            (
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 "${sf_module}" > "/tmp/single_file_step_${sf_i}.log" 2>&1
+              sf_rc="$?"
+              sf_now_ms > "/tmp/single_file_step_${sf_i}.end_ms"
+              # Written last: the heartbeat treats a module with an rc file as finished.
+              echo "${sf_rc}" > "/tmp/single_file_step_${sf_i}.rc"
+            ) &
+            sf_pids+=("$!")
+          done
+          # Heartbeat while modules run. sleep gets its own /dev/null fds so an
+          # orphaned sleep cannot hold the step's output pipe open.
+          (
+            while sleep 30 </dev/null >/dev/null 2>&1; do
+              sf_running=()
+              for sf_i in "${!sf_modules[@]}"; do
+                [ -e "/tmp/single_file_step_${sf_i}.rc" ] || sf_running+=("${sf_modules[${sf_i}]}")
+              done
+              [ "${#sf_running[@]}" -gt 0 ] || break
+              sf_beat_ms="$(sf_now_ms || true)"
+              sf_beat_elapsed_ms=0
+              case "${sf_beat_ms}" in
+                ''|*[!0-9]*) ;;
+                *) [ "${sf_step_start_ms}" = "0" ] || sf_beat_elapsed_ms="$((10#${sf_beat_ms} - 10#${sf_step_start_ms}))" ;;
+              esac
+              sf_running_csv="$(IFS=,; echo "${sf_running[*]}")"
+              echo "CI_SUBTEST_HEARTBEAT running=${sf_running_csv} elapsed_ms=${sf_beat_elapsed_ms}"
+            done
+          ) &
+          sf_heartbeat_pid="$!"
+          # The trap never calls exit, so the step keeps its own exit status.
+          trap 'kill "${sf_heartbeat_pid}" 2>/dev/null || true; wait "${sf_heartbeat_pid}" 2>/dev/null || true' EXIT
+          # Reap every process before judging any, so none is left orphaned.
+          for sf_pid in "${sf_pids[@]}"; do
+            wait "${sf_pid}" || true
+          done
+          sf_failed=()
+          sf_failed_ids=()
+          for sf_i in "${!sf_modules[@]}"; do
+            sf_module="${sf_modules[${sf_i}]}"
+            sf_stem="/tmp/single_file_step_${sf_i}"
+            # A missing or non-numeric exit code counts as a failure.
+            sf_rc="$(cat "${sf_stem}.rc" 2>/dev/null || echo 1)"
+            case "${sf_rc}" in
+              ''|*[!0-9]*) sf_rc=1 ;;
+            esac
+            # Timing is telemetry only: a missing or non-numeric start time gives 0;
+            # a missing or non-numeric end time is replaced by the current clock.
+            sf_start_ms="$(cat "${sf_stem}.start_ms" 2>/dev/null || true)"
+            sf_end_ms="$(cat "${sf_stem}.end_ms" 2>/dev/null || true)"
+            case "${sf_end_ms}" in
+              ''|*[!0-9]*) sf_end_ms="$(sf_now_ms || true)" ;;
+            esac
+            sf_elapsed_ms=0
+            case "${sf_start_ms}:${sf_end_ms}" in
+              :*|*:|*[!0-9:]*) ;;
+              *) sf_elapsed_ms="$((10#${sf_end_ms} - 10#${sf_start_ms}))" ;;
+            esac
+            echo "CI_SUBTEST_END subtest=${sf_module} elapsed_ms=${sf_elapsed_ms} rc=${sf_rc}"
+            echo "::group::single-file module ${sf_module}"
+            # "| " prefix: PR-controlled test output cannot act as a workflow command.
+            { cat "${sf_stem}.log" 2>/dev/null || true; } | sed 's/^/| /'
+            echo "::endgroup::"
+            if [ "${sf_rc}" != "0" ]; then
+              sf_failed+=("${sf_module}")
+              sf_failed_ids+=("${sf_i}")
+            fi
+          done
+          # Repeat failing modules' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for sf_j in "${!sf_failed[@]}"; do
+            echo "--- single-file module ${sf_failed[${sf_j}]} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/single_file_step_${sf_failed_ids[${sf_j}]}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#sf_failed[@]}" -gt 0 ]; then
+            echo "::error::single-file module tests failed: ${sf_failed[*]}"
+            exit 1
+          fi
 
       # Moved from tests-release-and-log-analysis, which took 17m51s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7689). Earlier
