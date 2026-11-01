@@ -260,6 +260,13 @@ def test_unparsable_page_deletes_nothing(tmp_path: Path, mode: str) -> None:
 	assert "::warning::Unparsable issue comments page for cleanup (issue #42, page 2); aborting cleanup" in result.stderr
 
 
+def test_phase_unparsable_page_deletes_nothing(tmp_path: Path) -> None:
+	result, calls = _run(tmp_path, "tg_cleanup_phase_msgs 42 clarify", {}, page_modes={1: "garbage"})
+	assert _deleted(calls) == [] and _tg_ids(calls) == []
+	assert ("::warning::Unparsable issue comments page for phase cleanup (issue #42, phase clarify, page 1); "
+		"aborting cleanup") in result.stderr
+
+
 @pytest.mark.parametrize("mode", ["500", "429", "transport", "garbage"])
 def test_transient_telegram_failure_keeps_only_that_comment(tmp_path: Path, mode: str) -> None:
 	pages = {1: [
