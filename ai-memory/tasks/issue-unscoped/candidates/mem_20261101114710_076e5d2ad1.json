@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:1656-1676 | severity=major | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `|| { ... }` graceful-degradation handler after `exec {fd}>&2 2> >(tee ...)` (and the `|| true` on the restore `exec`) is unreachable, because a failed redirection on the special builtin `exec` aborts the shell.\n  WHY: If stderr capture setup fails, the step exits instead of warning and continuing. Severity disagreement: gemini said MAJOR, minimax and glm said NIT, so the highest is used. sonnet-5_5 explicitly checked this and did not report it, because GitHub Actions runs bash in non-POSIX mode, where a failed `exec` returns status 1.\n- .github/workflows/clarify.yml:1664 | severity=major | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Capturing the tee PID with `${!:-}` is error-prone, because it expands to the last background job, which may not be the tee process.\n  WHY: `_clarify_attempt_stderr_capture_stop` (lines 1675-1678) may fail to wait for or terminate tee, which could leave dangling processes.\n- .github/workflows/clarify.yml:1666-1756 | severity=major | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: In the Claude branch the empty-output check fires before the nonzero-exit check, so a Claude attempt that exits non-zero with empty output is recorded as `kind=empty_output exit_code=0` instead of `kind=nonzero_exit exit_code=<rc>`.\n  WHY: `tests/test_plan_clarify_blocked_output.py` asserts `kind=nonzero_exit exit_code=1` for the crash case and `exit_code=1` for the nopool case, so those assertions would fail. The heal evidence also loses the real exit code.\n- External GitHub check run `copilot-pull-request-reviewer` (no repository file):job 124825825183 | severity=nit | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The Copilot review check failed with `custom_instructions_too_large` (HTTP 422) when creating its review request.\n  WHY: The request was rejected before Copilot produced a review, and the failure maps to no changed repository hunk.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/clarify.yml:1664, 1675-1678 | severity=MAJOR | confidence=4\n  PROBLEM: Capturing the tee PID with `${!:-}` is error-prone, because it expands to the last background job, which may not be the tee process (`_clarify_attempt_stderr_capture_start` line 1664, `_clarify_attempt_stderr_capture_stop` lines 1675-1678).\n  WHY: The stop logic may fail to wait for or terminate tee, which could leave dangling processes.\n- .github/workflows/clarify.yml:1656-1662 | severity=MAJOR | confidence=5\n  PROBLEM: The `exec` special builtin makes bash exit immediately if the redirection fails under `set -e`, which aborts the whole script (`_clarify_attempt_stderr_capture_start`, lines 1656-1662).\n  WHY: If stderr capture setup fails, the script aborts instead of warning and continuing, so the clarify step fails entirely and loses diagnostic information.\n- HARDENING: .github/workflows/clarify.yml:1656-1662 \u2014 the `exec` error-handling path is unreachable. Suggested fix: check that `tee` exists and the runtime directory is writable before calling `exec`. About 4 lines. HARDENING_RISK_SCORE: 1\n- HARDENING: .github/workflows/clarify.yml:1664 \u2014 PID capture of the background tee process is unreliable. Suggested fix: use a more robust mechanism to manage the background process lifecycle. About 5 lines. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/clarify.yml:1666-1756 | severity=MAJOR | confidence=4\n  PROBLEM: In the Claude branch the empty-output check fires before the nonzero-exit check, so a Claude attempt that exits non-zero with empty output is recorded as `kind=empty_output exit_code=0` instead of `kind=nonzero_exit exit_code=<rc>`.\n  WHY: The agents fragment and changelog document these as two distinct outcomes, and `tests/test_plan_clarify_blocked_output.py` asserts `kind=nonzero_exit exit_code=1` for the crash case and `exit_code=1` for the nopool case. Those assertions would fail, and the heal evidence loses the real exit code.\n- .github/workflows/clarify.yml:1662-1676 | severity=NIT | confidence=3\n  PROBLEM: The `|| { ... }` handler after `exec {var}>&2 2> >(tee ...)` is unreachable, because a redirection failure on a bare `exec` aborts the shell. The same applies to `|| true` on the restore `exec`.\n  WHY: If the redirection fails (for example `RUNTIME_DIR` not writable), the step exits instead of warning and continuing, so the documented fallback is dead.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- External GitHub check run `copilot-pull-request-reviewer` (no repository file):job 124825825183 | severity=NIT | confidence=4\n  PROBLEM: The Copilot review check failed with `custom_instructions_too_large` (HTTP 422) when creating its review request.\n  WHY: The request was rejected before Copilot produced a review, and the failure maps to no changed repository hunk.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/clarify.yml:1662-1667, 1676 | severity=NIT | confidence=4\n  PROBLEM: The graceful-degradation branch after a failed stderr capture is unreachable. A redirection error in `exec` terminates the shell, so neither the `|| { ... }` handler at line 1662 nor the `|| true` at line 1676 can intercept it.\n  WHY: If capture setup fails, the \"Run Codex\" step aborts instead of warning and continuing, and all remaining retries and `CLARIFY_ENGINE_ATTEMPT_FAILED` evidence lines are lost. No test exercises this branch.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e342a27ef5617499659bdcd12781f0be3de339dcde359625e8e08aa4345c299d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8610,
+    "run_id": "41298984679",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41298984679",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101114710_076e5d2ad1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8610,
+    "run_id": "41298984679"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T11:47:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
