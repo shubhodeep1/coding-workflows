@@ -19842,10 +19842,12 @@ persist_orch_record_merged_pr() {
 # `## Paused: same failure as another project item` comment
 # (AI_PERSIST_GROUPED_V1 key=<k> owner=<n>; skipped when the cached comments
 # already hold that marker from the pipeline login, posted no earlier than the
-# item's newest journal entry) per newly grouped item. Then exports the tick-local
-# maps PERSIST_ORCH_GROUPED_ISSUES_JSON ({member: owner}; the caller hides
-# members from check-stalls and the P6 governor) and
-# PERSIST_ORCH_GROUP_DIAG_JSON ({owner: [{issue, id, key}]}; read by
+# episode time newest_failure_ts: the later start of the item's and its owner's
+# newest run of same-key failures) per newly grouped item. Then exports the
+# tick-local maps PERSIST_ORCH_GROUPED_ISSUES_JSON ({member: owner}; the caller
+# hides members from check-stalls and the P6 governor) and
+# PERSIST_ORCH_GROUP_DIAG_JSON ({owner: [{issue, id, title, key}]}; title is
+# issue-author text labelled "UNTRUSTED_DATA: "; read by
 # invoke_stall_judge). A missing helper output, or a failed state write,
 # leaves the state as it was and pauses nothing. API budget (section 14): zero
 # reads (comments come from the GraphQL details cache), at most one identity
@@ -19949,9 +19951,11 @@ persist_orch_group_failures() {
     | {key: (.github_issue | tostring), value: .grouped_under.owner}] | from_entries' "${STATE_FILE}" 2>/dev/null)" \
     || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
   [ -n "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" ] || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
-  # Titles come from the details cache (issue-author text): control characters
-  # and comment delimiters are stripped, runs of "=" are broken up so a title
-  # cannot imitate a prompt section header, and the length is capped at 120.
+  # Titles come from the details cache (issue-author text): control characters,
+  # comment delimiters, "#" and "@" are stripped, runs of "=" are broken up so a
+  # title cannot imitate a prompt section header, the length is capped at 120,
+  # and a non-empty title is labelled "UNTRUSTED_DATA: " so the stall judge (and
+  # its semble query) reads it as data, not instructions.
   PERSIST_ORCH_GROUP_DIAG_JSON="$(jq -c --argjson wi "${WAVE_IDX}" --slurpfile d "${pog_details}" '($d[0] // {}) as $cache
     | [.waves[$wi].issues[]?
     | select(type == "object" and (.grouped_under | type) == "object" and (.github_issue | type) == "number")
@@ -19959,7 +19963,8 @@ persist_orch_group_failures() {
     | {owner: (.grouped_under.owner | tostring),
        item: {issue: .github_issue, id: ((.id // "item") | tostring | gsub("[^A-Za-z0-9._-]"; "_") | .[0:40]),
               title: (($cache[.github_issue | tostring].title? // "") | tostring
-                | gsub("\\p{Cc}|\\p{Zl}|\\p{Zp}"; " ") | gsub("<!--|-->"; "") | gsub("={3,}"; "= = =") | .[0:120]),
+                | gsub("\\p{Cc}|\\p{Zl}|\\p{Zp}"; " ") | gsub("<!--|-->"; "") | gsub("={3,}"; "= = =") | gsub("[#@]"; "") | .[0:120]
+                | if . == "" then . else "UNTRUSTED_DATA: " + . end),
               key: ((.grouped_under.key // "") | tostring | gsub("[^0-9a-f]"; "") | .[0:12])}}]
     | group_by(.owner) | map({key: .[0].owner, value: map(.item)}) | from_entries' "${STATE_FILE}" 2>/dev/null)" \
     || PERSIST_ORCH_GROUP_DIAG_JSON='{}'
@@ -19970,7 +19975,7 @@ persist_orch_group_failures() {
     echo "PERSIST orch_group outcome=grouped issue=${pog_issue} owner=${pog_owner}" >&2
     # The grouping state reaches the tracking issue only later in the tick
     # (post_state_comment), so a cached pipeline comment with the same marker
-    # (key and owner), posted no earlier than the item's newest journal entry,
+    # (key and owner), posted no earlier than the episode time (newest_failure_ts),
     # means this pause episode was already announced: skip the post. A marker
     # from an earlier episode (older than the failure that regrouped the item)
     # does not count.

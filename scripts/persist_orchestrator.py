@@ -67,9 +67,9 @@ group --state-file F --journals-json D --now EPOCH --wave-index I [--trusted-log
 	"key"}], "clear_cooldown": [issue], "new": [issue],
 	"newest_failure_ts": {"<issue>": epoch}}`` (``members`` omits the owner;
 	``new`` lists members without ``grouped_under`` before;
-	``newest_failure_ts`` gives, for each new member, the newer of its own
-	and its owner's newest journal entry time, so the poller can tell a pause
-	comment of this episode from an older one). A stored ``grouped_under.key`` that is not 12 hex characters is
+	``newest_failure_ts`` gives, for each new member, the later start of its
+	own and its owner's newest unbroken run of same-key failing entries, so the
+	poller can tell a pause comment of this episode from an older one). A stored ``grouped_under.key`` that is not 12 hex characters is
 	released as ``field_invalid``. Model
 	``note`` text is never read. Logs one ``PERSIST orch_group
 	outcome=<ok|skipped|error> reason=<token> [groups=<n>] [grouped=<n>]
@@ -399,8 +399,10 @@ def _ts_epoch(value: Any) -> int | None:
 
 
 def _newest_failure(entries: list[dict], now: int, window_s: int) -> tuple[str, int, int] | None:
-	"""(failure_key, earliest failing ts of that key in the window, newest
-	entry ts) when the newest entry is a failure inside the window, else None."""
+	"""(failure_key, earliest failing ts of that key in the window, start ts of
+	the newest unbroken run of failing entries with that key) when the newest
+	entry is a failure inside the window, else None. The run start does not move
+	when the same failure repeats, so it marks when the episode began."""
 	if not entries:
 		return None
 	ordered = sorted(entries, key=lambda e: e.get("ts", ""))
@@ -415,7 +417,14 @@ def _newest_failure(entries: list[dict], now: int, window_s: int) -> tuple[str, 
 		t for t in (_ts_epoch(e.get("ts")) for e in ordered if e.get("outcome") in GROUP_FAIL_OUTCOMES and e.get("failure_key") == key)
 		if t is not None and t >= now - window_s
 	]
-	return key, (min(stamps) if stamps else newest_ts), newest_ts
+	run_start = newest_ts
+	for e in reversed(ordered):
+		if e.get("outcome") not in GROUP_FAIL_OUTCOMES or e.get("failure_key") != key:
+			break
+		t = _ts_epoch(e.get("ts"))
+		if t is not None:
+			run_start = min(run_start, t)
+	return key, (min(stamps) if stamps else newest_ts), run_start
 
 
 def group_failures(
@@ -552,9 +561,10 @@ def group_failures(
 		for gh in kept:
 			if "grouped_under" not in items[gh]["entry"]:
 				result["new"].append(gh)
-				# Episode time: the newer of the member's and the owner's newest
-				# failure, so a regroup after the owner failed again (owner key
-				# K -> K2 -> K) is not hidden by the earlier episode's marker.
+				# Episode time: the later start of the member's and the owner's
+				# newest run of same-key failures, so a regroup after the owner
+				# failed again (owner key K -> K2 -> K) is not hidden by the earlier
+				# episode's marker, while the owner repeating K does not move it.
 				episode_ts[gh] = max(items[gh]["newest_ts"], items[owner]["newest_ts"])
 	for gh, it in items.items():
 		if "grouped_under" in it["entry"] and gh not in release and gh not in grouped and gh not in held:

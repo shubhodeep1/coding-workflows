@@ -619,7 +619,8 @@ def test_group_reports_the_newest_failure_time_of_new_members(tmp_path, monkeypa
 	details = _gdetails({10: [_gentry(5 * 3600, K1, "1")], 11: [_gentry(3 * 3600, K1, "2"), _gentry(3600, K1, "3")]})
 	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
 	assert out["new"] == [11]
-	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 3600}
+	# The start of the member's newest run of K failures (3 h ago), not its newest entry.
+	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 3 * 3600}
 
 
 def test_group_held_member_keeps_the_recorded_owner(tmp_path, monkeypatch):
@@ -645,3 +646,13 @@ def test_group_episode_time_takes_the_owner_newest_failure_when_newer(tmp_path, 
 	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
 	assert out["groups"] == [{"key": K1, "owner": 10, "members": [11]}]
 	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 600}
+
+
+def test_group_owner_repeating_the_same_key_does_not_move_the_episode_time(tmp_path, monkeypatch):
+	# The pause comment was posted, post_state_comment failed, and owner 10 then
+	# failed again with K1: the episode time stays at the run start, so the
+	# earlier marker still suppresses a second comment.
+	details = _gdetails({10: [_gentry(5 * 3600, K1, "1"), _gentry(600, K1, "2")], 11: [_gentry(3 * 3600, K1, "3")]})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
+	assert out["new"] == [11]
+	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 3 * 3600}
