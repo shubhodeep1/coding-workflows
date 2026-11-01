@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-01T15:05:11Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=(CI check-run copilot-pull-request-reviewer, run 41316554599; not a diff file):head SHA 0ca3e1286efcf2ad311296be97f6709996cf74a7; cited_path=copilot-pull-request-reviewer (CI check-run, not a repository path); files_touched=CHANGELOG.md, agents.d/8602-clarify-attempt-failure-reason.md, agents.md, changelog.d/8602-clarify-attempt-failure-reason.md.",
+  "phase": "review_autofix",
+  "pr_number": 8628,
+  "record_id": "lesson_20261101150511_c9bc87a26d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer (CI check-run, not a repository path)",
+    "(CI check-run copilot-pull-request-reviewer, run 41316554599; not a diff file)",
+    "CHANGELOG.md",
+    "agents.d/8602-clarify-attempt-failure-reason.md",
+    "agents.md",
+    "changelog.d/8602-clarify-attempt-failure-reason.md"
+  ]
+}
