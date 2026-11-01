@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: Issue #8570, fix the ordering check in `test_intake_freezes_failing_tests_before_the_diagnosis`\n\n**Planning ref:** `ai/issue-8567` at `9e13cdf3158719f4f1f5f8abe1f835a2f0f6d5dc` (Integration branch mismatch: false).\n\nScope-mode: Hold Scope\nReuse-audit: extends test_intake_freezes_failing_tests_before_the_diagnosis\nScope-mode justification: The triage evidence holds on the planning ref. `scripts/workflow_failure_heal_intake.sh` contains `heal-scope failing-tests --log-files \"${LOG_DIR}\"/run-*-job-*.txt` twice. The first copy is at line 1994, inside `_heal_cause_key` (defined at line 1961 and called at line 2008). The second is at line 2712, in the `FAILING_TESTS_JSON=` assignment. That assignment sits between `SCOPE_INPUTS_FROZEN=\"${RUNTIME_DIR}/scope_inputs_frozen.json\"` (line 2707) and `jq -n --arg crash` (line 2855). Because `str.index` returns the first match, the test now anchors on line 1994, so the assertion fails even though the order it protects is still correct. The fix is to anchor on the `FAILING_TESTS_JSON=\"$(python3 \"${HEAL_PY}\" heal-scope failing-tests --log-files \"${LOG_DIR}\"/run-*-job-*.txt` prefix, which appears exactly once (`grep -c` returns 1). The issue also suggests an optional assertion that the cause-key copy comes before the freeze. It costs about 3 lines, adds no dependency and no interface, so the Boil the Lake rule says to include it. Following \u00a76 (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the extra assertion records that the cause-key copy only feeds dedup and never the frozen scope. The production script is not changed.\n\n## Files likely to change\n- `tests/test_workflow_failure_heal_scope_tests.py`\n\n## Functions or modules to implement\n- Edit `test_intake_freezes_failing_tests_before_the_diagnosis` in `tests/test_workflow_failure_heal_scope_tests.py` (currently lines 204-209):\n  1. Replace the `extract_at` anchor with\n     `text.index('FAILING_TESTS_JSON=\"$(python3 \"${HEAL_PY}\" heal-scope failing-tests --log-files \"${LOG_DIR}\"/run-*-job-*.txt')`.\n  2. Keep the existing chained assertion unchanged: `text.index('SCOPE_INPUTS_FROZEN=...') < extract_at < text.index(\"jq -n --arg crash\")`.\n  3. Add a guarded assertion for the cause-key copy. Bind the freeze position to a new local variable `freeze_at` (the name is not used elsewhere in the function). Search for the cause-key prefix `cause_tests=\"$(python3 \"${HEAL_PY}\" heal-scope failing-tests --log-files \"${LOG_DIR}\"/run-*-job-*.txt` with `text.find(...)`. If it is found (`>= 0`), assert that its position is `< freeze_at`. This keeps the test valid if the cause-grouping block is ever removed.\n  4. Leave the two remaining assertions (`failing_tests: $failing_tests` ordering and `failing_tests: (.failing_tests // ...)`) untouched.\n- Use tabs for indentation, matching the file's existing style.\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None. This is a test-only change. `scripts/workflow_failure_heal_intake.sh` is deliberately not edited, as the triage recommends: making the two strings differ would make the test pass by accident.\n\n## Decisions\n\n### D1 \u2014 Anchor on the unique `FAILING_TESTS_JSON=` assignment\n- **Chosen:** Change the `extract_at` search string to the `FAILING_TESTS_JSON=\"$(python3 ...` prefix, which matches exactly once in the script.\n- **Alternatives considered:** Use `text.rindex(...)` on the old string. Rename or reword the cause-key copy in the script. Delete the ordering check.\n- **Why:** `rindex` would break silently if another copy were added later. Editing the script to dodge the test hides what the test is for. Deleting the check weakens the contract. Anchoring on the assignment states exactly which extraction feeds the frozen scope.\n\n### D2 \u2014 Add an optional ordering assertion for the cause-key copy\n- **Chosen:** If `cause_tests=\"$(python3 ...` is present, assert that it comes before `SCOPE_INPUTS_FROZEN=`.\n- **Alternatives considered:** Leave the cause-key copy unasserted. Require the copy unconditionally.\n- **Why:** The guarded check records that the copy runs before the freeze and only feeds the dedup cause key. Making it optional means a future removal of the cause-grouping block will not break this test.\n\n## Security considerations\n- **Trust boundaries:** none touched. This is a static text assertion over a repo file and runs no external input, network or credentials.\n- **Authorization:** no new endpoint or surface.\n- **Input validation:** not applicable.\n- **Abuse case:** the only risk is weakening a security-relevant ordering contract. Scope inputs must be frozen before failing tests are extracted into the diagnosis payload, so the extraction cannot be swapped after the freeze. This plan keeps that assertion at full strength and adds one more.\n\n## Potential risks or edge cases\n- **No conflicts found:** every line number and string the issue cites matches the planning ref.\n- **Line 1994 is sensitive to its exact form:** if `_heal_cause_key` is later rewritten (for example, the variable is renamed), `find` returns -1 and the D2 assertion is skipped instead of failing, which is the intended behaviour.\n- **A third `FAILING_TESTS_JSON=` assignment would hide behind `index`:** this is unlikely and out of scope.\n- **The new anchor must be byte-exact:** it has to include the `\"$(python3 \"${HEAL_PY}\" ` segment exactly as it appears at line 2712.\n\n## Testing considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal_scope_tests.py -q`. All tests should pass, including `test_intake_freezes_failing_tests_before_the_diagnosis`.\n- Optionally run the CI job's other suite: `python3 -m pytest tests/test_workflow_failure_heal.py -q`. It is unaffected and should stay green.\n- No `changelog.d` fragment and no `agents.d` fragment are needed for a test-only fix.\n\n## Pre-execution self-check\n- The one file to change exists. The anchor string is unique (`grep -c` returns 1). The ordering 2707 < 2712 < 2855 holds and the cause-key copy (1994) comes before 2707, so both the original and the added assertions pass on the current script.\n- No workflow YAML, scripts or prompts are touched, so the size limit, the \u00a721 auto-close rule and the agents fragment rule do not apply.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "177005a269b16425c2e52d3ac1fe48f1e624b05c5cf6a33285b3c826ba3a4546",
+  "lineage": {
+    "issue_number": 8570,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41255784207",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41255784207",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8570"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261101001812_235977f9d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8570,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41255784207"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8570",
+  "timestamps": {
+    "created_at": "2026-11-01T00:18:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
