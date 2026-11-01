@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:1677 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new `if:` condition on \"Force orchestrate poll after validation finalization\" requires `steps.authorized_target.outcome == 'success'`.\n  WHY: This stops the step from running when authorization failed or validation did not run, although finalization and cleanup should still run in those cases (reviewer severity MAJOR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"`tests/test_workspace_hooks.py` pins the hook step conditions. Update its before_remove expectation to the new condition, and change nothing else in that file.\"\n  expected_change_site: `tests/test_workspace_hooks.py`, `test_validate_workflow_stages_and_orders_workspace_hooks`\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `tests/test_workspace_hooks.py` has no assertion on the validate workflow's \"Run workspace before_remove hook\" `if:`, only the \"Run validation process\" assertion (line 658) was updated, the implement workflow's before_remove `if:` is pinned at line 633, and the new condition is pinned instead in `tests/test_validate_presetup_cleanup_contract.py::test_before_remove_hook_skips_without_staged_helper` (lines 186-189), so the behaviour is covered. Reviewers rate it NIT with no functional gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"`tests/test_workspace_hooks.py` pins the hook step conditions. Update its before_remove expectation to the new condition, and change nothing else in that file.\"\n  Expected change site: `tests/test_workspace_hooks.py`, `test_validate_workflow_stages_and_orders_workspace_hooks`\n  Evidence of absence: `tests/test_workspace_hooks.py` has no assertion on the validate workflow's \"Run workspace before_remove hook\" `if:`. The only pinned `if:` for that step name is the implement workflow's, at line 633. Only the \"Run validation process\" assertion (line 658) was updated. The new condition is pinned in `tests/test_validate_presetup_cleanup_contract.py::test_before_remove_hook_skips_without_staged_helper`. This is a literal-spec mismatch with no functional gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/validate.yml:1677 | severity=MAJOR | confidence=4\n  PROBLEM: The new `if:` condition requires `steps.authorized_target.outcome == 'success'` (Force orchestrate poll after validation finalization).\n  WHY: Requiring successful authorization prevents the `Force orchestrate poll` from running in failure cases, where cleanup and finalization steps must run.\n\nTASK_GAP:\n- Requirement: \"`tests/test_workspace_hooks.py` pins the hook step conditions. Update its before_remove expectation to the new condition, and change nothing else in that file.\"\n  Expected change site: `tests/test_workspace_hooks.py`, `test_validate_workflow_stages_and_orders_workspace_hooks`\n  Evidence of absence: The PR adds the `VALIDATE_HOOK_HELPER` check to the `if:` in `validate.yml`, but `tests/test_workspace_hooks.py` still has no assertion for that condition on the `Run workspace before_remove hook` step.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"`tests/test_workspace_hooks.py` pins the hook step conditions. Update its before_remove expectation to the new condition, and change nothing else in that file.\"\n  Expected change site: tests/test_workspace_hooks.py, `test_validate_workflow_stages_and_orders_workspace_hooks` (line 654)\n  Evidence of absence: The diff only updates the `Run validation process` `if:` assertion at line 658. No `Run workspace before_remove hook` `if:` assertion for VALIDATE_WORKFLOW is added. The new contract test `test_before_remove_hook_skips_without_staged_helper` lives in tests/test_validate_presetup_cleanup_contract.py:186-189. The IMPLEMENT_WORKFLOW condition is pinned at tests/test_workspace_hooks.py:633.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"`tests/test_workspace_hooks.py` pins the hook step conditions. Update its before_remove expectation to the new condition.\"\n  Expected change site: `tests/test_workspace_hooks.py`, `test_validate_workflow_stages_and_orders_workspace_hooks`\n  Evidence of absence: The PR updates the `Run validation process` condition assertion in this test but adds no assertion for the `Run workspace before_remove hook` condition there. That condition is asserted in the new cleanup contract test instead.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7f21804990a717b869aeed39bfa08bd07ecf668224d3983af508d11875c726be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8607,
+    "run_id": "41296083703",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41296083703",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101104836_14d20280bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8607,
+    "run_id": "41296083703"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T10:48:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
