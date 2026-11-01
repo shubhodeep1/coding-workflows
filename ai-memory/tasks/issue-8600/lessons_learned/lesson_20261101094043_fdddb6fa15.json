@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-01T09:40:43Z",
+  "issue_number": 8600,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/tg_helpers.sh:263-315; cited_path=scripts/tg_helpers.sh; files_touched=.github/workflows/ci.yml, changelog.d/8600-tg-cleanup-snapshot-retain.md, scripts/tg_helpers.sh, tests/test_tg_helpers_cleanup.py.",
+  "phase": "review_autofix",
+  "pr_number": 8605,
+  "record_id": "lesson_20261101094043_fdddb6fa15",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/tg_helpers.sh",
+    ".github/workflows/ci.yml",
+    "changelog.d/8600-tg-cleanup-snapshot-retain.md",
+    "tests/test_tg_helpers_cleanup.py"
+  ]
+}
