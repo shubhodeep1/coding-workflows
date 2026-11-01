@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "The workflow-failure healing logic is a shared script with fixture-backed tests.",
   "timestamps": {
     "created_at": "2026-11-01T01:16:53Z",
-    "promoted_at": null,
+    "promoted_at": "2026-11-01T01:17:27Z",
     "superseded_at": null
   }
 }
