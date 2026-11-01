@@ -613,3 +613,26 @@ def test_group_switch_and_hours_default_in_the_helper():
 	assert po.GROUP_WINDOW_HOURS_DEFAULT == 24 and po.GROUP_MAX_HOURS_DEFAULT == 12
 	assert '_env_hours("PERSIST_ORCH_GROUP_WINDOW_HOURS", GROUP_WINDOW_HOURS_DEFAULT)' in text
 	assert '_env_hours("PERSIST_ORCH_GROUP_MAX_HOURS", GROUP_MAX_HOURS_DEFAULT)' in text
+
+
+def test_group_reports_the_newest_failure_time_of_new_members(tmp_path, monkeypatch):
+	details = _gdetails({10: [_gentry(5 * 3600, K1, "1")], 11: [_gentry(3 * 3600, K1, "2"), _gentry(3600, K1, "3")]})
+	out = _group(tmp_path, monkeypatch, _gstate(_item(10), _item(11)), details)
+	assert out["new"] == [11]
+	assert out["newest_failure_ts"] == {"11": GROUP_NOW - 3600}
+
+
+def test_group_held_member_keeps_the_recorded_owner(tmp_path, monkeypatch):
+	# Item 11 is paused under 10; its cache entry is missing this tick. Item 12
+	# has an earlier in-window failure than 10, but 10 stays the owner.
+	journals = {10: [_gentry(3600, K1, "1")], 12: [_gentry(5 * 3600, K1, "3")]}
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": K1, "since": GROUP_NOW - 60}), _item(12))
+	out = _group(tmp_path, monkeypatch, state, _gdetails(journals))
+	assert out["groups"] == [{"key": K1, "owner": 10, "members": [12]}]
+	assert out["release"] == []
+
+
+def test_group_stored_key_that_is_not_hex12_is_field_invalid(tmp_path, monkeypatch):
+	state = _gstate(_item(10), _item(11, grouped_under={"owner": 10, "key": "not-a-key", "since": GROUP_NOW - 12 * 3600}))
+	out = _group(tmp_path, monkeypatch, state, {})
+	assert out["release_reasons"] == {"11": "field_invalid"} and out["release_cooldown"] == []

@@ -64,8 +64,13 @@ group --state-file F --journals-json D --now EPOCH --wave-index I [--trusted-log
 	(``clear_cooldown``). Writes, only with the switch on:
 	``{"groups": [{"key", "owner", "members"}], "release": [issue],
 	"release_reasons": {"<issue>": token}, "release_cooldown": [{"issue",
-	"key"}], "clear_cooldown": [issue], "new": [issue]}`` (``members`` omits
-	the owner; ``new`` lists members without ``grouped_under`` before). Model
+	"key"}], "clear_cooldown": [issue], "new": [issue],
+	"newest_failure_ts": {"<issue>": epoch}}`` (``members`` omits the owner;
+	``new`` lists members without ``grouped_under`` before;
+	``newest_failure_ts`` gives each new member's newest journal entry time,
+	so the poller can tell a pause comment of this episode from an older
+	one). A stored ``grouped_under.key`` that is not 12 hex characters is
+	released as ``field_invalid``. Model
 	``note`` text is never read. Logs one ``PERSIST orch_group
 	outcome=<ok|skipped|error> reason=<token> [groups=<n>] [grouped=<n>]
 	[released=<n>]`` line (issue #8427, P8).
@@ -393,9 +398,9 @@ def _ts_epoch(value: Any) -> int | None:
 		return None
 
 
-def _newest_failure(entries: list[dict], now: int, window_s: int) -> tuple[str, int] | None:
-	"""(failure_key, earliest failing ts of that key in the window) when the
-	newest entry is a failure inside the window, else None."""
+def _newest_failure(entries: list[dict], now: int, window_s: int) -> tuple[str, int, int] | None:
+	"""(failure_key, earliest failing ts of that key in the window, newest
+	entry ts) when the newest entry is a failure inside the window, else None."""
 	if not entries:
 		return None
 	ordered = sorted(entries, key=lambda e: e.get("ts", ""))
@@ -410,7 +415,7 @@ def _newest_failure(entries: list[dict], now: int, window_s: int) -> tuple[str, 
 		t for t in (_ts_epoch(e.get("ts")) for e in ordered if e.get("outcome") in GROUP_FAIL_OUTCOMES and e.get("failure_key") == key)
 		if t is not None and t >= now - window_s
 	]
-	return key, min(stamps) if stamps else newest_ts
+	return key, (min(stamps) if stamps else newest_ts), newest_ts
 
 
 def group_failures(
@@ -449,6 +454,7 @@ def group_failures(
 			"active": active,
 			"key": failure[0] if failure else None,
 			"earliest": failure[1] if failure else 0,
+			"newest_ts": failure[2] if failure else 0,
 			"has_journal": bool(entries),
 			"unknown": active and not readable,
 		}
@@ -476,7 +482,7 @@ def group_failures(
 		owner = _positive_int(old.get("owner")) if old else None
 		owner_it = items.get(owner) if owner is not None else None
 		since = old.get("since") if old else None
-		if old is None or owner is None or not isinstance(old.get("key"), str):
+		if old is None or owner is None or not isinstance(old.get("key"), str) or not _HEX12_RE.match(old["key"]):
 			reason = "field_invalid"
 		elif not it["active"]:
 			reason = "item_inactive"
@@ -520,8 +526,10 @@ def group_failures(
 		members = buckets[key]
 		if len(members) < 2:
 			continue
+		# Held members (cache entry unknown this tick) still vouch for the
+		# owner they recorded, so a one-tick cache gap does not re-elect it.
 		prior = sorted({
-			o for o in (_positive_int((old_group(g) or {}).get("owner")) for g in members if (old_group(g) or {}).get("key") == key)
+			o for o in (_positive_int((old_group(g) or {}).get("owner")) for g in members + sorted(held) if (old_group(g) or {}).get("key") == key)
 			if o in members
 		})
 		owner = prior[0] if prior else min(members, key=lambda g: (items[g]["earliest"], g))
@@ -549,6 +557,7 @@ def group_failures(
 	result["release_cooldown"] = [{"issue": gh, "key": cooldown[gh]} for gh in sorted(cooldown)]
 	result["clear_cooldown"] = sorted(gh for gh in clear if gh not in cooldown)
 	result["new"] = sorted(result["new"])
+	result["newest_failure_ts"] = {str(gh): items[gh]["newest_ts"] for gh in result["new"]}
 	return result, journal_seen
 
 

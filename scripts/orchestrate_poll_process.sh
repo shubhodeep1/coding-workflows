@@ -19841,7 +19841,8 @@ persist_orch_record_merged_pr() {
 # stay the same), and only after that write lands posts one
 # `## Paused: same failure as another project item` comment
 # (AI_PERSIST_GROUPED_V1 key=<k> owner=<n>; skipped when the cached comments
-# already hold that marker from the pipeline login) per newly grouped item. Then exports the tick-local
+# already hold that marker from the pipeline login, posted no earlier than the
+# item's newest journal entry) per newly grouped item. Then exports the tick-local
 # maps PERSIST_ORCH_GROUPED_ISSUES_JSON ({member: owner}; the caller hides
 # members from check-stalls and the P6 governor) and
 # PERSIST_ORCH_GROUP_DIAG_JSON ({owner: [{issue, id, key}]}; read by
@@ -19949,7 +19950,8 @@ persist_orch_group_failures() {
     || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
   [ -n "${PERSIST_ORCH_GROUPED_ISSUES_JSON}" ] || PERSIST_ORCH_GROUPED_ISSUES_JSON='{}'
   # Titles come from the details cache (issue-author text): control characters
-  # and comment delimiters are stripped and the length is capped at 120.
+  # and comment delimiters are stripped, runs of "=" are broken up so a title
+  # cannot imitate a prompt section header, and the length is capped at 120.
   PERSIST_ORCH_GROUP_DIAG_JSON="$(jq -c --argjson wi "${WAVE_IDX}" --slurpfile d "${pog_details}" '($d[0] // {}) as $cache
     | [.waves[$wi].issues[]?
     | select(type == "object" and (.grouped_under | type) == "object" and (.github_issue | type) == "number")
@@ -19957,20 +19959,25 @@ persist_orch_group_failures() {
     | {owner: (.grouped_under.owner | tostring),
        item: {issue: .github_issue, id: ((.id // "item") | tostring | gsub("[^A-Za-z0-9._-]"; "_") | .[0:40]),
               title: (($cache[.github_issue | tostring].title? // "") | tostring
-                | gsub("\\p{Cc}|\\p{Zl}|\\p{Zp}"; " ") | gsub("<!--|-->"; "") | .[0:120]),
+                | gsub("\\p{Cc}|\\p{Zl}|\\p{Zp}"; " ") | gsub("<!--|-->"; "") | gsub("={3,}"; "= = =") | .[0:120]),
               key: ((.grouped_under.key // "") | tostring | gsub("[^0-9a-f]"; "") | .[0:12])}}]
     | group_by(.owner) | map({key: .[0].owner, value: map(.item)}) | from_entries' "${STATE_FILE}" 2>/dev/null)" \
     || PERSIST_ORCH_GROUP_DIAG_JSON='{}'
   [ -n "${PERSIST_ORCH_GROUP_DIAG_JSON}" ] || PERSIST_ORCH_GROUP_DIAG_JSON='{}'
-  while IFS=$'\t' read -r pog_issue pog_owner pog_key; do
+  while IFS=$'\t' read -r pog_issue pog_owner pog_key pog_ts; do
     [[ "${pog_issue}" =~ ^[1-9][0-9]*$ ]] && [[ "${pog_owner}" =~ ^[1-9][0-9]*$ ]] && [[ "${pog_key}" =~ ^[0-9a-f]{12}$ ]] || continue
+    [[ "${pog_ts:-}" =~ ^[0-9]+$ ]] || pog_ts=0
     echo "PERSIST orch_group outcome=grouped issue=${pog_issue} owner=${pog_owner}" >&2
     # The grouping state reaches the tracking issue only later in the tick
     # (post_state_comment), so a cached pipeline comment with the same marker
-    # (key and owner) means this pause was already announced: skip the post.
+    # (key and owner), posted no earlier than the item's newest journal entry,
+    # means this pause episode was already announced: skip the post. A marker
+    # from an earlier episode (older than the failure that regrouped the item)
+    # does not count.
     if jq -e --arg n "${pog_issue}" --arg login "${PERSIST_JOURNAL_LOGIN_CACHE}" \
-      --arg m "AI_PERSIST_GROUPED_V1 key=${pog_key} owner=${pog_owner} " \
-      'any((.[$n].comments? // [])[]?; type == "object" and ((.user.login? // "") == $login) and ((.body // "") | tostring | contains($m)))' \
+      --arg m "AI_PERSIST_GROUPED_V1 key=${pog_key} owner=${pog_owner} " --argjson ts "${pog_ts}" \
+      'any((.[$n].comments? // [])[]?; type == "object" and ((.user.login? // "") == $login) and ((.body // "") | tostring | contains($m))
+        and (((.created_at // "") | tostring | (try fromdateiso8601 catch -1)) >= $ts))' \
       "${pog_details}" >/dev/null 2>&1; then
       continue
     fi
@@ -19985,7 +19992,8 @@ persist_orch_group_failures() {
     [$g[0].new[]? | select(type == "number" and . > 0) | tostring] as $new
     | .waves[$wi].issues[]?
     | select(type == "object" and (.grouped_under | type) == "object" and ((.github_issue | tostring) | IN($new[])))
-    | [(.github_issue | tostring), (.grouped_under.owner | tostring), (.grouped_under.key | tostring)] | @tsv' "${STATE_FILE}" 2>/dev/null || true)
+    | [(.github_issue | tostring), (.grouped_under.owner | tostring), (.grouped_under.key | tostring),
+       (($g[0].newest_failure_ts? // {})[.github_issue | tostring] // 0 | tostring)] | @tsv' "${STATE_FILE}" 2>/dev/null || true)
   rm -f "${pog_out}" "${pog_details}"
   return 0
 }
