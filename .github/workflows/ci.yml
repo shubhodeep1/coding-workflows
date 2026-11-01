@@ -2877,7 +2877,7 @@ jobs:
           rm -f /tmp/single_file_step_*.log /tmp/single_file_step_*.rc \
             /tmp/single_file_step_*.start_ms /tmp/single_file_step_*.end_ms
           sf_now_ms() { date +%s%3N; }
-          sf_step_start_ms="$(sf_now_ms)"
+          sf_step_start_ms="$(sf_now_ms || true)"
           case "${sf_step_start_ms}" in
             ''|*[!0-9]*)
               sf_step_start_ms=0
@@ -2907,7 +2907,7 @@ jobs:
                 [ -e "/tmp/single_file_step_${sf_i}.rc" ] || sf_running+=("${sf_modules[${sf_i}]}")
               done
               [ "${#sf_running[@]}" -gt 0 ] || break
-              sf_beat_ms="$(sf_now_ms)"
+              sf_beat_ms="$(sf_now_ms || true)"
               sf_beat_elapsed_ms=0
               case "${sf_beat_ms}" in
                 ''|*[!0-9]*) ;;
