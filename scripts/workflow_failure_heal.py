@@ -577,8 +577,8 @@ _STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
 # Some runners (and logs re-rendered without ANSI codes) echo the script
 # unstyled. The runner always prints the script first and the `shell:` /
 # `with:` / `env:` sections after it, so inside a Run header every line before
-# the first section key is script too. Those lines are dropped once the header
-# is confirmed (a section key or `##[endgroup]`); a header that never closes
+# the first section key is script too. Those lines are dropped once a section
+# key confirms the header; a header that closes or never closes without one
 # keeps them, so a log cut mid-header still carries its output (Refs #8602).
 _STEP_HEADER_SECTION_RE = re.compile(r"^(?:shell|with|env):")
 # The `env:` block of a step header prints every variable's value, and values
@@ -3019,8 +3019,10 @@ def _drop_step_script_lines(text: str) -> str:
 	so are unstyled lines between the header line and the header's first
 	``shell:`` / ``with:`` / ``env:`` section key (the echoed script printed
 	without colour). Those unstyled lines are buffered and dropped only once
-	the header is confirmed by a section key or ``##[endgroup]``; a header that
-	never closes (or is reopened by another ``##[group]Run`` first) keeps them
+	a section key confirms the header; a header that never closes, closes
+	with ``##[endgroup]`` before any section key (a user-defined ``Run ...``
+	group, since the runner prints a script step's ``shell:`` before the
+	close), or is reopened by another ``##[group]Run`` first keeps them
 	(fail open), so a log cut mid-header still carries the step's output. The
 	header line itself, the ``shell:`` / ``with:`` / ``env:`` block (left for
 	``_strip_step_env_values``), and every line after ``##[endgroup]`` are
@@ -3060,7 +3062,9 @@ def _drop_step_script_lines(text: str) -> str:
 			in_script = True
 			header_stamped = content != line
 		elif in_header and real_close:
-			# The closed header confirms the buffered lines were script.
+			# Closed before any section key: not an echoed script, keep them.
+			if in_script:
+				kept.extend(pending)
 			pending = []
 			in_header = False
 			in_script = False

@@ -1128,7 +1128,7 @@ def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
 	dropped = heal._drop_step_script_lines(BTC_SWEEPER_UNSTYLED_STEP_LOG)
 	assert "set -euo pipefail\n" not in dropped.split("##[group]Run set -euo pipefail", 1)[1]
 	assert "implement attempt failed" not in dropped
-	assert "if [ " not in dropped and "\nfi" not in dropped
+	assert "if [ " not in dropped and "0000500Z fi" not in dropped
 	# Header line, `shell:` / `env:` block and all output after the close stay.
 	assert "##[group]Run set -euo pipefail" in dropped
 	assert "2026-10-31T09:10:00.0000600Z shell: /usr/bin/bash -e {0}" in dropped
@@ -1171,8 +1171,17 @@ def test_drop_step_script_lines_keeps_uses_step_header() -> None:
 	)
 	assert heal._drop_step_script_lines(log) == log
 	# A header with no sections closes at once and is unchanged.
-	bare = "2026-10-31T09:10:00Z ##[group]Run true\n2026-10-31T09:10:00Z ##[endgroup]\nout\n"
+	bare = "2026-10-31T09:10:00Z ##[group]Run true\n2026-10-31T09:10:00Z ##[endgroup]\n2026-10-31T09:10:01Z out\n"
 	assert heal._drop_step_script_lines(bare) == bare
+	# A group closed before any section key is a user-defined `Run ...` group,
+	# not an echoed script: its output lines are kept.
+	user_group = (
+		"2026-10-31T09:10:00Z ##[group]Run tests\n"
+		"2026-10-31T09:10:00Z FAILED test_x\n"
+		"2026-10-31T09:10:00Z ##[endgroup]\n"
+		"2026-10-31T09:10:01Z after group\n"
+	)
+	assert heal._drop_step_script_lines(user_group) == user_group
 
 
 def test_drop_step_script_lines_keeps_unconfirmed_header_lines() -> None:
