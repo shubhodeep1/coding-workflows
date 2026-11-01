@@ -9720,8 +9720,8 @@ create_judge_fixup_issues_from_verdict() {
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
-                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-                  '.issue_number_map[$fix_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"}]' \
+                jq --arg fix_id "${FIX_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+                  '.issue_number_map[$fix_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $existing_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
                   "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${FIX_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate fix-up."
                 continue
@@ -9756,8 +9756,8 @@ create_judge_fixup_issues_from_verdict() {
           FIX_URL_CLEAN="$(printf '%s\n' "${FIX_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           FIX_NEW_NUM="$(basename "${FIX_URL_CLEAN%%[?#]*}")"
           if [[ "${FIX_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${FIX_ID}" ] && [ "${FIX_ID}" != "null" ]; then
-            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"}]' \
+            jq --arg fix_id "${FIX_ID}" --argjson fix_new_num "${FIX_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+              '.issue_number_map[$fix_id] = $fix_new_num | .waves[$wave_idx].issues |= map(select(.id != $fix_id)) | .waves[$wave_idx].issues += [{"id": $fix_id, "github_issue": $fix_new_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
             record_orchestrator_lesson_event "$(lesson_event_json_for_judge_fixup "${FIX_TITLE}" "${FIX_NEW_NUM}" "$((JUDGE_CYCLE + 1))" "${fix_issue}")"
           fi
@@ -19750,6 +19750,82 @@ persist_budget_govern_issue() {
   return 0
 }
 
+# persist_orch_since_note WAVE_NUM [DETAILS_JSON] (issue #8427, P7).
+# Prints the `## Since this plan was decomposed` section for a wave WAVE_NUM
+# (1-based) issue body, rendered by scripts/persist_orchestrator.py since-note
+# from STATE_FILE only: merged items of earlier waves with their
+# persist_merged_pr and files_touched, judge-added items, and the newest
+# journal step of items whose comments are in DETAILS_JSON (the tick's
+# _current_wave_details_json cache). API budget (section 14): zero calls; the
+# pipeline login is the tick's shared PERSIST_JOURNAL_LOGIN_CACHE and no
+# identity read is made here (an empty login omits the journal lines).
+# Prints nothing, and starts no Python, unless PERSIST_ORCH_CONTEXT_ENABLED is
+# true and the helper is staged. Always returns 0.
+persist_orch_since_note() {
+  local pos_wave="${1:-}" pos_details="${2:-}" pos_base pos_details_file="" pos_out
+  [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] || return 0
+  [ -f scripts/persist_orchestrator.py ] || return 0
+  [[ "${pos_wave}" =~ ^[1-9][0-9]*$ ]] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  pos_base="${RUNNER_TEMP:-/tmp}"
+  [ -d "${pos_base}" ] || pos_base="/tmp"
+  pos_out="$(mktemp "${pos_base}/persist_orch_since.XXXXXX" 2>/dev/null)" || return 0
+  if [ -n "${pos_details}" ] && printf '%s' "${pos_details}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    pos_details_file="$(mktemp "${pos_base}/persist_orch_details.XXXXXX" 2>/dev/null)" || pos_details_file=""
+    if [ -n "${pos_details_file}" ]; then
+      printf '%s' "${pos_details}" > "${pos_details_file}" 2>/dev/null || { rm -f "${pos_details_file}"; pos_details_file=""; }
+    fi
+  fi
+  local pos_args=(since-note --state-file "${STATE_FILE}" --current-wave "${pos_wave}"
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --out "${pos_out}")
+  [ -n "${pos_details_file}" ] && pos_args+=(--details-file "${pos_details_file}")
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py "${pos_args[@]}" < /dev/null || true
+  [ -s "${pos_out}" ] && cat "${pos_out}" 2>/dev/null || true
+  rm -f "${pos_out}" ${pos_details_file:+"${pos_details_file}"}
+  return 0
+}
+
+# persist_orch_judge_added_json (issue #8427, P7): "true" when
+# PERSIST_ORCH_CONTEXT_ENABLED is on, else "false". The wave-judge additions
+# record persist_judge_added only then, so the since-note can tell judge-added
+# items from decomposed ones; with the switch off the state is unchanged.
+persist_orch_judge_added_json() {
+  if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]; then echo true; else echo false; fi
+}
+
+# persist_orch_record_merged_pr WAVE_IDX ISSUE PR (issue #8427, P7): record
+# persist_merged_pr on a prior-wave entry the backward scan found merged (the
+# current-wave persist loop only covers .waves[WAVE_IDX]). Acts only with
+# PERSIST_ORCH_CONTEXT_ENABLED exactly "true" (the same rule as the workflow
+# gates and scripts/persist_orchestrator.py), only when the field is still
+# absent, and makes no API call. Always returns 0.
+persist_orch_record_merged_pr() {
+  local porm_wi="${1:-}" porm_issue="${2:-}" porm_pr="${3:-}"
+  [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] || return 0
+  [[ "${porm_wi}" =~ ^[0-9]+$ ]] && [[ "${porm_issue}" =~ ^[0-9]+$ ]] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  if jq -e --argjson wi "${porm_wi}" --arg inum "${porm_issue}" \
+    'any(.waves[$wi].issues[]; (.github_issue | tostring) == $inum and has("persist_merged_pr"))' "${STATE_FILE}" >/dev/null 2>&1; then
+    return 0
+  fi
+  # Only a merged entry gets the field (a failed status write leaves none).
+  jq -e --argjson wi "${porm_wi}" --arg inum "${porm_issue}" \
+    'any(.waves[$wi].issues[]; (.github_issue | tostring) == $inum and .status == "merged")' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if ! [[ "${porm_pr}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "PERSIST orch_context outcome=skipped reason=pr_unknown issue=${porm_issue}" >&2
+    return 0
+  fi
+  if jq --argjson wi "${porm_wi}" --arg inum "${porm_issue}" --arg pr "${porm_pr}" \
+    '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum and .status == "merged")).persist_merged_pr = ($pr|tonumber)' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+    echo "PERSIST orch_context outcome=recorded issue=${porm_issue} pr=${porm_pr}" >&2
+  else
+    rm -f "${STATE_FILE}.tmp"
+    echo "PERSIST orch_context outcome=error reason=state_write_failed issue=${porm_issue}" >&2
+  fi
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -27549,14 +27625,21 @@ The poller will resume processing on the next cycle."
           # Capture intent fingerprints for the late-detected merged
           # sub-issue (going-forward only — see capture helper docs).
           _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+          _pom_bws_pr=""
           if [ -n "${_bws_integ}" ]; then
             _bws_pr="$(_subissue_closing_pr_number "${pw_inum}" || echo "")"
             if [[ "${_bws_pr}" =~ ^[0-9]+$ ]]; then
               capture_intent_fingerprints_for_merged_subissue "${pw_inum}" "${_bws_pr}" || true
             fi
+            _pom_bws_pr="${_bws_pr}"
             unset _bws_pr
           fi
+          # persist_merged_pr (issue #8427, P7): reuses the lookup above only; no
+          # integration branch means no PR number here (no new API call), so the
+          # since-note renders "PR unknown" for this item.
           unset _bws_integ
+          persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${_pom_bws_pr}"
+          unset _pom_bws_pr
         elif echo "${PW_LABELS}" | jq -e 'index("ai:closed")' >/dev/null 2>&1; then
           echo "  [backward-scan] #${pw_inum} is now ai:closed. Updating state."
           jq --argjson wi "${prior_idx}" --arg inum "${pw_inum}" \
@@ -27602,6 +27685,8 @@ The poller will resume processing on the next cycle."
                 '(.waves[$wi].issues[] | select((.github_issue | tostring) == $inum)).status = "merged"' \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
               PRIOR_WAVE_REMEDIATED="true"
+              # persist_merged_pr (issue #8427, P7): PW_PR is the verified merged PR.
+              persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${PW_PR}"
               _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
               if [ -n "${_bws_integ}" ]; then
                 _bws_pr="$(_subissue_closing_pr_number "${pw_inum}" || echo "")"
@@ -27765,6 +27850,10 @@ The poller will resume processing on the next cycle."
       DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body' | sed 's/\\n/\n/g')"
       DEF_EXPECTED_SECTION="$(echo "${ISSUE_DEF}" | jq -c '.files_touched // []' 2>/dev/null | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)"
       if [ -n "${DEF_EXPECTED_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_EXPECTED_SECTION}")"; fi
+      # Since-note (issue #8427, P7): empty unless PERSIST_ORCH_CONTEXT_ENABLED;
+      # no details cache yet at this point of the tick, so no journal lines.
+      DEF_SINCE_SECTION="$(persist_orch_since_note "${CURRENT_WAVE}")"
+      if [ -n "${DEF_SINCE_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_SINCE_SECTION}")"; fi
       DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
 
       FULL_BODY="${DEF_BODY}
@@ -27957,6 +28046,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # ---------------------------------------------------------------
   ISSUE_STATES_JSON='{}'
   PR_STATES_JSON='{}'
+  # Merged PR per issue for persist_merged_pr (issue #8427, P7); filled only
+  # with PERSIST_ORCH_CONTEXT_ENABLED, never persisted (PR_STATES_JSON unchanged).
+  PERSIST_ORCH_MERGED_PRS_JSON='{}'
   RECONCILE_LABELS_CHANGED=false
   for inum in ${ISSUE_NUMS}; do
     if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
@@ -28003,6 +28095,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
     done
     PR_STATES_JSON="$(echo "${PR_STATES_JSON}" | jq -c --arg key "${inum}" --arg state "${PR_STATE}" --arg merged "${PR_MERGED}" '. + {($key): {state: $state, merged: ($merged == "true")}}' 2>/dev/null || echo "${PR_STATES_JSON}")"
+    if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [[ "${LINKED_PR_NUM}" =~ ^[1-9][0-9]*$ ]]; then
+      PERSIST_ORCH_MERGED_PRS_JSON="$(printf '%s' "${PERSIST_ORCH_MERGED_PRS_JSON}" | jq -c --arg key "${inum}" --argjson pr "${LINKED_PR_NUM}" '. + {($key): $pr}' 2>/dev/null || printf '%s' "${PERSIST_ORCH_MERGED_PRS_JSON}")"
+    fi
 
     BEFORE_LABELS="$(echo "${LABELS_JSON}" | jq -c --arg key "${inum}" '.[$key] // []')"
     AFTER_LABELS="$(reconcile_managed_issue_labels "${inum}" "${BEFORE_LABELS}" "${ISSUE_STATE}" "${PR_STATE}" "${PR_MERGED}")"
@@ -28227,6 +28322,24 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         fi
         unset _intent_integ
       fi
+    fi
+    # persist_merged_pr (issue #8427, P7): outside the transition branch, so a
+    # merged entry still missing it is recorded on a later tick too.
+    if [ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ] && [ "${_ws_status}" = "merged" ] && [[ "${_ws_gh}" =~ ^[0-9]+$ ]]; then
+      _pom_pr="$(printf '%s' "${PERSIST_ORCH_MERGED_PRS_JSON:-}" | jq -r --arg key "${_ws_gh}" '.[$key] // empty' 2>/dev/null || true)"
+      if [[ "${_pom_pr}" =~ ^[1-9][0-9]*$ ]] && ! jq -e --arg lid "${_ws_id}" --argjson wi "${WAVE_IDX}" \
+        'any(.waves[$wi].issues[]; .id == $lid and has("persist_merged_pr"))' "${STATE_FILE}" >/dev/null 2>&1; then
+        if jq --arg lid "${_ws_id}" --arg pr "${_pom_pr}" --argjson wi "${WAVE_IDX}" \
+          '(.waves[$wi].issues[] | select(.id == $lid)).persist_merged_pr = ($pr|tonumber)' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          RECONCILE_STATE_CHANGED=true
+          echo "PERSIST orch_context outcome=recorded issue=${_ws_gh} pr=${_pom_pr}" >&2
+        else
+          rm -f "${STATE_FILE}.tmp"
+          echo "PERSIST orch_context outcome=error reason=state_write_failed issue=${_ws_gh}" >&2
+        fi
+      fi
+      unset _pom_pr
     fi
   done < <(echo "${WAVE_STATUS}" | jq -c '.issues[]')
 
@@ -31877,8 +31990,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
             if [ -n "${EXISTING_NUM}" ]; then
               EXISTING_LABELS="$(get_issue_labels_json "${EXISTING_NUM}")"
               if ! has_label "${EXISTING_LABELS}" "ai:merged" && ! has_label "${EXISTING_LABELS}" "ai:closed"; then
-                jq --arg new_id "${NEW_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-                  '.issue_number_map[$new_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $existing_num, "status": "pending"}]' \
+                jq --arg new_id "${NEW_ID}" --argjson existing_num "${EXISTING_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+                  '.issue_number_map[$new_id] = $existing_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $existing_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
                   "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
                 echo "  ${NEW_ID}: already exists as #${EXISTING_NUM} and is still open, skipping duplicate addition."
                 continue
@@ -31913,8 +32026,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
           NEW_URL_CLEAN="$(printf '%s\n' "${NEW_URL}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
           ADD_NEW_NUM="$(basename "${NEW_URL_CLEAN%%[?#]*}")"
           if [[ "${ADD_NEW_NUM}" =~ ^[0-9]+$ ]] && [ -n "${NEW_ID}" ] && [ "${NEW_ID}" != "null" ]; then
-            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" \
-              '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"}]' \
+            jq --arg new_id "${NEW_ID}" --argjson add_new_num "${ADD_NEW_NUM}" --argjson wave_idx "${WAVE_IDX}" --argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)" \
+              '.issue_number_map[$new_id] = $add_new_num | .waves[$wave_idx].issues |= map(select(.id != $new_id)) | .waves[$wave_idx].issues += [{"id": $new_id, "github_issue": $add_new_num, "status": "pending"} + (if $pja then {"persist_judge_added": true} else {} end)]' \
               "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
           fi
         done
@@ -32123,6 +32236,10 @@ ${_gate_violations:-(no violation lines parsed — see workflow run log for the 
           DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body' | sed 's/\\n/\n/g')"
           DEF_EXPECTED_SECTION="$(echo "${ISSUE_DEF}" | jq -c '.files_touched // []' 2>/dev/null | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)"
           if [ -n "${DEF_EXPECTED_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_EXPECTED_SECTION}")"; fi
+          # Since-note (issue #8427, P7): empty unless PERSIST_ORCH_CONTEXT_ENABLED;
+          # the details cache holds the wave that just finished.
+          DEF_SINCE_SECTION="$(persist_orch_since_note "${NEXT_WAVE}" "${_current_wave_details_json:-}")"
+          if [ -n "${DEF_SINCE_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_SINCE_SECTION}")"; fi
           DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
 
           FULL_BODY="${DEF_BODY}

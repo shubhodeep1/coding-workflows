@@ -29530,5 +29530,252 @@ def test_persist_budget_managed_hook_records_basis_on_replan():
 		assert "persist_budget_basis" not in issues[1]
 
 
+
+# --- orchestrator context (issue #8427, P7) -------------------------------------------
+
+_POS_GUARD = '[ "${PERSIST_ORCH_CONTEXT_ENABLED:-false}" = "true" ]'
+
+
+def test_persist_orch_since_note_is_gated_placed_and_spends_no_api_call():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert script.index("persist_budget_govern_issue() {") < script.index("persist_orch_since_note() {") < script.index("invoke_stall_judge() {")
+	body = _extract_bash_function(script, "persist_orch_since_note() {")
+	python = body.index("python3 -B scripts/persist_orchestrator.py")
+	assert body.index(_POS_GUARD + " || return 0") < python
+	assert body.index("[ -f scripts/persist_orchestrator.py ] || return 0") < python
+	assert '--trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}"' in body
+	assert "gh " not in body and "gh_retry" not in body and "_safe_gh_jq" not in body
+	assert body.rstrip().endswith("return 0\n}")
+
+
+def test_persist_orch_since_note_hooks_both_creation_sites():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	calls = (
+		'DEF_SINCE_SECTION="$(persist_orch_since_note "${CURRENT_WAVE}")"',
+		'DEF_SINCE_SECTION="$(persist_orch_since_note "${NEXT_WAVE}" "${_current_wave_details_json:-}")"',
+	)
+	append = """if [ -n "${DEF_SINCE_SECTION}" ]; then DEF_BODY="$(printf '%s\\n\\n%s' "${DEF_BODY}" "${DEF_SINCE_SECTION}")"; fi"""
+	for call in calls:
+		assert script.count(call) == 1, call
+		at = script.index(call)
+		expected = script.rindex('if [ -n "${DEF_EXPECTED_SECTION}" ]; then DEF_BODY=', 0, at)
+		full = script.index('FULL_BODY="${DEF_BODY}', at)
+		assert at - expected < 400
+		assert script.index(append, at) < full
+		assert "gh issue create" not in script[expected:full]
+	assert script.count(append) == 2
+
+
+def test_persist_merged_pr_map_and_write_are_gated_and_outside_the_transition_branch():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert script.count("PERSIST_ORCH_MERGED_PRS_JSON='{}'") == 1
+	init = script.index("PERSIST_ORCH_MERGED_PRS_JSON='{}'")
+	assert script.rindex("  PR_STATES_JSON='{}'\n", 0, init) > init - 300
+	pr_states = script.index("PR_STATES_JSON=\"$(echo \"${PR_STATES_JSON}\" | jq -c --arg key \"${inum}\" --arg state \"${PR_STATE}\"", init)
+	fill = script.index('PERSIST_ORCH_MERGED_PRS_JSON="$(printf', pr_states)
+	gate = script.rindex("if " + _POS_GUARD + ' && [ "${PR_MERGED}" = "true" ] && [[ "${LINKED_PR_NUM}" =~ ^[1-9][0-9]*$ ]]; then', 0, fill)
+	assert pr_states < gate < fill
+	loop = script.index("  # Persist reconciled status decisions every cycle (not only narrow branches).\n")
+	loop_end = script.index("  done < <(echo \"${WAVE_STATUS}\" | jq -c '.issues[]')\n", loop)
+	block = script[loop:loop_end]
+	write = block.index(".persist_merged_pr = ($pr|tonumber)")
+	transition_end = block.index("        unset _intent_integ\n      fi\n    fi\n")
+	assert transition_end < write
+	assert block.rindex("    if " + _POS_GUARD + ' && [ "${_ws_status}" = "merged" ]', 0, write) > transition_end
+	assert 'has("persist_merged_pr")' in block and "RECONCILE_STATE_CHANGED=true" in block[write:]
+
+
+def _pos_run(tmp_path: Path, persist: str | None, *, details: str = "", stub_python: bool = False) -> tuple[subprocess.CompletedProcess, str]:
+	work = tmp_path / "work"
+	(work / "scripts").mkdir(parents=True)
+	for name in ("persist_orchestrator.py", "attempt_journal.py"):
+		shutil.copy(REPO_ROOT / "scripts" / name, work / "scripts" / name)
+	state = work / "state.json"
+	state.write_text(json.dumps({"waves": [
+		{"issues": [
+			{"id": "p1", "title": "a", "github_issue": 123, "status": "merged", "persist_merged_pr": 124, "files_touched": ["a/b.py"]},
+			{"id": "p2", "title": "b", "github_issue": 125, "status": "merged", "persist_merged_pr": 126, "files_touched": ["c.sh"]},
+		]},
+		{"issues": [{"id": "p3", "title": "c", "status": "not_created"}]},
+	]}), encoding="utf-8")
+	calls = tmp_path / "python_calls.log"
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	if stub_python:
+		stub = bin_dir / "python3"
+		stub.write_text(f"#!/bin/sh\necho \"$*\" >> '{calls}'\nexit 0\n", encoding="utf-8")
+		stub.chmod(0o755)
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	harness = (
+		"set -euo pipefail\n"
+		f"STATE_FILE='{state}'\nRUNNER_TEMP='{tmp_path}'\nPERSIST_JOURNAL_LOGIN_CACHE=''\n"
+		+ _extract_bash_function(script, "_is_truthy() {")
+		+ _extract_bash_function(script, "persist_orch_since_note() {")
+		+ "DEF_BODY='Body line'\n"
+		+ f"DEF_SINCE_SECTION=\"$(persist_orch_since_note 2 '{details}')\"\n"
+		+ """if [ -n "${DEF_SINCE_SECTION}" ]; then DEF_BODY="$(printf '%s\\n\\n%s' "${DEF_BODY}" "${DEF_SINCE_SECTION}")"; fi\n"""
+		+ "printf '%s' \"${DEF_BODY}\"\n"
+	)
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+	if persist is not None:
+		env["PERSIST_ORCH_CONTEXT_ENABLED"] = persist
+	proc = subprocess.run(["bash", "-c", harness], cwd=work, env=env, capture_output=True, text=True, timeout=60, check=False)
+	return proc, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+
+def test_persist_orch_since_note_switch_off_keeps_issue_bodies_byte_identical():
+	for persist in (None, "false", "0", "no", "1", "yes", "on", "TRUE "):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, calls = _pos_run(Path(tmp), persist, stub_python=True)
+			assert proc.returncode == 0, proc.stderr
+			assert proc.stdout == "Body line", persist
+			assert calls == "", persist
+			assert proc.stderr == "", persist
+
+
+def test_persist_orch_since_note_switch_on_names_merged_prs_and_files():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _ = _pos_run(Path(tmp), "true", details='{"123": {"comments_available": true, "comments": []}}')
+		assert proc.returncode == 0, proc.stderr
+		assert proc.stdout.startswith("Body line\n\n## Since this plan was decomposed\n\n")
+		assert "- `p1`: issue 123, merged as PR 124. Files: `a/b.py`" in proc.stdout
+		assert "- `p2`: issue 125, merged as PR 126. Files: `c.sh`" in proc.stdout
+		assert "PERSIST orch_context outcome=ok" in proc.stderr
+		# Scratch files are removed.
+		assert not list(Path(tmp).glob("persist_orch_*"))
+
+
+def _persist_loop_run(tmp_path: Path, persist: str | None, merged_map: str, issues: list[dict], wave_status: list[dict]) -> tuple[subprocess.CompletedProcess, dict]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = script.index("  # Persist reconciled status decisions every cycle (not only narrow branches).\n")
+	end = script.index("  done < <(echo \"${WAVE_STATUS}\" | jq -c '.issues[]')\n", start)
+	block = script[start:end] + "  done < <(echo \"${WAVE_STATUS}\" | jq -c '.issues[]')\n"
+	state = tmp_path / "state.json"
+	state.write_text(json.dumps({"waves": [{"issues": issues}]}), encoding="utf-8")
+	harness = (
+		"set -euo pipefail\n"
+		f"STATE_FILE='{state}'\nWAVE_IDX=0\n"
+		f"PERSIST_ORCH_MERGED_PRS_JSON='{merged_map}'\n"
+		f"WAVE_STATUS='{json.dumps({'issues': wave_status})}'\n"
+		+ _extract_bash_function(script, "_is_truthy() {")
+		+ "add_healing_note() { :; }\n_subissue_closing_pr_number() { echo ''; }\n"
+		+ block
+		+ "echo \"CHANGED=${RECONCILE_STATE_CHANGED}\"\n"
+	)
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_"))}
+	if persist is not None:
+		env["PERSIST_ORCH_CONTEXT_ENABLED"] = persist
+	proc = subprocess.run(["bash", "-c", harness], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
+	return proc, json.loads(state.read_text(encoding="utf-8"))
+
+
+def test_persist_merged_pr_is_recorded_once_even_without_a_status_change():
+	issues = [
+		{"id": "a", "github_issue": 12, "status": "merged"},
+		{"id": "b", "github_issue": 13, "status": "merged", "persist_merged_pr": 99},
+		{"id": "c", "github_issue": 14, "status": "implementing"},
+	]
+	wave_status = [
+		{"id": "a", "github_issue": 12, "status": "merged"},
+		{"id": "b", "github_issue": 13, "status": "merged"},
+		{"id": "c", "github_issue": 14, "status": "implementing"},
+	]
+	merged_map = '{"12": 40, "13": 41, "14": 42}'
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _persist_loop_run(Path(tmp), "true", merged_map, issues, wave_status)
+		assert proc.returncode == 0, proc.stderr
+		got = state["waves"][0]["issues"]
+		assert got[0]["persist_merged_pr"] == 40
+		assert got[1]["persist_merged_pr"] == 99
+		assert "persist_merged_pr" not in got[2]
+		assert "CHANGED=true" in proc.stdout
+		assert "PERSIST orch_context outcome=recorded issue=12 pr=40" in proc.stderr
+		assert "issue=13" not in proc.stderr
+	for persist in (None, "false", "yes", "1"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, state = _persist_loop_run(Path(tmp), persist, merged_map, issues, wave_status)
+			assert proc.returncode == 0, proc.stderr
+			assert state["waves"][0]["issues"] == issues
+			assert "CHANGED=false" in proc.stdout and "PERSIST orch_context" not in proc.stderr
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _persist_loop_run(Path(tmp), "true", "{}", issues, wave_status)
+		assert proc.returncode == 0, proc.stderr
+		assert "persist_merged_pr" not in state["waves"][0]["issues"][0] and "CHANGED=false" in proc.stdout
+
+
+def test_persist_orch_context_switch_and_staging_in_poller_workflow():
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert workflow.count("PERSIST_ORCH_CONTEXT_ENABLED: ${{ vars.PERSIST_ORCH_CONTEXT_ENABLED || 'false' }}") == 1
+	assert " persist_budget.py persist_orchestrator.py " in workflow
+
+
+def test_persist_judge_added_marker_is_written_only_at_wave_judge_additions_and_gated():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	marker = '+ (if $pja then {"persist_judge_added": true} else {} end)]'
+	arg = '--argjson pja "$(persist_orch_judge_added_json 2>/dev/null || echo false)"'
+	assert script.count(marker) == 4 and script.count(arg) == 4
+	fixup = _extract_bash_function(script, "create_judge_fixup_issues_from_verdict() {")
+	assert fixup.count(marker) == 2
+	judge_block = script[script.index("      # Create new issues if judge found gaps"):]
+	assert judge_block.count(marker) == 2
+	helper = _extract_bash_function(script, "persist_orch_judge_added_json() {")
+	assert _POS_GUARD in helper
+	for persist, expected in ((None, "false"), ("false", "false"), ("yes", "false"), ("1", "false"), ("true", "true")):
+		env = {k: v for k, v in os.environ.items() if not k.startswith("PERSIST_")}
+		if persist is not None:
+			env["PERSIST_ORCH_CONTEXT_ENABLED"] = persist
+		harness = "set -euo pipefail\n" + _extract_bash_function(script, "_is_truthy() {") + helper + "persist_orch_judge_added_json\n"
+		proc = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, timeout=60, check=False)
+		assert proc.returncode == 0, proc.stderr
+		assert proc.stdout.strip() == expected, persist
+
+
+def test_persist_orch_record_merged_pr_covers_backward_scan_merges():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(script, "persist_orch_record_merged_pr() {")
+	assert "gh " not in helper and "gh_retry" not in helper
+	# Both prior-wave backward-scan merge paths call it; the ready-to-merge path reuses PW_PR.
+	assert script.count('persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${_pom_bws_pr}"') == 1
+	assert script.count('persist_orch_record_merged_pr "${prior_idx}" "${pw_inum}" "${PW_PR}"') == 1
+	# No new API lookup for a project without an integration branch (P7 zero-new-calls budget).
+	assert '_pom_bws_pr="$(_subissue_closing_pr_number' not in script
+	issues = [
+		{"id": "a", "github_issue": 12, "status": "merged"},
+		{"id": "b", "github_issue": 13, "status": "merged", "persist_merged_pr": 99},
+		{"id": "c", "github_issue": 14, "status": "implementing"},
+	]
+	for persist, issue, pr, expected in (
+		("true", 12, "40", 40),
+		("true", 13, "41", 99),
+		("true", 13, "", None),
+		("true", 14, "42", None),
+		("true", 14, "", None),
+		("true", 12, "", None),
+		("yes", 12, "40", None),
+		(None, 12, "40", None),
+	):
+		with tempfile.TemporaryDirectory() as tmp:
+			state = Path(tmp) / "state.json"
+			state.write_text(json.dumps({"waves": [{"issues": issues}]}), encoding="utf-8")
+			env = {k: v for k, v in os.environ.items() if not k.startswith("PERSIST_")}
+			if persist is not None:
+				env["PERSIST_ORCH_CONTEXT_ENABLED"] = persist
+			harness = f"set -euo pipefail\nSTATE_FILE='{state}'\n" + helper + f"persist_orch_record_merged_pr 0 {issue} '{pr}'\n"
+			proc = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True, timeout=60, check=False)
+			assert proc.returncode == 0, proc.stderr
+			got = {e["github_issue"]: e for e in json.loads(state.read_text(encoding="utf-8"))["waves"][0]["issues"]}
+			assert got[issue].get("persist_merged_pr") == (expected if expected is not None else issues[issue - 12].get("persist_merged_pr")), (persist, issue, pr)
+			if expected is not None and issue == 12:
+				assert f"PERSIST orch_context outcome=recorded issue=12 pr={expected}" in proc.stderr
+			else:
+				assert "outcome=recorded" not in proc.stderr
+			assert ("reason=pr_unknown issue=12" in proc.stderr) == (persist == "true" and pr == "" and issue == 12), (persist, issue, pr)
+			if issue in (13, 14):
+				# Already recorded, or not merged: no PERSIST orch_context line at all.
+				assert "PERSIST orch_context" not in proc.stderr, (persist, issue, pr)
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
