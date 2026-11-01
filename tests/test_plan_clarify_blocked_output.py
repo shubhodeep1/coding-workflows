@@ -670,6 +670,11 @@ case "${STUB_MODE}" in
     echo 'CLAUDE_POOL run reason=$(id);::error::x outcome=::warning::y' >&2
     exit 1
     ;;
+  glued)
+    printf 'cli line without newline' >&2
+    echo "CLAUDE_POOL run role=CLARIFY account=TEAM1 outcome=crashed reason=no_result exit_code=1" >&2
+    exit 1
+    ;;
   empty)
     : > "$2"
     exit 0
@@ -770,6 +775,8 @@ def test_clarify_attempt_failure_line_edge_cases() -> None:
 		# A spoofed line cannot carry workflow commands or shell syntax.
 		"spoof_only": lambda line: not any(bad in line for bad in ("$", ";", "::", "(", ")")),
 		"empty": lambda line: "kind=empty_output exit_code=0" in line,
+		# The CLI's unterminated last stderr line shares a line with the pool line.
+		"glued": lambda line: "pool_outcome=crashed pool_reason=no_result pool_exit_code=1" in line,
 		"nopool": lambda line: "engine=Claude" in line and "exit_code=1" in line and unknown in line,
 	}
 	for mode, check in cases.items():
