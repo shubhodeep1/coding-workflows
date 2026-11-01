@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-01T03:17:11Z",
+  "issue_number": 8586,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=.github/workflows/ci.yml:1-1; cited_path=copilot-pull-request-reviewer check-run; files_touched=.github/workflows/ci.yml, agents.d/wfopt-2026-09-28-ci-subtest-timing.md, changelog.d/wfopt-2026-09-28-ci-single-file-overlap.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 8590,
+  "record_id": "lesson_20261101031711_31864d0a22",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check-run",
+    ".github/workflows/ci.yml",
+    "agents.d/wfopt-2026-09-28-ci-subtest-timing.md",
+    "changelog.d/wfopt-2026-09-28-ci-single-file-overlap.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
