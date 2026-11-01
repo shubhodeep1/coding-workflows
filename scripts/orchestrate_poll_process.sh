@@ -20022,6 +20022,30 @@ _persist_orch_wave_check_clear() {
   return 0
 }
 
+# _persist_orch_wave_check_unjudge REASON (issue #8427, P9). Called on the wave
+# judge's no-verdict exits (checkout failure, isolation unavailable, judge run
+# failed, unparseable output). When this tick's judge run came from the
+# between-waves check (PERSIST_ORCH_WAVE_CHECK_BLOCK set), removes the
+# wave_check_judged / wave_check_judged_at marker written before the judge ran,
+# so the next tick invokes the judge again instead of holding as
+# judged_recently. The wait fields are kept. No-op otherwise.
+_persist_orch_wave_check_unjudge() {
+  local pwcu_reason="$1"
+  [ -n "${PERSIST_ORCH_WAVE_CHECK_BLOCK:-}" ] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  jq -e 'type == "object" and (has("wave_check_judged") or has("wave_check_judged_at"))' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if jq 'del(.wave_check_judged, .wave_check_judged_at)' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+    && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+    && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+    echo "PERSIST wave_check outcome=unjudged reason=${pwcu_reason}" >&2
+    post_state_comment || true
+  else
+    rm -f "${STATE_FILE}.persist_wave_check.tmp"
+    echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+  fi
+  return 0
+}
+
 # _persist_orch_wave_check_stamp HEAD_SHA [SINCE] (issue #8427, P9). Writes
 # wave_check_wait_since (SINCE when given, else now, starting the wait clock)
 # and wave_check_wait_head (the head last seen at the boundary; empty when no
@@ -31826,6 +31850,7 @@ Manual intervention required." >/dev/null \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+    _persist_orch_wave_check_unjudge judge_checkout_failed
     continue
   fi
 
@@ -32160,12 +32185,14 @@ ${PR_DIFF}
 	  if [ "${wave_judge_rc:-0}" -eq 77 ]; then
 	    echo "::warning::Wave judge isolation unavailable for #${TRACKING_NUM}; deferring without changing wave state." >&2
 	    [ "${wave_isolation_skipped:-false}" = true ] || tg_notify "Wave judge isolation unavailable for #${TRACKING_NUM}; retrying next poll." "DEBUG"
+	    _persist_orch_wave_check_unjudge judge_isolation_unavailable
 	    continue
 	  fi
 	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
 	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
 	    _judge_output_failure_alert "Orchestrator Judge failed for #${TRACKING_NUM}."
 	    unblock_handover_judge_output "llm_failed"
+	    _persist_orch_wave_check_unjudge judge_failed
 	    continue
 	  fi
 	  _clear_judge_isolation_state WAVE_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
@@ -32178,6 +32205,7 @@ ${PR_DIFF}
     echo "::error::Could not parse judge output for #${TRACKING_NUM}"
     _judge_output_failure_alert "Orchestrator Judge output unparseable for #${TRACKING_NUM}."
     unblock_handover_judge_output "unparseable"
+    _persist_orch_wave_check_unjudge judge_unparseable
     continue
   fi
   if [ "$(jq -r '.judge_output_failures // 0' "${STATE_FILE}" 2>/dev/null || echo 0)" != "0" ]; then

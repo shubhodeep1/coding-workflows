@@ -30423,5 +30423,36 @@ def test_persist_orch_wave_check_ignores_failing_checks_outside_the_required_nam
 		assert out["STUCK"] == "true" and "failing check: copilot-pull-request-reviewer (failure)" in out["BLOCK"]
 
 
+def test_persist_orch_wave_check_judge_no_verdict_drops_the_judged_marker():
+	"""A wave judge run that produced no verdict (checkout failure, isolation
+	unavailable, judge failure, unparseable output) must not leave the
+	wave_check_judged marker behind, or the next tick holds as judged_recently
+	for MAX_WAIT minutes instead of retrying the judge."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	for reason in ("judge_checkout_failed", "judge_isolation_unavailable", "judge_failed", "judge_unparseable"):
+		call = f"_persist_orch_wave_check_unjudge {reason}\n"
+		assert script.count(call) == 1, reason
+		after = script[script.index(call) + len(call):].lstrip(" \t")
+		assert after.startswith("continue\n"), reason
+	helper = _extract_bash_function(script, "_persist_orch_wave_check_unjudge() {")
+	for block, expect_removed in (("x", True), ("", False)):
+		with tempfile.TemporaryDirectory() as tmp:
+			state_file = Path(tmp) / "state.json"
+			state_file.write_text(json.dumps(_pwc_state(wave_check_wait_since="2026-11-01T00:00:00Z", wave_check_wait_head=_PWC_SHA,
+				wave_check_judged=f"{_PWC_SHA}:red", wave_check_judged_at=1)), encoding="utf-8")
+			posts = Path(tmp) / "posts.log"
+			harness = (f"STATE_FILE='{state_file}'\nPERSIST_ORCH_WAVE_CHECK_BLOCK='{block}'\n"
+				f"post_state_comment() {{ echo post >> '{posts}'; }}\n{helper}_persist_orch_wave_check_unjudge judge_failed\n")
+			proc = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, timeout=30, check=False)
+			assert proc.returncode == 0, proc.stderr
+			after_state = json.loads(state_file.read_text(encoding="utf-8"))
+			assert after_state["wave_check_wait_since"] == "2026-11-01T00:00:00Z" and after_state["wave_check_wait_head"] == _PWC_SHA
+			if expect_removed:
+				assert "wave_check_judged" not in after_state and "wave_check_judged_at" not in after_state
+				assert "PERSIST wave_check outcome=unjudged reason=judge_failed" in proc.stderr and posts.exists()
+			else:
+				assert after_state["wave_check_judged"] == f"{_PWC_SHA}:red" and not posts.exists() and proc.stderr == ""
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
