@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-failure-heal-intake.yml:151-159, 446-454 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR adds a new environment variable, WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED. According to the pre-push test gate report, this causes failures in tests/test_review_autofix_provider_outage_contract.py and tests/test_workflow_checkout_integration_ref_audit.py.\n  WHY: The CI pipeline reports that the changes cause regressions in existing test suites, so someone needs to check whether the new environment variable interacts unexpectedly with the test infrastructure. The reviewer gave severity BLOCKER, mapped here to critical.\n- (external check-run, no repository source location):copilot-pull-request-reviewer run 41296766258 job 124819156204 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails before it reviews anything, because prompt creation returns HTTP 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\").\n  WHY: The Copilot review never completes and the check stays failed, but the failure does not map to any changed file or line, and no code in this PR can change the repo's custom-instruction size budget. Both reviewers gave severity NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING: scripts/workflow_failure_heal_intake.sh:`_heal_run_reproduction`, lines 3393 and 3396 | HARDENING_RISK_SCORE=1\n  PROBLEM: This code predates the PR. The `last-green-run` call and the `HEAD_BRANCH` writer still use the raw `HEAD_BRANCH`, while the two handoff readers use the checked branch.\n  WHY: The writer and its reader at line 3642 agree with each other, so nothing fails today. The reviewer suggests no change in this PR, or optionally a one-line comment at line 3396 (estimated lines changed: 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/workflow-failure-heal-intake.yml:151-159, 446-454 | severity=BLOCKER | confidence=4\n  PROBLEM: The PR adds a new environment variable, WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED. According to the pre-push test gate report, this causes failures in tests/test_review_autofix_provider_outage_contract.py and tests/test_workflow_checkout_integration_ref_audit.py.\n  WHY: The CI pipeline reports that the changes cause regressions in existing test suites, so someone needs to check whether the environment variable setup interacts unexpectedly with the test infrastructure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- External GitHub check; no repository source file identified:`copilot-pull-request-reviewer`, run 41296766258, job 124819156204 | severity=NIT | confidence=5\n  PROBLEM: The review check failed before completing because prompt creation returned `custom_instructions_too_large` (HTTP 422).\n  WHY: The Copilot review does not run to completion, and the check remains failed. The provided log does not map this failure to a defect in the PR diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (external check-run, no repository source location):failed check `copilot-pull-request-reviewer`, run 41296766258, job 124819156204 | severity=NIT | confidence=5 (on the failure fact; 1 on any diff mapping \u2014 none exists)\n  PROBLEM: The check fails before reviewing: HTTP 422 `custom_instructions_too_large` (\"Prompt too big after adding system message\"). It does not map to any changed file or line, and the diff cannot change the repo's custom-instruction size budget.\n  WHY: Prompt assembly in the Copilot review action fails because of the repo-level instruction size, and no code path in this PR contributes to it.\n- HARDENING: scripts/workflow_failure_heal_intake.sh, lines 3396 and 3643 | HARDENING_RISK_SCORE=1\n  PROBLEM: The reproduction last-green cache writer and reader still key on the raw `HEAD_BRANCH`, while the handoff consumers use the validated branch.\n  WHY: The writer and reader agree with each other, so the behavior is correct today. A one-line comment at 3396 noting that the divergence is intentional would guard a future edit (estimated lines changed: 1).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "807efcae6cde8909efc1c0eee3a10e7f253ed611bb77391626ffe81465f4964e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8597,
+    "run_id": "41296756272",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41296756272",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101104138_eb94783555",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8597,
+    "run_id": "41296756272"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-01T10:41:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
