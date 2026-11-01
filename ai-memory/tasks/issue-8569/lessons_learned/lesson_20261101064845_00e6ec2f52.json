@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-01T06:48:45Z",
+  "issue_number": 8569,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 007 as out-of-scope; anchor=(external check-run) copilot-pull-request-reviewer:n/a; cited_path=(external check-run) copilot-pull-request-reviewer; files_touched=.github/workflows/ci.yml, .github/workflows/orchestrate.yml, .github/workflows/orchestrate_poll.yml, agents.d/8427-p7-persist-orch-context.md, changelog.d/8427-p7-persist-orch-context.md, docs/INVENTORY.md, scripts/orchestrate_poll_process.sh, scripts/persist_orchestrator.py, tests/test_orchestrate_poll_process.py, tests/test_persist_orchestrator.py, tests/test_workflow_untrusted_input_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8582,
+  "record_id": "lesson_20261101064845_00e6ec2f52",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "(external check-run) copilot-pull-request-reviewer",
+    ".github/workflows/ci.yml",
+    ".github/workflows/orchestrate.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    "agents.d/8427-p7-persist-orch-context.md",
+    "changelog.d/8427-p7-persist-orch-context.md",
+    "docs/INVENTORY.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/persist_orchestrator.py",
+    "tests/test_orchestrate_poll_process.py",
+    "tests/test_persist_orchestrator.py",
+    "tests/test_workflow_untrusted_input_contract.py"
+  ]
+}
