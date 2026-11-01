@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8613,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8613\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8617\",\"pr_number\":8617,\"branch\":\"ai/issue-8613\",\"run_id\":\"41304437489\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41304437489\",\"changed_files\":[\"changelog.d/8613-filter-log-runtime-lines-unstyled-script.md\",\"scripts/workflow_failure_heal.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "f93b8d71007e4b33ab4eaa9a735a9591251e0e8337f1185c9b5e85d95879ccc7",
+  "lineage": {
+    "issue_number": 8613,
+    "parent_ids": [],
+    "pr_number": 8617,
+    "run_id": "41304437489",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41304437489",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8617"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261101124549_32c3b776f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8613,
+    "level": "run",
+    "pr_number": 8617,
+    "run_id": "41304437489"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8613: https://github.com/shubhodeep1/coding-workflows/pull/8617",
+  "timestamps": {
+    "created_at": "2026-11-01T12:45:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
