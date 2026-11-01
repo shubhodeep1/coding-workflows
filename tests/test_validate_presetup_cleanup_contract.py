@@ -140,14 +140,24 @@ def test_collect_status_without_runtime_dir_writes_no_files(tmp_path: Path) -> N
 	assert step.get("if") == FINALIZE_IF
 	body = _run_text(step)
 	assert "${{" not in body
-	for label, runtime_dir in (("empty", ""), ("missing", str(tmp_path / "case-missing" / "missing"))):
+	assert step.get("env", {}).get("SUPPORT_STAGING_OUTCOME") == "${{ steps.support_staging.outcome }}"
+	staged_runtime = tmp_path / "case-staging" / "runtime"
+	cases = (
+		("empty", "", "success"),
+		("missing", str(tmp_path / "case-missing" / "missing"), "success"),
+		("staging", str(staged_runtime), "failure"),
+	)
+	for label, runtime_dir, staging_outcome in cases:
 		case_dir = tmp_path / f"case-{label}"
 		case_dir.mkdir()
+		if label == "staging":
+			staged_runtime.mkdir()
 		output_file = case_dir / "out"
 		env = {
 			"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
 			"HOME": str(case_dir),
 			"RUNTIME_DIR": runtime_dir,
+			"SUPPORT_STAGING_OUTCOME": staging_outcome,
 			"GITHUB_OUTPUT": str(output_file),
 		}
 		result = subprocess.run(
@@ -160,7 +170,10 @@ def test_collect_status_without_runtime_dir_writes_no_files(tmp_path: Path) -> N
 		)
 		assert result.returncode == 0, (label, result.stderr)
 		assert _parse_outputs(output_file) == EXPECTED_NOT_INITIALIZED_OUTPUTS, label
-		assert sorted(p.name for p in case_dir.iterdir()) == ["out"], label
+		expected_entries = ["out", "runtime"] if label == "staging" else ["out"]
+		assert sorted(p.name for p in case_dir.iterdir()) == expected_entries, label
+		if label == "staging":
+			assert list(staged_runtime.iterdir()) == []
 		assert not (case_dir / "missing").exists()
 
 

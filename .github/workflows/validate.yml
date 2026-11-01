@@ -1445,11 +1445,14 @@ jobs:
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
+          SUPPORT_STAGING_OUTCOME: ${{ steps.support_staging.outcome }}
         run: |
           set -euo pipefail
 
-          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ]; then
-            echo "::warning::Validation runtime directory is unavailable; reporting status=error without writing status files."
+          # Also when support staging failed: Run validation process was
+          # skipped then, so a missing status file is not a codex failure.
+          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ] || [ "${SUPPORT_STAGING_OUTCOME:-success}" != "success" ]; then
+            echo "::warning::Validation runtime directory or support files are unavailable; reporting status=error without writing status files."
             {
               echo "status=error"
               echo "raw_status=not_initialized"

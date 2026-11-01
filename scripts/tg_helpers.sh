@@ -195,9 +195,11 @@ tg_delete_msg()
 # failures (BUG-006).
 # Returns 0 when no retry is needed: deleted (HTTP 2xx, .ok == true),
 # already gone or permanent (HTTP 400, or any other .ok == false that
-# is not 429/5xx, e.g. "message to delete not found").
+# is not 401/403/429/5xx, e.g. "message to delete not found").
 # Returns 1 when the failure is transient: curl transport failure,
-# HTTP 429 or 5xx, or a missing / unparsable response.
+# HTTP 401 or 403 (bot token or chat permission problem, retried once
+# the credential is fixed), HTTP 429 or 5xx, or a missing / unparsable
+# response.
 # Prints nothing; never logs the URL, token or response body.
 # Usage: if _tg_delete_msg_checked 12345; then ...; fi
 # ---------------------------------------------------------------
@@ -230,7 +232,7 @@ _tg_delete_msg_checked()
 	if ! [[ "${http_code}" =~ ^[0-9][0-9][0-9]$ ]] || [ "${http_code}" = "000" ]; then
 		return 1
 	fi
-	if [ "${http_code}" = "429" ] || [ "${http_code:0:1}" = "5" ]; then
+	if [ "${http_code}" = "429" ] || [ "${http_code}" = "401" ] || [ "${http_code}" = "403" ] || [ "${http_code:0:1}" = "5" ]; then
 		return 1
 	fi
 	if [ "${http_code}" = "400" ]; then

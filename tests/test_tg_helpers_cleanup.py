@@ -107,6 +107,10 @@ if "api.telegram.org" in url:
 		respond(200, '{"ok":false,"error_code":400,"description":"Bad Request: message can\'t be deleted"}')
 	if mode == "429":
 		respond(429, '{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 5"}')
+	if mode == "401":
+		respond(401, '{"ok":false,"error_code":401,"description":"Unauthorized"}')
+	if mode == "403":
+		respond(403, '{"ok":false,"error_code":403,"description":"Forbidden: bot was kicked from the group chat"}')
 	if mode == "500":
 		respond(500, '{"ok":false,"error_code":500,"description":"Internal Server Error"}')
 	if mode == "garbage":
@@ -267,7 +271,7 @@ def test_phase_unparsable_page_deletes_nothing(tmp_path: Path) -> None:
 		"aborting cleanup") in result.stderr
 
 
-@pytest.mark.parametrize("mode", ["500", "429", "transport", "garbage"])
+@pytest.mark.parametrize("mode", ["500", "429", "401", "403", "transport", "garbage"])
 def test_transient_telegram_failure_keeps_only_that_comment(tmp_path: Path, mode: str) -> None:
 	pages = {1: [
 		_comment(1, "<!-- tg_cleanup:21 -->"),
@@ -347,7 +351,8 @@ def test_tg_delete_msg_always_returns_zero(tmp_path: Path, mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode,expected", [
-	("ok", 0), ("not_found", 0), ("cant_delete", 0), ("500", 1), ("429", 1), ("transport", 1), ("garbage", 1),
+	("ok", 0), ("not_found", 0), ("cant_delete", 0), ("500", 1), ("429", 1), ("401", 1), ("403", 1),
+	("transport", 1), ("garbage", 1),
 ])
 def test_checked_delete_classification(tmp_path: Path, mode: str, expected: int) -> None:
 	result, _ = _run(tmp_path, "rc=0; _tg_delete_msg_checked 81 || rc=$?; echo RC=$rc", {}, tg_modes={"81": mode})
