@@ -412,11 +412,11 @@ def test_truncated_runs_list_stays_pending(tmp_path: Path) -> None:
 	result, state, _ = _execute(tmp_path, _state([_closed(10)], runs=[_run(2, MERGE_SHA, "success", 10)],
 		runs_total={"ci.yml": 150}, runs_window_total={"ci.yml": 120}))
 	assert result.returncode == 0, result.stderr
-	assert "outcome=pending issue=10 reason=runs_truncated" in result.stdout
+	assert "outcome=pending issue=10 reason=runs_truncated window_end=" in result.stdout
 	assert state.get("comments") is None and state.get("reopened") is None
 
 
-def test_truncated_runs_list_reads_the_first_day_after_the_merge(tmp_path: Path) -> None:
+def test_truncated_runs_list_reads_from_the_merge_to_the_oldest_run_on_the_page(tmp_path: Path) -> None:
 	newest = [_run(9, MERGE_SHA, "success", 1500)]
 	window = [_run(3, MERGE_SHA, "success", 30), _run(2, MERGE_SHA, "failure", 10)]
 	result, state, _ = _execute(tmp_path, _state([_closed(10)], runs=newest, runs_total={"ci.yml": 150},
@@ -424,29 +424,30 @@ def test_truncated_runs_list_reads_the_first_day_after_the_merge(tmp_path: Path)
 	assert result.returncode == 0, result.stderr
 	runs_calls = [call for call in _rest_calls(state) if any("/runs?" in a for a in call)]
 	assert len(runs_calls) == 2
-	window_end = _iso(MERGED_AT + timedelta(days=1)).replace(":", "%3A")
+	window_end = _iso(MERGED_AT + timedelta(minutes=1500)).replace(":", "%3A")
 	assert any(window_end in a and ".." in a for a in runs_calls[1])
 	assert "outcome=recurred issue=10 run=2" in result.stdout and "reads=3" in result.stdout
 
 
-def test_truncated_list_descendant_failure_gets_compare_and_jobs_reads(tmp_path: Path) -> None:
+def test_truncated_list_descendant_failure_stays_within_three_reads(tmp_path: Path) -> None:
 	newest = [_run(9, MERGE_SHA, "success", 1500)]
 	window = [_run(3, DESC_SHA, "failure", 20)]
 	result, state, _ = _execute(tmp_path, _state([_closed(10)], runs=newest, runs_total={"ci.yml": 150},
 		runs_window={"ci.yml": window}, compare={DESC_SHA: "ahead"}, jobs={"3": _jobs()}))
 	assert result.returncode == 0, result.stderr
-	assert "outcome=recurred issue=10 run=3" in result.stdout and "reads=4" in result.stdout
-	assert state["reopened"] == [10]
+	# Page + window leave one read; compare + jobs would need two, so the heal waits.
+	assert "outcome=pending issue=10 reason=read_budget" in result.stdout and "reads=2" in result.stdout
+	assert state.get("reopened") is None and state.get("comments") is None
 
 
-def test_truncated_list_undecided_first_day_waits(tmp_path: Path) -> None:
+def test_truncated_list_reaches_a_decisive_run_after_the_first_day(tmp_path: Path) -> None:
 	newest = [_run(9, MERGE_SHA, "success", 1500)]
-	window = [_run(3, MERGE_SHA, "cancelled", 30)]
+	window = [_run(4, MERGE_SHA, "success", 1450), _run(3, MERGE_SHA, "cancelled", 30)]
 	result, state, _ = _execute(tmp_path, _state([_closed(10)], runs=newest, runs_total={"ci.yml": 150},
 		runs_window={"ci.yml": window}))
 	assert result.returncode == 0, result.stderr
-	assert "outcome=pending issue=10 reason=window_undecided" in result.stdout
-	assert state.get("comments") is None and state.get("reopened") is None
+	assert "outcome=held issue=10 run=4" in result.stdout
+	assert "window_undecided" not in result.stdout
 
 
 def test_truncated_list_joins_page_and_window_when_they_meet(tmp_path: Path) -> None:

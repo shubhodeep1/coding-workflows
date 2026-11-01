@@ -8,7 +8,7 @@ Only this repository's release, CI and scheduled-check heals are verified; consu
 | Default | off (`WORKFLOW_HEAL_VERIFY_ENABLED=false`) |
 | Heals checked per hour | 3 (`WORKFLOW_HEAL_VERIFY_MAX_PER_TICK`, 1-10) |
 | Window | heals closed in the last 7 days |
-| GitHub API calls | 1 list query per hour, then at most 3 reads per heal (4 when a heal's runs list is cut off at 100 runs) |
+| GitHub API calls | 1 list query per hour, then at most 3 reads per heal |
 | Log line | `WORKFLOW_HEAL_VERIFY outcome=<held|recurred|recurred_lineage|inconclusive|pending|skip|error> ...` |
 
 What this means for operators: nothing changes until the switch is on; then a heal whose fix did not hold comes back on its own instead of waiting for the same failure to be reported again.

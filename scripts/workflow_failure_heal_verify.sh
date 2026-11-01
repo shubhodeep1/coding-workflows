@@ -48,8 +48,8 @@
 #
 # GitHub API cost per run (CLAUDE.md §14): one GraphQL list query. Per
 # examined heal at most 3 REST reads (one workflow-runs list, at most 2
-# compares, one jobs read when the deciding run failed; one more list read
-# when the runs list is cut off at 100 runs), and at most 3 writes
+# compares, one jobs read when the deciding run failed; a second list read,
+# counted in those 3, when the runs list is cut off at 100 runs), and at most 3 writes
 # (reopen, comment, label). The recovery scan's `/user` read and OPEN-only
 # list cannot serve this pass, so the list query carries `viewer` and both
 # issue states as aliases. Every API error is logged and fails open: nothing
@@ -78,8 +78,6 @@ export GH_RETRY_MAX_ATTEMPTS="${GH_RETRY_MAX_ATTEMPTS:-1}"
 VERIFY_WINDOW_DAYS=7
 MAX_READS_PER_HEAL=3
 MAX_COMPARES_PER_HEAL=2
-# Days after the merge read again when the open-ended runs list is cut off.
-TRUNCATED_WINDOW_DAYS=1
 
 _bounded_int()
 {
@@ -468,30 +466,20 @@ _verify_one()
 		return 0
 	fi
 	# The list is newest-first; a cut-off page can hide the oldest decisive run,
-	# and a verdict from a later run would be final. The open-ended `created>=`
-	# set only grows, so read once more from the merge: up to the oldest run on
-	# the page when that run is within a day of the merge (then the two lists
-	# together hold every run since the merge), else the first day only. This
-	# extra read is the one read allowed beyond MAX_READS_PER_HEAL, so a failed
-	# run on a descendant still gets its compare and jobs reads. Still cut off,
-	# or no decisive run in a first-day-only window: wait (fail open).
-	local read_limit="${MAX_READS_PER_HEAL}" select_file="${runs_file}" window_only=false
+	# and a verdict from a later run would be final. Read once more, from the
+	# merge up to the oldest run on the page: the two lists together then hold
+	# every run since the merge. That read counts toward MAX_READS_PER_HEAL, so
+	# a failed run on a descendant commit (compare + jobs) waits as
+	# `read_budget`. Still cut off, or no usable oldest run: wait (fail open).
+	local select_file="${runs_file}"
 	if ! jq -e '(.total_count // 0) <= (.workflow_runs | length)' "${runs_file}" >/dev/null 2>&1; then
-		local window_end window_enc page_oldest window_file="${RUNTIME_DIR}/runs_${number}_window.json"
-		read_limit=$((MAX_READS_PER_HEAL + 1))
-		if ! window_end="$(python3 -c 'import sys; from datetime import datetime, timedelta; print((datetime.strptime(sys.argv[1], "%Y-%m-%dT%H:%M:%SZ") + timedelta(days=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "${merged_at}" "${TRUNCATED_WINDOW_DAYS}" 2>/dev/null)" \
-			|| ! [[ "${window_end}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
-			|| [ $((reads + 1)) -gt "${read_limit}" ]; then
+		local window_enc page_oldest window_file="${RUNTIME_DIR}/runs_${number}_window.json"
+		page_oldest="$(jq -r '[.workflow_runs[]?.created_at | select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))] | min // ""' "${runs_file}" 2>/dev/null || true)"
+		if ! [[ "${page_oldest}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
 			log "outcome=pending issue=${number} reason=runs_truncated"
 			return 0
 		fi
-		page_oldest="$(jq -r '[.workflow_runs[]?.created_at | select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))] | min // ""' "${runs_file}" 2>/dev/null || true)"
-		window_only=true
-		if [[ "${page_oldest}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ ! "${page_oldest}" > "${window_end}" ]]; then
-			window_end="${page_oldest}"
-			window_only=false
-		fi
-		window_enc="$(jq -rn --arg value "${merged_at}..${window_end}" '$value | @uri')"
+		window_enc="$(jq -rn --arg value "${merged_at}..${page_oldest}" '$value | @uri')"
 		reads=$((reads + 1))
 		TOTAL_READS=$((TOTAL_READS + 1))
 		if ! gh_retry gh api --method GET "repos/${SELF_REPO}/actions/workflows/${file}/runs?branch=${branch_enc}&created=${window_enc}&per_page=100" > "${window_file}" 2>/dev/null \
@@ -500,16 +488,13 @@ _verify_one()
 			return 0
 		fi
 		if ! jq -e '(.total_count // 0) <= (.workflow_runs | length)' "${window_file}" >/dev/null 2>&1; then
-			log "outcome=pending issue=${number} reason=runs_truncated"
+			log "outcome=pending issue=${number} reason=runs_truncated window_end=${page_oldest}"
 			return 0
 		fi
-		select_file="${window_file}"
-		if [ "${window_only}" = "false" ]; then
-			select_file="${RUNTIME_DIR}/runs_${number}_joined.json"
-			if ! jq -s '{workflow_runs: ((.[0].workflow_runs + .[1].workflow_runs) | map(select(type == "object")) | unique_by(.id))}' "${runs_file}" "${window_file}" > "${select_file}" 2>/dev/null; then
-				log "outcome=error issue=${number} reason=runs_window_failed"
-				return 0
-			fi
+		select_file="${RUNTIME_DIR}/runs_${number}_joined.json"
+		if ! jq -s '{workflow_runs: ((.[0].workflow_runs + .[1].workflow_runs) | map(select(type == "object")) | unique_by(.id))}' "${runs_file}" "${window_file}" > "${select_file}" 2>/dev/null; then
+			log "outcome=error issue=${number} reason=runs_window_failed"
+			return 0
 		fi
 	fi
 
@@ -524,7 +509,7 @@ _verify_one()
 		if [ "${head_sha}" != "${merge_sha}" ]; then
 			need=1
 			[ "${conclusion}" = "success" ] || need=2
-			if [ "${compares}" -ge "${MAX_COMPARES_PER_HEAL}" ] || [ $((reads + need)) -gt "${read_limit}" ]; then
+			if [ "${compares}" -ge "${MAX_COMPARES_PER_HEAL}" ] || [ $((reads + need)) -gt "${MAX_READS_PER_HEAL}" ]; then
 				log "outcome=pending issue=${number} reason=read_budget"
 				stopped=true
 				break
@@ -565,11 +550,6 @@ _verify_one()
 		| [(.id | tostring), .head_sha, (.conclusion // "")] | @tsv' "${select_file}" 2>/dev/null)
 
 	[ "${stopped}" = "false" ] || return 0
-	if [ -z "${picked_id}" ] && [ "${window_only}" = "true" ]; then
-		# Decisive runs may exist after the first day; the oldest one is unknown.
-		log "outcome=pending issue=${number} reason=window_undecided"
-		return 0
-	fi
 	if [ -z "${picked_id}" ]; then
 		log "outcome=pending issue=${number} reason=no_completed_run"
 		return 0
