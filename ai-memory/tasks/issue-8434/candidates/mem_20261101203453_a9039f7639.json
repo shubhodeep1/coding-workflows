@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.9,
+  "details": "status=pass; raw_status=pass; summary=Runtime validation passed (10/10 tests, 269s).; failure_summary=",
+  "fingerprint": "fb0ae3b150c2f77259b06d567a84dfb859c27019bd188659da1a534a6dbdfee9",
+  "lineage": {
+    "issue_number": 8434,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41346873664",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41346873664",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20261101203453_a9039f7639",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8434,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41346873664"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Runtime validation passed (10/10 tests, 269s).",
+  "timestamps": {
+    "created_at": "2026-11-01T20:34:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
