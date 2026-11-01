@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The review workflow requires a reviewable change \u2014 a PR diff (commits on `ai/issue-8567` beyond the base commit) plus the linked issue body and PR description to review against.\n  expected_change_site: Branch `ai/issue-8567` (commits beyond base `a43522e`), and the reviewer bundle artefacts (PR diff, issue body, PR description, last-run diff).\n  confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: `.git/logs/HEAD` shows the branch was created at exactly the checkout base commit `a43522e70491aa558b45fef6b4ae7b77667e9b0d` with no subsequent commits (only `reset: moving to HEAD` entries); `refs/heads/ai/issue-8567` equals `refs/remotes/origin/ai/issue-8567` at that same SHA; no PR diff, issue body, PR description, or last-run diff was provided in the reviewer bundle (source severity=BLOCKER, ISSUE_CONFIDENCE=HIGH; the four other reviewers reviewed the issue #8567 diff and reported no gaps).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: The review workflow requires a reviewable change \u2014 a PR diff (commits on `ai/issue-8567` beyond the base commit) plus the linked issue body and PR description to review against.\n  Expected change site: Branch `ai/issue-8567` (commits beyond base `a43522e`), and the reviewer bundle artefacts (PR diff, issue body, PR description, last-run diff).\n  Evidence of absence: `.git/logs/HEAD` shows the branch was created at exactly the checkout base commit `a43522e70491aa558b45fef6b4ae7b77667e9b0d` with no subsequent commits (only `reset: moving to HEAD` entries); `refs/heads/ai/issue-8567` equals `refs/remotes/origin/ai/issue-8567` at that same SHA; no PR diff, issue body, PR description, or last-run diff was provided in the reviewer bundle.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: HIGH\n- BLOCKED: reviewer bundle missing \u2014 branch `ai/issue-8567` has zero commits beyond its base commit `a43522e` (verified via reflog and refs); no PR diff, linked issue body, PR description, or last-run diff was provided. A reviewable change set must be re-supplied before this review can proceed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cf4b37a4580861874c4c8d6560b99349b5825f08f15dc7c0c820f136cf2174e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8568,
+    "run_id": "41260612640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41260612640",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261101013805_0c22b54d95",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8568,
+    "run_id": "41260612640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-01T01:38:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
