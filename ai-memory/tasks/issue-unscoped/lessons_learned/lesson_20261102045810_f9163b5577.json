@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-02T04:58:10Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=N/A (external check-run `copilot-pull-request-reviewer`, run 41382495817):N/A; cited_path=copilot-pull-request-reviewer (external check-run, errorCode `custom_instructions_too_large`); files_touched=.github/workflows/orchestrate_clarify_respond.yml, agents.d/8650-clarify-respond-orchestrator-questions-gate.md, changelog.d/8650-clarify-respond-orchestrator-questions-gate.md, tests/test_clarify_respond_standalone.py, tests/test_phase_skip_gate_telemetry_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8656,
+  "record_id": "lesson_20261102045810_f9163b5577",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer (external check-run, errorCode `custom_instructions_too_large`)",
+    "N/A (external check-run `copilot-pull-request-reviewer`, run 41382495817)",
+    ".github/workflows/orchestrate_clarify_respond.yml",
+    "agents.d/8650-clarify-respond-orchestrator-questions-gate.md",
+    "changelog.d/8650-clarify-respond-orchestrator-questions-gate.md",
+    "tests/test_clarify_respond_standalone.py",
+    "tests/test_phase_skip_gate_telemetry_contract.py"
+  ]
+}
