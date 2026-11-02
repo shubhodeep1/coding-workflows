@@ -57,6 +57,9 @@ env:
   # Check between waves (issue #8427, P9): default off; see scripts/persist_orchestrator.py.
   PERSIST_ORCH_WAVE_CHECK_ENABLED: ${{ vars.PERSIST_ORCH_WAVE_CHECK_ENABLED || 'false' }}
   PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES: ${{ vars.PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES || '90' }}
+  # Re-decompose remaining waves (issue #8427, P10): default off; see scripts/persist_orchestrator.py.
+  PERSIST_ORCH_REDECOMPOSE_ENABLED: ${{ vars.PERSIST_ORCH_REDECOMPOSE_ENABLED || 'false' }}
+  PERSIST_ORCH_MAX_REDECOMPOSE: ${{ vars.PERSIST_ORCH_MAX_REDECOMPOSE || '2' }}
   WORKFLOW_HEAL_VERIFY_ENABLED: ${{ vars.WORKFLOW_HEAL_VERIFY_ENABLED || 'false' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: orchestrate_poll
@@ -789,6 +792,19 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" "prompts/${pf}"
+          done
+
+          # Re-decompose remaining waves (issue #8427, P10). Optional: the
+          # poller checks each file with [ -f ] and skips the revise when one
+          # is missing, so a missing file never fails the poll.
+          for revise_asset in prompts/mode-judge-revise-option.txt prompts/_templates/mode-judge-revise-option.txt prompts/mode-orchestrate-revise.txt prompts/_templates/mode-orchestrate-revise.txt; do
+            asset_src=".codex-workflow-src/${revise_asset}"
+            if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/${revise_asset}" ]; then
+              asset_src=".codex-workflow-src-main/${revise_asset}"
+            fi
+            [ -f "${asset_src}" ] || continue
+            mkdir -p "$(dirname -- "${revise_asset}")"
+            install -m 0644 "${asset_src}" "${revise_asset}"
           done
 
           for security_prompt in mode-security-audit.txt mode-judge-security-pass-exhaustion.txt; do
