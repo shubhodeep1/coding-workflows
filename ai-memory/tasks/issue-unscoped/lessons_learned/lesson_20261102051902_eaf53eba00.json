@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-02T05:19:02Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=N/A (external check-run `copilot-pull-request-reviewer`, run 41389868192):N/A; cited_path=external check-run copilot-pull-request-reviewer (run 41389868192); not a repository file; files_touched=analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-09-28-3.md, changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md, scripts/review_rb_judge.sh, tests/test_ai_label_precreation_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8654,
+  "record_id": "lesson_20261102051902_eaf53eba00",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "external check-run copilot-pull-request-reviewer (run 41389868192); not a repository file",
+    "N/A (external check-run `copilot-pull-request-reviewer`, run 41389868192)",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-09-28-3.md",
+    "changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md",
+    "scripts/review_rb_judge.sh",
+    "tests/test_ai_label_precreation_contract.py"
+  ]
+}
