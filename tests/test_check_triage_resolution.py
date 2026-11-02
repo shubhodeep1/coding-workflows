@@ -815,6 +815,16 @@ def test_integration_path_unverified(tmp_path, monkeypatch, integration, overrid
 	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
 
 
+@pytest.mark.parametrize(("integration", "reason"), [
+	(_integration_pr(head_repo="fork/coding-workflows"), "integration_pr_cross_repository"),
+	(_integration_pr(state="closed"), "integration_pr_closed"),
+])
+def test_rejected_integration_pr_is_not_named_as_evidence(tmp_path, monkeypatch, integration, reason):
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=_int_routes(integration=integration))
+	assert result["reason"] == reason
+	assert "integration_pr" not in result and result.get("evidence_ref") in (None, "")
+
+
 def test_newest_integration_pr_is_used(tmp_path, monkeypatch):
 	older_closed = _integration_pr(state="closed", number=940, created_at="2026-10-01T00:00:00Z")
 	routes = _int_routes(**{INT_LIST: [older_closed, _integration_pr()]})

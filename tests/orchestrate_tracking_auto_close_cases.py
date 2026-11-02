@@ -59,7 +59,7 @@ _FUNCTIONS = _has_label_fn() + "".join(_fn(name) for name in (
 _HARNESS = r'''
 set -euo pipefail
 gh_retry() { "$@"; }
-post_state_comment() { echo POST_STATE >> "${GH_LOG}.state"; }
+post_state_comment() { echo POST_STATE >> "${GH_LOG}.state"; [ "${FAKE_STATE_POST_FAIL:-}" != true ]; }
 gh() {
   printf '%s\0' "$@" >> "${GH_LOG}"; printf '\n' >> "${GH_LOG}"
   case "$*" in
@@ -105,7 +105,8 @@ def _run(status: str = "complete", comments: list | None = None, labels: list | 
 		state_file.write_text(json.dumps(state if state is not None else {"status": status}), encoding="utf-8")
 		log = tmp / "gh.log"
 		run_env = {k: v for k, v in os.environ.items() if k not in (
-			"ORCHESTRATOR_CLOSE_COMPLETED_TRACKING", "ACTIVATION_VERIFY_ENABLED", "FAKE_PATCH_FAIL", "FAKE_COMMENT_FAIL")}
+			"ORCHESTRATOR_CLOSE_COMPLETED_TRACKING", "ACTIVATION_VERIFY_ENABLED", "FAKE_PATCH_FAIL", "FAKE_COMMENT_FAIL",
+			"FAKE_STATE_POST_FAIL")}
 		run_env.update({
 			"GH_LOG": str(log), "STATE_FILE": str(state_file), "TRACKING_NUM": str(TRACKING),
 			"GITHUB_REPOSITORY": REPO, "COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS": "OWNER,MEMBER,COLLABORATOR",
@@ -185,12 +186,16 @@ def test_settled_follow_ups_close() -> None:
 	({"comments": [_verdict(association="NONE", login="stranger")]}, "no_activation_verdict"),
 	({"comments": [_verdict(verdict="LIVE").copy() | {"body": "<!-- ai:activation:v1 verdict=LIVE source=project-901 -->"}]},
 		"no_activation_verdict"),
-	({"labels": ["ai:comprehensive-test-pending"]}, "release_callback_pending"),
-	({"labels": ["ai:comprehensive-test-pending"], "state": {"status": "complete", "comprehensive_release_callback": {"handled": False}}},
-		"release_callback_pending"),
+	({"labels": ["ai:orchestrator-tracking", "ai:comprehensive-test-pending"]}, "release_callback_pending"),
+	({"labels": ["ai:orchestrator-tracking", "ai:comprehensive-test-pending"],
+		"state": {"status": "complete", "comprehensive_release_callback": {"handled": False}}}, "release_callback_pending"),
 	({"comments": [_split_marker(), _verdict()]}, "plan_split_pending"),
-	({"labels": ["ai:integration-backpressure"]}, "backpressure_label"),
+	({"labels": ["ai:orchestrator-tracking", "ai:integration-backpressure"]}, "backpressure_label"),
 	({"env": {"COMMENTS_FETCH_OK": "false"}}, "comments_unavailable"),
+	# A failed labels read gives [] (get_issue_labels_json), which must not
+	# count as "no pending release callback / no backpressure label".
+	({"labels": []}, "labels_unavailable"),
+	({"labels": ["ai:comprehensive-test-pending"]}, "labels_unavailable"),
 ])
 def test_unmet_condition_defers_without_writes(kwargs, reason) -> None:
 	out, calls, state, state_posts = _run(**kwargs)
@@ -244,6 +249,15 @@ def test_untrusted_close_marker_does_not_suppress_the_comment() -> None:
 	forged = {**_close_marker(), "author_association": "NONE", "user": {"login": "stranger"}}
 	_, calls, _, _ = _run(comments=[_verdict(), forged])
 	assert len(_posts(calls)) == 1
+
+
+def test_state_save_failure_after_close_warns() -> None:
+	out, calls, _, _ = _run(env={"FAKE_STATE_POST_FAIL": "true"})
+	assert "outcome=closed verdict=LIVE state_persist=failed" in out, out
+	assert "::warning::TRACKING_AUTO_CLOSE tracking_issue=900 closed, but its state was not saved" in out, out
+	assert len(_patches(calls)) == 1
+	out, _, _, _ = _run()
+	assert "state_persist=ok" in out and "::warning::" not in out, out
 
 
 def test_comment_failure_never_patches() -> None:

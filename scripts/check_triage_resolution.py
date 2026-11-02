@@ -508,8 +508,6 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			return None
 		integration = max(candidates, key=lambda item: item["created_at"])
 		integration_number = integration["number"]
-		verdict["evidence_ref"] = f"integration_pr:{integration_number}"
-		verdict["integration_pr"] = integration_number
 		int_head = integration["head"]
 		int_head_repo = int_head["repo"].get("full_name") if isinstance(int_head.get("repo"), dict) else None
 		if not isinstance(int_head_repo, str) or int_head_repo.lower() != repo.lower():
@@ -519,6 +517,12 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		if not isinstance(int_head_sha, str) or not SHA_RE.match(int_head_sha):
 			_fail("integration_pr_unreadable")
 			return None
+		if not integration.get("merged_at") and integration.get("state") != "open":
+			_fail("integration_pr_closed")
+			return None
+		# Named as evidence only once the integration PR passed its trust checks.
+		verdict["evidence_ref"] = f"integration_pr:{integration_number}"
+		verdict["integration_pr"] = integration_number
 
 		if integration.get("merged_at"):
 			int_merge_sha = integration.get("merge_commit_sha")
@@ -542,9 +546,6 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			# ... and the final compare checks the squash reached the default tip.
 			return int_merge_sha, evidence
 
-		if integration.get("state") != "open":
-			_fail("integration_pr_closed")
-			return None
 		evidence = int_head_sha
 		if workflow_id is None:
 			try:

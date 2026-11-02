@@ -1205,30 +1205,6 @@ lesson_event_json_for_stall() {
 # (already fetched for this tracking issue) is checked for it, so the guard
 # costs no API call. Gated by ACTIVATION_VERIFY_ENABLED (default true); every
 # failure is logged and ignored, never failing the poll.
-# activation_final_verdict_from_comments <comments_json> <tracking_num>
-#
-# Prints "<LIVE|DORMANT> <html_url>" for the last trusted comment (author
-# github-actions[bot], or author_association OWNER/MEMBER/COLLABORATOR) whose
-# trailing-whitespace-trimmed body ends with the final activation marker
-# <!-- ai:activation:v1 verdict=LIVE|DORMANT source=project-<tracking_num> -->.
-# Prints nothing when there is none; a partial=true marker never matches.
-# Shared by run_project_activation_verify (already_verified guard) and
-# close_completed_tracking_issue_if_ready (issue #8685) so both apply one
-# trust filter. Reads only the given JSON (no API call); always returns 0.
-activation_final_verdict_from_comments() {
-  local comments_json="${1:-[]}"
-  local tracking_num="${2:-}"
-  printf '%s' "${comments_json}" | jq -r --arg src "project-${tracking_num}" '
-    [.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
-      | {url: ((.html_url // "") | tostring), body: (.body // "" | sub("[[:space:]]+$"; ""))}
-      | (if (.body | endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->")) then "LIVE"
-         elif (.body | endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->")) then "DORMANT"
-         else empty end) as $verdict
-      | "\($verdict) \(.url)"] | last // empty
-  ' 2>/dev/null || true
-  return 0
-}
-
 run_project_activation_verify() {
   local verify_default verify_dir
   if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ] || ! [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
@@ -1278,6 +1254,30 @@ run_project_activation_verify() {
     || echo "::warning::Activation worktree cleanup failed for project #${TRACKING_NUM}."
   rm -rf -- "${verify_dir}-runtime" \
     || echo "::warning::Activation runtime cleanup failed for project #${TRACKING_NUM}."
+  return 0
+}
+
+# activation_final_verdict_from_comments <comments_json> <tracking_num>
+#
+# Prints "<LIVE|DORMANT> <html_url>" for the last trusted comment (author
+# github-actions[bot], or author_association OWNER/MEMBER/COLLABORATOR) whose
+# trailing-whitespace-trimmed body ends with the final activation marker
+# <!-- ai:activation:v1 verdict=LIVE|DORMANT source=project-<tracking_num> -->.
+# Prints nothing when there is none; a partial=true marker never matches.
+# Shared by run_project_activation_verify (already_verified guard) and
+# close_completed_tracking_issue_if_ready (issue #8685) so both apply one
+# trust filter. Reads only the given JSON (no API call); always returns 0.
+activation_final_verdict_from_comments() {
+  local comments_json="${1:-[]}"
+  local tracking_num="${2:-}"
+  printf '%s' "${comments_json}" | jq -r --arg src "project-${tracking_num}" '
+    [.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+      | {url: ((.html_url // "") | tostring), body: (.body // "" | sub("[[:space:]]+$"; ""))}
+      | (if (.body | endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->")) then "LIVE"
+         elif (.body | endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->")) then "DORMANT"
+         else empty end) as $verdict
+      | "\($verdict) \(.url)"] | last // empty
+  ' 2>/dev/null || true
   return 0
 }
 
@@ -15082,6 +15082,8 @@ close_plan_split_source_if_needed() {
 #     reason=disabled is logged once per process);
 #   - COMMENTS was fetched (reason=comments_unavailable): the plan-split and
 #     duplicate-comment checks need real comments;
+#   - the labels were read: they include ai:orchestrator-tracking
+#     (reason=labels_unavailable), so a failed read never counts as "absent";
 #   - the activation verdict is final: ACTIVATION_VERIFY_ENABLED=false, or a
 #     trusted LIVE/DORMANT marker from activation_final_verdict_from_comments
 #     (a partial=true marker does not count; reason=no_activation_verdict);
@@ -15099,7 +15101,8 @@ close_plan_split_source_if_needed() {
 # on the next tick without a second comment: the trusted marker comment is
 # found in COMMENTS. A failed comment POST (reason=comment_failed) never
 # PATCHes. The comment carries no model text.
-# Log: TRACKING_AUTO_CLOSE tracking_issue=<N> outcome=closed|deferred reason=<...> verdict=<LIVE|DORMANT|none>
+# Log: TRACKING_AUTO_CLOSE tracking_issue=<N> outcome=closed verdict=<LIVE|DORMANT|none> state_persist=<ok|failed>,
+# or outcome=deferred reason=<...>. A failed state save after the close is a ::warning::.
 _TRACKING_AUTO_CLOSE_DISABLED_LOGGED="false"
 close_completed_tracking_issue_if_ready() {
   local project_status="$1"
@@ -15122,6 +15125,13 @@ close_completed_tracking_issue_if_ready() {
   fi
   if [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
     echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=comments_unavailable"
+    return 0
+  fi
+  # A tracking issue always carries ai:orchestrator-tracking; without it the
+  # labels read failed (get_issue_labels_json falls back to []) and the
+  # label-absence checks below would pass on no evidence.
+  if ! has_label "${labels_json}" "ai:orchestrator-tracking"; then
+    echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=deferred reason=labels_unavailable"
     return 0
   fi
 
@@ -15198,10 +15208,17 @@ close_completed_tracking_issue_if_ready() {
     return 0
   fi
   now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  jq --arg at "${now_utc}" --arg verdict "${verdict}" '.tracking_auto_close = {outcome: "closed", at: $at, verdict: $verdict}' \
-    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || true
-  post_state_comment || true
-  echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=closed verdict=${verdict}"
+  local state_persist="ok"
+  if ! { jq --arg at "${now_utc}" --arg verdict "${verdict}" '.tracking_auto_close = {outcome: "closed", at: $at, verdict: $verdict}' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+    state_persist="failed"
+  elif ! post_state_comment; then
+    state_persist="failed"
+  fi
+  if [ "${state_persist}" = "failed" ]; then
+    echo "::warning::TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} closed, but its state was not saved; if the issue is reopened, a later tick may close it again." >&2
+  fi
+  echo "TRACKING_AUTO_CLOSE tracking_issue=${TRACKING_NUM} outcome=closed verdict=${verdict} state_persist=${state_persist}"
   return 0
 }
 

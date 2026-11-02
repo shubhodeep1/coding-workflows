@@ -956,10 +956,14 @@ def _collect_tracking_auto_close_cases() -> None:
 	)
 	cases = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(cases)
+	collected = 0
 	for case_name in dir(cases):
 		if case_name.startswith("test_"):
 			assert case_name not in globals(), case_name
 			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 10, f"only {collected} tracking auto-close cases collected"
 
 
 _collect_tracking_auto_close_cases()
