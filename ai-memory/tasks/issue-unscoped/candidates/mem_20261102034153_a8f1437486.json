@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:Test suite failure | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR description reports CI failures in tests/test_implement_post_codex_recovery.py which are attributed to this PR.\n  WHY: The pre-push test gate fails, blocking the PR from being merged, even if the canary update is correct. (Severity was not stated by the source; medium is the ledger's own assignment. Other reviewers found no path from the canary-only diff to that test and saw 0 failed and 0 incomplete CI check-runs.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:Test suite failure | confidence=4\n  PROBLEM: The PR description reports CI failures in tests/test_implement_post_codex_recovery.py which are attributed to this PR.\n  WHY: The pre-push test gate fails, blocking the PR from being merged. Even if the canary update is correct, the PR is not in a passing state.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (no gap found; reviewer reported it with SEVERITY: NIT, ISSUE_CONFIDENCE: 5)\n  Requirement: \"Update its content so it is exactly these three lines: status: ok / run_id: alt-40831286935 / updated-by: ai-pipeline\" and \"Only modify tests/e2e_smoke_canary.txt\" (issue #8337).\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: None \u2014 the PR diff (tests/e2e_smoke_canary.txt, hunk @@ -1,2 +1,3 @@) replaces `decompose-run: 40427433026` with `run_id: alt-40831286935` and adds `updated-by: ai-pipeline`, producing exactly the three required lines, and `pr_changed_files.txt` lists only that file. The constraint and the deliverable are both met; the canary file is plain text with no code impact.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fb684f4ef64f781fde383997d44993e5c7507bd289cbcc8a80cdd50d08196d19",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41383528570",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41383528570",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102034153_a8f1437486",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41383528570"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-02T03:41:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
