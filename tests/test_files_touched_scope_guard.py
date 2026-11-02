@@ -1520,6 +1520,124 @@ def test_review_reject_verify_parser_matches_the_guard() -> None:
 	assert body in (REPO_ROOT / "scripts" / "review_reject_verify.sh").read_text(encoding="utf-8")
 
 
+# Issue #8339: a path_not_granted hold caused only by directory or glob tokens
+# carries replannable: true so stall recovery can re-plan once.
+_PLACEHOLDER_PLAN = (
+	"## Files likely to change\n\n"
+	"- `scripts/files_touched_scope_guard.py`\n"
+	"- `scripts/orchestrate_poll_process.sh`\n"
+	"- `tests/test_files_touched_scope_guard.py`\n"
+	"- `tests/test_orchestrate_poll_process.py`\n"
+	"- New helpers go in scripts/<helper> next to the guard.\n"
+)
+
+
+def test_plan_gate_placeholder_directory_hold_is_replannable() -> None:
+	code, record, body = _run_grant_cli(_PLACEHOLDER_PLAN, _pipeline_meta())
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED, record
+	assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+	assert record["denied_paths"] == ["scripts/"] and record["replannable"] is True
+	assert body is None
+	# Without the placeholder the same plan gets the pipeline plan grant.
+	clean = _PLACEHOLDER_PLAN.replace("- New helpers go in scripts/<helper> next to the guard.\n", "")
+	code, record, body = _run_grant_cli(clean, _pipeline_meta())
+	assert record["reason"] == "pipeline_plan_grant" and "replannable" not in record and body
+
+
+def test_plan_gate_replannable_for_exact_allowlist_and_globs() -> None:
+	meta = _owner_meta("scripts/a.sh")
+	for token in ("scripts/", "scripts/*.sh", "scripts/**"):
+		code, record, _ = _run_grant_cli(f"## Files likely to change\n- `scripts/a.sh`\n- `{token}`\n", meta)
+		assert record["reason"] == "path_not_granted" and record["denied_paths"] == [token], (token, record)
+		assert record.get("replannable") is True, (token, record)
+
+
+def test_plan_gate_replannable_absent_when_not_only_placeholder_tokens() -> None:
+	cases = [
+		# Exact-looking denied paths.
+		("## Files likely to change\n- `scripts/lib`\n- `scripts/a.sh`\n", _pipeline_meta()),
+		("## Files likely to change\n- `scripts/a.sh`\n- `scripts/b.sh`\n", _owner_meta("scripts/a.sh")),
+		# A mix of exact and directory tokens denied.
+		("## Files likely to change\n- `scripts/a.sh`\n- `scripts/b.sh`\n- `scripts/`\n", _owner_meta("scripts/a.sh")),
+		# Every protected path is a directory (D2).
+		("## Files likely to change\n- `scripts/`\n- `prompts/`\n", _owner_meta("scripts/a.sh")),
+	]
+	for plan, meta in cases:
+		code, record, _ = _run_grant_cli(plan, meta)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", (plan, record)
+		assert "replannable" not in record, (plan, record)
+
+
+def test_plan_gate_replannable_absent_when_remaining_plan_still_holds_files_touched() -> None:
+	# The rest of the plan names a file outside files_touched: a re-plan
+	# without the token would still be held, so it is not replannable.
+	plan = "## Files likely to change\n- `scripts/a.sh`\n- `README.md`\n- `scripts/`\n"
+	code, record, _ = _run_grant_cli(plan, _owner_meta("scripts/a.sh"))
+	assert record["reason"] == "path_not_granted" and "replannable" not in record, record
+	saved = _with_env(ENFORCE_FILES_TOUCHED="false")
+	try:
+		code, record, _ = _run_grant_cli(plan, _owner_meta("scripts/a.sh"))
+	finally:
+		_restore_env(saved)
+	assert record["reason"] == "path_not_granted" and record.get("replannable") is True, record
+
+
+def test_plan_gate_replannable_absent_on_heal_route() -> None:
+	plan = "## Files likely to change\n- `scripts/a.sh`\n- `scripts/`\n"
+	labelled = dict(_owner_meta("scripts/a.sh"), labels=[{"name": "ai:workflow-heal"}])
+	code, record, _ = _run_grant_cli(plan, labelled)
+	assert record["reason"] == "path_not_granted" and "replannable" not in record, record
+	fp = dict(_owner_meta("scripts/a.sh"))
+	fp["body"] += "\n<!-- workflow-failure-heal:fp=" + "a" * 64 + " -->\n"
+	code, record, _ = _run_grant_cli(plan, fp)
+	assert record["reason"] == "path_not_granted" and "replannable" not in record, record
+
+
+def test_plan_gate_replannable_absent_for_every_other_reason() -> None:
+	plan = "## Files likely to change\n- `scripts/a.sh`\n- `scripts/`\n"
+	seen = set()
+	cases = [
+		(_run_grant_cli(plan, dict(_owner_meta("scripts/a.sh"), author_association="NONE")), "untrusted_author"),
+		(_run_grant_cli(plan, _owner_meta()), "no_allowlist"),
+		(_run_grant_cli(plan, dict(_owner_meta(), body="files_touched:\nnot a list")), "malformed_allowlist"),
+		(_run_grant_cli(plan, _owner_meta("scripts/a.sh"), allow_edits="false"), "workflow_edits_disabled"),
+		(_run_grant_cli(plan, _owner_meta("scripts/a.sh", number=43)), "grant_issue_mismatch"),
+		(_run_grant_cli(plan, _owner_meta("scripts/a.sh"), flag="false"), "automation_path_plan_auto_approval_disabled"),
+		(_run_grant_cli(plan, dict(_pipeline_meta(), body="Re-issued from #7 for a fix.")), "origin_unverified"),
+		(_run_grant_cli("## Files likely to change\n" + "".join(f"- `scripts/f{i}.sh`\n" for i in range(51))
+			+ "- `scripts/`\n", _pipeline_meta()), "plan_too_large_for_grant"),
+		(_run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `README.md`\n",
+			_owner_meta("scripts/a.sh")), "plan_files_outside_files_touched"),
+		(_run_grant_cli("   \n", _owner_meta("scripts/a.sh")), "plan_gate_error"),
+	]
+	for (code, record, body), reason in cases:
+		assert record["reason"] == reason, (reason, record)
+		assert "replannable" not in record and body is None, (reason, record)
+		seen.add(reason)
+	# open_grant_not_exact: pipeline issue without the grant-body output path.
+	code, record = _run_plan_gate_cli(plan, "true", _pipeline_meta())
+	assert record["reason"] == "open_grant_not_exact" and "replannable" not in record, record
+	# issue_meta_unavailable: no metadata file.
+	code, record = _run_plan_gate_cli(plan, "true", None)
+	assert record["reason"] == "issue_meta_unavailable" and "replannable" not in record, record
+	# origin_untrusted: a source written by an untrusted author.
+	untrusted_source = {"number": 7, "user": {"login": "outsider"}, "author_association": "NONE", "body": "x"}
+	meta = dict(_pipeline_meta(), body="Re-issued from #7 for a fix.")
+	grant = guard.build_automation_grant(meta, "pipeline[bot]", lambda number: untrusted_source)
+	assert grant["reason"] == "untrusted_origin"
+	assert guard.evaluate_plan_auto_approval(["scripts/a.sh", "scripts/"], grant, flag_enabled=True,
+		allow_workflow_edits="true", issue_number="42")[1] == "untrusted_origin"
+	assert guard._plan_hold_replannable(plan, ["scripts/a.sh", "scripts/"], ["scripts/a.sh", "scripts/"], grant,
+		flag_on=True, allow_workflow_edits="true", issue_number="42", metadata=meta,
+		check_files_touched=False) is False
+
+
+def test_plan_gate_approve_record_keys_unchanged() -> None:
+	code, record, _ = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n", _owner_meta("scripts/a.sh"))
+	assert record["decision"] == "approve" and record["reason"] == "granted"
+	assert set(record) == {"decision", "reason", "protected_paths", "denied_paths", "log_paths"}
+
+
 def _run_all() -> int:
 	funcs = [obj for name, obj in sorted(globals().items()) if name.startswith("test_") and callable(obj)]
 	failures = 0

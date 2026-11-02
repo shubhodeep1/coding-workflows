@@ -27540,11 +27540,138 @@ def test_managed_pipeline_plan_grant_write_failure_holds() -> None:
 
 def test_managed_pipeline_plan_grant_skipped_for_directory_plan() -> None:
 	# A listed directory can never be an exact grant: no body write, hold.
-	result = _pipeline_plan_grant_run(issue_comments={10: [_trusted_plan_comment(("scripts/", "scripts/a.sh"))]})
+	# The #8339 re-plan already ran (trusted marker), so the hold stands.
+	result = _pipeline_plan_grant_run(issue_comments={10: [_trusted_plan_comment(("scripts/", "scripts/a.sh")),
+		_replan_marker_comment(10)]})
 	log = result["stdout"] + result["stderr"]
 	assert _approved_bodies(result, "10") == [], log
 	assert result.get("issue_body_patch_calls", []) == []
 	assert "reason=path_not_granted outcome=defer issue=10 paths=scripts/" in log
+
+
+# Issue #8339: a hold caused only by directory or glob tokens re-plans once.
+_REPLAN_PLAN_FILES = ("scripts/a.sh", "scripts/")
+
+
+def _replan_marker_comment(issue: int, *, login: str = _PLAN_GATE_LOGIN, association: str = "OWNER") -> dict:
+	return {
+		"body": f"/answer\n\n_earlier re-plan_\n\n<!-- ai:automation-path-replan:v1 issue={issue} -->",
+		"user": {"login": login},
+		"author_association": association,
+		"created_at": "2026-01-01T00:00:02Z",
+	}
+
+
+def _replan_answer_bodies(result: dict, issue: str) -> list[str]:
+	return [c.get("body", "") for c in result["issues"][issue]["comments"]
+		if c.get("body", "").startswith("/answer")
+		and f"<!-- ai:automation-path-replan:v1 issue={issue} -->" in c.get("body", "")
+		and "_earlier re-plan_" not in c.get("body", "")]
+
+
+def _replan_hold_bodies(result: dict, issue: str) -> list[str]:
+	return [c.get("body", "") for c in result["issues"][issue]["comments"]
+		if f"<!-- ai:automation-path-plan-hold:v1 issue={issue} " in c.get("body", "")]
+
+
+def _replan_run(extra_comments: list[dict] | None = None, **overrides) -> dict:
+	comments = [_trusted_plan_comment(_REPLAN_PLAN_FILES)] + list(extra_comments or [])
+	return _pipeline_plan_grant_run(issue_comments={10: comments}, **overrides)
+
+
+def test_managed_replannable_hold_posts_one_replan_answer() -> None:
+	result = _replan_run()
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert result.get("issue_body_patch_calls", []) == []
+	assert result.get("issue_edit_call_counts", {}).get("10") == 1, log
+	labels = result["issues"]["10"]["labels"]
+	assert "ai:planning" in labels and "ai:awaiting-approval" not in labels, labels
+	answers = _replan_answer_bodies(result, "10")
+	assert len(answers) == 1, log
+	assert answers[0].startswith("/answer\n")
+	assert answers[0].rstrip().endswith("<!-- ai:automation-path-replan:v1 issue=10 -->")
+	assert _replan_hold_bodies(result, "10") == [], log
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted "
+		"outcome=replan issue=10") in log
+	assert "outcome=defer issue=10" not in log
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+
+
+def test_managed_replannable_hold_with_trusted_marker_gets_hold_notice() -> None:
+	result = _replan_run([_replan_marker_comment(10)])
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert result.get("issue_edit_call_counts", {}).get("10", 0) == 0, log
+	assert _replan_answer_bodies(result, "10") == [], log
+	assert len(_replan_hold_bodies(result, "10")) == 1, log
+	assert "reason=path_not_granted outcome=defer issue=10 paths=scripts/" in log
+	assert "outcome=replan" not in log
+
+
+def test_managed_replannable_hold_ignores_untrusted_marker() -> None:
+	result = _replan_run([_replan_marker_comment(10, login="outsider", association="NONE")])
+	log = result["stdout"] + result["stderr"]
+	assert len(_replan_answer_bodies(result, "10")) == 1, log
+	assert _replan_hold_bodies(result, "10") == [], log
+	assert "reason=path_not_granted outcome=replan issue=10" in log
+
+
+def test_managed_replannable_hold_label_edit_failure_falls_back_to_hold() -> None:
+	result = _replan_run(fail_issue_edit_for=[10])
+	log = result["stdout"] + result["stderr"]
+	assert "reason=path_not_granted outcome=replan_label_failed issue=10" in log
+	assert _replan_answer_bodies(result, "10") == [], log
+	assert len(_replan_hold_bodies(result, "10")) == 1, log
+	assert "reason=path_not_granted outcome=defer issue=10 paths=scripts/" in log
+
+
+def test_managed_replannable_hold_comment_failure_posts_no_hold_notice() -> None:
+	result = _replan_run(fail_issue_comment_post_for=[10])
+	log = result["stdout"] + result["stderr"]
+	assert "reason=path_not_granted outcome=replan_comment_failed issue=10" in log
+	assert "outcome=defer issue=10" not in log
+	assert "Could not post the automation-path hold comment for issue #10" not in log
+	assert _replan_hold_bodies(result, "10") == [], log
+
+
+def test_managed_non_replannable_hold_is_unchanged() -> None:
+	# An exact ungranted path is not a placeholder token: today's hold.
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment(("scripts/a.sh", "scripts/b.sh", "scripts/"))]},
+		issue_bodies={10: "Fix it.\n\nfiles_touched:\n  - scripts/a.sh\n"},
+		issue_authors={10: {"login": "maintainer", "association": "OWNER"}},
+		env_overrides={"AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert result.get("issue_edit_call_counts", {}).get("10", 0) == 0, log
+	assert _replan_answer_bodies(result, "10") == [], log
+	assert len(_replan_hold_bodies(result, "10")) == 1, log
+	assert "reason=path_not_granted outcome=defer issue=10" in log
+	assert "outcome=replan" not in log
+
+
+def test_standalone_replannable_hold_posts_one_replan_answer() -> None:
+	result = _run_poller(
+		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [_trusted_plan_comment(_REPLAN_PLAN_FILES), _standalone_awaiting_approval_state_comment()]},
+		issue_bodies={501: "Security finding. No allowlist."},
+		issue_authors={501: {"login": _PLAN_GATE_LOGIN, "association": "NONE"}},
+		mock_gh_issue_list_label_filter=True,
+		tracking_issues_override=[],
+		env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED": "true"},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "501") == [], log
+	assert len(_replan_answer_bodies(result, "501")) == 1, log
+	assert _replan_hold_bodies(result, "501") == [], log
+	labels = result["issues"]["501"]["labels"]
+	assert "ai:planning" in labels and "ai:awaiting-approval" not in labels, labels
+	assert "reason=path_not_granted outcome=replan issue=501" in log
 
 
 def test_managed_auto_approve_flag_on_open_grant_held_exact_grant_posted() -> None:

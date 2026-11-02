@@ -63,6 +63,11 @@ Inputs:
                           ALLOW_OUT_OF_SCOPE_FILES is not "true" and
                           PLAN_FILES_TOUCHED_GATE_ENABLED is not off
                           (all read from the environment).
+                          A hold with reason path_not_granted whose denied
+                          paths are all directory or glob tokens, and whose
+                          other protected paths would be granted, carries
+                          replannable: true (#8339); the poller re-plans
+                          once. No grant is written for that check.
   --plan-auto-approval-gate --plan-file PATH --heal-scope-file PATH
                           --flag-enabled VALUE --issue-number NUMBER
                           Workflow-heal plans (#7444): approve only when every
@@ -879,6 +884,37 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 		if not path_in_scope(path, allowlist, own_fragment_issue=issue_number)]
 
 
+# Re-plan of a hold caused only by non-exact tokens (#8339). A plan whose
+# Files section mentions a placeholder such as `scripts/<helper>` is read as
+# the bare directory `scripts/`, which can never be granted exactly, so the
+# plan is held with path_not_granted for good. When every denied path is a
+# directory or glob token and the rest of the plan would be approved, the
+# record carries ``replannable: true`` and the poller's stall recovery asks
+# for one new plan. The check is in memory only: it never changes the
+# decision, the denied list or any grant, and never writes a grant body.
+def _plan_hold_replannable(plan_text: str, protected: list[str], denied: list[str], replan_grant: object, *,
+	flag_on: bool, allow_workflow_edits: str, issue_number: str, metadata: object,
+	check_files_touched: bool) -> bool:
+	"""True when a path_not_granted hold would approve without its non-exact tokens."""
+	if not denied or not isinstance(metadata, dict):
+		return False
+	if not all(path.endswith("/") or any(char in path for char in _GLOB_CHARS) for path in denied):
+		return False
+	if _issue_on_heal_route(metadata.get("body") or "", metadata.get("labels")):
+		return False
+	remaining = [path for path in protected if path not in denied]
+	if not remaining:
+		return False
+	decision, reason, _ = evaluate_plan_auto_approval(remaining, replan_grant, flag_enabled=flag_on,
+		allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+	if decision != PLAN_DECISION_APPROVE or reason != "granted":
+		return False
+	if check_files_touched and plan_files_outside_files_touched(plan_text, metadata.get("body") or "",
+			metadata.get("labels"), issue_number=issue_number or metadata.get("number")):
+		return False
+	return True
+
+
 def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
 	pipeline_login: str, allow_workflow_edits: str, issue_number: str, origin_repo: str = "",
 	grant_body_out: str = "") -> tuple[dict, int]:
@@ -894,10 +930,14 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 	body is written to ``grant_body_out`` and the record carries
 	``pipeline_grant_body: true``; the caller must write it to the issue
 	before it posts /approved, and hold if that write fails.
+
+	A ``path_not_granted`` hold held only by directory or glob tokens, which
+	would approve without them, adds ``replannable: true`` (#8339).
 	"""
 	protected: list[str] = []
 	grant_proposed = False
 	plan_path_count = 0
+	replannable = False
 	try:
 		with open(plan_file, encoding="utf-8") as handle:
 			plan_text = handle.read()
@@ -928,6 +968,9 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 			grant = build_automation_grant(metadata, pipeline_login, fetch_origin if repo else None)
 		decision, reason, denied = evaluate_plan_auto_approval(protected, grant, flag_enabled=flag_on,
 			allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+		# The grant behind a path_not_granted hold, for the #8339 re-plan check.
+		replan_grant: object = grant
+		replan_via_proposal = False
 		if (grant_body_out and decision == PLAN_DECISION_HOLD and reason == "open_grant_not_exact"
 				and isinstance(grant, dict) and grant.get("open") is True
 				and grant.get("reason") == PIPELINE_AUTHOR_OPEN_REASON):
@@ -959,6 +1002,8 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 					# Report what the proposed grant still misses (a listed
 					# directory or glob, or a path the plan named only in prose).
 					decision, reason, denied = proposed
+					replan_grant = proposed_grant
+					replan_via_proposal = True
 		# An approval the implement scope guard would refuse is held. The
 		# pipeline plan grant is skipped: its block is written from this plan.
 		# Without issue metadata (the poller's cache had no body) there is no
@@ -976,16 +1021,31 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number"))
 			if outside:
 				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside
+		if decision == PLAN_DECISION_HOLD and reason == "path_not_granted":
+			# The counterfactual approval would be a proposed pipeline plan
+			# grant when the proposal produced this hold, and the real gate
+			# skips the files_touched check for that; otherwise it runs as
+			# above. Any error only means "not replannable".
+			try:
+				replannable = _plan_hold_replannable(plan_text, protected, denied, replan_grant,
+					flag_on=flag_on, allow_workflow_edits=allow_workflow_edits, issue_number=issue_number,
+					metadata=metadata, check_files_touched=(not replan_via_proposal and bool(issue_meta_file)
+						and plan_files_touched_gate_active()))
+			except Exception:  # noqa: BLE001 - advisory only; the hold stands
+				replannable = False
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
 		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
 		grant_proposed = False
 		plan_path_count = 0
+		replannable = False
 	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
 		"log_paths": plan_gate_log_paths(denied or protected)}
 	if grant_proposed:
 		record["pipeline_grant_body"] = True
 	if plan_path_count:
 		record["plan_path_count"] = plan_path_count
+	if replannable:
+		record["replannable"] = True
 	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
 
 
