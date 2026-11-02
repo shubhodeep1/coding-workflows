@@ -559,6 +559,11 @@ def test_check_lists_oldest_first_and_reads_more_pages_only_when_full(fake, monk
 
 def test_check_logs_a_failed_later_page_and_dedupes_repeated_issues(fake, monkeypatch, tmp_path, capsys):
 	assert [i["number"] for i in ppv._candidates([{"number": 5}, {"number": 6}, {"number": 5}])] == [5, 6]
+	stale = {"number": 5, "updated_at": "2026-10-20T09:00:00Z"}
+	fresh = {"number": 5, "updated_at": "2026-10-20T11:00:00Z"}
+	other = {"number": 6, "updated_at": "2026-10-20T10:00:00Z"}
+	kept = ppv._candidates([stale, other, fresh])
+	assert [i["number"] for i in kept] == [6, 5] and kept[1] is fresh
 	monkeypatch.setenv("PERSIST_POSTMERGE_VERIFY_ENABLED", "false")
 	fake.issues = [{"number": n} for n in range(1, 101)]
 	fake.fail = ("&page=2",)

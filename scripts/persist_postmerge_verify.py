@@ -573,19 +573,18 @@ def _updated_key(item: dict) -> str:
 def _candidates(data: Any) -> list[dict]:
 	if not isinstance(data, list):
 		return []
-	out = []
-	seen: set[int] = set()
+	by_number: dict[int, dict] = {}
 	for item in data:
 		if not isinstance(item, dict) or "pull_request" in item:
 			continue
-		# Pages are read separately: an issue updated between reads can be listed twice.
+		# Pages are read separately, oldest-updated first: an issue updated
+		# between reads is listed again on a later page, so the later (fresher)
+		# occurrence wins.
 		number = _positive(item.get("number"))
-		if number is None or number in seen:
+		if number is None:
 			continue
-		seen.add(number)
-		out.append(item)
-	out.sort(key=_updated_key)
-	return out
+		by_number[number] = item
+	return sorted(by_number.values(), key=_updated_key)
 
 
 def cleanup_disabled(repo: str, candidates: list[dict], now: datetime, window_h: int, cap: int) -> int:
