@@ -1040,3 +1040,51 @@ def test_revise_input_blocks_are_fenced_prefixed_and_forgery_safe() -> None:
 
 if __name__ == "__main__":
 	run_all_contract_tests()
+
+
+# --- evidence broker (issue #8427, P11) ----------------------------------------------
+
+BROKER_ENV_LINES = (
+	"PERSIST_EVIDENCE_BROKER_ENABLED: ${{ vars.PERSIST_EVIDENCE_BROKER_ENABLED || 'false' }}",
+	"PERSIST_EVIDENCE_BROKER_MAX_REQUESTS: ${{ vars.PERSIST_EVIDENCE_BROKER_MAX_REQUESTS || '10' }}",
+	"PERSIST_EVIDENCE_BROKER_MAX_BYTES: ${{ vars.PERSIST_EVIDENCE_BROKER_MAX_BYTES || '32768' }}",
+)
+
+
+def test_evidence_broker_switches_default_off_in_plan() -> None:
+	text = (WORKFLOW_DIR / "plan.yml").read_text(encoding="utf-8")
+	for line in BROKER_ENV_LINES:
+		assert text.count(line) == 1, line
+	env = _workflow("plan.yml").get("env") or {}
+	assert isinstance(env, dict)
+	for line in BROKER_ENV_LINES:
+		key, value = line.split(": ", 1)
+		assert env.get(key) == value
+	script = (REPO_ROOT / "scripts" / "run_plan_codex.sh").read_text(encoding="utf-8")
+	assert script.count('if [ "${PERSIST_EVIDENCE_BROKER_ENABLED:-false}" = "true" ]; then') == 1
+	assert '[ "${PERSIST_EVIDENCE_BROKER_ENABLED:-false}" = "true" ] || return 0' in script
+
+
+def test_evidence_broker_helper_and_fragment_are_staged_optionally_in_plan() -> None:
+	text = (WORKFLOW_DIR / "plan.yml").read_text(encoding="utf-8")
+	# A separate loop keeps P4's asserted `for f in evidence_pack.py; do` line unchanged.
+	assert re.search(r"(?m)^\s+for f in evidence_pack\.py; do$", text)
+	loop = re.search(r"(?m)^\s+for f in evidence_broker\.py; do$", text)
+	assert loop and text.index("for f in evidence_pack.py; do") < loop.start()
+	assert "Optional evidence-broker helper ${f} unavailable" in text
+	assert loop.start() < text.index('printf \'%s\\n\' "${_fetched_scripts[@]}" .gitignore')
+	install = 'install -m 0644 "${src}" prompts/mode-plan-evidence-request.txt'
+	assert text.count(install) == 1
+	assert text.index('install -m 0644 "${src}" prompts/mode-plan-acceptance.txt') < text.index(install)
+	block = text[text.index("if [ ! -f prompts/mode-plan-evidence-request.txt ]; then"):text.index(install)]
+	assert '[ -f "${src}" ] && [ ! -L "${src}" ]' in block
+
+
+def test_evidence_broker_hash_reaches_the_plan_journal_only_with_the_switch() -> None:
+	step = _step("plan.yml", "plan", "Record attempt journal entry (plan)")
+	run = step.get("run")
+	assert isinstance(run, str) and "${{" not in run
+	gate = 'if [ "${PERSIST_EVIDENCE_BROKER_ENABLED:-false}" = true ] && [ -s "${RUNTIME_DIR}/evidence_broker_hash.txt" ]; then'
+	assert run.count(gate) == 1
+	assert 'acceptance_args+=(--evidence-hash-file "${RUNTIME_DIR}/evidence_broker_hash.txt")' in run[run.index(gate):]
+	assert run.index(gate) < run.index("scripts/attempt_journal.py append")

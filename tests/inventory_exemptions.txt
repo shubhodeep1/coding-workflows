@@ -2,3 +2,5 @@
 # Intentionally empty; add entries only when a documented parity escape is required.
 prompts/mode-judge-revise-option.txt | issue #8427 P10 adds this prompt; docs/INVENTORY.md is outside the P10 file grant, so the entry is added at the next docs sync
 prompts/mode-orchestrate-revise.txt | issue #8427 P10 adds this prompt; docs/INVENTORY.md is outside the P10 file grant, so the entry is added at the next docs sync
+prompts/mode-plan-evidence-request.txt | issue #8427 P11 adds this prompt; docs/INVENTORY.md is outside the P11 file grant, so the entry is added at the next docs sync
+scripts/evidence_broker.py | issue #8427 P11 adds this helper; docs/INVENTORY.md is outside the P11 file grant, so the entry is added at the next docs sync

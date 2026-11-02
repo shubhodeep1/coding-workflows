@@ -408,6 +408,26 @@ open(sys.argv[2], "w", encoding="utf-8").write(best[1])
 	fi
 fi
 
+# Evidence broker (issue #8427, P11): only with PERSIST_EVIDENCE_BROKER_ENABLED=true
+# (default false, defaulted here per section 8), tell the planner how to ask
+# for evidence it cannot see. Off, or no fragment: the prompt is unchanged and
+# plan_evidence_broker_round (end of file) never re-runs the planner.
+evidence_broker_prompt_appended=false
+if [ "${PERSIST_EVIDENCE_BROKER_ENABLED:-false}" = "true" ]; then
+	evidence_broker_prompt="prompts/mode-plan-evidence-request.txt"
+	evidence_broker_rendered=""
+	if [ -f "${evidence_broker_prompt}" ] && [ ! -L "${evidence_broker_prompt}" ] \
+		&& evidence_broker_rendered="$(bash scripts/render_prompt.sh "${evidence_broker_prompt}")" && [ -n "${evidence_broker_rendered}" ]; then
+		{
+			echo
+			printf '%s\n' "${evidence_broker_rendered}"
+		} >> "${CODEX_PROMPT_FILE}"
+		evidence_broker_prompt_appended=true
+	else
+		echo "PERSIST broker outcome=skipped reason=prompt_absent"
+	fi
+fi
+
 # Update progress comment to signal model invocation is starting
 if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
@@ -588,3 +608,79 @@ for attempt in $(seq 1 "${max_attempts}"); do
     exit 1
   fi
 done
+
+# BEGIN plan evidence broker (#8427 P11)
+# One evidence round (PERSIST_EVIDENCE_BROKER_MAX_ROUNDS, fixed at 1 in this
+# phase). Only with PERSIST_EVIDENCE_BROKER_ENABLED=true and the request
+# fragment appended above: when the planner output ends `STATUS: NOT_CLEAR`
+# with `PLAN_SELF_CHECK: BLOCKER: evidence needed` and valid
+# `EVIDENCE_REQUEST:` lines, the host (holding GH_TOKEN; the model never does)
+# fulfils them, appends the fenced results to the prompt and runs the planner
+# once more on the engine and model the attempt loop ended with. The second
+# output replaces the first only when it is non-empty; otherwise the first
+# output is kept and plan.yml blocks it as before. A plan without requests
+# runs exactly once.
+plan_evidence_broker_round()
+{
+  local requests_file="${RUNTIME_DIR}/evidence_requests.json"
+  local results_file="${RUNTIME_DIR}/evidence_broker_results.txt"
+  local hash_file="${RUNTIME_DIR}/evidence_broker_hash.txt"
+  local rerun_output="${RUNTIME_DIR}/plan_output_broker.txt"
+  local request_count="" rerun_rc=0
+  [ "${PERSIST_EVIDENCE_BROKER_ENABLED:-false}" = "true" ] || return 0
+  [ "${evidence_broker_prompt_appended:-false}" = "true" ] || return 0
+  if [ ! -f scripts/evidence_broker.py ] || [ -L scripts/evidence_broker.py ]; then
+    echo "PERSIST broker outcome=skipped reason=helper_absent"
+    return 0
+  fi
+  rm -f -- "${requests_file}" "${results_file}" "${hash_file}" "${rerun_output}"
+  request_count="$(PYTHONDONTWRITEBYTECODE=1 timeout 60 python3 -B scripts/evidence_broker.py validate \
+    --output-file "${CODEX_OUTPUT_FILE}" --repo "${GITHUB_REPOSITORY:-}" --out "${requests_file}")" || request_count=""
+  [[ "${request_count}" =~ ^[1-9][0-9]*$ ]] || return 0
+  PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -B scripts/evidence_broker.py fulfil \
+    --requests "${requests_file}" --repo "${GITHUB_REPOSITORY:-}" --repo-root . \
+    --default-branch "${PLAN_ISOLATED_BASE_BRANCH:-}" \
+    --out "${results_file}" --hash-out "${hash_file}" || true
+  if [ ! -s "${results_file}" ]; then
+    rm -f -- "${hash_file}"
+    echo "PERSIST broker outcome=skipped reason=no_results"
+    return 0
+  fi
+  { echo; cat "${results_file}"; } >> "${CODEX_PROMPT_FILE}"
+  if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+    sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+  fi
+  echo "${plan_engine_name:-Codex} planning evidence round: re-running the planner once with broker results."
+  # Same dispatch as one attempt of the loop above.
+  if [ "${HEAL_ROUTE:-false}" = true ]; then
+    MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${rerun_output}" "${RUNTIME_DIR}/codex_log.txt" "${PLAN_ENGINE}" PLAN || rerun_rc=$?
+    if [ "${rerun_rc}" -eq 75 ]; then
+      PLAN_ENGINE=codex
+      rerun_rc=0
+      MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${rerun_output}" "${RUNTIME_DIR}/codex_log.txt" codex PLAN || rerun_rc=$?
+    fi
+  elif [ "${PLAN_ENGINE}" = "claude" ]; then
+    AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
+      claude_run PLAN "${CODEX_PROMPT_FILE}" "${rerun_output}" "${PWD}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || rerun_rc=$?
+    if [ "${rerun_rc}" -eq 75 ]; then
+      PLAN_ENGINE="codex"
+      rerun_rc=0
+    fi
+  fi
+  if [ "${HEAL_ROUTE:-false}" != true ] && [ "${PLAN_ENGINE}" != "claude" ]; then
+    bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${rerun_output}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || rerun_rc=$?
+  fi
+  if [ "${rerun_rc}" -eq 0 ] && [ -f "${rerun_output}" ] && grep -q '[^[:space:]]' "${rerun_output}"; then
+    # Overwriting runtime files only: the first output is kept beside it.
+    cp -f -- "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/plan_output_first.txt"
+    cp -f -- "${rerun_output}" "${CODEX_OUTPUT_FILE}"
+    echo "PERSIST broker outcome=rerun_ok rounds=1"
+  else
+    # The final output never saw the results, so the journal records no hash.
+    rm -f -- "${hash_file}"
+    echo "PERSIST broker outcome=rerun_failed rc=${rerun_rc}"
+  fi
+  return 0
+}
+# END plan evidence broker (#8427 P11)
+plan_evidence_broker_round

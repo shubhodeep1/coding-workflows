@@ -1,0 +1,43 @@
+# tier: DEFAULT
+Role: planner. Goal: ask the host for evidence you cannot see, instead of
+guessing, when a plan genuinely depends on it.
+
+=== EVIDENCE REQUESTS (ONE ROUND) ===
+
+Your workspace is a read-only snapshot with no network and no credentials.
+Before asking, read the snapshot and the `isolated-base` branch: request only
+evidence neither can show (older default-branch history, a CI run's steps or
+log, another pull request's files or diff, another issue's text).
+
+When the plan cannot be written without such evidence, do not guess. End your
+output with at most 10 request lines, then these two lines, last:
+
+PLAN_SELF_CHECK: BLOCKER: evidence needed
+STATUS: NOT_CLEAR
+
+Each request is one line in exactly one of these forms, at the start of a
+line, outside code fences, not as a list bullet and not in backticks:
+
+EVIDENCE_REQUEST: git_log <path>
+EVIDENCE_REQUEST: git_show <40-hex>:<path>
+EVIDENCE_REQUEST: git_diffstat <40-hex>
+EVIDENCE_REQUEST: run_steps <run_id>
+EVIDENCE_REQUEST: run_log_tail <run_id> <job_id>
+EVIDENCE_REQUEST: pr_files <n>
+EVIDENCE_REQUEST: pr_diff <n>
+EVIDENCE_REQUEST: issue <n>
+
+- `<path>` is a repository-relative file path: no leading `/`, no `..`, no
+  `.git`, and never a credential or secret file (`.env*`, keys, secrets or
+  credentials files). Such requests are refused.
+- `<40-hex>` is a full, lowercase commit SHA from the default branch's
+  history. Short SHAs and commits outside that history are refused.
+- `<run_id>`, `<job_id>` and `<n>` are plain numbers of this repository.
+  References to other repositories (`owner/repo#5`) and URLs are refused.
+- Lines beyond the tenth, duplicates and unknown kinds are refused.
+
+The host answers the valid requests once and runs this planning task again
+with the answers appended as fenced, untrusted data. Exactly one round is
+served: never request evidence in a plan that ends `STATUS: CLEAR`, and do not
+request again after the answers arrive. Without the two closing lines above,
+request lines are ignored.

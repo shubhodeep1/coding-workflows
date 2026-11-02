@@ -29,6 +29,7 @@ CLI:
 		[--attempt A] [--note-file F] [--files-file F] [--gate-result F] [--acceptance-file F]
 		[--deletions-from-commit] [--failure-workflow W --failure-step S
 		--failure-text-file F] [--comments-file F] [--trusted-login L]
+		[--evidence-hash-file F]
 	render [--repo R (--issue N | --pr N [--head-ref B]) | --comments-file F] --out F
 		[--trusted-login L] [--max-bytes N]
 	latest-key --comments-file F [--trusted-login L]
@@ -534,6 +535,18 @@ def _read_lines(path: str | None) -> list[str]:
 		return []
 
 
+def evidence_hash_field(path: str | None) -> str:
+	"""Journal `evidence_hash` from a file holding one sha256 (issue #8427, P11:
+	scripts/evidence_broker.py's --hash-out). Anything else, or no file, is ""."""
+	if not path:
+		return ""
+	try:
+		value = Path(path).read_text(encoding="utf-8", errors="replace").strip()
+	except OSError:
+		return ""
+	return value if _HASH_RE.match(value) else ""
+
+
 def _valid_target(repo: str | None, issue: str | None) -> bool:
 	return bool(repo and _REPO_RE.match(repo) and issue and issue.isdigit() and int(issue) > 0)
 
@@ -616,7 +629,7 @@ def cmd_append(args: argparse.Namespace) -> None:
 		"gate": gate_fields(args.gate_result),
 		"acceptance": acceptance_fields(args.acceptance_file),
 		"editor_deletions": commit_deletions() if args.deletions_from_commit else [],
-		"evidence_hash": "",
+		"evidence_hash": evidence_hash_field(args.evidence_hash_file),
 		"note": note,
 	})
 	if entry is None:
@@ -707,6 +720,7 @@ def build_parser() -> argparse.ArgumentParser:
 	append.add_argument("--failure-text-file")
 	append.add_argument("--comments-file")
 	append.add_argument("--trusted-login")
+	append.add_argument("--evidence-hash-file")
 	rend = sub.add_parser("render")
 	rend.add_argument("--repo")
 	rend.add_argument("--issue", default="")
