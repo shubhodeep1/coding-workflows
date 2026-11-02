@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-02T08:29:26Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 008 as out-of-scope; anchor=not tied to any changed file:n/a; cited_path=AGENTS.md / CLAUDE.md (third-party `copilot-pull-request-reviewer` check, run 41410285880); files_touched=agents.d/8661-security-pass-advisory-cited-code-check.md, changelog.d/8661-security-pass-advisory-cited-code-check.md, scripts/orchestrate_poll_process.sh, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 8670,
+  "record_id": "lesson_20261102082926_b82a49d176",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md / CLAUDE.md (third-party `copilot-pull-request-reviewer` check, run 41410285880)",
+    "not tied to any changed file",
+    "agents.d/8661-security-pass-advisory-cited-code-check.md",
+    "changelog.d/8661-security-pass-advisory-cited-code-check.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py"
+  ]
+}
