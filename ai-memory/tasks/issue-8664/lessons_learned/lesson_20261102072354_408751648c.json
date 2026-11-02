@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-02T07:23:54Z",
+  "issue_number": 8664,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=(none: external GitHub check run `copilot-pull-request-reviewer`):n/a; cited_path=copilot-pull-request-reviewer (external check run 41404028898, job 125141901180; no repository file); files_touched=changelog.d/wfopt-2026-09-29-collector-run-row-dedup.md, scripts/collect_workflow_logs.py, tests/test_collect_workflow_logs.py.",
+  "phase": "review_autofix",
+  "pr_number": 8665,
+  "record_id": "lesson_20261102072354_408751648c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer (external check run 41404028898, job 125141901180; no repository file)",
+    "(none: external GitHub check run `copilot-pull-request-reviewer`)",
+    "changelog.d/wfopt-2026-09-29-collector-run-row-dedup.md",
+    "scripts/collect_workflow_logs.py",
+    "tests/test_collect_workflow_logs.py"
+  ]
+}
