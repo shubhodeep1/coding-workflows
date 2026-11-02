@@ -8199,10 +8199,15 @@ security_pass_file_deferred_advisory_followups() {
 	# One fetch per ref (local git, no API calls) so the cited-code check sees
 	# the merged default branch and the audited head.  Fail-open: a failed
 	# fetch makes the check print `unknown`, which keeps the legacy wording.
-	local row_cited_status
-	git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || true
+	local row_cited_status cited_default_fetch_ok=true
+	git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || cited_default_fetch_ok=false
 	if [ -n "${integration_branch}" ]; then
 		git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 || true
+	fi
+	# The final merge deletes the integration branch; the PR head ref keeps
+	# the audited commit reachable on later ticks.
+	if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+		git fetch --no-tags origin "+refs/pull/${final_pr}/head:refs/orchestrator/security-pass/advisory-pr-${final_pr}-head" >/dev/null 2>&1 || true
 	fi
   while IFS= read -r row_json; do
     [ -n "${row_json}" ] || continue
@@ -8216,6 +8221,8 @@ security_pass_file_deferred_advisory_followups() {
 	row_cited_status="$(security_pass_advisory_cited_code_status "${row_head_sha}" "${default_branch}" \
 		"$(printf '%s' "${row_finding}" | jq -r '.file // ""')" \
 		"$(printf '%s' "${row_finding}" | jq -r '.line // ""')")"
+	# A failed default-branch fetch cannot prove the code is gone.
+	[ "${cited_default_fetch_ok}" = "true" ] || row_cited_status="unknown"
 	echo "SECURITY_PASS_ADVISORY_CITED_CODE tracking_issue=${TRACKING_NUM} finding=$(printf '%s' "${row_json}" | jq -r '.finding_id') default_branch=${default_branch} status=${row_cited_status}"
     create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}" "${row_cited_status}"
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then

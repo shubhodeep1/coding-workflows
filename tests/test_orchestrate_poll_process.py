@@ -6964,8 +6964,18 @@ def _cited_code_status_function_source() -> str:
 	return text[start:end]
 
 
-def test_security_pass_advisory_cited_code_status_window_match(tmp_path: Path) -> None:
+def test_security_pass_advisory_cited_code_status_window_match() -> None:
 	"""The helper matches a whitespace-normalised window, not a bare line.
+
+	Takes no arguments: this module's custom runner calls every test as
+	``func()`` (``test_custom_runner_tests_need_no_pytest_arguments``).
+	"""
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_cited_code_status_window_match(Path(tmp_dir))
+
+
+def _check_cited_code_status_window_match(tmp_path: Path) -> None:
+	"""Body of test_security_pass_advisory_cited_code_status_window_match.
 
 	A bare `}` or `} catch {` line matches almost any file (the
 	fun-token-multi-chain#709 citation chain.ts:367 was `} catch {` inside a
