@@ -7035,6 +7035,18 @@ def _check_cited_code_status_window_match(tmp_path: Path) -> None:
 	# Same commit on both sides: present.
 	git("update-ref", "refs/remotes/origin/main", audited_sha)
 	assert status(audited_sha, "src.py", "3") == "present"
+	# A lone "\r" is not a line break for git: line 5 is keep_e, so the window
+	# is keep_c..keep_g, all still on the default branch.  read_text() would
+	# split at the "\r", shift the window onto pad_b and report `absent`.
+	keep = "".join(f"keep_line_{c}{c}{c}{c}\n" for c in "cdefg")
+	(repo / "cr.py").write_bytes(("x\ry\npad_line_bbbb\n" + keep).encode())
+	git("add", "cr.py")
+	git("commit", "--quiet", "-m", "lone cr")
+	cr_sha = git("rev-parse", "HEAD")
+	(repo / "cr.py").write_bytes(("pad_line_aaaa\n" + keep).encode())
+	git("commit", "--quiet", "-am", "default without pad_b")
+	git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+	assert status(cr_sha, "cr.py", "5") == "present"
 	assert not list(tmp_path.glob("security-pass-cited-code.*"))  # temp dirs cleaned up
 
 
