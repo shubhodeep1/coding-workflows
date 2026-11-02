@@ -1742,3 +1742,30 @@ Source commit: `cec39fdb5f94ab267130b2f79c6604870cfce49c`
 - DEAD-001: rejected — naming immutability (precedent).
 - SHELL-001: rejected — style-only (SC2043 precedent).
 - DEBT-001: rejected — conditional; `tests/test_workflow_file_size_limit.py` already enforces the 480,000-byte guard, and the fix is deferred to the next substantial expansion of `review_autofix.yml`.
+
+### `analysis/workflow-optimization-2026-09-29.md`
+Source doc: `analysis/workflow-optimization-2026-09-29.md`
+Processed: 2026-11-02
+Source commit: `00b33ac5b49ac9640d4e596dd773371b0dccc10d`
+- Exec 1 / Speed 1 / CI pipeline row / per-repo action 2 (move the poll tests to a parallel job): already-implemented — `.github/workflows/ci.yml` has a separate `orchestrate-poll` job with no `needs:`. It writes `/tmp/orchestrate_poll_remaining_tests.txt` and runs `Orchestrate poll process unit tests` in parallel with `static-checks` and the `tests-*` jobs, and the required `lint` job remains.
+- Exec 2 / Speed 2 / Cost 1 / per-repo action 3 (45-minute absolute reviewer-slot cap, reconcile the 662,879,782-token `grok-4.20` record): rejected — the evidence is a single run (36483245451); the doc rates the risk as medium and requires a failback-quality check first; and the 2026-09-28-3 verdict rejected a reviewer stall cap. Reconciling with provider billing happens outside the repo, and `scripts/cost_audit.py` already aggregates per-call usage.
+- Exec 3 / Reliability 1 / Validate pipeline row (`validation_dispatch_status` for merged PR #4842): already-implemented, per the 2026-09-28 verdict — the step `Dispatch standalone validate for orchestrator short-circuit issues` in `.github/workflows/review_autofix.yml` fails with `::error::` when validation was required but could not be dispatched, and keeps `ai:orchestrator-validate-required`.
+- Exec 4 / Reliability 2 / per-repo action 1 (collector dedup): already-implemented for event lines — `_structured_cost_telemetry_line_key` in `scripts/collect_workflow_logs.py` strips timestamps. The run-row part (keyed on run ID plus attempt, reported as `duplicate_runs_skipped`) is applied by the sibling collector change (`changelog.d/wfopt-2026-09-29-collector-run-row-dedup.md`; the PR number is not recoverable from this branch's squashed history). The per-slot, API and tick diagnostics in per-repo action 1 are rejected as measurement-only.
+- Exec 5 / GH API audit (endpoint-template counters in `gh_retry`) and the review-sweep batching bullet: rejected — measurement-only. `GH_API_RETRY` and the `Record GH_PAT budget at ...` steps already exist, and per-call stderr lines from `gh_retry` would reach callers that capture its stderr (2026-09-28 precedent).
+- GH API audit, duplicate final-PR `.state`/`.merged_at` fetch: already-implemented — the snapshot-miss fallback in `scripts/orchestrate_poll_process.sh` (`existing_pr_fallback_json`) reads `pulls/<final_pr>` once with `--jq '.'` and takes both fields from that payload.
+- Speed 3, Speed 4, Cost 2, Cost 3, Cost 4, Reliability 3, Prompt Cache & Memory System, Pipeline Flow Bottlenecks: rejected — measurement-only with no consumer. The Cost 4 Claude-fixer hand-off is obsolete because the hand-off is retired.
+- Reliability 4 (Semble contract-test fallbacks counted as outages): already-implemented — the events carry `context=contract-test` (`scripts/cost_audit.py`), and fail-open behaviour is unchanged.
+- AI Memory Health: already-implemented in part — `AI_MEMORY_TELEMETRY` carries `op`, `ok`, `records_selected`, `estimated_tokens`, `keyword_method`, `fail_open` and `did_push`. The relevance and record-ID digest is rejected as measurement-only.
+- Orchestrator Health (`ORCH_TICK_SUMMARY`): already-implemented in part — the per-tick `state-snapshot` artifact (`scripts/build_state_snapshot.py`) and `POLL_PROGRESS`. The rest is rejected as measurement-only.
+- BUG-001: already-implemented — `set_issue_phase_label_resilient` in `scripts/label_helpers.sh` POSTs the target label, DELETEs stale phase labels, and never PUTs the full set.
+- BUG-002: rejected — obsolete; `scripts/claude_issue_queue_watchdog.sh` and `scripts/claude_issue_route.py` no longer exist.
+- BUG-003: applied by the sibling change — `find_tracking` in `.github/workflows/orchestrate_poll.yml` lists up to `ORCHESTRATE_TRACKING_ISSUE_LIST_LIMIT` (default 100, integer 1-1000) issues and emits `ORCH_TRACKING_ISSUE_LIST_TRUNCATED limit=<n> count=<n>` when it hits the limit (`changelog.d/wfopt-2026-09-29-tracking-issue-list-limit.md`; the PR number is not recoverable from this branch's squashed history).
+- BUG-004: already-implemented — on PATCH failure, both `scripts/workflow_retro_fanout.sh` and the `Upsert weekly retro tracker comment` step in `.github/workflows/workflow-log-analysis.yml` re-read the comment before posting.
+- BUG-005: rejected — the doc tags it NEEDS VERIFICATION; the source read is bounded by `since=${RETRO_WINDOW_SINCE}` (a one-week window) on a tracker that gets one marker comment per week, and no week with more than 100 comments has been shown.
+- SEC-001: already-implemented for run-body interpolation — no `${{ secrets.GH_PAT }}` is interpolated into remote URLs in run bodies. Moving the token out of the remote URL is rejected, per the 2026-09-22 precedent: it is a dedicated change across about 14 sites in several workflows.
+- API-001, API-002, API-003: rejected — the doc's own cross-references tag them RISKY_SKIP.
+- DUP-001, DUP-002: rejected — refactor-only across trusted staging boundaries, with no defect. The BUG-001 rationale for DUP-002 no longer holds, because the helper no longer PUTs the full label set.
+- EXPR-001: already-implemented — the `Stage workflow support files` run body in `.github/workflows/implement.yml` passes values through `env:` and contains no `${{ }}`.
+- DEAD-001: rejected — naming immutability (precedent). SHELL-001: rejected — style-only change in the hot poller file (precedent).
+- MERGE-001: rejected — tagged NEEDS_VERIFICATION and not verified. MERGE-002, REUSE-001, REUSE-002: rejected — tagged RISKY_SKIP.
+- DEAD-API: no findings.
