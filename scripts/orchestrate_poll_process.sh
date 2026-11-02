@@ -18500,6 +18500,14 @@ _plan_auto_approval_gate()
         | select(contains($marker))
       ] | length > 0' 2>/dev/null)" || gate_replan_seen="true"
     [ "${gate_replan_seen}" = "false" ] || gate_replan_seen="true"
+    if [ "${gate_replan_seen}" = "false" ] \
+      && ! phase_cap_can_dispatch "ai:planning" "automation_path_replan" "${issue_num}"; then
+      # The callers checked only the ai:implementing cap; a re-plan starts a
+      # plan run, so it waits for the ai:planning cap. No marker is posted,
+      # so a later tick retries the re-plan.
+      echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=automation_path_replan"
+      return 1
+    fi
     if [ "${gate_replan_seen}" = "false" ]; then
       # §14 audit: comments_json, details_map_json and the retrigger_plan
       # comment POST were checked; none of them can change labels, and
@@ -18521,8 +18529,14 @@ ${gate_replan_marker}"
           echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan issue=${issue_num}"
           tg_notify_issue "${issue_num}" "Stall recovery: plan held only by directory or glob tokens; re-planning once." "DEBUG" || true
         else
-          # The issue sits in ai:planning; the retrigger_plan arm recovers it.
+          # Put the issue back in ai:awaiting-approval so the next tick retries
+          # the whole re-plan with its marker; without the marker a plain
+          # retrigger_plan /answer could allow a second automatic re-plan.
+          # If the rollback fails too, the retrigger_plan arm recovers it.
           echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_failed issue=${issue_num}"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 \
+            || echo "::warning::Could not restore ai:awaiting-approval on issue #${issue_num} after a failed re-plan comment."
         fi
         return 1
       fi

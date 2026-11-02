@@ -1547,7 +1547,7 @@ def test_plan_gate_placeholder_directory_hold_is_replannable() -> None:
 def test_plan_gate_replannable_for_exact_allowlist_and_globs() -> None:
 	meta = _owner_meta("scripts/a.sh")
 	for token in ("scripts/", "scripts/*.sh", "scripts/**"):
-		code, record, _ = _run_grant_cli(f"## Files likely to change\n- `scripts/a.sh`\n- `{token}`\n", meta)
+		_code, record, _ = _run_grant_cli(f"## Files likely to change\n- `scripts/a.sh`\n- `{token}`\n", meta)
 		assert record["reason"] == "path_not_granted" and record["denied_paths"] == [token], (token, record)
 		assert record.get("replannable") is True, (token, record)
 
@@ -1563,7 +1563,7 @@ def test_plan_gate_replannable_absent_when_not_only_placeholder_tokens() -> None
 		("## Files likely to change\n- `scripts/`\n- `prompts/`\n", _owner_meta("scripts/a.sh")),
 	]
 	for plan, meta in cases:
-		code, record, _ = _run_grant_cli(plan, meta)
+		_code, record, _ = _run_grant_cli(plan, meta)
 		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", (plan, record)
 		assert "replannable" not in record, (plan, record)
 
@@ -1572,11 +1572,11 @@ def test_plan_gate_replannable_absent_when_remaining_plan_still_holds_files_touc
 	# The rest of the plan names a file outside files_touched: a re-plan
 	# without the token would still be held, so it is not replannable.
 	plan = "## Files likely to change\n- `scripts/a.sh`\n- `README.md`\n- `scripts/`\n"
-	code, record, _ = _run_grant_cli(plan, _owner_meta("scripts/a.sh"))
+	_code, record, _ = _run_grant_cli(plan, _owner_meta("scripts/a.sh"))
 	assert record["reason"] == "path_not_granted" and "replannable" not in record, record
 	saved = _with_env(ENFORCE_FILES_TOUCHED="false")
 	try:
-		code, record, _ = _run_grant_cli(plan, _owner_meta("scripts/a.sh"))
+		_code, record, _ = _run_grant_cli(plan, _owner_meta("scripts/a.sh"))
 	finally:
 		_restore_env(saved)
 	assert record["reason"] == "path_not_granted" and record.get("replannable") is True, record
@@ -1585,11 +1585,11 @@ def test_plan_gate_replannable_absent_when_remaining_plan_still_holds_files_touc
 def test_plan_gate_replannable_absent_on_heal_route() -> None:
 	plan = "## Files likely to change\n- `scripts/a.sh`\n- `scripts/`\n"
 	labelled = dict(_owner_meta("scripts/a.sh"), labels=[{"name": "ai:workflow-heal"}])
-	code, record, _ = _run_grant_cli(plan, labelled)
+	_code, record, _ = _run_grant_cli(plan, labelled)
 	assert record["reason"] == "path_not_granted" and "replannable" not in record, record
 	fp = dict(_owner_meta("scripts/a.sh"))
 	fp["body"] += "\n<!-- workflow-failure-heal:fp=" + "a" * 64 + " -->\n"
-	code, record, _ = _run_grant_cli(plan, fp)
+	_code, record, _ = _run_grant_cli(plan, fp)
 	assert record["reason"] == "path_not_granted" and "replannable" not in record, record
 
 
@@ -1614,11 +1614,14 @@ def test_plan_gate_replannable_absent_for_every_other_reason() -> None:
 		assert record["reason"] == reason, (reason, record)
 		assert "replannable" not in record and body is None, (reason, record)
 		seen.add(reason)
+	assert seen == {"untrusted_author", "no_allowlist", "malformed_allowlist", "workflow_edits_disabled",
+		"grant_issue_mismatch", "automation_path_plan_auto_approval_disabled", "origin_unverified",
+		"plan_too_large_for_grant", "plan_files_outside_files_touched", "plan_gate_error"}, seen
 	# open_grant_not_exact: pipeline issue without the grant-body output path.
-	code, record = _run_plan_gate_cli(plan, "true", _pipeline_meta())
+	_code, record = _run_plan_gate_cli(plan, "true", _pipeline_meta())
 	assert record["reason"] == "open_grant_not_exact" and "replannable" not in record, record
 	# issue_meta_unavailable: no metadata file.
-	code, record = _run_plan_gate_cli(plan, "true", None)
+	_code, record = _run_plan_gate_cli(plan, "true", None)
 	assert record["reason"] == "issue_meta_unavailable" and "replannable" not in record, record
 	# origin_untrusted: a source written by an untrusted author.
 	untrusted_source = {"number": 7, "user": {"login": "outsider"}, "author_association": "NONE", "body": "x"}
@@ -1633,7 +1636,7 @@ def test_plan_gate_replannable_absent_for_every_other_reason() -> None:
 
 
 def test_plan_gate_approve_record_keys_unchanged() -> None:
-	code, record, _ = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n", _owner_meta("scripts/a.sh"))
+	_code, record, _ = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n", _owner_meta("scripts/a.sh"))
 	assert record["decision"] == "approve" and record["reason"] == "granted"
 	assert set(record) == {"decision", "reason", "protected_paths", "denied_paths", "log_paths"}
 

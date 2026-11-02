@@ -909,10 +909,8 @@ def _plan_hold_replannable(plan_text: str, protected: list[str], denied: list[st
 		allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
 	if decision != PLAN_DECISION_APPROVE or reason != "granted":
 		return False
-	if check_files_touched and plan_files_outside_files_touched(plan_text, metadata.get("body") or "",
-			metadata.get("labels"), issue_number=issue_number or metadata.get("number")):
-		return False
-	return True
+	return not (check_files_touched and plan_files_outside_files_touched(plan_text, metadata.get("body") or "",
+		metadata.get("labels"), issue_number=issue_number or metadata.get("number")))
 
 
 def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,

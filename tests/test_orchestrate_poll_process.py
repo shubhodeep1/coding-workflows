@@ -27633,6 +27633,10 @@ def test_managed_replannable_hold_comment_failure_posts_no_hold_notice() -> None
 	assert "outcome=defer issue=10" not in log
 	assert "Could not post the automation-path hold comment for issue #10" not in log
 	assert _replan_hold_bodies(result, "10") == [], log
+	# The label move is rolled back so the next tick retries with the marker.
+	assert result.get("issue_edit_call_counts", {}).get("10") == 2, log
+	labels = result["issues"]["10"]["labels"]
+	assert "ai:awaiting-approval" in labels and "ai:planning" not in labels, labels
 
 
 def test_managed_non_replannable_hold_is_unchanged() -> None:
