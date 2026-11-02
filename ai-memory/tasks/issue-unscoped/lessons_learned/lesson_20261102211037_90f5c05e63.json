@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-02T21:10:37Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=agents.md:3909-3928; cited_path=AGENTS.md, CLAUDE.md (the instruction files the Copilot check named, which would have to shrink); files_touched=CHANGELOG.md, agents.d/8661-security-pass-advisory-cited-code-check.md, agents.md, changelog.d/8661-security-pass-advisory-cited-code-check.md.",
+  "phase": "review_autofix",
+  "pr_number": 8704,
+  "record_id": "lesson_20261102211037_90f5c05e63",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md, CLAUDE.md (the instruction files the Copilot check named, which would have to shrink)",
+    "agents.md",
+    "CHANGELOG.md",
+    "agents.d/8661-security-pass-advisory-cited-code-check.md",
+    "changelog.d/8661-security-pass-advisory-cited-code-check.md"
+  ]
+}
