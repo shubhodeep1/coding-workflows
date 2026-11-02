@@ -263,8 +263,10 @@ def test_review_rb_judge_fallback_label_metadata_matches_label_contract() -> Non
 	problems: list[str] = []
 
 	for line in text.splitlines():
-		call = re.match(r"^\s*ensure_label_exists\s+(\S+)", line)
-		if call and not re.fullmatch(r'"ai:[^"$]+"', call.group(1)):
+		# Also catch calls chained after `&&`, `||` or `;` on one line.
+		for call in re.finditer(r"(?:^|&&|\|\||;)\s*ensure_label_exists\s+(\S+)", line):
+			if re.fullmatch(r'"ai:[^"$]+"', call.group(1)):
+				continue
 			problems.append(
 				"scripts/review_rb_judge.sh: `ensure_label_exists` call must pass a double-quoted literal "
 				f"\"ai:...\" label so the fallback check sees it: {line.strip()!r}"
