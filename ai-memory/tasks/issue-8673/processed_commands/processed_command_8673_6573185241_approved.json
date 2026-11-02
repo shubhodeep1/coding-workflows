@@ -5,13 +5,30 @@
   "entry_id": "processed_command_8673_6573185241_approved",
   "issue_number": 8673,
   "metadata": {
+    "branch": "ai/issue-8673",
+    "changed_files": [
+      "README.md",
+      "changelog.d/8673-ci-triage-prose-marker-skip.md",
+      "scripts/resolve_integration_ref.sh",
+      "tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_body_with_label_refuses_marker_invalid.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_header_first_line_without_label_refuses.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_mid_body_without_label_skips.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_skip_flag_false_refuses.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_skip_flag_unrecognised_refuses.json",
+      "tests/test_resolve_integration_ref_ci_triage.py"
+    ],
+    "issue_number": 8673,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8673",
+    "pr_number": 8676,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8676",
+    "run_attempt": "1",
+    "run_id": "41417665279",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41417665279"
   },
   "run_attempt": 1,
   "run_id": "41417665279",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-02T09:05:52Z",
+  "status": "completed",
+  "timestamp": "2026-11-02T09:47:48Z",
   "workflow": "implement"
 }
