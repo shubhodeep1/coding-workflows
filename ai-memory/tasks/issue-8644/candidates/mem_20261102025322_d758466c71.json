@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8644,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8644\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8653\",\"pr_number\":8653,\"branch\":\"ai/issue-8644\",\"run_id\":\"41368859525\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41368859525\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"agents.d/8427-p10-persist-redecompose.md\",\"changelog.d/8427-p10-persist-redecompose.md\",\"prompts/_templates/mode-judge-revise-option.txt\",\"prompts/_templates/mode-orchestrate-revise.txt\",\"prompts/mode-judge-revise-option.txt\",\"prompts/mode-orchestrate-revise.txt\",\"scripts/orchestrate_poll_process.sh\",\"scripts/persist_orchestrator.py\",\"tests/inventory_exemptions.txt\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_orchestrate_poll_workflow_contract.py\",\"tests/test_persist_orchestrator.py\",\"tests/test_workflow_untrusted_input_contract.py\"]}",
+  "fingerprint": "c90f1fc7c0041d34b36e4c75afa6af6eb85827e6d44eb937c31c67ca5320f160",
+  "lineage": {
+    "issue_number": 8644,
+    "parent_ids": [],
+    "pr_number": 8653,
+    "run_id": "41368859525",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41368859525",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8653"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261102025322_d758466c71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8644,
+    "level": "run",
+    "pr_number": 8653,
+    "run_id": "41368859525"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8644: https://github.com/shubhodeep1/coding-workflows/pull/8653",
+  "timestamps": {
+    "created_at": "2026-11-02T02:53:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
