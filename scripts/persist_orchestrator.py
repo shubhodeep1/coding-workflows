@@ -120,6 +120,40 @@ wave-check-block --result-file R [--log-file L] --state-file S --wave-index I [-
 	``- ... truncated`` line. Both log ``PERSIST wave_check outcome=<..>
 	reason=<token> [k=<n>]``.
 
+revise-input --state-file S --current-wave N [--details-file D] [--trusted-login L] [--reason-file R] --out O
+	Pure: no subprocess, no network, zero API calls. Switch:
+	PERSIST_ORCH_REDECOMPOSE_ENABLED (default "false"; only the exact value
+	"true" turns it on). Cap: PERSIST_ORCH_MAX_REDECOMPOSE (default 2; a value
+	that is not a positive integer falls back to 2) against the state's
+	``redecompose_count``. Writes the variable tail of the revise prompt: the
+	``=== BEGIN/END UNTRUSTED <NAME> ===`` blocks PROJECT SPEC
+	(``project_body_snapshot``), PENDING ISSUE DEFS (the not-created items of
+	the waves after wave N, plus the frozen ids), SINCE DECOMPOSED
+	(``since_lines`` / ``render_since``, also with P7 off), JOURNALS (newest
+	trusted journal step per item; ``note`` is never read) and JUDGE REASON (at
+	most 500 characters). Every data line gets the wave-check-block treatment
+	and the ``UNTRUSTED_DATA: `` prefix; at most 48 KiB, and nothing is written
+	when the pending defs would be cut (``input_too_large``), when any later
+	wave entry is already created (``created_in_remaining``) or when there is
+	no later wave.
+
+revise-validate --state-file S --current-wave N --output-file M --now EPOCH --out-state O --out-comment C
+	Pure: no subprocess, no network, zero API calls. Same switch and cap.
+	Takes the last JSON object with a ``pending_issue_defs`` key from M (at
+	most 1 MiB), checks it (shape as the ``issues[]`` item of
+	.github/ai/orchestrate_schema.v1.json plus a required
+	``implementation_minutes_estimate`` of 1..60; no id reuse of frozen ids;
+	edges only between new ids; no ``Orchestrator metadata`` / ``<!--`` in
+	titles or bodies; ``validate_decomposition``, ``compute_waves`` and
+	``validate_wave_file_partition`` from scripts/orchestrate_lib.py) and only
+	then writes O (the state with ``waves[N:]``, ``pending_issue_defs``,
+	``dependency_edges``, ``total_waves`` and ``total_issues`` replaced,
+	``pending_issue_defs_previous`` and ``persist_redecompose_previous_layout``
+	saved, ``redecompose_count`` incremented) and C (the tracking comment,
+	removed and added titles, no ``#N``). Created items and earlier waves are
+	never changed. Both log ``PERSIST redecompose outcome=<ok|skipped|invalid|error>
+	reason=<token> [k=<n>]`` (issue #8427, P10).
+
 Logs: one ``PERSIST orch_context outcome=<ok|skipped|partial|error>
 reason=<token> [calls=<n>] [bytes=<n>]`` line on stderr; tokens and numbers
 only, never titles, paths or comment text.
@@ -132,6 +166,7 @@ imported, since-note and open-projects fail closed: no output,
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -185,6 +220,29 @@ WAVE_CHECK_END = "=== END UNTRUSTED WAVE CHECK ==="
 WAVE_CHECK_DATA_PREFIX = "UNTRUSTED_DATA: "
 _WAVE_CHECK_EQ_RUN_RE = re.compile(r"={3,}")
 _WAVE_CHECK_RUN_ID_RE = re.compile(r"/actions/runs/([0-9]+)(?:/|$)")
+# Re-decompose remaining waves (issue #8427, P10).
+REDECOMPOSE_MAX_DEFAULT = 2
+REVISE_INPUT_MAX_BYTES = 48 * 1024
+REVISE_OUTPUT_MAX_BYTES = 1024 * 1024
+REVISE_REASON_MAX = 500
+# Bounds mirror the issues[] item of .github/ai/orchestrate_schema.v1.json.
+REVISE_MAX_ITEMS = 50
+REVISE_TITLE_MAX = 256
+REVISE_BODY_MAX = 12000
+REVISE_PRIORITY_MIN = 1
+REVISE_PRIORITY_MAX = 10
+REVISE_FILES_MAX = 50
+REVISE_FILE_LEN_MAX = 512
+REVISE_MAX_EDGES = 500
+REVISE_ESTIMATE_MAX = 60
+REVISE_COMMENT_TITLES_MAX = 20
+REVISE_ITEM_KEYS = frozenset({"title", "body", "priority", "files_touched", "implementation_minutes_estimate"})
+REVISE_STORED_KEYS = ("title", "body", "priority", "files_touched")
+REVISE_MARKERS = ("orchestrator metadata", "<!--")
+REVISE_COMMENT_HEADING = "## Remaining waves re-decomposed"
+_REVISE_ID_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
+_REVISE_OBJ_START_RE = re.compile(r'\{\s*"pending_issue_defs"\s*:')
+_REVISE_FENCE_RE = re.compile(r"```(?:json)?[ \t]*\n(.*?)```", re.S)
 
 
 def log(outcome: str, reason: str, **extra: int) -> None:
@@ -944,6 +1002,400 @@ def cmd_wave_check_block(args: argparse.Namespace) -> None:
 	log_wave_check("ok", "block_rendered", unmet=len(unmet), bytes=len(text.encode("utf-8")))
 
 
+def redecompose_enabled() -> bool:
+	# Exactly "true", the same rule as the other switches and the poller.
+	return os.environ.get("PERSIST_ORCH_REDECOMPOSE_ENABLED", "false") == "true"
+
+
+def _max_redecompose() -> int:
+	return _env_hours("PERSIST_ORCH_MAX_REDECOMPOSE", REDECOMPOSE_MAX_DEFAULT)
+
+
+def log_redecompose(outcome: str, reason: str, **extra: int) -> None:
+	line = f"PERSIST redecompose outcome={outcome} reason={_TOKEN_UNSAFE_RE.sub('_', reason)[:60]}"
+	for key, value in extra.items():
+		line += f" {key}={int(value)}"
+	print(line, file=sys.stderr)
+
+
+def _redecompose_count(state: Any) -> int:
+	value = state.get("redecompose_count") if isinstance(state, dict) else None
+	if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+		return 0
+	return value
+
+
+def revisable_ids(state: Any, current_wave: int) -> list[str] | None:
+	"""Local ids of the not-created items in the waves after current_wave
+	(1-based), or None when any of those entries is already created, has no
+	pending def or is malformed. An empty list: no wave after the current one."""
+	if not isinstance(state, dict):
+		return None
+	waves = state.get("waves")
+	defs = state.get("pending_issue_defs")
+	number_map = state.get("issue_number_map") if isinstance(state.get("issue_number_map"), dict) else {}
+	if not isinstance(waves, list) or not isinstance(defs, dict) or current_wave < 1 or current_wave > len(waves):
+		return None
+	ids: list[str] = []
+	for wave in waves[current_wave:]:
+		issues = wave.get("issues") if isinstance(wave, dict) else None
+		if not isinstance(issues, list):
+			return None
+		for entry in issues:
+			if not isinstance(entry, dict):
+				return None
+			iid = entry.get("id")
+			if (
+				not isinstance(iid, str) or entry.get("github_issue") is not None or iid in number_map
+				or not isinstance(defs.get(iid), dict) or iid in ids
+			):
+				return None
+			ids.append(iid)
+	return ids
+
+
+def _frozen_ids(state: dict, ids: list[str]) -> set[str]:
+	"""Every local id the revise must not reuse: created, current or earlier
+	wave entries, mapped ids and pending defs outside the revisable set."""
+	frozen: set[str] = set()
+	for wave in state.get("waves") or []:
+		for entry in (wave.get("issues") if isinstance(wave, dict) else None) or []:
+			if isinstance(entry, dict) and isinstance(entry.get("id"), str):
+				frozen.add(entry["id"])
+	if isinstance(state.get("issue_number_map"), dict):
+		frozen.update(str(k) for k in state["issue_number_map"])
+	if isinstance(state.get("pending_issue_defs"), dict):
+		frozen.update(str(k) for k in state["pending_issue_defs"])
+	return frozen - set(ids)
+
+
+def _revise_block(name: str, text: str, max_bytes: int) -> tuple[str, bool]:
+	"""One fenced UNTRUSTED block of neutralised data lines (the P9 treatment),
+	cut at max_bytes with a truncation line; (text, truncated)."""
+	head = f"=== BEGIN UNTRUSTED {name} ===\n"
+	tail = f"=== END UNTRUSTED {name} ===\n"
+	data = _wave_check_neutralise(text)
+	body = "".join(line + "\n" for line in data)
+	if len((head + body + tail).encode("utf-8")) <= max_bytes:
+		return head + body + tail, False
+	trailer = WAVE_CHECK_DATA_PREFIX + "- ... truncated\n"
+	budget = max_bytes - len((head + trailer + tail).encode("utf-8"))
+	kept: list[str] = []
+	for line in data:
+		raw = (line + "\n").encode("utf-8")
+		if len(raw) > budget:
+			if budget > len(WAVE_CHECK_DATA_PREFIX) + 1:
+				kept.append(raw[: budget - 1].decode("utf-8", "ignore") + "\n")
+			break
+		kept.append(line + "\n")
+		budget -= len(raw)
+	return head + "".join(kept) + trailer + tail, True
+
+
+def render_revise_input(state: dict, current_wave: int, details: Any, login: str, reason: str) -> tuple[str, str]:
+	"""(text, skip reason). The variable tail of the revise prompt: five fenced
+	UNTRUSTED blocks, at most REVISE_INPUT_MAX_BYTES."""
+	ids = revisable_ids(state, current_wave)
+	if ids is None:
+		return "", "created_in_remaining"
+	if not ids:
+		return "", "nothing_revisable"
+	defs = state["pending_issue_defs"]
+	pending = {iid: {k: defs[iid].get(k) for k in REVISE_STORED_KEYS if k in defs[iid]} for iid in ids}
+	spec, _ = _revise_block("PROJECT SPEC", str(state.get("project_body_snapshot") or "(no project spec recorded)"), 12 * 1024)
+	lines, _hits = since_lines(state, current_wave + 1, details, login)
+	since, _ = _revise_block("SINCE DECOMPOSED", render_since(lines) or "(nothing recorded)", 6 * 1024)
+	journal_lines: list[str] = []
+	for wave in (state.get("waves") or [])[:current_wave]:
+		for entry in (wave.get("issues") if isinstance(wave, dict) else None) or []:
+			if not isinstance(entry, dict):
+				continue
+			gh = _positive_int(entry.get("github_issue"))
+			step = _newest_journal_step(gh, details, login)
+			if step:
+				journal_lines.append(f"issue {gh} (`{_local_id(entry.get('id'))}`): latest journal step `{step[0]}` -> `{step[1]}`")
+	journals, _ = _revise_block("JOURNALS", "\n".join(journal_lines) or "(no journal entries)", 3 * 1024)
+	reason_text = " ".join(_CONTROL_RE.sub(" ", reason or "").split())[:REVISE_REASON_MAX]
+	judge_reason, _ = _revise_block("JUDGE REASON", reason_text or "(no reason given)", 2 * 1024)
+	payload = json.dumps({"pending_issue_defs": pending, "frozen_ids": sorted(_frozen_ids(state, ids))}, indent=1, sort_keys=True, ensure_ascii=False)
+	rest = len((spec + since + journals + judge_reason).encode("utf-8"))
+	defs_block, truncated = _revise_block("PENDING ISSUE DEFS", payload, REVISE_INPUT_MAX_BYTES - rest)
+	if truncated:
+		# A model that cannot see every pending def would silently drop some.
+		return "", "input_too_large"
+	return spec + defs_block + since + journals + judge_reason, ""
+
+
+def cmd_revise_input(args: argparse.Namespace) -> None:
+	if not redecompose_enabled():
+		log_redecompose("skipped", "switch_off")
+		return
+	if _aj is None:
+		log_redecompose("skipped", "helper_absent")
+		return
+	try:
+		current_wave = int(str(args.current_wave).strip())
+	except ValueError:
+		log_redecompose("error", "args_invalid")
+		return
+	state = _read_json(args.state_file)
+	if not isinstance(state, dict):
+		log_redecompose("error", "state_unreadable")
+		return
+	if _redecompose_count(state) >= _max_redecompose():
+		log_redecompose("skipped", "cap_reached")
+		return
+	reason = ""
+	if args.reason_file:
+		try:
+			reason = Path(args.reason_file).read_text(encoding="utf-8", errors="replace")[: REVISE_REASON_MAX * 4]
+		except OSError:
+			reason = ""
+	text, skip = render_revise_input(state, current_wave, _read_json(args.details_file), args.trusted_login or "", reason)
+	if skip:
+		log_redecompose("skipped", skip)
+		return
+	if not _write(args.out, text):
+		log_redecompose("error", "out_unwritable")
+		return
+	log_redecompose("ok", "input_rendered", bytes=len(text.encode("utf-8")))
+
+
+def _extract_revise_json(text: str) -> dict | None:
+	"""The last JSON object with a pending_issue_defs key: from a fenced block,
+	the whole text, or an object starting with that key."""
+	found: dict | None = None
+
+	def _consider(candidate: Any) -> None:
+		nonlocal found
+		if isinstance(candidate, dict) and "pending_issue_defs" in candidate:
+			found = candidate
+
+	for match in _REVISE_FENCE_RE.finditer(text):
+		try:
+			_consider(json.loads(match.group(1).strip()))
+		except ValueError:
+			continue
+	if found is not None:
+		return found
+	try:
+		_consider(json.loads(text.strip()))
+	except ValueError:
+		pass
+	if found is not None:
+		return found
+	decoder = json.JSONDecoder()
+	for match in _REVISE_OBJ_START_RE.finditer(text):
+		try:
+			obj, _end = decoder.raw_decode(text, match.start())
+		except ValueError:
+			continue
+		_consider(obj)
+	return found
+
+
+def _is_bounded_str(value: Any, max_len: int) -> bool:
+	return isinstance(value, str) and 1 <= len(value) <= max_len and bool(value.strip())
+
+
+def validate_revise_output(obj: Any, state: dict, ids: list[str]) -> tuple[str, dict, list]:
+	"""(reason, defs, edges); reason "" when the shape, estimate, id, edge and
+	marker checks pass. The graph checks run in revise_apply."""
+	if not isinstance(obj, dict):
+		return "unparseable", {}, []
+	defs = obj.get("pending_issue_defs")
+	edges = obj.get("dependency_edges", [])
+	if not isinstance(defs, dict) or not 1 <= len(defs) <= REVISE_MAX_ITEMS:
+		return "schema", {}, []
+	if not isinstance(edges, list) or len(edges) > REVISE_MAX_EDGES:
+		return "schema", {}, []
+	for iid, item in defs.items():
+		if not isinstance(iid, str) or not _REVISE_ID_RE.match(iid) or not isinstance(item, dict):
+			return "schema", {}, []
+		if not set(item) <= REVISE_ITEM_KEYS:
+			return "schema", {}, []
+		if not _is_bounded_str(item.get("title"), REVISE_TITLE_MAX) or not _is_bounded_str(item.get("body"), REVISE_BODY_MAX):
+			return "schema", {}, []
+		priority = item.get("priority")
+		if isinstance(priority, bool) or not isinstance(priority, int) or not REVISE_PRIORITY_MIN <= priority <= REVISE_PRIORITY_MAX:
+			return "schema", {}, []
+		files = item.get("files_touched", [])
+		if not isinstance(files, list) or len(files) > REVISE_FILES_MAX:
+			return "schema", {}, []
+		if not all(_is_bounded_str(f, REVISE_FILE_LEN_MAX) for f in files):
+			return "schema", {}, []
+	for edge in edges:
+		if not isinstance(edge, dict) or set(edge) != {"from", "to"} or not all(isinstance(edge[k], str) for k in ("from", "to")):
+			return "schema", {}, []
+	for item in defs.values():
+		estimate = item.get("implementation_minutes_estimate")
+		if isinstance(estimate, bool) or not isinstance(estimate, int) or not 1 <= estimate <= REVISE_ESTIMATE_MAX:
+			return "estimate", {}, []
+	if set(defs) & _frozen_ids(state, ids):
+		return "id_collision", {}, []
+	if any(edge["from"] not in defs or edge["to"] not in defs for edge in edges):
+		return "edge_scope", {}, []
+	for item in defs.values():
+		text = (item["title"] + "\n" + item["body"]).lower()
+		if any(marker in text for marker in REVISE_MARKERS):
+			return "marker_forgery", {}, []
+	return "", defs, edges
+
+
+def revise_apply(state: dict, current_wave: int, obj: Any, now: int, max_count: int) -> tuple[str, dict, str, dict]:
+	"""(reason, new state, comment, counts); reason "" on success. Pure."""
+	ids = revisable_ids(state, current_wave)
+	if ids is None:
+		return "created_in_remaining", {}, "", {}
+	if not ids:
+		return "nothing_revisable", {}, "", {}
+	reason, defs, edges = validate_revise_output(obj, state, ids)
+	if reason:
+		return reason, {}, "", {}
+	try:
+		import orchestrate_lib as _ol
+	except Exception:  # noqa: BLE001 - fail closed: no graph checks, no revise
+		return "helper_absent", {}, "", {}
+	data: dict = {
+		"project_title": str(state.get("project_title") or "").strip() or "project",
+		"project_summary": "Remaining waves re-decomposed by the orchestrator.",
+		"issues": [
+			{"id": iid, "title": item["title"], "body": item["body"], "priority": item["priority"],
+				"files_touched": list(item.get("files_touched", []))}
+			for iid, item in defs.items()
+		],
+		"dependency_edges": [{"from": e["from"], "to": e["to"]} for e in edges],
+	}
+	try:
+		data = _ol.validate_decomposition(data)
+	except _ol.OrchestrateError:
+		return "schema", {}, "", {}
+	try:
+		hot = _ol.load_hot_files()
+		computed = _ol.compute_waves(data, hot_files=hot)
+		by_id = {issue["id"]: issue for issue in data["issues"]}
+		for wave in computed:
+			if _ol.validate_wave_file_partition([issue["id"] for issue in wave], by_id, hot):
+				return "partition", {}, "", {}
+	except _ol.OrchestrateError:
+		return "partition", {}, "", {}
+	old_defs = state["pending_issue_defs"]
+	old_edges = state.get("dependency_edges") if isinstance(state.get("dependency_edges"), list) else []
+	revised = set(ids)
+	new = copy.deepcopy(state)
+	new["pending_issue_defs_previous"] = {iid: copy.deepcopy(old_defs[iid]) for iid in ids}
+	new["persist_redecompose_previous_layout"] = {
+		"waves": copy.deepcopy(state["waves"][current_wave:]), "dependency_edges": copy.deepcopy(old_edges), "at": now,
+	}
+	pending = {k: copy.deepcopy(v) for k, v in old_defs.items() if k not in revised}
+	for issue in data["issues"]:
+		pending[issue["id"]] = {
+			"title": issue["title"], "body": issue["body"], "priority": issue["priority"],
+			"files_touched": list(issue.get("files_touched", []) or []),
+		}
+	new["pending_issue_defs"] = pending
+	new["waves"] = copy.deepcopy(state["waves"][:current_wave]) + [
+		{"wave": current_wave + 1 + n, "issues": [
+			{"id": issue["id"], "github_issue": None, "status": "not_created", "files_touched": list(issue.get("files_touched", []) or [])}
+			for issue in wave
+		]}
+		for n, wave in enumerate(computed)
+	]
+	kept_edges = [
+		copy.deepcopy(e) for e in old_edges
+		if not (isinstance(e, dict) and (e.get("from") in revised or e.get("to") in revised))
+	]
+	new["dependency_edges"] = kept_edges + [{"from": e["from"], "to": e["to"]} for e in data.get("dependency_edges", [])]
+	old_total = state.get("total_issues")
+	if isinstance(old_total, bool) or not isinstance(old_total, int):
+		old_total = sum(len(w.get("issues") or []) for w in state["waves"] if isinstance(w, dict))
+	new["total_issues"] = max(0, old_total - len(ids) + len(data["issues"]))
+	new["total_waves"] = len(new["waves"])
+	new["redecompose_count"] = _redecompose_count(state) + 1
+	removed = [iid for iid in ids if iid not in defs]
+	added = [issue["id"] for issue in data["issues"] if issue["id"] not in revised]
+	rewritten = [iid for iid in ids if iid in defs]
+
+	def _title_lines(items: list[tuple[str, Any]]) -> list[str]:
+		out = [f"- `{_local_id(iid)}`: {_clean_title(str(title or ''))}" for iid, title in items[:REVISE_COMMENT_TITLES_MAX]]
+		if len(items) > REVISE_COMMENT_TITLES_MAX:
+			out.append(f"- ... {len(items) - REVISE_COMMENT_TITLES_MAX} more not shown")
+		return out or ["- (none)"]
+
+	old_total_waves = len(state["waves"])
+	parts = [
+		f"{REVISE_COMMENT_HEADING} ({new['redecompose_count']}/{max_count})",
+		"",
+		"_Recorded by the orchestrator after the wave judge asked to revise the remaining plan. Data only._",
+		"",
+		(
+			f"Waves after wave {current_wave}: {old_total_waves - current_wave} before, {len(computed)} after "
+			f"(total waves {old_total_waves} -> {new['total_waves']}). Items rewritten in place: {len(rewritten)}."
+		),
+		"",
+		"Removed:",
+		*_title_lines([(iid, old_defs[iid].get("title")) for iid in removed]),
+		"",
+		"Added:",
+		*_title_lines([(iid, defs[iid]["title"]) for iid in added]),
+		"",
+		"The previous definitions are kept in the project state as `pending_issue_defs_previous`.",
+	]
+	comment = "\n".join(_aj._scrub(line) if _aj is not None else line for line in parts) + "\n"
+	return "", new, comment, {"removed": len(removed), "added": len(added), "waves": len(computed)}
+
+
+def cmd_revise_validate(args: argparse.Namespace) -> None:
+	if not redecompose_enabled():
+		log_redecompose("skipped", "switch_off")
+		return
+	if _aj is None:
+		log_redecompose("skipped", "helper_absent")
+		return
+	try:
+		current_wave = int(str(args.current_wave).strip())
+		now = int(str(args.now).strip())
+	except ValueError:
+		log_redecompose("error", "args_invalid")
+		return
+	if current_wave < 1 or now <= 0:
+		log_redecompose("error", "args_invalid")
+		return
+	state = _read_json(args.state_file)
+	if not isinstance(state, dict):
+		log_redecompose("error", "state_unreadable")
+		return
+	max_count = _max_redecompose()
+	if _redecompose_count(state) >= max_count:
+		log_redecompose("skipped", "cap_reached")
+		return
+	try:
+		raw = Path(args.output_file).read_bytes()
+	except OSError:
+		log_redecompose("invalid", "unparseable")
+		return
+	if len(raw) > REVISE_OUTPUT_MAX_BYTES:
+		log_redecompose("invalid", "unparseable")
+		return
+	obj = _extract_revise_json(raw.decode("utf-8", "replace"))
+	if obj is None:
+		log_redecompose("invalid", "unparseable")
+		return
+	reason, new_state, comment, counts = revise_apply(state, current_wave, obj, now, max_count)
+	if reason:
+		log_redecompose("skipped" if reason == "helper_absent" else "invalid", reason)
+		return
+	if not _write(args.out_state, json.dumps(new_state, indent=2) + "\n") or not _write(args.out_comment, comment):
+		for leftover in (args.out_state, args.out_comment):
+			try:
+				Path(leftover).unlink()
+			except OSError:
+				pass
+		log_redecompose("error", "out_unwritable")
+		return
+	log_redecompose("ok", "revised", **counts)
+
+
 def plan_path(description: str, repo_root: str | Path) -> str:
 	try:
 		root = Path(os.path.realpath(repo_root))
@@ -1019,6 +1471,20 @@ def build_parser() -> argparse.ArgumentParser:
 	block.add_argument("--journals-json", default=None)
 	block.add_argument("--trusted-login", default="")
 	block.add_argument("--out", required=True)
+	revise_in = sub.add_parser("revise-input")
+	revise_in.add_argument("--state-file", required=True)
+	revise_in.add_argument("--current-wave", required=True)
+	revise_in.add_argument("--details-file", default=None)
+	revise_in.add_argument("--trusted-login", default="")
+	revise_in.add_argument("--reason-file", default=None)
+	revise_in.add_argument("--out", required=True)
+	revise_val = sub.add_parser("revise-validate")
+	revise_val.add_argument("--state-file", required=True)
+	revise_val.add_argument("--current-wave", required=True)
+	revise_val.add_argument("--output-file", required=True)
+	revise_val.add_argument("--now", required=True)
+	revise_val.add_argument("--out-state", required=True)
+	revise_val.add_argument("--out-comment", required=True)
 	return parser
 
 
@@ -1027,12 +1493,15 @@ def main(argv: list[str] | None = None) -> int:
 	handlers = {
 		"since-note": cmd_since_note, "open-projects": cmd_open_projects, "plan-path": cmd_plan_path, "group": cmd_group,
 		"wave-check": cmd_wave_check, "wave-check-block": cmd_wave_check_block,
+		"revise-input": cmd_revise_input, "revise-validate": cmd_revise_validate,
 	}
 	try:
 		handlers[args.cmd](args)
 	except Exception as exc:  # noqa: BLE001 - fail open, never block a tick or the decomposer
 		if args.cmd in ("wave-check", "wave-check-block"):
 			log_wave_check("error", "exception_" + type(exc).__name__)
+		elif args.cmd in ("revise-input", "revise-validate"):
+			log_redecompose("error", "exception_" + type(exc).__name__)
 		else:
 			(log_group if args.cmd == "group" else log)("error", "exception_" + type(exc).__name__)
 	return 0

@@ -1,2 +1,4 @@
 # One exemption per line: repo/relative/path | short justification
 # Intentionally empty; add entries only when a documented parity escape is required.
+prompts/mode-judge-revise-option.txt | issue #8427 P10 adds this prompt; docs/INVENTORY.md is outside the P10 file grant, so the entry is added at the next docs sync
+prompts/mode-orchestrate-revise.txt | issue #8427 P10 adds this prompt; docs/INVENTORY.md is outside the P10 file grant, so the entry is added at the next docs sync

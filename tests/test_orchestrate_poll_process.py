@@ -30457,5 +30457,188 @@ def test_persist_orch_wave_check_judge_no_verdict_drops_the_judged_marker():
 				assert after_state["wave_check_judged"] == f"{_PWC_SHA}:red" and not posts.exists() and proc.stderr == ""
 
 
+
+# --- persist_orch_redecompose (issue #8427, P10; re-decompose remaining waves) ------
+
+_PRD_GATE = '[ "${PERSIST_ORCH_REDECOMPOSE_ENABLED:-false}" = "true" ] || return 0'
+
+
+def _prd_state(**extra) -> dict:
+	return {
+		"project_title": "Project", "project_body_snapshot": "Spec", "total_issues": 3, "total_waves": 3, "current_wave": 1,
+		"waves": [
+			{"wave": 1, "issues": [{"id": "p1", "github_issue": 10, "status": "merged", "files_touched": ["a.py"]}]},
+			{"wave": 2, "issues": [{"id": "p2", "github_issue": None, "status": "not_created", "files_touched": ["b.py"]}]},
+			{"wave": 3, "issues": [{"id": "p3", "github_issue": None, "status": "not_created", "files_touched": ["c.py"]}]},
+		],
+		"dependency_edges": [{"from": "p1", "to": "p2"}, {"from": "p2", "to": "p3"}],
+		"issue_number_map": {"p1": 10},
+		"pending_issue_defs": {
+			"p2": {"title": "Two", "body": "two", "priority": 1, "files_touched": ["b.py"]},
+			"p3": {"title": "Three", "body": "three", "priority": 2, "files_touched": ["c.py"]},
+		},
+		**extra,
+	}
+
+
+_PRD_GOOD = "```json\n" + json.dumps({"pending_issue_defs": {
+	"p2": {"title": "Two again", "body": "two again", "priority": 1, "files_touched": ["b.py"], "implementation_minutes_estimate": 30},
+	"p4": {"title": "Four", "body": "four", "priority": 2, "files_touched": ["d.py"], "implementation_minutes_estimate": 20},
+}, "dependency_edges": [{"from": "p2", "to": "p4"}]}) + "\n```\n"
+
+
+def _prd_run(tmp_path: Path, state: dict, enabled: str = "true", judge_json: str | None = None, model: str = _PRD_GOOD,
+		judge_rc: int = 0, call: str = "persist_orch_redecompose < /dev/null || true\necho \"TOTAL=${TOTAL_WAVES}\"\n"):
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(script, "persist_orch_revise_option_block() {")
+	helper += _extract_bash_function(script, "persist_orch_redecompose() {")
+	(tmp_path / "scripts").mkdir(exist_ok=True)
+	for name in ("persist_orchestrator.py", "attempt_journal.py", "orchestrate_lib.py"):
+		shutil.copy(REPO_ROOT / "scripts" / name, tmp_path / "scripts" / name)
+	(tmp_path / "scripts" / "render_prompt.sh").write_text('#!/bin/bash\ncat "$1"\n', encoding="utf-8")
+	(tmp_path / "prompts").mkdir(exist_ok=True)
+	for name in ("mode-judge-revise-option.txt", "mode-orchestrate-revise.txt"):
+		shutil.copy(REPO_ROOT / "prompts" / name, tmp_path / "prompts" / name)
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	py_log = tmp_path / "python.log"
+	shim = bin_dir / "python3"
+	shim.write_text(f"#!/bin/sh\necho \"start $*\" >> '{py_log}'\nexec '{sys.executable}' \"$@\"\n", encoding="utf-8")
+	shim.chmod(0o755)
+	rt = tmp_path / "rt"
+	rt.mkdir(exist_ok=True)
+	(rt / "judge_static.txt").write_text("STATIC PREFIX\n", encoding="utf-8")
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps(state), encoding="utf-8")
+	(tmp_path / "model.txt").write_text(model, encoding="utf-8")
+	comments = tmp_path / "comments.log"
+	prompts = tmp_path / "prompt_seen.txt"
+	if judge_json is None:
+		judge_json = json.dumps({"status": "in_progress", "revise_remaining": True, "revise_reason": "p3 is redundant"})
+	harness = (
+		"set -euo pipefail\n"
+		f"STATE_FILE='{state_file}'\nRUNTIME_DIR='{rt}'\nGITHUB_REPOSITORY=owner/repo\nTRACKING_NUM=5\n"
+		"CURRENT_WAVE=1\nTOTAL_WAVES=3\nPERSIST_JOURNAL_LOGIN_CACHE=pipeline-bot\n_current_wave_details_json='{}'\n"
+		f"JUDGE_JSON={shlex.quote(judge_json)}\n"
+		f"export PERSIST_ORCH_REDECOMPOSE_ENABLED='{enabled}'\n"
+		"sanitize_codex_prompt_file() { :; }\n"
+		"_judge_isolation_should_run() { [ \"$1\" = WAVE_JUDGE ]; }\n"
+		f"poller_claude_judge() {{ cp \"$2\" '{prompts}'; cat '{tmp_path / 'model.txt'}' > \"$3\"; return {judge_rc}; }}\n"
+		f"post_tracking_comment() {{ printf '%s\\n' \"$1\" >> '{comments}'; }}\n"
+		+ helper
+		+ call
+	)
+	env = {k: v for k, v in os.environ.items() if not k.startswith("PERSIST_")}
+	env["PATH"] = f"{bin_dir}:{env['PATH']}"
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	proc = subprocess.run(["bash", "-c", harness], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
+	py = py_log.read_text(encoding="utf-8").splitlines() if py_log.exists() else []
+	posted = comments.read_text(encoding="utf-8") if comments.exists() else ""
+	seen = prompts.read_text(encoding="utf-8") if prompts.exists() else ""
+	return proc, py, posted, seen, json.loads(state_file.read_text(encoding="utf-8"))
+
+
+def test_persist_orch_redecompose_is_defined_gated_and_placed():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert (script.index("persist_orch_wave_check() {") < script.index("persist_orch_revise_option_block() {")
+		< script.index("persist_orch_redecompose() {") < script.index("invoke_stall_judge() {"))
+	for sig in ("persist_orch_revise_option_block() {", "persist_orch_redecompose() {"):
+		body = _extract_bash_function(script, sig)
+		assert _PRD_GATE in body
+		assert "python3" not in body or body.index(_PRD_GATE) < body.index("python3")
+		assert "gh_retry" not in body and "gh api" not in body
+	body = _extract_bash_function(script, "persist_orch_redecompose() {")
+	assert body.count("poller_claude_judge WAVE_JUDGE ") == 1 and "_record_judge_isolation_failure" not in body
+	assert body.index("_judge_isolation_should_run WAVE_JUDGE") < body.index("poller_claude_judge WAVE_JUDGE ")
+	assert body.count("post_tracking_comment ") == 1
+	# Cache-stable static prefix, then the task, then the fenced data.
+	assert body.index('cat "${RUNTIME_DIR}/judge_static.txt"') < body.index('echo "=== REVISE TASK ==="') \
+		< body.index("render_prompt.sh prompts/mode-orchestrate-revise.txt") < body.index('cat "${prd_tail}"')
+	assert script.count("bash scripts/render_prompt.sh prompts/mode-judge.txt\n    persist_orch_revise_option_block\n    echo\n") == 1
+	arm = script.index('    in_progress)\n', script.index('case "${JUDGE_STATUS}"'))
+	call = script.index("        persist_orch_redecompose < /dev/null || true\n", arm)
+	assert script.count("persist_orch_redecompose < /dev/null || true") == 1
+	skip = script.index("# Skip wave advancement — next poll cycle will re-check this wave", arm)
+	advance = script.index("      NEXT_WAVE=$(( CURRENT_WAVE + 1 ))\n", arm)
+	assert skip < call < advance < call + 400
+	assert 'if [ "${CURRENT_WAVE}" -lt "${TOTAL_WAVES}" ]; then\n        persist_orch_redecompose' in script
+
+
+def test_persist_orch_redecompose_replaces_the_state_and_posts_one_comment():
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, py, posted, seen, after = _prd_run(Path(tmp), _prd_state())
+		assert proc.returncode == 0, proc.stderr
+		assert "PERSIST redecompose outcome=ok reason=revised removed=1 added=1 waves=2" in proc.stderr
+		assert set(after["pending_issue_defs"]) == {"p2", "p4"} and after["redecompose_count"] == 1
+		assert [[e["id"] for e in w["issues"]] for w in after["waves"]] == [["p1"], ["p2"], ["p4"]]
+		assert after["waves"][0] == _prd_state()["waves"][0]
+		assert posted.count("## Remaining waves re-decomposed (1/2)") == 1
+		assert "TOTAL=3" in proc.stdout
+		assert seen.startswith("STATIC PREFIX\n\n=== REVISE TASK ===\n\n# tier: DEFAULT\nRole: orchestrator re-planner.")
+		assert seen.index("=== REVISE TASK ===") < seen.index("=== BEGIN UNTRUSTED PROJECT SPEC ===")
+		assert "p3 is redundant" in seen
+		assert len(py) == 2 and "revise-input" in py[0] and "revise-validate" in py[1]
+
+
+@pytest.mark.parametrize(
+	("kwargs", "log"),
+	[
+		({"judge_rc": 77, "model": ""}, "outcome=skipped reason=isolation_unavailable"),
+		({"judge_rc": 1, "model": ""}, "outcome=skipped reason=llm_failed rc=1"),
+		({"model": "no json"}, "outcome=invalid reason=unparseable"),
+		({"model": _PRD_GOOD.replace('"implementation_minutes_estimate": 20', '"implementation_minutes_estimate": 61')}, "outcome=invalid reason=estimate"),
+		({"model": _PRD_GOOD.replace('"p4"', '"p1"')}, "outcome=invalid reason=id_collision"),
+	],
+)
+def test_persist_orch_redecompose_failure_leaves_the_state_unchanged(kwargs, log):
+	with tempfile.TemporaryDirectory() as tmp:
+		state = _prd_state()
+		proc, _py, posted, _seen, after = _prd_run(Path(tmp), state, **kwargs)
+		assert proc.returncode == 0, proc.stderr
+		assert after == state and posted == ""
+		assert f"PERSIST redecompose {log}" in proc.stderr
+		assert "TOTAL=3" in proc.stdout
+
+
+@pytest.mark.parametrize(
+	("enabled", "judge_json"),
+	[
+		("false", None), ("TRUE ", None), ("1", None),
+		("true", json.dumps({"status": "in_progress"})),
+		("true", json.dumps({"status": "in_progress", "revise_remaining": "true"})),
+		("true", "not json"),
+	],
+)
+def test_persist_orch_redecompose_off_or_not_requested_starts_nothing(enabled, judge_json):
+	with tempfile.TemporaryDirectory() as tmp:
+		state = _prd_state()
+		proc, py, posted, seen, after = _prd_run(Path(tmp), state, enabled=enabled, judge_json=judge_json)
+		assert proc.returncode == 0, proc.stderr
+		assert py == [] and posted == "" and seen == "" and after == state
+		assert "PERSIST redecompose" not in proc.stderr
+
+
+@pytest.mark.parametrize(
+	("enabled", "state_extra", "env", "shown"),
+	[
+		("true", {}, "", True),
+		("false", {}, "", False),
+		("true", {"redecompose_count": 2}, "", False),
+		("true", {"redecompose_count": 2}, "PERSIST_ORCH_MAX_REDECOMPOSE=3\n", True),
+		("true", {"redecompose_count": 2}, "PERSIST_ORCH_MAX_REDECOMPOSE=abc\n", False),
+		("true", {}, "CURRENT_WAVE=3\n", False),
+	],
+)
+def test_persist_orch_revise_option_block_is_shown_only_when_a_revise_can_run(enabled, state_extra, env, shown):
+	with tempfile.TemporaryDirectory() as tmp:
+		call = env + "printf 'BEGIN'; persist_orch_revise_option_block; printf 'END'\n"
+		proc, py, _posted, _seen, _after = _prd_run(Path(tmp), _prd_state(**state_extra), enabled=enabled, call=call)
+		assert proc.returncode == 0, proc.stderr
+		fragment = (REPO_ROOT / "prompts" / "mode-judge-revise-option.txt").read_text(encoding="utf-8")
+		assert proc.stdout == ("BEGIN\n" + fragment + "END" if shown else "BEGINEND")
+		# Never starts Python, so the judge prompt is byte-identical with the switch off.
+		assert py == []
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

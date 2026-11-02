@@ -20346,6 +20346,137 @@ persist_orch_wave_check() {
   return 0
 }
 
+# persist_orch_revise_option_block (issue #8427, P10; re-decompose remaining
+# waves). Prints prompts/mode-judge-revise-option.txt (the optional
+# revise_remaining / revise_reason judge output fields) for the wave-judge
+# prompt, only when PERSIST_ORCH_REDECOMPOSE_ENABLED is exactly "true", the
+# fragment and scripts/persist_orchestrator.py are staged, CURRENT_WAVE <
+# TOTAL_WAVES and the state's redecompose_count is below
+# PERSIST_ORCH_MAX_REDECOMPOSE (default 2). Otherwise prints nothing and
+# starts no Python, so the judge prompt is byte-identical with the switch off.
+persist_orch_revise_option_block() {
+  local porb_max porb_count
+  [ "${PERSIST_ORCH_REDECOMPOSE_ENABLED:-false}" = "true" ] || return 0
+  [ -f prompts/mode-judge-revise-option.txt ] && [ -f scripts/persist_orchestrator.py ] || return 0
+  [[ "${CURRENT_WAVE:-}" =~ ^[1-9][0-9]*$ ]] && [[ "${TOTAL_WAVES:-}" =~ ^[1-9][0-9]*$ ]] || return 0
+  [ "${CURRENT_WAVE}" -lt "${TOTAL_WAVES}" ] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  porb_max="${PERSIST_ORCH_MAX_REDECOMPOSE:-2}"
+  [[ "${porb_max}" =~ ^[1-9][0-9]*$ ]] || porb_max=2
+  porb_count="$(jq -r '.redecompose_count // 0 | if type == "number" and . >= 0 then floor else 0 end' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${porb_count}" =~ ^[0-9]+$ ]] || porb_count=0
+  [ "${porb_count}" -lt "${porb_max}" ] || return 0
+  echo
+  cat prompts/mode-judge-revise-option.txt 2>/dev/null || true
+  return 0
+}
+
+# persist_orch_redecompose (issue #8427, P10). Called in the wave judge's
+# in_progress arm immediately before "Advance to next wave", only on the branch
+# where the judge added no current-wave issues. Acts only when
+# PERSIST_ORCH_REDECOMPOSE_ENABLED is exactly "true", JUDGE_JSON has
+# revise_remaining == true, CURRENT_WAVE < TOTAL_WAVES and the helper and
+# prompts/mode-orchestrate-revise.txt are staged. Flow: persist_orchestrator.py
+# revise-input renders the fenced UNTRUSTED blocks from STATE_FILE, the tick's
+# _current_wave_details_json cache and revise_reason (zero API calls); one
+# sandboxed poller_claude_judge WAVE_JUDGE run (no retries, no host fallback;
+# rc 77 skips) writes the revised pending_issue_defs; revise-validate checks it
+# and only then writes the new state, which replaces STATE_FILE, and the
+# tracking comment, posted once. The next wave's deferred creation reads the
+# revised defs, and the arm's post_state_comment persists the state. API
+# budget (section 14): one comment per successful revise. Any failure leaves
+# STATE_FILE untouched and the wave advances on the old defs. Always returns 0.
+persist_orch_redecompose() {
+  local prd_base prd_reason prd_details="" prd_tail prd_prompt prd_out prd_state prd_comment prd_rc=0 prd_total
+  [ "${PERSIST_ORCH_REDECOMPOSE_ENABLED:-false}" = "true" ] || return 0
+  printf '%s' "${JUDGE_JSON:-}" | jq -e 'type == "object" and .revise_remaining == true' >/dev/null 2>&1 || return 0
+  if [ ! -f scripts/persist_orchestrator.py ] || [ ! -f prompts/mode-orchestrate-revise.txt ]; then
+    echo "PERSIST redecompose outcome=skipped reason=helper_absent" >&2
+    return 0
+  fi
+  if ! [[ "${CURRENT_WAVE:-}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${TOTAL_WAVES:-}" =~ ^[1-9][0-9]*$ ]] \
+    || [ "${CURRENT_WAVE}" -ge "${TOTAL_WAVES}" ]; then
+    echo "PERSIST redecompose outcome=skipped reason=last_wave" >&2
+    return 0
+  fi
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  prd_base="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}"
+  [ -d "${prd_base}" ] || prd_base="/tmp"
+  prd_reason="$(mktemp "${prd_base}/persist_revise_reason.XXXXXX" 2>/dev/null)" || prd_reason=""
+  prd_tail="$(mktemp "${prd_base}/persist_revise_tail.XXXXXX" 2>/dev/null)" || prd_tail=""
+  prd_prompt="$(mktemp "${prd_base}/persist_revise_prompt.XXXXXX" 2>/dev/null)" || prd_prompt=""
+  prd_out="$(mktemp "${prd_base}/persist_revise_out.XXXXXX" 2>/dev/null)" || prd_out=""
+  prd_state="$(mktemp "${prd_base}/persist_revise_state.XXXXXX" 2>/dev/null)" || prd_state=""
+  prd_comment="$(mktemp "${prd_base}/persist_revise_comment.XXXXXX" 2>/dev/null)" || prd_comment=""
+  if [ -z "${prd_reason}" ] || [ -z "${prd_tail}" ] || [ -z "${prd_prompt}" ] || [ -z "${prd_out}" ] \
+    || [ -z "${prd_state}" ] || [ -z "${prd_comment}" ]; then
+    echo "PERSIST redecompose outcome=error reason=scratch_unwritable" >&2
+    rm -f ${prd_reason:+"${prd_reason}"} ${prd_tail:+"${prd_tail}"} ${prd_prompt:+"${prd_prompt}"} \
+      ${prd_out:+"${prd_out}"} ${prd_state:+"${prd_state}"} ${prd_comment:+"${prd_comment}"}
+    return 0
+  fi
+  # The validator writes these only when every check passes.
+  rm -f "${prd_state}" "${prd_comment}"
+  printf '%s' "${JUDGE_JSON}" | jq -r '.revise_reason // "" | if type == "string" then .[0:500] else "" end' > "${prd_reason}" 2>/dev/null || : > "${prd_reason}"
+  if [ -n "${_current_wave_details_json:-}" ] && printf '%s' "${_current_wave_details_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    prd_details="$(mktemp "${prd_base}/persist_revise_details.XXXXXX" 2>/dev/null)" || prd_details=""
+    if [ -n "${prd_details}" ]; then
+      printf '%s' "${_current_wave_details_json}" > "${prd_details}" 2>/dev/null || { rm -f "${prd_details}"; prd_details=""; }
+    fi
+  fi
+  local prd_args=(revise-input --state-file "${STATE_FILE}" --current-wave "${CURRENT_WAVE}"
+    --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --reason-file "${prd_reason}" --out "${prd_tail}")
+  [ -n "${prd_details}" ] && prd_args+=(--details-file "${prd_details}")
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py "${prd_args[@]}" < /dev/null || true
+  if [ -s "${prd_tail}" ]; then
+    # Cache-stable static prefix first, then the task, then the fenced data.
+    if {
+      if [ -f "${RUNTIME_DIR:-}/judge_static.txt" ]; then
+        cat "${RUNTIME_DIR}/judge_static.txt"
+        echo
+      fi
+      echo "=== REVISE TASK ==="
+      echo
+      bash scripts/render_prompt.sh prompts/mode-orchestrate-revise.txt
+      echo
+      cat "${prd_tail}"
+    } > "${prd_prompt}" 2>/dev/null; then
+      sanitize_codex_prompt_file "${prd_prompt}" || true
+      if ! _judge_isolation_should_run WAVE_JUDGE "${STATE_FILE}" "${TRACKING_NUM:-}" "${TRACKING_LABELS:-}"; then
+        echo "PERSIST redecompose outcome=skipped reason=isolation_unavailable" >&2
+      else
+        poller_claude_judge WAVE_JUDGE "${prd_prompt}" "${prd_out}" "${RUNTIME_DIR:-${prd_base}}/revise_log.txt" < /dev/null || prd_rc=$?
+        if [ "${prd_rc}" -eq 77 ]; then
+          echo "PERSIST redecompose outcome=skipped reason=isolation_unavailable" >&2
+        elif [ ! -s "${prd_out}" ]; then
+          echo "PERSIST redecompose outcome=skipped reason=llm_failed rc=${prd_rc}" >&2
+        else
+          PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py revise-validate --state-file "${STATE_FILE}" \
+            --current-wave "${CURRENT_WAVE}" --output-file "${prd_out}" --now "$(date -u +%s)" \
+            --out-state "${prd_state}" --out-comment "${prd_comment}" < /dev/null || true
+          if [ -s "${prd_state}" ] && [ -s "${prd_comment}" ] \
+            && jq -e 'type == "object" and (.waves | type) == "array" and (.total_waves | type) == "number"' "${prd_state}" >/dev/null 2>&1; then
+            if mv -f "${prd_state}" "${STATE_FILE}" 2>/dev/null; then
+              prd_total="$(jq -r '.total_waves' "${STATE_FILE}" 2>/dev/null || true)"
+              [[ "${prd_total}" =~ ^[1-9][0-9]*$ ]] && TOTAL_WAVES="${prd_total}"
+              echo "Remaining waves re-decomposed for #${TRACKING_NUM:-}; total waves now ${TOTAL_WAVES}."
+              if ! post_tracking_comment "$(cat "${prd_comment}")"; then
+                echo "PERSIST redecompose outcome=error reason=comment_failed" >&2
+              fi
+            else
+              echo "PERSIST redecompose outcome=error reason=state_write_failed" >&2
+            fi
+          fi
+        fi
+      fi
+    else
+      echo "PERSIST redecompose outcome=error reason=scratch_unwritable" >&2
+    fi
+  fi
+  rm -f "${prd_reason}" "${prd_tail}" "${prd_prompt}" "${prd_out}" "${prd_state}" "${prd_comment}" ${prd_details:+"${prd_details}"}
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -32008,6 +32139,7 @@ ${PR_DIFF}
     echo "=== JUDGE TASK ==="
     echo
     SEMBLE_PREFETCH="${JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge.txt
+    persist_orch_revise_option_block
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -32644,6 +32776,12 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
         post_state_comment || true
         # Skip wave advancement — next poll cycle will re-check this wave
       else
+
+      # Re-decompose the remaining waves when the judge asked for it
+      # (issue #8427, P10; PERSIST_ORCH_REDECOMPOSE_ENABLED, default off).
+      if [ "${CURRENT_WAVE}" -lt "${TOTAL_WAVES}" ]; then
+        persist_orch_redecompose < /dev/null || true
+      fi
 
       # Advance to next wave
       NEXT_WAVE=$(( CURRENT_WAVE + 1 ))
