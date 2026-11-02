@@ -7,10 +7,10 @@
 # whose `probes` output (the probe records: account, 5-hour and 7-day
 # utilization, reset times, status, error; never a token) arrives as
 # CLAUDE_POOL_PROBES. `claude_engine.py pool-health` turns the records into one
-# message naming every account at or above `gate_utilization` with both
-# utilizations and the reset time of each window at the gate, plus every
-# account whose token was rejected; nothing is sent while every account is
-# below the gate. The poller runs every five minutes, so the message goes out
+# message listing every probed account with both utilizations and the hours
+# until each window resets (plus the UTC reset time of each window at or above
+# `gate_utilization`), and every account whose token was rejected; nothing is
+# sent while every account is below the gate. The poller runs every five minutes, so the message goes out
 # at most once an hour: only the cycle whose clock minute is below
 # CLAUDE_POOL_HEALTH_WINDOW_MINUTES (default 5) sends it. A cycle delayed past
 # that window skips the hour rather than sending twice.
@@ -82,6 +82,9 @@ server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
 repo = os.environ.get("GITHUB_REPOSITORY", "")
 since = str(items.get("opened_at") or "unknown")
 reset = str(report.get("next_usable_at") or "unknown")
+reset_in = str(report.get("next_usable_in") or "")
+if reset_in:
+	reset += f" ({reset_in})"
 lines = [f"Claude pool exhausted: {count} item(s) waiting since {since}; earliest reset {reset}."]
 for entry in entries[:10]:
 	if not isinstance(entry, dict):

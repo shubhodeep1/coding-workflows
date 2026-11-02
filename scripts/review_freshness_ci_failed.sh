@@ -34,10 +34,52 @@ freshness_ci_failed_log()
 	echo "FRESHNESS_CI_FAILED pr=${PR_NUMBER:-?} head=${PR_HEAD_SHA:-?} outcome=$1${2:+ $2}"
 }
 
+# Dispatch the PR's review workflow once, trying each candidate name in turn.
+# Env: REPOSITORY, PR_NUMBER, REVIEW_AUTOFIX_CALLER_WORKFLOW_REF,
+# ALLOW_WORKFLOW_EDITS. Prints the dispatched workflow file and returns 0, or
+# returns 1 when every candidate failed. Also used by
+# review_autofix_step_deterministic_skip_security_pass.sh (#8333).
+freshness_ci_failed_dispatch_review_workflow()
+{
+	local candidate caller_workflow allow_edits
+	local -a candidates=()
+
+	allow_edits=false
+	[ "${ALLOW_WORKFLOW_EDITS:-}" = "true" ] && allow_edits=true
+	caller_workflow=""
+	if [ -n "${REVIEW_AUTOFIX_CALLER_WORKFLOW_REF:-}" ]; then
+		caller_workflow="$(basename "${REVIEW_AUTOFIX_CALLER_WORKFLOW_REF%%@*}")"
+	fi
+	if ! [[ "${caller_workflow}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+		caller_workflow="internal-review.yml"
+	fi
+	# Same order as review_autofix_step_post_commit_retrigger.sh: the
+	# PR-named review wrappers first, then a differently named caller, then
+	# review_autofix.yml.
+	case "${caller_workflow}" in
+		ai-review.yml|internal-review.yml) candidates+=("${caller_workflow}") ;;
+	esac
+	for candidate in ai-review.yml internal-review.yml; do
+		[ "${candidate}" != "${caller_workflow}" ] && candidates+=("${candidate}")
+	done
+	case "${caller_workflow}" in
+		ai-review.yml|internal-review.yml|review_autofix.yml) ;;
+		*) candidates+=("${caller_workflow}") ;;
+	esac
+	candidates+=(review_autofix.yml)
+	for candidate in "${candidates[@]}"; do
+		if gh workflow run "${candidate}" --repo "${REPOSITORY}" \
+			-f pr_number="${PR_NUMBER}" -f allow_workflow_edits="${allow_edits}" >/dev/null 2>&1; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+	return 1
+}
+
 freshness_ci_failed_main()
 {
-	local switch candidate caller_workflow allow_edits body
-	local -a candidates=()
+	local switch candidate body
 
 	switch="$(printf '%s' "${FRESHNESS_CI_FAILED_REDISPATCH_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
 	case "${switch}" in
@@ -86,36 +128,10 @@ freshness_ci_failed_main()
 		return 0
 	fi
 
-	allow_edits=false
-	[ "${ALLOW_WORKFLOW_EDITS:-}" = "true" ] && allow_edits=true
-	caller_workflow=""
-	if [ -n "${REVIEW_AUTOFIX_CALLER_WORKFLOW_REF:-}" ]; then
-		caller_workflow="$(basename "${REVIEW_AUTOFIX_CALLER_WORKFLOW_REF%%@*}")"
+	if candidate="$(freshness_ci_failed_dispatch_review_workflow)"; then
+		freshness_ci_failed_log redispatched "workflow=${candidate}"
+		return 0
 	fi
-	if ! [[ "${caller_workflow}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
-		caller_workflow="internal-review.yml"
-	fi
-	# Same order as review_autofix_step_post_commit_retrigger.sh: the
-	# PR-named review wrappers first, then a differently named caller, then
-	# review_autofix.yml.
-	case "${caller_workflow}" in
-		ai-review.yml|internal-review.yml) candidates+=("${caller_workflow}") ;;
-	esac
-	for candidate in ai-review.yml internal-review.yml; do
-		[ "${candidate}" != "${caller_workflow}" ] && candidates+=("${candidate}")
-	done
-	case "${caller_workflow}" in
-		ai-review.yml|internal-review.yml|review_autofix.yml) ;;
-		*) candidates+=("${caller_workflow}") ;;
-	esac
-	candidates+=(review_autofix.yml)
-	for candidate in "${candidates[@]}"; do
-		if gh workflow run "${candidate}" --repo "${REPOSITORY}" \
-			-f pr_number="${PR_NUMBER}" -f allow_workflow_edits="${allow_edits}" >/dev/null 2>&1; then
-			freshness_ci_failed_log redispatched "workflow=${candidate}"
-			return 0
-		fi
-	done
 	echo "::warning::Could not dispatch a review workflow for PR #${PR_NUMBER}; the next push or stall recovery re-runs review."
 	freshness_ci_failed_log dispatch_failed
 	return 0

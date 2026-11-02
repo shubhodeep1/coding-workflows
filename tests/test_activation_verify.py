@@ -83,6 +83,12 @@ if endpoint.endswith("/files?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_FILES") == "1":
 		sys.exit(1)
 	done(json.dumps([[{"filename": name} for name in json.loads(os.environ.get("FAKE_GH_FILES", '["README.md"]'))]]))
+if endpoint.startswith("repos/o/r/pulls?state=open"):
+	if os.environ.get("FAKE_GH_FAIL_OPEN_PRS") == "1":
+		sys.exit(1)
+	if os.environ.get("FAKE_GH_OPEN_PRS_RAW") is not None:
+		done(os.environ["FAKE_GH_OPEN_PRS_RAW"])
+	done(json.dumps(state.get("open_prs", [])))
 if endpoint.startswith("search/issues?"):
 	if os.environ.get("FAKE_GH_FAIL_SEARCH") == "1":
 		sys.exit(1)
@@ -142,11 +148,11 @@ def _setup(tmp_path: Path, **state) -> tuple[dict, Path]:
 	return env, state_file
 
 
-def _verify(tmp_path: Path, verdict: dict | str, linked: dict | None = None, env_extra: dict | None = None, mode: str = "pr", fix_search: dict | None = None):
+def _verify(tmp_path: Path, verdict: dict | str, linked: dict | None = None, env_extra: dict | None = None, mode: str = "pr", fix_search: dict | None = None, open_prs: list | None = None):
 	target = tmp_path / "target"
 	target.mkdir(exist_ok=True)
 	env, state_file = _setup(tmp_path, linked=linked or {"number": 7, "title": "t", "body": "spec", "author_association": "OWNER"},
-		fix_search=fix_search or {"total_count": 0, "items": []})
+		fix_search=fix_search or {"total_count": 0, "items": []}, open_prs=open_prs or [])
 	env.update(
 		REPOSITORY="o/r",
 		PR_NUMBER="42",
@@ -830,3 +836,112 @@ def test_prompt_never_turns_exempt_files_into_gaps() -> None:
 		prompt = (ROOT / rel).read_text(encoding="utf-8")
 		assert "`exempt_changed_files`" in prompt, rel
 		assert "never report a gap asking to implement, build or ship them" in prompt, rel
+
+
+# --- Code gaps an open pull request already fixes (tele-funtoken-msg-scoring#4992) ---
+
+OPEN_PR_91 = {"number": 91, "title": "Add the NIGHTLY_REPORT_ENABLED row to README", "head": {"ref": "claude/readme-row", "repo": {"full_name": "o/r"}}, "draft": False, "body": "Adds the row.", "author_association": "OWNER", "user": {"login": "owner"}}
+
+
+def _tagged(open_pr: object) -> dict:
+	tagged = json.loads(json.dumps(DORMANT))
+	tagged["gaps"][0]["open_pr"] = open_pr
+	return tagged
+
+
+def _fix_issues(state: dict) -> list:
+	return [created for created in state["created"] if created.get("title", "").startswith("Activation gaps after")]
+
+
+def test_open_prs_reach_model_context(tmp_path: Path) -> None:
+	long_body = dict(OPEN_PR_91, body="x" * 4000, title="t" * 400)
+	result, _ = _verify(tmp_path, LIVE, open_prs=[long_body, {"title": "no number"}])
+	assert "outcome=posted" in result.stdout
+	listed = _context(tmp_path)["open_pull_requests"]
+	assert listed == [{"number": 91, "title": "t" * 200, "head": "claude/readme-row", "draft": False, "body": "x" * 1500}]
+
+
+def test_gap_fixed_by_an_open_pr_opens_no_fix_issue(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, _tagged(91), open_prs=[OPEN_PR_91])
+	assert result.returncode == 0
+	assert _fix_issues(state) == []
+	assert not any(call[1].startswith("search/issues?") for call in state["calls"] if len(call) > 1)
+	assert "ACTIVATION_VERIFY mode=pr item=42 op=in_flight_gaps count=1 prs=91 outcome=left_to_open_prs" in result.stdout
+	verdict_comment = state["comments"][-1]
+	assert "- [code] README lacks the new variable (fix in progress in open PR #91)" in verdict_comment["body"]
+	assert verdict_comment["body"].endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
+	# The operator step is still recorded.
+	assert any(created.get("title") == "Operator steps waiting" for created in state["created"])
+
+
+@pytest.mark.parametrize("open_pr", [999, "91", 91.0, True, None])
+def test_open_pr_tag_outside_the_list_is_ignored(tmp_path: Path, open_pr: object) -> None:
+	result, state = _verify(tmp_path, _tagged(open_pr), open_prs=[OPEN_PR_91])
+	assert "op=in_flight_gaps" not in result.stdout
+	fix_issue = _fix_issues(state)[0]
+	assert "README lacks the new variable" in fix_issue["body"]
+	assert "fix in progress" not in state["comments"][-1]["body"]
+
+
+def test_open_pr_tag_on_an_operator_gap_is_ignored(tmp_path: Path) -> None:
+	tagged = json.loads(json.dumps(DORMANT))
+	tagged["gaps"][1]["open_pr"] = 91
+	_, state = _verify(tmp_path, tagged, open_prs=[OPEN_PR_91])
+	assert "fix in progress" not in state["comments"][-1]["body"]
+	assert len(_fix_issues(state)) == 1
+
+
+def test_only_untagged_code_gaps_go_into_the_fix_issue(tmp_path: Path) -> None:
+	mixed = json.loads(json.dumps(DORMANT))
+	mixed["gaps"][0]["open_pr"] = 91
+	mixed["gaps"].append({"kind": "code", "title": "Workflow input misnamed", "evidence": "nightly.yml:3", "fix": "Rename the input"})
+	result, state = _verify(tmp_path, mixed, open_prs=[OPEN_PR_91])
+	fix_issue = _fix_issues(state)[0]
+	assert "Workflow input misnamed" in fix_issue["body"]
+	assert "README lacks the new variable" not in fix_issue["body"]
+	assert "op=in_flight_gaps count=1 prs=91" in result.stdout
+	assert "code_gaps=2 operator_gaps=1 outcome=posted" in result.stdout
+
+
+@pytest.mark.parametrize("override", [
+	{"author_association": "NONE", "user": {"login": "outsider"}},
+	{"head": {"ref": "claude/readme-row", "repo": {"full_name": "fork/r"}}},
+	{"head": {"ref": "claude/readme-row", "repo": None}},
+])
+def test_untrusted_or_fork_open_prs_are_not_listed(tmp_path: Path, override: dict) -> None:
+	untrusted = dict(OPEN_PR_91, **override)
+	_, state = _verify(tmp_path, _tagged(91), open_prs=[untrusted])
+	assert _context(tmp_path)["open_pull_requests"] == []
+	assert len(_fix_issues(state)) == 1
+	assert "fix in progress" not in state["comments"][-1]["body"]
+
+
+def test_bot_authored_open_pr_is_listed(tmp_path: Path) -> None:
+	bot_pr = dict(OPEN_PR_91, author_association="NONE", user={"login": "github-actions[bot]"})
+	_verify(tmp_path, LIVE, open_prs=[bot_pr])
+	assert [item["number"] for item in _context(tmp_path)["open_pull_requests"]] == [91]
+
+
+def test_open_pr_lookup_failure_fails_open(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, _tagged(91), open_prs=[OPEN_PR_91], env_extra={"FAKE_GH_FAIL_OPEN_PRS": "1"})
+	assert "ACTIVATION_VERIFY open_pull_requests unavailable reason=lookup_failed" in result.stderr
+	assert _context(tmp_path)["open_pull_requests"] == []
+	assert len(_fix_issues(state)) == 1
+	assert "fix in progress" not in state["comments"][-1]["body"]
+
+
+def test_open_pr_response_that_does_not_parse_fails_open(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, _tagged(91), open_prs=[OPEN_PR_91], env_extra={"FAKE_GH_OPEN_PRS_RAW": '{"message": "not a list"}'})
+	assert "ACTIVATION_VERIFY open_pull_requests unavailable reason=parse_failed" in result.stderr
+	assert "reason=lookup_failed" not in result.stderr
+	assert _context(tmp_path)["open_pull_requests"] == []
+	assert len(_fix_issues(state)) == 1
+	assert "fix in progress" not in state["comments"][-1]["body"]
+
+
+def test_prompt_explains_open_pr_tagging() -> None:
+	for rel in ("prompts/mode-activation-verify.txt", "prompts/_templates/mode-activation-verify.txt"):
+		prompt = (ROOT / rel).read_text(encoding="utf-8")
+		assert "`open_pull_requests` lists this repository's open, unmerged pull requests" in prompt, rel
+		assert '"open_pr": <optional, code gaps only:' in prompt, rel
+		assert "when unsure, leave it out" in prompt, rel

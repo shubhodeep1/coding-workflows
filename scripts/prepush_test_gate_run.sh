@@ -250,9 +250,13 @@ fi
 
 wall=$(( timeout_minutes * 60 + 120 ))
 rc=0
+# /tmp is mounted `exec`: Docker's --tmpfs defaults to noexec, and many shell
+# tests write a stub script to a temp dir and run it. Under noexec those tests
+# failed or hung on both trees, so the gate reported noise (PR #8371 loop).
+# The tests already run arbitrary code here; exec adds no capability.
 env -i PATH="${PATH}" timeout --kill-after=30s "${wall}" docker run --rm --init --name "${container}" \
 	--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-	--pids-limit 512 --memory 4g --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+	--pids-limit 512 --memory 4g --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m \
 	"${mounts[@]}" ${extra_env[@]+"${extra_env[@]}"} \
 	--workdir /source "${image}" \
 	python3 /gate/prepush_affected_tests.py run --repo-root /source \
