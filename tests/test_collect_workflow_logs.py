@@ -770,6 +770,118 @@ def test_list_runs_for_repo_uses_etag_and_returns_not_modified() -> None:
 	assert capped is False
 	assert meta["not_modified"] is True
 	assert meta["etag"] == "W/\"cached\""
+	assert meta["duplicate_runs_skipped"] == 0
+
+
+def _list_runs_with_pages(pages: dict[int, list[dict]], *, max_runs: int = 0):
+	orig = collector.gh_api_json
+	calls = []
+
+	def fake_gh_api_json(
+		endpoint: str,
+		*,
+		token: str,
+		retries: int = 3,
+		backoff_seconds: float = 1.0,
+		request_headers: dict[str, str] | None = None,
+		include_response_meta: bool = False,
+	):
+		calls.append(endpoint)
+		page = int(parse_qs(urlparse("https://x/" + endpoint).query).get("page", ["1"])[0])
+		meta = {"status_code": 200, "headers": {"etag": "W/\"abc\""}}
+		payload = {"workflow_runs": [dict(item) for item in pages.get(page, [])]}
+		return (payload, meta) if include_response_meta else payload
+
+	collector.gh_api_json = fake_gh_api_json
+	try:
+		runs, capped, meta = collector.list_runs_for_repo(
+			"owner/repo",
+			since_utc=datetime(2026, 4, 1, tzinfo=timezone.utc),
+			per_page=100,
+			max_pages=3,
+			max_runs=max_runs,
+			token="x",
+		)
+	finally:
+		collector.gh_api_json = orig
+	return runs, capped, meta, calls
+
+
+def test_list_runs_for_repo_drops_cross_page_duplicate_run() -> None:
+	runs, capped, meta, _calls = _list_runs_with_pages(
+		{
+			1: [
+				{"id": 1, "run_attempt": 1, "name": "AI Plan", "path": ".github/workflows/plan.yml"},
+				# No run_attempt: defaults to attempt 1, same key as the page-2 copy.
+				{"id": 2, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+			],
+			2: [
+				{"id": 2, "run_attempt": 1, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+				{"id": 3, "run_attempt": 1, "name": "AI Implement", "path": ".github/workflows/implement.yml"},
+			],
+		}
+	)
+
+	assert [r["id"] for r in runs] == [1, 2, 3]
+	assert "run_attempt" not in runs[1]  # first occurrence kept
+	assert capped is False
+	assert meta["duplicate_runs_skipped"] == 1
+
+
+def test_list_runs_for_repo_keeps_same_id_with_different_attempts() -> None:
+	runs, capped, meta, _calls = _list_runs_with_pages(
+		{
+			1: [{"id": 5, "run_attempt": 1, "name": "AI Plan", "path": ".github/workflows/plan.yml"}],
+			2: [{"id": 5, "run_attempt": 2, "name": "AI Plan", "path": ".github/workflows/plan.yml"}],
+		}
+	)
+
+	assert [(r["id"], r["run_attempt"]) for r in runs] == [(5, 1), (5, 2)]
+	assert capped is False
+	assert meta["duplicate_runs_skipped"] == 0
+
+
+def test_list_runs_for_repo_max_runs_counts_unique_runs_only() -> None:
+	runs, capped, meta, _calls = _list_runs_with_pages(
+		{
+			1: [
+				{"id": 1, "name": "AI Plan", "path": ".github/workflows/plan.yml"},
+				{"id": 2, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+			],
+			2: [
+				{"id": 2, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+				{"id": 3, "name": "AI Implement", "path": ".github/workflows/implement.yml"},
+			],
+		},
+		max_runs=3,
+	)
+
+	assert [r["id"] for r in runs] == [1, 2, 3]
+	assert capped is True
+	assert meta["duplicate_runs_skipped"] == 1
+
+
+def test_list_runs_for_repo_no_duplicates_reports_zero() -> None:
+	runs, capped, meta, calls = _list_runs_with_pages(
+		{
+			1: [
+				{"id": 1, "name": "AI Plan", "path": ".github/workflows/plan.yml"},
+				{"id": 2, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+			],
+			2: [
+				{"id": 3, "name": "AI Implement", "path": ".github/workflows/implement.yml"},
+				{"id": 4, "name": "Release CI", "path": ".github/workflows/ci.yml"},
+			],
+		}
+	)
+
+	assert capped is False
+	assert [r["id"] for r in runs] == [1, 2, 3, 4]
+	assert [r["_workflow_family"] for r in runs] == ["plan", "validate", "implement", "ci"]
+	assert meta["not_modified"] is False
+	assert meta["etag"] == "W/\"abc\""
+	assert meta["duplicate_runs_skipped"] == 0
+	assert len(calls) == 3
 
 
 def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
