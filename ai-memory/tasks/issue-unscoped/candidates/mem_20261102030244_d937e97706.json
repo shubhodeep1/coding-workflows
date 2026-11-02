@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md:2 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The rollback note (\"To roll back, remove the three arms and the warning line.\") does not say to remove the new test `test_review_rb_judge_fallback_label_metadata_matches_label_contract`, so following it leaves a failing test in tests/test_ai_label_precreation_contract.py.\n  WHY: An operator following the changelog rollback gets a red contract test in CI. All four reviewers rated this NIT, so low is the nearest scale value.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md:last sentence | severity=NIT | confidence=3\n  PROBLEM: Removing the three arms and the warning line, as the changelog says, without also removing the new test leaves a failing test.\n  WHY: Anyone following the changelog rollback gets a red test in tests/test_ai_label_precreation_contract.py.\n- HARDENING (risk score 1): tests/test_ai_label_precreation_contract.py, after `literals = sorted(set(_ENSURE_LITERAL_RE.findall(text)))`. `_ENSURE_LITERAL_RE` only matches double-quoted `\"ai:...\"` first arguments. Suggested fix: assert every `ensure_label_exists ` line has a first argument matching `\"ai:[^\"$]+\"` (about 5 lines).\n- MISSING_CONTEXT: `.github/ai/label_contract.v1.json` is absent from the review checkout. The pre-push gate failure on tests/test_ai_label_precreation_contract.py could not be tied to any hunk. The copilot-pull-request-reviewer check failed with `custom_instructions_too_large`. \"Existing tests still pass\" is unverified.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md:2 | severity=NIT | confidence=4\n  PROBLEM: The documented rollback procedure is incomplete.\n  WHY: Following it makes `test_review_rb_judge_fallback_label_metadata_matches_label_contract` fail, so the changelog must also say to remove or update the test.\n- HARDENING (risk score 1): tests/test_ai_label_precreation_contract.py lines 98 (_ENSURE_LITERAL_RE) and 262. The regex only detects double-quoted literals. Suggested fix: assert every `ensure_label_exists` line has a first argument matching `^\"ai:[^\"$]+\"` (about 5 lines).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md:2 | severity=NIT | confidence=4\n  PROBLEM: The rollback procedure is incomplete. The new test (tests/test_ai_label_precreation_contract.py lines 278-282) asserts an arm for each literal call site. The call sites for ai:clarification, ai:orchestrator-managed and ai:workflow-heal (scripts/review_rb_judge.sh lines 3208, 3218, 3739, 3743) remain.\n  WHY: An operator following the rollback exactly gets a broken test suite on the next CI run.\n- HARDENING (risk score 1): tests/test_ai_label_precreation_contract.py around line 262. `_ENSURE_LITERAL_RE.findall(text)` only matches double-quoted literals. Suggested fix: assert every `ensure_label_exists` line has a first argument matching `^\"ai:[^\"$]+\"` (about 6 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md:2 | severity=NIT | confidence=5\n  PROBLEM: The rollback is inconsistent with the new test. Removing the three arms fails tests/test_ai_label_precreation_contract.py:278-282, because the call sites at scripts/review_rb_judge.sh:3208, 3218, 3739, 3743 still exist. Removing the warning line alone fails the check at tests/test_ai_label_precreation_contract.py:322-324.\n  WHY: A partial rollback following the fragment produces a red contract test in CI with no guidance.\n- HARDENING (risk score 1): tests/test_ai_label_precreation_contract.py, after the `literals` extraction at line 262. An unquoted, single-quoted or variable first argument would fall through to the `*)` arm. Suggested fix: assert every `ensure_label_exists` line has a first argument matching `^\"ai:[^\"$]+\"` (about 5 lines).\n- MISSING_CONTEXT: Tests could not be executed. The gate failure on tests/test_ai_label_precreation_contract.py cannot be located statically on head 17955f42. The copilot-pull-request-reviewer check failed with `custom_instructions_too_large`. Inherited test failures also fail on the merge-base and are out of scope.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ed48c81c6e7d8e6a29902d9f043d35d414d205173af4abb978ff426c5fef4016",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8651,
+    "run_id": "41377682522",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41377682522",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102030244_d937e97706",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8651,
+    "run_id": "41377682522"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T03:02:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
