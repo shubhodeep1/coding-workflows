@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-02T02:03:39Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows:1-1; cited_path=AGENTS.md, CLAUDE.md (Copilot reviewer custom instructions); files_touched=changelog.d/claude-pool-missing-five-hour-window.md, scripts/claude_engine.py, tests/test_claude_engine.py.",
+  "phase": "review_autofix",
+  "pr_number": 8648,
+  "record_id": "lesson_20261102020339_ef8ad84b41",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md, CLAUDE.md (Copilot reviewer custom instructions)",
+    ".github/workflows",
+    "changelog.d/claude-pool-missing-five-hour-window.md",
+    "scripts/claude_engine.py",
+    "tests/test_claude_engine.py"
+  ]
+}
