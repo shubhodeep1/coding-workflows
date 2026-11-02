@@ -18536,9 +18536,9 @@ ${gate_replan_marker}"
           # gh_retry makes one attempt for this POST, so a failure can be a
           # lost response for a comment GitHub accepted. §14 audit:
           # comments_json predates the POST, so one read of the recent
-          # comments runs here, only on this failure branch. A failed read
-          # keeps the rollback below.
-          if gate_replan_recent="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100${gate_replan_since:+&since=${gate_replan_since}}" 2>/dev/null)" \
+          # comments runs here, only on this failure branch, with one
+          # attempt. A failed read keeps the rollback below.
+          if gate_replan_recent="$(GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100${gate_replan_since:+&since=${gate_replan_since}}" 2>/dev/null)" \
             && [ "$(printf '%s' "${gate_replan_recent}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" = "true" ]; then
             gate_replan_landed="true"
             echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_confirmed issue=${issue_num}"
