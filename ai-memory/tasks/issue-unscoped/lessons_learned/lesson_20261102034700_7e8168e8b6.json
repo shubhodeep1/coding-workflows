@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-02T03:47:00Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/copilot-pull-request-reviewer:N/A; cited_path=.github/workflows/copilot-pull-request-reviewer; files_touched=analysis/validation-selftest-status.json.",
+  "phase": "review_autofix",
+  "pr_number": 8652,
+  "record_id": "lesson_20261102034700_7e8168e8b6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/copilot-pull-request-reviewer",
+    "analysis/validation-selftest-status.json"
+  ]
+}
