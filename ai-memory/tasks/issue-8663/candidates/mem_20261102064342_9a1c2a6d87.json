@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply analysis recommendations from workflow-optimization-2026-09-29.md\",\"issues\":[{\"id\":\"collector-run-row-dedup\",\"title\":\"collect_workflow_logs: deduplicate paginated run rows by run ID and attempt\",\"priority\":1},{\"id\":\"tracking-issue-list-limit\",\"title\":\"orchestrate_poll: stop truncating open tracking issues at 20 (BUG-003)\",\"priority\":1},{\"id\":\"report-and-delete-source-doc\",\"title\":\"Record verdicts for workflow-optimization-2026-09-29.md and delete the source doc\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"collector-run-row-dedup\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"tracking-issue-list-limit\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"collector-run-row-dedup\",\"to\":\"tracking-issue-list-limit\"}]}",
+  "fingerprint": "d8c6079f14212d53424ae281aa5496875a73a1bea82ca29248a4404e1019b0ea",
+  "lineage": {
+    "issue_number": 8663,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41400928775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41400928775",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261102064342_9a1c2a6d87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8663,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41400928775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply analysis recommendations from workflow-optimization-2026-09-29.md' into 3 issues (tracking #8663)",
+  "timestamps": {
+    "created_at": "2026-11-02T06:43:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
