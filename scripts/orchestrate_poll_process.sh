@@ -18553,6 +18553,10 @@ ${gate_replan_marker}"
           # the whole re-plan with its marker; without the marker a plain
           # retrigger_plan /answer could allow a second automatic re-plan.
           # If the rollback fails too, the retrigger_plan arm recovers it.
+          # Residual case: if the POST landed but both its response and the
+          # confirmation read were lost, the marker is already on the issue,
+          # so the next tick posts the hold notice for a maintainer instead
+          # of re-planning (never a second re-plan, never a stuck issue).
           echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_failed issue=${issue_num}"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
             --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 \
