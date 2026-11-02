@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cplan.yml runs every helper from the verified support tree\u201d pinned to SCRIPT_REF.\n  expected_change_site: The `plan` support-script list in `scripts/stage_support_for_phase.sh` and the superseded-issue helper selection in `.github/workflows/plan.yml`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The plan helper list at `scripts/stage_support_for_phase.sh:110-120` does not include `plan_superseded_merged_pr.py`, In `.github/workflows/plan.yml:1220-1224`, the workflow falls back from `.codex-workflow-src` to `.codex-workflow-src-main` when selecting that helper, then executes the selected file at lines 1240-1241, The PR diff leaves this path unchanged, so the helper can come from a commit other than SCRIPT_REF (reviewer severity: MAJOR).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING (advisory, not a finding): .github/workflows/plan.yml | \"Stage workflow support files\" step, the loop `while IFS= read -r support_list_name; do [ -n \"${support_list_name}\" ] && _fetched_scripts+=(\"${support_list_name}\"); done <<< \"${support_list_names}\"`\n  PROBLEM: When the last line is blank, `[ -n \"\" ] && ...` returns 1 as the last command of the loop body.\n  WHY: This does not kill the step today, because errexit does not fire on a failure in the non-final part of an `&&` list and the `while` status comes from the final `read`. No current helper prints blank lines. Suggested fix: `if [ -n \"${support_list_name}\" ]; then _fetched_scripts+=(\"${support_list_name}\"); fi` (1 line). HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cplan.yml runs every helper from the verified support tree\u201d pinned to SCRIPT_REF.\n  Expected change site: The `plan` support-script list in `scripts/stage_support_for_phase.sh` and the superseded-issue helper selection in `.github/workflows/plan.yml`.\n  Evidence of absence: The plan helper list at `scripts/stage_support_for_phase.sh:110-120` does not include `plan_superseded_merged_pr.py`. In `.github/workflows/plan.yml:1220-1224`, the workflow falls back from `.codex-workflow-src` to `.codex-workflow-src-main` when selecting that helper, then executes the selected file at lines 1240-1241. The PR diff leaves this path unchanged, so the helper can come from a commit other than SCRIPT_REF.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cf62c579315273c23dbdcc7f45c320bc9cdf25a37ffe3aff66d033c837e4ce5b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8703,
+    "run_id": "41543832558",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41543832558",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102232914_ea41a53999",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8703,
+    "run_id": "41543832558"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-02T23:29:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
