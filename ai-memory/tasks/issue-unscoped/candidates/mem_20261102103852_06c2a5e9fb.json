@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8153-8159 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `Path.read_text()` in `stripped()` (line 8156, in `security_pass_advisory_cited_code_status`) uses universal-newline translation, so a lone `\\r` becomes `\\n` before `.split(\"\\n\")`. Line numbering no longer matches git's LF-only numbering, and the cited window can shift.\n  WHY: A shifted window can give a false `absent` status and advisory wording that says the code was removed. The issue is still filed, so only the wording is affected. Severity disagreement: sonnet, minimax and glm said NIT, and gemini said MAJOR. The highest, MAJOR, is mapped to high. The suggested fix is `Path(path).read_bytes().decode(\"utf-8\", errors=\"replace\").split(\"\\n\")`. glm noted the earlier `splitlines()` version behaved the same way.\n- tests/test_files_touched_scope_guard.py:(pre-push test gate failure) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: PR changes cause CI failures in existing tests.\n  WHY: The pre-push test gate reports failures in tests/test_files_touched_scope_guard.py and shellcheck, which prevents the PR from merging. Severity is BLOCKER in the source. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) said these failures belong to an earlier head and are not shown in the current check-runs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"forward-merge stable into main\"\n  expected_change_site: Git merge operation\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR includes significant new feature implementation (security-pass-advisory-cited-code-check) that is not part of the forward-merge task. The PR description implies a clean merge, not a functional feature addition.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:8156 | severity=NIT | confidence=3\n  PROBLEM: `Path.read_text()` opens the file in text mode with universal newlines. It turns a lone `\\r` into `\\n` before the `.split(\"\\n\")`. The comment claims LF-only splitting \"as git numbers lines\", which is not fully true.\n  WHY: A stray CR shifts the five-line window, so the helper can print `absent` and the advisory says the code \"was removed or rewritten\". The effect is limited to advisory wording because the issue is filed either way. The case is rare. The fix is `read_bytes().decode(...)`.\n- HARDENING_SUGGESTIONS: replace `read_text(...)` with `Path(path).read_bytes().decode(\"utf-8\", errors=\"replace\")` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:8156 | severity=MAJOR | confidence=4\n  PROBLEM: Path.read_text() uses universal newline translation.\n  WHY: A lone \\r becomes \\n before the explicit split. This shifts the audited window and can cause a false absent result and incorrect advisory wording.\n- tests/test_files_touched_scope_guard.py:(pre-push test gate failure) | severity=BLOCKER | confidence=5\n  PROBLEM: PR changes cause CI failures in existing tests.\n  WHY: The pre-push test gate reports failures in tests/test_files_touched_scope_guard.py and shellcheck, preventing the PR from merging.\n- TASK_GAP: Requirement: \"forward-merge stable into main\"\n  Expected change site: Git merge operation\n  Evidence of absence: The PR includes significant new feature implementation (security-pass-advisory-cited-code-check) which is not part of the forward-merge task. The PR description implies a clean merge, not a functional feature addition.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:8153-8158 | severity=NIT | confidence=3\n  PROBLEM: `Path(path).read_text(encoding=\"utf-8\", errors=\"replace\")` uses universal newlines and rewrites lone `\\r` and `\\r\\n` to `\\n` before `.split(\"\\n\")`. A CR-only file therefore gets phantom line breaks that git never counted.\n  WHY: The cited window shifts and looks absent for content still on the default branch. The advisory then says \"Do not recreate the removed code\", which can steer the wrong fix. The issue is still filed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:8156 | severity=NIT | confidence=4\n  PROBLEM: `read_text()` universal-newline translation converts lone `\\r` to `\\n` before the explicit `.split(\"\\n\")`. Line indices then no longer match git's LF-only numbering.\n  WHY: The wrong audited lines are selected, so code still on the default branch can be reported `absent`. The impact is bounded to advisory wording. The prior `splitlines()` version behaved the same way, so the last run neither introduced nor worsened it.\n- HARDENING_SUGGESTIONS: scripts/orchestrate_poll_process.sh line 8156, `stripped()`. Replace with `Path(path).read_bytes().decode(\"utf-8\", errors=\"replace\").split(\"\\n\")` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "295214e5a1ddb6b00b762c1dc87267c075aef411ec06b37f052ef9720e8d028f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8670,
+    "run_id": "41428031485",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41428031485",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102103852_06c2a5e9fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8670,
+    "run_id": "41428031485"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T10:38:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
