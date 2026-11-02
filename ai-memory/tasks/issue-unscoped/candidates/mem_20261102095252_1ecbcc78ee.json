@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:multiple tests | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Tests such as `test_review_pipeline_integration_chain_module_runs_clean` and `test_staged_support_guard_marks_only_auto_release_safe_conflicts` fail on the PR head SHA, and the PR description lists them as \"Failures caused by this change\".\n  WHY: The reviewer says the CI report ties these failures to the change even though the author calls them unrelated. The reviewer gave no severity, so medium is inferred from the finding's weight.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:multiple tests (`test_review_pipeline_integration_chain_module_runs_clean`, `test_staged_support_guard_marks_only_auto_release_safe_conflicts`, etc.) | confidence=3\n  PROBLEM: The PR description lists these tests as \"Failures caused by this change,\" yet they are failing on the PR head SHA.\n  WHY: The tests are failing now. The author says they are unrelated to the canary file change, but the CI report explicitly categorizes them as caused by this change.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3c14f1135d1def4c290096daf32c9546a7cc5468b0e2440514470e01fdf15f08",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41422925802",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41422925802",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102095252_1ecbcc78ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41422925802"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-02T09:52:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
