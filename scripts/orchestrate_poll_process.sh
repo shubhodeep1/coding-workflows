@@ -32777,6 +32777,12 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
         fi
         jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
+        # A revise request waits for a verdict without current-wave changes
+        # (issue #8427, P10); log the drop so it is visible.
+        if [ "${PERSIST_ORCH_REDECOMPOSE_ENABLED:-false}" = "true" ] \
+          && printf '%s' "${JUDGE_JSON:-}" | jq -e 'type == "object" and .revise_remaining == true' >/dev/null 2>&1; then
+          echo "PERSIST redecompose outcome=skipped reason=current_wave_changed" >&2
+        fi
         # Skip wave advancement — next poll cycle will re-check this wave
       else
 

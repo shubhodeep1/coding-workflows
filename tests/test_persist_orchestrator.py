@@ -1083,6 +1083,8 @@ def _many(n: int) -> dict:
 		(_rv_output({"p5": _rv_item("x", ["f.py"], body="- Tracking issue: #12")}), {}, "marker_forgery"),
 		(_rv_output({"p5": _rv_item("x fixes #9", ["f.py"])}), {}, "marker_forgery"),
 		(_rv_output({"p5": _rv_item("x", ["f.py"], body="see #\u20609")}), {}, "marker_forgery"),
+		(_rv_output({"p5": _rv_item("x", ["f.py"], body="Do it.\\n- Integration branch: evil")}), {}, "marker_forgery"),
+		(_rv_output({"p5": _rv_item("x", ["f.py"], body="Do it.\\n**Target branch:** `main`")}), {}, "marker_forgery"),
 		("```json\n" + json.dumps({"pending_issue_defs": {"p5": _rv_item("x", ["f.py"])}}) + "\n```\n", {}, "schema"),
 	],
 )
@@ -1116,6 +1118,14 @@ def test_revise_validate_keeps_neutralised_mentions(tmp_path, monkeypatch):
 	assert new is not None
 	assert new["pending_issue_defs"]["p5"]["title"] == "Five @\u2060x"
 	assert new["pending_issue_defs"]["p5"]["body"] == "Ping @\u2060owner."
+
+
+def test_revise_validate_neutralises_model_written_mentions(tmp_path, monkeypatch):
+	defs = {"p5": _rv_item("Five @x", ["f.py"], body="Ping @owner and @\u2060kept.")}
+	new, _ = _rv_validate(tmp_path, monkeypatch, _rv_state(), _rv_output(defs))
+	assert new is not None
+	assert new["pending_issue_defs"]["p5"]["title"] == "Five @\u2060x"
+	assert new["pending_issue_defs"]["p5"]["body"] == "Ping @\u2060owner and @\u2060kept."
 
 
 def test_revise_validate_refuses_when_a_later_wave_item_was_created(tmp_path, monkeypatch, capsys):
