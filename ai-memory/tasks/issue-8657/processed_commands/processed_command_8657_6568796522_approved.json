@@ -5,13 +5,23 @@
   "entry_id": "processed_command_8657_6568796522_approved",
   "issue_number": 8657,
   "metadata": {
+    "branch": "ai/issue-8657",
+    "changed_files": [
+      "analysis/recommendation-processing-report.md",
+      "analysis/workflow-optimization-2026-09-28-3.md"
+    ],
+    "issue_number": 8657,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8657",
+    "pr_number": 8659,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8659",
+    "run_attempt": "1",
+    "run_id": "41386654627",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41386654627"
   },
   "run_attempt": 1,
   "run_id": "41386654627",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-02T04:09:00Z",
+  "status": "completed",
+  "timestamp": "2026-11-02T04:16:40Z",
   "workflow": "implement"
 }
