@@ -262,6 +262,14 @@ def test_review_rb_judge_fallback_label_metadata_matches_label_contract() -> Non
 	literals = sorted(set(_ENSURE_LITERAL_RE.findall(text)))
 	problems: list[str] = []
 
+	for line in text.splitlines():
+		call = re.match(r"^\s*ensure_label_exists\s+(\S+)", line)
+		if call and not re.fullmatch(r'"ai:[^"$]+"', call.group(1)):
+			problems.append(
+				"scripts/review_rb_judge.sh: `ensure_label_exists` call must pass a double-quoted literal "
+				f"\"ai:...\" label so the fallback check sees it: {line.strip()!r}"
+			)
+
 	missing_known = [label for label in REVIEW_RB_JUDGE_REQUIRED_FALLBACK_LABELS if label not in literals]
 	if missing_known:
 		problems.append(
