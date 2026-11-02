@@ -299,6 +299,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
+          ORCHESTRATE_TRACKING_ISSUE_LIST_LIMIT: ${{ vars.ORCHESTRATE_TRACKING_ISSUE_LIST_LIMIT || '100' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -326,16 +327,35 @@ jobs:
           echo "capacity_wait=${capacity_wait}" >> "$GITHUB_OUTPUT"
           echo "CLAUDE_CAPACITY_WAIT_TRACKER capacity_wait=${capacity_wait}"
 
+          # Tracking-issue list limit (workflow-optimization 2026-09-29
+          # BUG-003). A hard-coded limit of 20 silently dropped the oldest open
+          # projects from tracking_issues.json once more than 20 were open, so
+          # their waves stopped dispatching (the failure in
+          # docs/postmortems/2026-05-18-project-2734-stall.md). The value must
+          # be an integer 1-1000; anything else falls back to 100 with a
+          # warning that shows only a sanitized, bounded form of the value.
+          tracking_issue_list_limit="${ORCHESTRATE_TRACKING_ISSUE_LIST_LIMIT:-100}"
+          if ! [[ "${tracking_issue_list_limit}" =~ ^[1-9][0-9]*$ ]] \
+            || [ "${#tracking_issue_list_limit}" -gt 4 ] \
+            || [ "${tracking_issue_list_limit}" -gt 1000 ]; then
+            tracking_issue_list_limit_shown="$(printf '%s' "${tracking_issue_list_limit}" | tr -cd 'A-Za-z0-9_-' | cut -c1-32)"
+            echo "::warning::ORCHESTRATE_TRACKING_ISSUE_LIST_LIMIT is invalid (configured='${tracking_issue_list_limit_shown}'; must be an integer 1-1000); using 100."
+            tracking_issue_list_limit=100
+          fi
+
           # Find all open issues with the orchestrator tracking label
           TRACKING_ISSUES="$(gh_retry gh issue list \
             --repo "${{ github.repository }}" \
             --label "ai:orchestrator-tracking" \
             --state open \
             --json number,title,labels \
-            --limit 20)"
+            --limit "${tracking_issue_list_limit}")"
 
           COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
           echo "Found ${COUNT} active tracking issue(s)"
+          if [ "${COUNT}" -ge "${tracking_issue_list_limit}" ]; then
+            echo "::warning::ORCH_TRACKING_ISSUE_LIST_TRUNCATED limit=${tracking_issue_list_limit} count=${COUNT}"
+          fi
 
           echo "${TRACKING_ISSUES}" > "${RUNTIME_DIR}/tracking_issues.json"
 
