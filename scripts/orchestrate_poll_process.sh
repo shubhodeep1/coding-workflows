@@ -20003,6 +20003,349 @@ persist_orch_group_failures() {
   return 0
 }
 
+# _persist_orch_wave_check_clear REASON (issue #8427, P9). Removes the
+# top-level wave_check_wait_since field from STATE_FILE when it is present and
+# posts the state, so a wait from one wave boundary never carries over to a
+# later one. One jq check and nothing else when the field is absent.
+_persist_orch_wave_check_clear() {
+  local pwcc_reason="$1"
+  jq -e 'type == "object" and (has("wave_check_wait_since") or has("wave_check_wait_head") or has("wave_check_judged") or has("wave_check_judged_at"))' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if jq 'del(.wave_check_wait_since, .wave_check_wait_head, .wave_check_judged, .wave_check_judged_at)' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+    && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+    && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+    echo "PERSIST wave_check outcome=cleared reason=${pwcc_reason}" >&2
+    post_state_comment || true
+  else
+    rm -f "${STATE_FILE}.persist_wave_check.tmp"
+    echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+  fi
+  return 0
+}
+
+# _persist_orch_wave_check_unjudge REASON (issue #8427, P9). Called on the wave
+# judge's no-verdict exits (checkout failure, isolation unavailable, judge run
+# failed, unparseable output). When this tick's judge run came from the
+# between-waves check (PERSIST_ORCH_WAVE_CHECK_BLOCK set), removes the
+# wave_check_judged / wave_check_judged_at marker written before the judge ran,
+# so the next tick invokes the judge again instead of holding as
+# judged_recently. The wait fields are kept. No-op otherwise.
+_persist_orch_wave_check_unjudge() {
+  local pwcu_reason="$1"
+  [ -n "${PERSIST_ORCH_WAVE_CHECK_BLOCK:-}" ] || return 0
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  jq -e 'type == "object" and (has("wave_check_judged") or has("wave_check_judged_at"))' "${STATE_FILE}" >/dev/null 2>&1 || return 0
+  if jq 'del(.wave_check_judged, .wave_check_judged_at)' "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+    && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+    && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+    echo "PERSIST wave_check outcome=unjudged reason=${pwcu_reason}" >&2
+    post_state_comment || true
+  else
+    rm -f "${STATE_FILE}.persist_wave_check.tmp"
+    echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+  fi
+  return 0
+}
+
+# _persist_orch_wave_check_stamp HEAD_SHA [SINCE] (issue #8427, P9). Writes
+# wave_check_wait_since (SINCE when given, else now, starting the wait clock)
+# and wave_check_wait_head (the head last seen at the boundary; empty when no
+# head was known) and posts the state. Returns 1 when the state could not be
+# written.
+_persist_orch_wave_check_stamp() {
+  local pwcs_head="$1"
+  local pwcs_since="${2:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  if jq --arg t "${pwcs_since}" --arg h "${pwcs_head}" '.wave_check_wait_since = $t | .wave_check_wait_head = $h' \
+      "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+    && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+    && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+    post_state_comment || true
+    return 0
+  fi
+  rm -f "${STATE_FILE}.persist_wave_check.tmp"
+  echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+  return 1
+}
+
+# persist_orch_wave_check (issue #8427, P9; check between waves). Called in the
+# managed loop immediately before the clean-wave skip (SKIP_JUDGE_FOR_CLEAN_WAVE)
+# after initialising PERSIST_ORCH_WAVE_CHECK_BLOCK="" and
+# PERSIST_ORCH_WAVE_CHECK_HOLD=false; never in a subshell, it sets them.
+# Switch PERSIST_ORCH_WAVE_CHECK_ENABLED (exactly "true"; default false, also
+# defaulted in scripts/persist_orchestrator.py and orchestrate_poll.yml).
+# Off: starts no Python and makes no API call; one jq check removes a leftover
+# wave_check_wait_since field (then posts the state). On, and only when every
+# clean-wave skip condition holds: reads the head SHA of the pending
+# final_merge_pr that the external-finalize block captured this tick
+# (PERSIST_ORCH_WAVE_CHECK_HEAD_SHA, no extra read), reads one page of its
+# check runs and classifies them with persist_orchestrator.py wave-check
+# against the final-merge gate's required names (ORCH_FINAL_MERGE_REQUIRED_CHECKS;
+# the branch-protection lookup is not repeated here). The first tick that
+# reaches a boundary only records wave_check_wait_since / wave_check_wait_head
+# and holds: the head was read before this tick's sub-issue merges (or the
+# final PR was created this tick), so the next tick reads the current head.
+# A head that moved during a hold keeps the wait clock (the wait is bounded per
+# boundary, not per head) and only the recorded head is updated.
+# green: the skip proceeds. pending / no_checks: records wave_check_wait_since
+# once (post_state_comment) and sets PERSIST_ORCH_WAVE_CHECK_HOLD=true (the
+# caller continues to the next project). red, or pending after
+# PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES (default 90): reads at most one
+# Actions job log tail, renders the fenced UNTRUSTED WAVE CHECK block into
+# PERSIST_ORCH_WAVE_CHECK_BLOCK and sets INVOKE_JUDGE_FOR_STUCK=true so the
+# existing wave-judge path runs. No final PR, no head SHA, unreadable checks,
+# no checks after the wait, or a helper failure: today's skip (fail open).
+# green / red / timeout append a wave_check entry to the tracking issue's
+# attempt journal (the helper's own PERSIST_JOURNAL_ENABLED gate applies).
+# API budget (section 14): at most two reads (check runs + one job log), plus
+# the identity read shared through PERSIST_JOURNAL_LOGIN_CACHE. The journal
+# append is a separate comment write by attempt_journal.py under its own
+# PERSIST_JOURNAL_ENABLED gate and is not counted here. Always returns 0.
+persist_orch_wave_check() {
+  local pwc_pr pwc_status pwc_sha pwc_base pwc_runs pwc_out pwc_log pwc_block pwc_details pwc_comments pwc_note
+  local pwc_wait pwc_wait_head pwc_outcome pwc_job pwc_waited pwc_max pwc_failing pwc_valid pwc_truncated pwc_journal
+  local pwc_head_moved=false pwc_ci_name="none"
+  local pwc_judged_key pwc_judged_prev pwc_judged_at pwc_now pwc_since_keep
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  if [ "${PERSIST_ORCH_WAVE_CHECK_ENABLED:-false}" != "true" ]; then
+    _persist_orch_wave_check_clear switch_off
+    return 0
+  fi
+  if [ "${ENABLE_CLEAN_WAVE_JUDGE_SKIP:-}" != "true" ] \
+    || [ "${INVOKE_JUDGE_FOR_STUCK:-}" = "true" ] \
+    || [ "${WAVE_COMPLETE:-}" != "true" ] \
+    || [ "${ANY_FAILED:-}" = "true" ] \
+    || [ "${PROJECT_COMPLETE:-}" = "true" ] \
+    || ! [[ "${CURRENT_WAVE:-}" =~ ^[0-9]+$ ]] || ! [[ "${TOTAL_WAVES:-}" =~ ^[0-9]+$ ]] \
+    || [ "${CURRENT_WAVE}" -ge "${TOTAL_WAVES}" ]; then
+    _persist_orch_wave_check_clear stale
+    return 0
+  fi
+  pwc_pr="$(jq -r 'if (.final_merge_pr | type) == "number" then (.final_merge_pr | tostring) else (.final_merge_pr // "" | tostring) end' "${STATE_FILE}" 2>/dev/null || true)"
+  pwc_status="$(jq -r '.final_merge_status // "pending" | tostring' "${STATE_FILE}" 2>/dev/null || true)"
+  if ! [[ "${pwc_pr}" =~ ^[1-9][0-9]*$ ]] || [ "${pwc_status}" != "pending" ]; then
+    echo "PERSIST wave_check outcome=skipped reason=no_final_pr" >&2
+    _persist_orch_wave_check_clear no_final_pr
+    return 0
+  fi
+  pwc_wait="$(jq -r '.wave_check_wait_since // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+  [[ "${pwc_wait}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || pwc_wait=""
+  pwc_wait_head="$(jq -r '.wave_check_wait_head // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+  pwc_sha="${PERSIST_ORCH_WAVE_CHECK_HEAD_SHA:-}"
+  if ! [[ "${pwc_sha}" =~ ^[0-9a-f]{40}$ ]] || [ "${PERSIST_ORCH_WAVE_CHECK_HEAD_PR:-}" != "${pwc_pr}" ]; then
+    # First tick at the boundary (for example the final PR was recorded this
+    # tick, after the external-finalize read): hold once so the next tick
+    # reads its head. Later ticks without a head fail open, as before.
+    if [ -z "${pwc_wait}" ] && _persist_orch_wave_check_stamp ""; then
+      echo "PERSIST wave_check outcome=pending reason=head_sha_unavailable pr=${pwc_pr}" >&2
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      return 0
+    fi
+    echo "PERSIST wave_check outcome=skipped reason=head_sha_unavailable pr=${pwc_pr}" >&2
+    _persist_orch_wave_check_clear head_sha_unavailable
+    return 0
+  fi
+  if [ ! -f scripts/persist_orchestrator.py ]; then
+    echo "PERSIST wave_check outcome=skipped reason=helper_absent" >&2
+    _persist_orch_wave_check_clear helper_absent
+    return 0
+  fi
+  if [ -z "${pwc_wait}" ]; then
+    # First tick at this boundary: the head was read before this tick's
+    # sub-issue merges, so hold once and classify the next tick's head. When
+    # the stamp cannot be written, classify this head instead (no endless hold).
+    if _persist_orch_wave_check_stamp "${pwc_sha}"; then
+      echo "PERSIST wave_check outcome=pending reason=boundary_first_seen pr=${pwc_pr}" >&2
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      return 0
+    fi
+  elif [ "${pwc_wait_head}" != "${pwc_sha}" ]; then
+    # The head moved during the hold. The wait clock is kept, so a head that
+    # keeps moving cannot hold the boundary past the maximum wait; the new head
+    # is recorded only by a branch that writes state anyway (one write a tick).
+    pwc_head_moved=true
+  fi
+  # The CI check name whose cancelled runs a newer same-name run from another
+  # workflow must not hide (the rule of PR_CHECKS_JQ_SUPERSEDE_DEFS).
+  if declare -F _pr_auto_merge_required_ci_check_name >/dev/null 2>&1; then
+    pwc_ci_name="$(_pr_auto_merge_required_ci_check_name 2>/dev/null || echo none)"
+  fi
+  pwc_base="${RUNTIME_DIR:-/tmp}"
+  [ -d "${pwc_base}" ] || pwc_base="/tmp"
+  # Private scratch files (mktemp), so overlapping runs never share them.
+  pwc_runs="$(mktemp "${pwc_base}/persist_wave_check_runs.XXXXXX" 2>/dev/null)" || pwc_runs=""
+  pwc_out="$(mktemp "${pwc_base}/persist_wave_check_out.XXXXXX" 2>/dev/null)" || pwc_out=""
+  if [ -z "${pwc_runs}" ] || [ -z "${pwc_out}" ]; then
+    rm -f "${pwc_runs}" "${pwc_out}"
+    echo "PERSIST wave_check outcome=error reason=scratch_unwritable" >&2
+    _persist_orch_wave_check_clear scratch_unwritable
+    return 0
+  fi
+  # API read 1 of at most 2: one page, no --paginate. A failure leaves the
+  # file empty and the helper reports unavailable.
+  gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${pwc_sha}/check-runs?per_page=100" > "${pwc_runs}" 2>/dev/null || : > "${pwc_runs}"
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py wave-check --check-runs-file "${pwc_runs}" \
+    --now "$(date -u +%s)" --wait-since="${pwc_wait}" \
+    --required-names="${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT:-*}}" \
+    --ci-check-name="${pwc_ci_name:-none}" \
+    --out "${pwc_out}" < /dev/null || true
+  rm -f "${pwc_runs}"
+  pwc_outcome="$(jq -r 'if type == "object" and .schema == "wave_check.v1" then (.outcome // "" | tostring) else "" end' "${pwc_out}" 2>/dev/null || true)"
+  case "${pwc_outcome}" in
+    green|pending|no_checks|red|timeout|no_checks_timeout|unavailable) ;;
+    *)
+      rm -f "${pwc_out}"
+      echo "PERSIST wave_check outcome=skipped reason=helper_failed pr=${pwc_pr}" >&2
+      _persist_orch_wave_check_clear helper_failed
+      return 0
+      ;;
+  esac
+  pwc_waited="$(jq -r '.waited_minutes // 0 | if type == "number" then floor else 0 end' "${pwc_out}" 2>/dev/null || echo 0)"
+  pwc_max="$(jq -r '.max_wait_minutes // 0 | if type == "number" then floor else 0 end' "${pwc_out}" 2>/dev/null || echo 0)"
+  pwc_failing="$(jq -r '.failing | if type == "array" then length else 0 end' "${pwc_out}" 2>/dev/null || echo 0)"
+  pwc_valid="$(jq -r 'if .wait_since_valid == true then "true" else "false" end' "${pwc_out}" 2>/dev/null || echo false)"
+  pwc_truncated="$(jq -r 'if .truncated == true then 1 else 0 end' "${pwc_out}" 2>/dev/null || echo 0)"
+  pwc_job="$(jq -r '.log_job_id // "" | tostring' "${pwc_out}" 2>/dev/null || true)"
+  [[ "${pwc_waited}" =~ ^[0-9]+$ ]] || pwc_waited=0
+  [[ "${pwc_max}" =~ ^[0-9]+$ ]] || pwc_max=0
+  [[ "${pwc_failing}" =~ ^[0-9]+$ ]] || pwc_failing=0
+  [[ "${pwc_truncated}" =~ ^[01]$ ]] || pwc_truncated=0
+  pwc_journal=""
+  # A red / timeout head already sent to the judge holds instead of invoking
+  # it again on every tick: the same head and outcome reach the judge at most
+  # once per PERSIST_ORCH_WAVE_CHECK_MAX_WAIT_MINUTES (the final-PR phase
+  # bypasses the judge-cycle cap, so nothing else bounds it). A head move, a
+  # new outcome, or the wait fields' stale clear (wave advanced or fix-ups
+  # added) lets the judge run again.
+  pwc_judged_key=""
+  pwc_now="$(date -u +%s)"
+  if [ "${pwc_outcome}" = "red" ] || [ "${pwc_outcome}" = "timeout" ]; then
+    pwc_judged_key="${pwc_sha}:${pwc_outcome}"
+    pwc_judged_prev="$(jq -r '.wave_check_judged // "" | if type == "string" then . else "" end' "${STATE_FILE}" 2>/dev/null || true)"
+    pwc_judged_at="$(jq -r '.wave_check_judged_at // 0 | if type == "number" then floor else 0 end' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    [[ "${pwc_judged_at}" =~ ^[0-9]+$ ]] || pwc_judged_at=0
+    if [ "${pwc_judged_prev}" = "${pwc_judged_key}" ] && [ "${pwc_judged_at}" -gt 0 ] \
+      && [ "${pwc_judged_at}" -le "${pwc_now}" ] && [ $((pwc_now - pwc_judged_at)) -lt $((pwc_max * 60)) ]; then
+      pwc_outcome="judged_hold"
+    fi
+  fi
+  case "${pwc_outcome}" in
+    judged_hold)
+      echo "PERSIST wave_check outcome=pending reason=judged_recently pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      ;;
+    green)
+      echo "PERSIST wave_check outcome=green reason=checks_passed pr=${pwc_pr} truncated=${pwc_truncated}" >&2
+      _persist_orch_wave_check_clear green
+      pwc_journal="ok"
+      ;;
+    pending|no_checks)
+      if [ "${pwc_valid}" != "true" ]; then
+        _persist_orch_wave_check_stamp "${pwc_sha}" || true
+      elif [ "${pwc_head_moved}" = "true" ]; then
+        _persist_orch_wave_check_stamp "${pwc_sha}" "${pwc_wait}" || true
+      fi
+      if [ "${pwc_outcome}" = "pending" ]; then
+        echo "PERSIST wave_check outcome=pending reason=checks_pending pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
+      else
+        echo "PERSIST wave_check outcome=pending reason=no_checks pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
+      fi
+      PERSIST_ORCH_WAVE_CHECK_HOLD=true
+      ;;
+    red|timeout)
+      if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+        PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+        [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+      fi
+      pwc_log=""
+      if [[ "${pwc_job}" =~ ^[1-9][0-9]*$ ]]; then
+        pwc_log="$(mktemp "${pwc_base}/persist_wave_check_log.XXXXXX" 2>/dev/null)" || pwc_log=""
+        if [ -n "${pwc_log}" ]; then
+          # API read 2 of at most 2: the failing Actions job's log; only its
+          # last 8192 bytes reach the helper and the log never reaches stdout.
+          { gh_retry gh api --allow-escape-sequences "repos/${GITHUB_REPOSITORY}/actions/jobs/${pwc_job}/logs" 2>/dev/null || true; } | tail -c 8192 > "${pwc_log}" 2>/dev/null || : > "${pwc_log}"
+        fi
+      fi
+      pwc_details="$(mktemp "${pwc_base}/persist_wave_check_details.XXXXXX" 2>/dev/null)" || pwc_details=""
+      pwc_block="$(mktemp "${pwc_base}/persist_wave_check_block.XXXXXX" 2>/dev/null)" || pwc_block=""
+      if [ -n "${pwc_details}" ] && [ -n "${pwc_block}" ]; then
+        printf '%s' "${_current_wave_details_json:-}" > "${pwc_details}" 2>/dev/null || : > "${pwc_details}"
+        jq -e 'type == "object"' "${pwc_details}" >/dev/null 2>&1 || printf '{}' > "${pwc_details}"
+        if [ -n "${pwc_log}" ] && [ -s "${pwc_log}" ]; then
+          PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py wave-check-block --result-file "${pwc_out}" \
+            --log-file "${pwc_log}" --state-file "${STATE_FILE}" --wave-index "${WAVE_IDX:-0}" --journals-json "${pwc_details}" \
+            --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --out "${pwc_block}" < /dev/null || true
+        else
+          PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/persist_orchestrator.py wave-check-block --result-file "${pwc_out}" \
+            --state-file "${STATE_FILE}" --wave-index "${WAVE_IDX:-0}" --journals-json "${pwc_details}" \
+            --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --out "${pwc_block}" < /dev/null || true
+        fi
+        PERSIST_ORCH_WAVE_CHECK_BLOCK="$(cat "${pwc_block}" 2>/dev/null || true)"
+      fi
+      rm -f "${pwc_log}" "${pwc_details}" "${pwc_block}"
+      if [ -z "${PERSIST_ORCH_WAVE_CHECK_BLOCK}" ]; then
+        # Helper failed to render: the judge still learns why it was invoked.
+        PERSIST_ORCH_WAVE_CHECK_BLOCK="$(printf '=== BEGIN UNTRUSTED WAVE CHECK ===\nUNTRUSTED_DATA: outcome: %s (details unavailable)\n=== END UNTRUSTED WAVE CHECK ===' "${pwc_outcome}")"
+      fi
+      INVOKE_JUDGE_FOR_STUCK=true
+      if [ "${pwc_outcome}" = "red" ]; then
+        echo "PERSIST wave_check outcome=red reason=checks_failed pr=${pwc_pr} failing=${pwc_failing} truncated=${pwc_truncated}" >&2
+      else
+        echo "PERSIST wave_check outcome=timeout reason=checks_pending pr=${pwc_pr} failing=${pwc_failing} waited=${pwc_waited} max=${pwc_max}" >&2
+      fi
+      # The wait fields stay, so the next tick classifies this head again
+      # instead of taking the boundary_first_seen hold; wave_check_judged
+      # records this head and outcome so the judged_hold above bounds repeat
+      # judge runs. The stale clear (also run on incomplete-wave ticks) removes
+      # them once the judge advances the wave or adds fix-ups.
+      pwc_since_keep="${pwc_wait}"
+      [ "${pwc_valid}" = "true" ] || pwc_since_keep="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      if jq --arg t "${pwc_since_keep}" --arg h "${pwc_sha}" --arg k "${pwc_judged_key}" --argjson n "${pwc_now}" \
+          '.wave_check_wait_since = $t | .wave_check_wait_head = $h | .wave_check_judged = $k | .wave_check_judged_at = $n' \
+          "${STATE_FILE}" > "${STATE_FILE}.persist_wave_check.tmp" 2>/dev/null \
+        && [ -s "${STATE_FILE}.persist_wave_check.tmp" ] \
+        && mv "${STATE_FILE}.persist_wave_check.tmp" "${STATE_FILE}" 2>/dev/null; then
+        post_state_comment || true
+      else
+        rm -f "${STATE_FILE}.persist_wave_check.tmp"
+        echo "PERSIST wave_check outcome=error reason=state_write_failed" >&2
+      fi
+      pwc_journal="fail"
+      ;;
+    no_checks_timeout)
+      echo "PERSIST wave_check outcome=skipped reason=no_checks pr=${pwc_pr} waited=${pwc_waited} max=${pwc_max}" >&2
+      _persist_orch_wave_check_clear no_checks
+      ;;
+    unavailable)
+      echo "PERSIST wave_check outcome=skipped reason=checks_unavailable pr=${pwc_pr}" >&2
+      _persist_orch_wave_check_clear checks_unavailable
+      ;;
+  esac
+  if [ -n "${pwc_journal}" ] && [ -f scripts/attempt_journal.py ]; then
+    if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+      PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+      [[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+    fi
+    if [ -z "${PERSIST_JOURNAL_LOGIN_CACHE}" ] || [ "${COMMENTS_FETCH_OK:-false}" != "true" ] \
+      || [ "${COMMENTS_FOR_TRACKING_NUM:-}" != "${TRACKING_NUM:-}" ] || ! [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]]; then
+      # The tick's tracking comments are the only journal read (no extra call).
+      echo "PERSIST wave_check outcome=skipped reason=journal_unavailable pr=${pwc_pr}" >&2
+    else
+      pwc_comments="$(mktemp "${pwc_base}/persist_wave_check_comments.XXXXXX" 2>/dev/null)" || pwc_comments=""
+      pwc_note="$(mktemp "${pwc_base}/persist_wave_check_note.XXXXXX" 2>/dev/null)" || pwc_note=""
+      if [ -n "${pwc_comments}" ] && [ -n "${pwc_note}" ] \
+        && printf '%s' "${COMMENTS:-[]}" > "${pwc_comments}" 2>/dev/null \
+        && printf 'wave %s pr=%s outcome=%s' "${CURRENT_WAVE}" "${pwc_pr}" "${pwc_outcome}" > "${pwc_note}" 2>/dev/null; then
+        PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py append --repo "${GITHUB_REPOSITORY}" \
+          --issue "${TRACKING_NUM}" --stage wave_check --outcome "${pwc_journal}" --approach inherit \
+          --comments-file "${pwc_comments}" --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE}" \
+          --note-file "${pwc_note}" < /dev/null || true
+      fi
+      rm -f "${pwc_comments}" "${pwc_note}"
+    fi
+  fi
+  rm -f "${pwc_out}"
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -25862,6 +26205,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
   unset _INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE
   HEALING_NOTES=()
+  # P9 (#8427): per-project head of the final PR, captured only by this
+  # project's external-finalize read.
+  PERSIST_ORCH_WAVE_CHECK_HEAD_SHA=""
+  PERSIST_ORCH_WAVE_CHECK_HEAD_PR=""
   echo "========================================"
   echo "Processing tracking issue #${TRACKING_NUM}: ${TRACKING_TITLE}"
   echo "========================================"
@@ -26491,6 +26838,12 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
         _orch_extfin_pr_json="$(_fetch_pr_json "${_orch_extfin_pr}")"
         _orch_extfin_pr_state="$(_jq_field "${_orch_extfin_pr_json}" '.state' 'open|closed|merged')"
         _orch_extfin_pr_merged="$(_jq_field "${_orch_extfin_pr_json}" '.merged_at != null' 'true|false')"
+        # P9 (#8427): the between-waves check reads the open final PR's head
+        # from this read, so it makes no extra PR call.
+        if [ "${_orch_extfin_pr_state}" = "open" ]; then
+          PERSIST_ORCH_WAVE_CHECK_HEAD_SHA="$(_jq_field "${_orch_extfin_pr_json}" '.head.sha' '[0-9a-f]{40}')"
+          PERSIST_ORCH_WAVE_CHECK_HEAD_PR="${_orch_extfin_pr}"
+        fi
         if [ -z "${_orch_extfin_pr_state}" ] || [ -z "${_orch_extfin_pr_merged}" ]; then
           echo "::warning::[external-finalize] unable to inspect PR #${_orch_extfin_pr}; leaving final_merge_status pending."
         elif [ "${_orch_extfin_pr_state}" = "closed" ] && [ "${_orch_extfin_pr_merged}" = "true" ]; then
@@ -31349,6 +31702,13 @@ with open('${STATE_FILE}', 'w') as f:
     fi
 
     if [ "${INVOKE_JUDGE_FOR_STUCK}" != "true" ]; then
+      # P9 (#8427): an incomplete wave is not at a boundary, so wait fields
+      # kept by a red / timeout check (the judge advanced the wave or added
+      # fix-ups) must not carry over into the next boundary. One jq check
+      # when they are absent.
+      if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
+        _persist_orch_wave_check_clear stale
+      fi
       continue
     fi
     fi  # end: INVOKE_JUDGE_FOR_STUCK != true
@@ -31358,6 +31718,17 @@ with open('${STATE_FILE}', 'w') as f:
     echo "Wave ${CURRENT_WAVE} stuck — invoking judge to define missing issues or decide next action..."
   else
     echo "Wave ${CURRENT_WAVE} complete!"
+  fi
+
+  # Check between waves (issue #8427, P9; PERSIST_ORCH_WAVE_CHECK_ENABLED,
+  # default off): hold the clean-wave skip while the integration PR's checks
+  # are pending, and route a red result to the wave judge.
+  PERSIST_ORCH_WAVE_CHECK_BLOCK=""
+  PERSIST_ORCH_WAVE_CHECK_HOLD=false
+  persist_orch_wave_check < /dev/null || true
+  if [ "${PERSIST_ORCH_WAVE_CHECK_HOLD}" = "true" ]; then
+    echo "Wave ${CURRENT_WAVE} held: integration PR checks pending."
+    continue
   fi
 
   SKIP_JUDGE_FOR_CLEAN_WAVE="false"
@@ -31479,6 +31850,7 @@ Manual intervention required." >/dev/null \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
   if ! prepare_tracking_judge_checkout "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+    _persist_orch_wave_check_unjudge judge_checkout_failed
     continue
   fi
 
@@ -31706,7 +32078,7 @@ ${PR_DIFF}
     if [ "${ANY_FAILED}" = "true" ]; then
       echo "WARNING: Some issues in this wave were closed without merge."
     fi
-    if [ "${INVOKE_JUDGE_FOR_STUCK}" = "true" ]; then
+    if [ "${INVOKE_JUDGE_FOR_STUCK}" = "true" ] && [ -z "${PERSIST_ORCH_WAVE_CHECK_BLOCK:-}" ]; then
       echo
       echo "WARNING: This judge invocation was triggered because the wave is STUCK."
       echo "Some issues in this wave have github_issue == null and no pending_issue_defs"
@@ -31714,6 +32086,11 @@ ${PR_DIFF}
       echo "All other (created) issues in the wave are in terminal states."
       echo "You must decide what to do: define the missing issues, skip them, or take"
       echo "another corrective action. The wave CANNOT complete on its own."
+    fi
+    if [ -n "${PERSIST_ORCH_WAVE_CHECK_BLOCK:-}" ]; then
+      echo
+      echo "WARNING: This judge invocation was triggered by the between-waves check on the integration PR (PERSIST_ORCH_WAVE_CHECK_ENABLED). Decide whether to add fix-up issues, revert, or advance."
+      printf '%s\n' "${PERSIST_ORCH_WAVE_CHECK_BLOCK}"
     fi
     echo
     echo "IMPORTANT: If current wave < total waves, the project is NOT complete."
@@ -31808,12 +32185,17 @@ ${PR_DIFF}
 	  if [ "${wave_judge_rc:-0}" -eq 77 ]; then
 	    echo "::warning::Wave judge isolation unavailable for #${TRACKING_NUM}; deferring without changing wave state." >&2
 	    [ "${wave_isolation_skipped:-false}" = true ] || tg_notify "Wave judge isolation unavailable for #${TRACKING_NUM}; retrying next poll." "DEBUG"
+	    # An escalated isolation latch ran no judge: keep the judged marker so
+	    # the wave check holds as judged_recently instead of repeating its reads.
+	    [ "${wave_isolation_skipped:-false}" = true ] || _persist_orch_wave_check_unjudge judge_isolation_unavailable
 	    continue
 	  fi
 	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
 	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
 	    _judge_output_failure_alert "Orchestrator Judge failed for #${TRACKING_NUM}."
 	    unblock_handover_judge_output "llm_failed"
+	    # No attempt ran (prompt over the stdin cap): the same failure repeats, so keep the marker.
+	    [ "${max_attempts:-0}" -le 0 ] || _persist_orch_wave_check_unjudge judge_failed
 	    continue
 	  fi
 	  _clear_judge_isolation_state WAVE_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
@@ -31826,6 +32208,7 @@ ${PR_DIFF}
     echo "::error::Could not parse judge output for #${TRACKING_NUM}"
     _judge_output_failure_alert "Orchestrator Judge output unparseable for #${TRACKING_NUM}."
     unblock_handover_judge_output "unparseable"
+    _persist_orch_wave_check_unjudge judge_unparseable
     continue
   fi
   if [ "$(jq -r '.judge_output_failures // 0' "${STATE_FILE}" 2>/dev/null || echo 0)" != "0" ]; then
