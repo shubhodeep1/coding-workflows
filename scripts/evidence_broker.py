@@ -589,7 +589,9 @@ class Broker:
 		return out or ["(no jobs)"]
 
 	def _run_log_tail(self, fields: dict) -> list[str] | None:
-		raw = self.gh([f"repos/{self.repo}/actions/jobs/{fields['job']}/logs"])
+		# Job logs carry ANSI colour codes; gh refuses them without this flag.
+		# The flag goes first so the path stays last (gh_api_retry.endpoint skips it).
+		raw = self.gh(["--allow-escape-sequences", f"repos/{self.repo}/actions/jobs/{fields['job']}/logs"])
 		if raw is None:
 			return None
 		# Redact a wider window before cutting to 4 KiB, so a credential that

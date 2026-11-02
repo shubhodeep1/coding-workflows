@@ -259,7 +259,7 @@ def fake_call(monkeypatch):
 
 	def call(args, **kwargs):
 		calls.append((list(args), kwargs))
-		rc, body = responses.get(args[0], (1, b""))
+		rc, body = responses.get(gh_api_retry.endpoint(args), (1, b""))
 		return SimpleNamespace(rc=rc, stdout=body)
 
 	monkeypatch.setattr(gh_api_retry, "call", call)
@@ -284,7 +284,8 @@ def test_github_kinds_make_one_optional_call_each(fake_call, tmp_path):
 	text, broker = eb.fulfil(items, "o/r", tmp_path, "main", 65536)
 	assert broker.calls == len(calls) == 6
 	assert all(kw == {"optional": True, "max_attempts": 1} for _, kw in calls)
-	assert all(args[0].startswith("repos/o/r/") for args, _ in calls)
+	assert all(gh_api_retry.endpoint(args).startswith("repos/o/r/") for args, _ in calls)
+	assert calls[1][0][0] == "--allow-escape-sequences"
 	assert _answer(text, "run_steps", "11") == ["job 5 build failure", "  step 1 Run tests failure"]
 	tail = _answer(text, "run_log_tail", "11 5")
 	assert "log line 1999" in "\n".join(tail) and "log line 0\n" not in "\n".join(tail) and "abcdefghijklmnopqrstuvwxyz0123456789" not in "\n".join(tail)
