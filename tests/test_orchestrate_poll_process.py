@@ -7026,6 +7026,12 @@ def _check_cited_code_status_window_match(tmp_path: Path) -> None:
 	assert status(audited_sha, "src.py", "99") == "unknown"  # out of range
 	assert status("0" * 40, "src.py", "3") == "unknown"  # audited head unreadable
 	assert status(audited_sha, "src.py", "") == "unknown"
+	# Unresolvable default-branch ref: unknown, not absent.
+	assert subprocess.run(
+		["bash", str(script), audited_sha, "no-such-branch", "src.py", "3"],
+		check=True, capture_output=True, text=True, cwd=repo,
+		env={**os.environ, "RUNTIME_DIR": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1"},
+	).stdout.strip() == "unknown"
 	# Same commit on both sides: present.
 	git("update-ref", "refs/remotes/origin/main", audited_sha)
 	assert status(audited_sha, "src.py", "3") == "present"

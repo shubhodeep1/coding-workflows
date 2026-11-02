@@ -8132,9 +8132,14 @@ security_pass_advisory_cited_code_status() {
 		return 0
 	fi
 	if ! git show "origin/${default_branch}:${cited_file}" > "${cited_tmp_dir}/current" 2>/dev/null; then
-		# The audited blob exists but the file is gone from the default branch.
+		# The audited blob exists but the file is gone from the default branch,
+		# unless the default-branch ref itself does not resolve (then unknown).
 		rm -rf "${cited_tmp_dir}"
-		echo "absent"
+		if git rev-parse --verify --quiet "origin/${default_branch}^{commit}" >/dev/null 2>&1; then
+			echo "absent"
+		else
+			echo "unknown"
+		fi
 		return 0
 	fi
 	cited_status="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${cited_tmp_dir}/audited" "${cited_tmp_dir}/current" "${cited_line}" <<'PY' 2>/dev/null || echo "unknown"
@@ -8224,7 +8229,7 @@ security_pass_file_deferred_advisory_followups() {
 		"$(printf '%s' "${row_finding}" | jq -r '.line // ""')")"
 	# A failed default-branch fetch cannot prove the code is gone.
 	[ "${cited_default_fetch_ok}" = "true" ] || row_cited_status="unknown"
-	echo "SECURITY_PASS_ADVISORY_CITED_CODE tracking_issue=${TRACKING_NUM} finding=$(printf '%s' "${row_json}" | jq -r '.finding_id') default_branch=${default_branch} status=${row_cited_status}"
+	echo "SECURITY_PASS_ADVISORY_CITED_CODE tracking_issue=${TRACKING_NUM} finding=$(printf '%s' "${row_json}" | jq -r '.finding_id' | tr -d '\r\n') default_branch=${default_branch} status=${row_cited_status}"
     create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}" "${row_cited_status}"
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
       filed_count=$((filed_count + 1))
