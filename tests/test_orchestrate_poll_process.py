@@ -27639,6 +27639,21 @@ def test_managed_replannable_hold_comment_failure_posts_no_hold_notice() -> None
 	assert "ai:awaiting-approval" in labels and "ai:planning" not in labels, labels
 
 
+def test_managed_replannable_hold_lost_comment_response_keeps_planning() -> None:
+	# GitHub accepted the /answer but the response was lost: the re-read
+	# finds the marker, so ai:planning stays and plan.yml can re-plan.
+	result = _replan_run(fail_issue_comment_post_after_write_for=[10])
+	log = result["stdout"] + result["stderr"]
+	assert "reason=path_not_granted outcome=replan_comment_confirmed issue=10" in log
+	assert "reason=path_not_granted outcome=replan issue=10" in log
+	assert "outcome=replan_comment_failed" not in log
+	assert len(_replan_answer_bodies(result, "10")) == 1, log
+	assert _replan_hold_bodies(result, "10") == [], log
+	assert result.get("issue_edit_call_counts", {}).get("10") == 1, log
+	labels = result["issues"]["10"]["labels"]
+	assert "ai:planning" in labels and "ai:awaiting-approval" not in labels, labels
+
+
 def test_managed_non_replannable_hold_is_unchanged() -> None:
 	# An exact ungranted path is not a placeholder token: today's hold.
 	result = _run_poller(

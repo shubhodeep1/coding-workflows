@@ -18366,6 +18366,10 @@ _plan_auto_approval_gate()
   local gate_replan_marker=""
   local gate_replan_seen="true"
   local gate_replan_body=""
+  local gate_replan_jq=""
+  local gate_replan_since=""
+  local gate_replan_recent=""
+  local gate_replan_landed="false"
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -18490,7 +18494,7 @@ _plan_auto_approval_gate()
     # a trusted comment (same filter as _plan_auto_approval_hold_notify); a
     # jq failure counts as "seen", so the hold notice below runs as before.
     gate_replan_marker="<!-- ai:automation-path-replan:v1 issue=${issue_num} -->"
-    gate_replan_seen="$(printf '%s' "${comments_json:-[]}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" '
+    gate_replan_jq='
       [ .[]?
         | select(type == "object")
         | select(((.user.login // "") == $login and $login != "")
@@ -18498,7 +18502,8 @@ _plan_auto_approval_gate()
             or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
         | (.body // "")
         | select(contains($marker))
-      ] | length > 0' 2>/dev/null)" || gate_replan_seen="true"
+      ] | length > 0'
+    gate_replan_seen="$(printf '%s' "${comments_json:-[]}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" || gate_replan_seen="true"
     [ "${gate_replan_seen}" = "false" ] || gate_replan_seen="true"
     if [ "${gate_replan_seen}" = "false" ] \
       && ! phase_cap_can_dispatch "ai:planning" "automation_path_replan" "${issue_num}"; then
@@ -18523,8 +18528,23 @@ _plan_auto_approval_gate()
 _Orchestrator stall recovery: the plan's \"Files likely to change\" section listed a directory or glob token (for example from placeholder text), and such a token can never be granted exactly. Re-planning once. The earlier clarification answers still apply. List only exact file paths in that section, with no placeholder text. If the new plan is held again, it goes to a maintainer._
 
 ${gate_replan_marker}"
+        gate_replan_since="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
         if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
           -f body="${gate_replan_body}" >/dev/null 2>&1; then
+          gate_replan_landed="true"
+        else
+          # gh_retry makes one attempt for this POST, so a failure can be a
+          # lost response for a comment GitHub accepted. §14 audit:
+          # comments_json predates the POST, so one read of the recent
+          # comments runs here, only on this failure branch. A failed read
+          # keeps the rollback below.
+          if gate_replan_recent="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100${gate_replan_since:+&since=${gate_replan_since}}" 2>/dev/null)" \
+            && [ "$(printf '%s' "${gate_replan_recent}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" = "true" ]; then
+            gate_replan_landed="true"
+            echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_confirmed issue=${issue_num}"
+          fi
+        fi
+        if [ "${gate_replan_landed}" = "true" ]; then
           phase_cap_note_dispatch "ai:planning"
           echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan issue=${issue_num}"
           tg_notify_issue "${issue_num}" "Stall recovery: plan held only by directory or glob tokens; re-planning once." "DEBUG" || true
@@ -18536,7 +18556,7 @@ ${gate_replan_marker}"
           echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_failed issue=${issue_num}"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
             --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 \
-            || echo "::warning::Could not restore ai:awaiting-approval on issue #${issue_num} after a failed re-plan comment."
+            || echo "::warning::Could not restore ai:awaiting-approval on issue #${issue_num} after a failed re-plan comment; it is left in ai:planning with no re-plan marker."
         fi
         return 1
       fi
