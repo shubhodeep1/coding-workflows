@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for the e2e smoke canary (`canary-a`)\n\nThe planning ref is `a8f495672f6f4e3bfbe0a8b5672fd8e6e9148eb1` on branch `orchestrator/project-8681`. That matches the integration branch named in the issue metadata, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for an exact two-line content change to a single file it names, and it explicitly forbids editing any other file. The file has two lines now. Line 1 is already `status: ok`. Line 2 is `decompose-run: 40427433026`, a run ID from an earlier smoke run. So the change is one line, and widening or narrowing the scope is not justified.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data-file edit:\n- Keep line 1 as exactly `status: ok`.\n- Replace line 2 with exactly `decompose-run: 41445772297`.\n- End the file with a single trailing newline.\n\n## Data structures affected\nOnly the plain-text canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Do not touch the advisory \"Expected files\" test modules\n- Chosen: edit only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: also update the listed `tests/test_*.py` files.\n- Why: the issue's scope and acceptance criteria require the PR diff to touch only the canary file. The \"Expected files\" list is marked advisory, and its test modules do not need to change when one line of plain text changes.\n\n### D2 \u2014 Overwrite the file with exactly two lines\n- Chosen: write exactly the two required lines and a trailing newline.\n- Alternatives considered: keep the old `decompose-run` line and add a new one.\n- Why: the acceptance criteria require line 2 to be exactly `decompose-run: 41445772297`, so the old value must be replaced, not kept.\n\n## Security considerations\n- No trust boundary, endpoint, secret or money-handling surface is touched.\n- The issue's content is fixed literal text, so there is no input to inject.\n\n## Risks and edge cases\n- **Conflict with the issue text:** the \"Expected files\" list names 11 test modules, but the Scope section forbids editing any file except the canary. The Scope section wins (see D1).\n- **Trailing newline:** the file currently ends without a newline after line 2 (`cat -A` shows no final `$`). The implementer must add one.\n- **Sibling files:** `tests/e2e_smoke_canary_b.txt` and `tests/e2e_smoke_canary_spec.txt` must not be modified.\n\n## Testing considerations\n- `head -n 1 tests/e2e_smoke_canary.txt` must print exactly `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` must print exactly `decompose-run: 41445772297`.\n- `tail -c1 tests/e2e_smoke_canary.txt | xxd` must show `0a` (the trailing newline).\n- `git diff --stat` must list only `tests/e2e_smoke_canary.txt`.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "06e9b0a748751c1709b0ce035b74683275a28e9e3d9c46390798a6a22219b58d",
+  "lineage": {
+    "issue_number": 8682,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41450996947",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41450996947",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8682"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261102131850_c2d65d28c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8682,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41450996947"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8682",
+  "timestamps": {
+    "created_at": "2026-11-02T13:18:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
