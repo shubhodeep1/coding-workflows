@@ -12,7 +12,9 @@ name: AI Orchestrate Clarify Respond (Reusable)
 #          owner/member/collaborator). The "Check orchestrator metadata" step
 #          then picks the mode:
 #          - orchestrator: the issue body contains the "Managed by: AI
-#            Orchestrator" metadata marker;
+#            Orchestrator" metadata marker and the comment is clarify.yml's
+#            questions comment (first line <!-- ai:clarification-questions -->);
+#            any other comment is skipped (gate=orchestrator_questions);
 #          - standalone: the comment is clarify.yml's questions comment
 #            (first line <!-- ai:clarification-questions -->), the issue is
 #            open and not ai:orchestrator-managed, no human asked to answer
@@ -161,8 +163,23 @@ jobs:
           ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
             echo "is_orchestrator=true" >> "$GITHUB_OUTPUT"
-            echo "mode=orchestrator" >> "$GITHUB_OUTPUT"
-            echo "respond=true" >> "$GITHUB_OUTPUT"
+            # Answer only clarify.yml's questions comment (first line
+            # <!-- ai:clarification-questions -->; capacity replays keep it).
+            # The job filter is a case-insensitive substring match, so a plan
+            # or an earlier auto-answer that merely quotes "clarification
+            # required" (e.g. the ai:clarification label description) would
+            # otherwise be answered again and loop until the loop breaker
+            # escalates (issue #8650).
+            ORCHESTRATOR_FIRST_LINE="$(printf '%s\n' "${CLARIFY_RESPOND_COMMENT_BODY}" | head -n1 | tr -d '\r' | sed -e 's/[[:space:]]*$//')"
+            if [ "${ORCHESTRATOR_FIRST_LINE}" != "<!-- ai:clarification-questions -->" ]; then
+              echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_questions reason=not_clarify_questions outcome=skip issue=${ISSUE_NUMBER}"
+              echo "mode=skip" >> "$GITHUB_OUTPUT"
+              echo "respond=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_questions reason=clarify_questions outcome=run issue=${ISSUE_NUMBER}"
+              echo "mode=orchestrator" >> "$GITHUB_OUTPUT"
+              echo "respond=true" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "Issue #${ISSUE_NUMBER} is not orchestrator-managed."
             echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_metadata reason=not_orchestrator_managed outcome=skip issue=${ISSUE_NUMBER}"
