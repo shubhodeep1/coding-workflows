@@ -163,6 +163,7 @@ PROSE_MARKER_FIXTURES = {
 	"prose_marker_skip_flag_false_refuses": (3, "label_missing"),
 	"prose_marker_skip_flag_unrecognised_refuses": (3, "label_missing"),
 	"prose_marker_body_with_label_refuses_marker_invalid": (3, "marker_invalid"),
+	"prose_marker_managed_child_without_tracking_line_refuses": (3, "label_missing"),
 }
 
 
@@ -198,6 +199,12 @@ def test_prose_marker_skip_fixtures_shape_and_run(stem: str) -> None:
 		else:
 			assert "ai:check-triage" not in labels
 	if stem == "prose_marker_mid_body_without_label_skips":
+		assert "CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED" not in env
+	if stem == "prose_marker_managed_child_without_tracking_line_refuses":
+		# A managed child with no tracking line stays fail closed even when its
+		# markers sit only in prose.
+		assert "ai:orchestrator-managed" in labels
+		assert "Tracking issue" not in body
 		assert "CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED" not in env
 	if stem == "prose_marker_skip_flag_false_refuses":
 		assert env["CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED"] == "false"
