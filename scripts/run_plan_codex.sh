@@ -299,6 +299,20 @@ EOF
   cat "${PLANNING_CONTEXT_FILE}"
 } > "${CODEX_PROMPT_FILE}"
 
+# Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true
+# (default false), append the issue's fenced journal after the dynamic
+# planning context. Off, or no journal yet: the prompt is unchanged.
+if [ "${PERSIST_JOURNAL_ENABLED:-false}" = "true" ] && [ -f scripts/attempt_journal.py ] && [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+  PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/attempt_journal.py render --repo "${GITHUB_REPOSITORY:-}" \
+    --issue "${ISSUE_NUMBER}" --out "${RUNTIME_DIR}/attempt_journal.txt" || true
+  if [ -s "${RUNTIME_DIR}/attempt_journal.txt" ]; then
+    {
+      echo
+      cat "${RUNTIME_DIR}/attempt_journal.txt"
+    } >> "${CODEX_PROMPT_FILE}"
+  fi
+fi
+
 if [ "${HEAL_ROUTE:-false}" = true ]; then
 	[ -s "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" ] || { echo '::error::Heal evidence bundle missing' >&2; exit 1; }
 	cat "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" >> "${CODEX_PROMPT_FILE}"
@@ -316,6 +330,81 @@ if [ "${HEAL_ROUTE:-false}" = true ]; then
 		} >> "${CODEX_PROMPT_FILE}"
 	else
 		echo "::warning::HEAL_COUNTERFACTUAL prompt unavailable; the plan auto-approval gate will hold this heal plan"
+	fi
+fi
+
+# Done-check (issue #8427, P2): only with PERSIST_ACCEPTANCE_ENABLED=true
+# (default false, defaulted here per section 8), ask the planner for
+# `ACCEPTANCE:` lines. Off, or no fragment: the prompt is unchanged.
+if [ "${PERSIST_ACCEPTANCE_ENABLED:-false}" = "true" ]; then
+	acceptance_prompt="prompts/mode-plan-acceptance.txt"
+	acceptance_rendered=""
+	if [ -f "${acceptance_prompt}" ] && [ ! -L "${acceptance_prompt}" ] \
+		&& acceptance_rendered="$(bash scripts/render_prompt.sh "${acceptance_prompt}")" && [ -n "${acceptance_rendered}" ]; then
+		{
+			echo
+			printf '%s\n' "${acceptance_rendered}"
+		} >> "${CODEX_PROMPT_FILE}"
+	else
+		echo "PERSIST acceptance outcome=skipped reason=prompt_absent"
+	fi
+fi
+
+# Evidence pack (issue #8427, P4): only with PERSIST_EVIDENCE_PACK_ENABLED=true
+# (default false, defaulted here per section 8), build the fenced pack on the
+# host (GH_TOKEN never reaches the model) and append it after the dynamic
+# context. Off, missing helper or empty pack: the prompt is unchanged.
+if [ "${PERSIST_EVIDENCE_PACK_ENABLED:-false}" = "true" ]; then
+	if [ -f scripts/evidence_pack.py ] && [ ! -L scripts/evidence_pack.py ]; then
+		# Re-planning: the newest earlier plan comment (last line
+		# <!-- ai:plan-proposal:v1 -->) by github-actions[bot] or an
+		# OWNER/MEMBER/COLLABORATOR, read from the comments plan.yml already
+		# fetched (no API call), goes in as the trusted --plan-file so files it
+		# plans to create reach the open-PR overlap check. None found: no flag.
+		evidence_plan_args=()
+		evidence_prev_plan="${RUNTIME_DIR}/evidence_previous_plan.md"
+		rm -f -- "${evidence_prev_plan}"
+		if [ -f "${ISSUE_COMMENTS_FILE:-}" ] && [ ! -L "${ISSUE_COMMENTS_FILE:-}" ] \
+			&& python3 -I -B -c '
+import json, sys
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+decoder, pos, comments = json.JSONDecoder(), 0, []
+while True:
+	while pos < len(text) and text[pos].isspace():
+		pos += 1
+	if pos >= len(text):
+		break
+	page, pos = decoder.raw_decode(text, pos)
+	comments.extend(page if isinstance(page, list) else [])
+marker = "<!-- ai:plan-proposal:v1 -->"
+best = None
+for c in comments:
+	if not isinstance(c, dict):
+		continue
+	user = c.get("user") if isinstance(c.get("user"), dict) else {}
+	if user.get("login") != "github-actions[bot]" and c.get("author_association") not in ("OWNER", "MEMBER", "COLLABORATOR"):
+		continue
+	body = c.get("body") if isinstance(c.get("body"), str) else ""
+	lines = [line.strip() for line in body.splitlines() if line.strip()]
+	if not lines or lines[-1] != marker:
+		continue
+	key = str(c.get("created_at") or "")
+	if best is None or key >= best[0]:
+		best = (key, body)
+if best is None:
+	sys.exit(1)
+open(sys.argv[2], "w", encoding="utf-8").write(best[1])
+' "${ISSUE_COMMENTS_FILE}" "${evidence_prev_plan}" 2>/dev/null && [ -s "${evidence_prev_plan}" ]; then
+			evidence_plan_args=(--plan-file "${evidence_prev_plan}")
+		fi
+		PYTHONDONTWRITEBYTECODE=1 timeout 300 python3 -B scripts/evidence_pack.py build --repo "${GITHUB_REPOSITORY:-}" \
+			${evidence_plan_args[@]+"${evidence_plan_args[@]}"} \
+			--text-file "${PLANNING_CONTEXT_FILE}" --repo-root . --out "${RUNTIME_DIR}/evidence_pack.txt" || true
+		if [ -s "${RUNTIME_DIR}/evidence_pack.txt" ]; then
+			{ echo; cat "${RUNTIME_DIR}/evidence_pack.txt"; } >> "${CODEX_PROMPT_FILE}"
+		fi
+	else
+		echo "PERSIST evidence_pack outcome=skipped reason=helper_absent"
 	fi
 fi
 
