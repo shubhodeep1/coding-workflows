@@ -397,9 +397,13 @@ def _decode_pages(raw: bytes) -> list | None:
 	return out
 
 
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$")
+
+
 def resolve_login(explicit: str | None) -> str:
-	if explicit:
+	if explicit and _LOGIN_RE.match(explicit.strip()):
 		return explicit.strip()
+	# An explicit value that is not a GitHub login falls back to the lookup.
 	cache = None
 	runtime = os.environ.get("RUNTIME_DIR", "")
 	if runtime and os.path.isdir(runtime):

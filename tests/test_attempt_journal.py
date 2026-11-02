@@ -473,3 +473,12 @@ def test_evidence_hash_file_fills_the_evidence_hash_field(fake_gh, tmp_path):
 	_, entries = aj.parse(json.loads((state / "comments.json").read_text(encoding="utf-8")), LOGIN)
 	by_run = {e["run_id"]: e["evidence_hash"] for e in entries}
 	assert by_run == {"401": "ab" * 32, "402": "", "403": ""}
+
+
+def test_resolve_login_accepts_only_github_logins_as_explicit(monkeypatch):
+	monkeypatch.setattr(aj, "_gh", lambda args: b'{"login": "looked-up"}')
+	monkeypatch.delenv("RUNTIME_DIR", raising=False)
+	assert aj.resolve_login("pipeline-bot") == "pipeline-bot"
+	assert aj.resolve_login(" github-actions[bot] ") == "github-actions[bot]"
+	for bad in ("bad login", "-x", "a/b", "x" * 60):
+		assert aj.resolve_login(bad) == "looked-up"
