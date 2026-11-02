@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Many implementation PRs pair changes to scripts or workflows with documentation under agents.d and a release note under changelog.d. Check these locations when planning a user-visible or operational behavior change; analysis-only PRs may not follow this pattern.",
+  "fingerprint": "26f65180f6cb229660057210f03bf5fe64e0476082448b826d0a782ce9793b79",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41508860670",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41508860670",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8660",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8662",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8664",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8669",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8674",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8665",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8666",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8667",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8672",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8675"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261102192634_6b803f30b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Operational changes commonly include both an agents.d note and a changelog.d entry.",
+  "timestamps": {
+    "created_at": "2026-11-02T19:26:34Z",
+    "promoted_at": "2026-11-02T19:27:07Z",
+    "superseded_at": null
+  }
+}
