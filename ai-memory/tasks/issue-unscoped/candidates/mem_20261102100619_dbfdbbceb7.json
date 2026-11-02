@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:96-100, 203-208 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash, minimax_minimax-m3, anthropic_claude-sonnet-5_5]\n  PROBLEM: The documented off switch CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED is not forwarded by clarify.yml (or the plan, implement, validate and clarify-respond workflows), so setting it to false in Actions never reaches the resolver.\n  WHY: The resolver always sees the default true, so the previous refusal cannot be restored through Actions. Severity disagreement: gemini and luna said MAJOR; glm, minimax and sonnet said NIT, because the README and changelog disclose the limitation and no workflow files are in the plan scope. Highest is used (MAJOR mapped to high).\n- scripts/resolve_integration_ref.sh:154-164 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: ci_triage_prose_marker_skip_enabled() accepts only true/false, while ci_triage_routing_enabled() at scripts/resolve_integration_ref.sh:133-143 accepts true|1|yes|on and false|0|no|off.\n  WHY: A value such as 1, yes or on hits the unrecognised branch, emits a warning and turns the skip off, which is inconsistent with the sibling flag.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Gate the new skip on CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED ... `false` turns it off (an off switch usable to restore the old refusal)\n  expected_change_site: env: blocks of the resolver-calling workflows, e.g. .github/workflows/clarify.yml\n  confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: no workflow file is in the diff, so in Actions the flag stays at its default of on. Sonnet rated it NIT because the issue does not ask for forwarding and the plan scope has no workflow files.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- (task gap, NIT) Requirement: Gate the new skip on CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED ... `false` turns it off\n  Expected change site: env: blocks of the resolver-calling workflows, e.g. .github/workflows/clarify.yml (follow-up PR with workflow scope)\n  Evidence of absence: no workflow file is in the diff; in Actions the flag stays at default on; the PR text states this limitation\n  ISSUE_CONFIDENCE: 2\n- All other categories: NONE. The resolver logic, flag handling, tests, changelog fragment and README were checked and found correct.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/clarify.yml:96-100, 203-208 | severity=MAJOR | confidence=5\n  PROBLEM: The documented off-switch CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED is unreachable in workflow executions.\n  WHY: The variable is not passed to the resolve_integration_ref.sh environment in the workflow step, so the resolver always defaults to true. This affects all workflows calling the resolver.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/resolve_integration_ref.sh:154-164 | severity=NIT | confidence=3\n  PROBLEM: The new ci_triage_prose_marker_skip_enabled() accepts only true/false, while ci_triage_routing_enabled() at scripts/resolve_integration_ref.sh:133-143 accepts true|1|yes|on and false|0|no|off.\n  WHY: A consumer setting 1, yes or on gets the unrecognised-value branch with a warning and the skip is off, which is inconsistent with the sibling flag. The README at line 2714 also documents only true/false.\n- README.md:2714 | severity=NIT | confidence=4\n  PROBLEM: The README documents the new env var, but the consumer workflows (clarify.yml:96-100, etc.) never forward CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED, so the documented false off switch is unreachable in Actions.\n  WHY: The resolver always sees the default true. This matches the issue text, but a future operator following the README will find the off switch non-functional.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/clarify.yml:99, 207-208; scripts/resolve_integration_ref.sh:155-156; README.md:2714 | severity=MAJOR | confidence=5\n  PROBLEM: The documented off switch is not exposed through the resolver workflows. The routing variable is forwarded, but CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED is not, in clarify, plan, implement, validate or clarify-respond.\n  WHY: Setting the repository variable to false does not reach the resolver, which defaults to true, so operators cannot restore the previous refusal through Actions.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/clarify.yml:99, 207 (same pattern in plan.yml:169/287, implement.yml:589/700, validate.yml:198/326, orchestrate_clarify_respond.yml:245/349) | severity=NIT | confidence=4\n  PROBLEM: The new off switch is inert in Actions, because CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED is not forwarded at the three sites where the sibling flag is.\n  WHY: Setting the repo variable to false never reaches ci_triage_prose_marker_skip_enabled() (scripts/resolve_integration_ref.sh:155-163), so rollback in Actions requires editing workflow YAML. It is disclosed in README.md:2714 and the changelog fragment, so it is a documented limitation (NIT, not MAJOR as flagged in pass 1).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ab7b199ea824d37194159b281587bcd2bb7a97b75961beb9bcf835b190c3f05a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8676,
+    "run_id": "41423444523",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41423444523",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102100619_dbfdbbceb7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8676,
+    "run_id": "41423444523"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T10:06:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
