@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-01T20:02:05Z",
+  "tick_at": "2026-11-02T17:24:00Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,72 +11,12 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 10
+    "tracking_issues": 6
   },
   "tracking_issues": [
     {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8188,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Pre-push affected-test gate: orchestrator scoping, implement / review / resolver / heal gates, integration post-sync test repair (plan P2-P5)",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8218,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] [E2E Orchestrate Smoke 40427433026] Update two smoke canary files in parallel",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8253,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Cut the unattended pipelines' static prompt prefix: agents.md index instead of inline",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
       "current_wave": 2,
-      "integration_ahead_by": "66",
+      "integration_ahead_by": "73",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -96,11 +36,10 @@
       "wave_complete": false
     },
     {
-      "current_wave": 9,
-      "integration_ahead_by": "44",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -113,7 +52,7 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Keep unattended work going until the change is delivered and verified (persistent-unattended-workflows plan P1-P11)",
-      "total_waves": 11,
+      "total_waves": 0,
       "wave_complete": false
     },
     {
@@ -149,10 +88,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 8504,
+      "number": 8649,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Apply validated recommendations from analysis/workflow-optimization-2026-09-26-2.md",
+      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-28-3.md",
       "total_waves": 0,
       "wave_complete": false
     },
@@ -169,15 +108,16 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 8531,
+      "number": 8663,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Apply recommendations from analysis/workflow-optimization-2026-09-26-3.md",
+      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-29.md",
       "total_waves": 0,
       "wave_complete": false
     },
     {
-      "current_wave": 0,
+      "current_wave": 1,
+      "integration_ahead_by": "2",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -185,35 +125,15 @@
         "in_progress": 0,
         "merged": 0,
         "not_created": 0,
-        "ready_to_merge": 0,
+        "ready_to_merge": 2,
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 8585,
+      "number": 8681,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Apply workflow-optimization-2026-09-28 recommendations (CI single-file ledger overlap + report)",
-      "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 0,
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 8598,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-28-2.md",
-      "total_waves": 0,
+      "title": "[Orchestrator] [E2E Orchestrate Smoke 41445772297] Parallel canary file updates",
+      "total_waves": 1,
       "wave_complete": false
     }
   ]
