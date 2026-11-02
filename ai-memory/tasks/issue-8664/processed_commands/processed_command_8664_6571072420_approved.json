@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8664_6571072420_approved",
   "issue_number": 8664,
   "metadata": {
+    "branch": "ai/issue-8664",
+    "changed_files": [
+      "changelog.d/wfopt-2026-09-29-collector-run-row-dedup.md",
+      "scripts/collect_workflow_logs.py",
+      "tests/test_collect_workflow_logs.py"
+    ],
+    "issue_number": 8664,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8664",
+    "pr_number": 8665,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8665",
+    "run_attempt": "1",
+    "run_id": "41403023164",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41403023164"
   },
   "run_attempt": 1,
   "run_id": "41403023164",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-02T06:57:45Z",
+  "status": "completed",
+  "timestamp": "2026-11-02T07:06:12Z",
   "workflow": "implement"
 }
