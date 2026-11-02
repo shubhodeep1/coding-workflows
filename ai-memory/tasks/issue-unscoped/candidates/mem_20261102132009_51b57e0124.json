@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "When planning changes to scripts or GitHub Actions workflows, look for the corresponding focused test module and add a changelog.d entry as part of the change. Multiple merged runs show this pattern across polling, log collection, healing, and review workflows.",
+  "fingerprint": "57a4b2c838c8d18bc5606700a77a4bb001a9fc356234997f00bf315d0c9c5e08",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41451567424",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41451567424",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8644",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8662",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8664",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8669",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8674",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8653",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8665",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8667",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8672",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8675"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261102132009_51b57e0124",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow and script changes in this repository are commonly paired with focused tests and a changelog.d entry.",
+  "timestamps": {
+    "created_at": "2026-11-02T13:20:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
