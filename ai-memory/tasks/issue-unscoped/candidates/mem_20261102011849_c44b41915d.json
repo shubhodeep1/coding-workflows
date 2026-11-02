@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Several changes to healing behavior modify this shared module, with intake behavior handled in workflow_failure_heal_intake.sh and its workflow definition when needed. For healing-related work, inspect the shared module and its focused tests before introducing parallel logic.",
+  "fingerprint": "07a97207eb2c34cb19c44886bb42fb33c879368b813d413c6ce44abb6bae407f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41371238583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41371238583",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8611",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8630",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8631",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8633",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8635",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8616",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8632",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8634",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8636",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8637"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261102011849_c44b41915d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow-failure healing behavior is centralized in scripts/workflow_failure_heal.py.",
+  "timestamps": {
+    "created_at": "2026-11-02T01:18:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
