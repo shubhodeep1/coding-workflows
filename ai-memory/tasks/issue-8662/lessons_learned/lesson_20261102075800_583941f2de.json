@@ -1,0 +1,27 @@
+{
+  "discovered_at": "2026-11-02T07:58:00Z",
+  "issue_number": 8662,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 014 as out-of-scope; anchor=tests/test_persist_orchestrator.py:1-1; cited_path=tests/test_gh_api_write_guard.py, tests/test_operator_step_issue.py, tests/test_persist_orchestrator.py (pre-push gate suites); copilot-pull-request-reviewer check; files_touched=.github/workflows/ci.yml, .github/workflows/plan.yml, agents.d/8427-p11-persist-evidence-broker.md, changelog.d/8427-p11-persist-evidence-broker.md, prompts/_templates/mode-plan-evidence-request.txt, prompts/mode-plan-evidence-request.txt, scripts/attempt_journal.py, scripts/evidence_broker.py, scripts/run_plan_codex.sh, tests/inventory_exemptions.txt, tests/test_attempt_journal.py, tests/test_evidence_broker.py, tests/test_workflow_untrusted_input_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8667,
+  "record_id": "lesson_20261102075800_583941f2de",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_gh_api_write_guard.py, tests/test_operator_step_issue.py, tests/test_persist_orchestrator.py (pre-push gate suites); copilot-pull-request-reviewer check",
+    "tests/test_persist_orchestrator.py",
+    ".github/workflows/ci.yml",
+    ".github/workflows/plan.yml",
+    "agents.d/8427-p11-persist-evidence-broker.md",
+    "changelog.d/8427-p11-persist-evidence-broker.md",
+    "prompts/_templates/mode-plan-evidence-request.txt",
+    "prompts/mode-plan-evidence-request.txt",
+    "scripts/attempt_journal.py",
+    "scripts/evidence_broker.py",
+    "scripts/run_plan_codex.sh",
+    "tests/inventory_exemptions.txt",
+    "tests/test_attempt_journal.py",
+    "tests/test_evidence_broker.py",
+    "tests/test_workflow_untrusted_input_contract.py"
+  ]
+}
