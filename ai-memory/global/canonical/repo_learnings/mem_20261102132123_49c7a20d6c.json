@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Some prompt-related changes update both prompts/<name>.txt and prompts/_templates/<name>.txt. When changing a prompt, check whether a template counterpart exists and keep them consistent.",
+  "fingerprint": "f206f0260f27b8ddbccc089ff5e0e2f39a2942b6acc71fa12a1005fa18f1f458",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41451567424",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41451567424",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8644",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8662",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8664",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8669",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8674",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8653",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8665",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8667",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8672",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8675"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261102132123_49c7a20d6c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Changes to prompt content may need coordinated edits to both the prompt and its template.",
+  "timestamps": {
+    "created_at": "2026-11-02T13:21:23Z",
+    "promoted_at": "2026-11-02T13:22:00Z",
+    "superseded_at": null
+  }
+}
