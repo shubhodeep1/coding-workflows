@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-02T13:43:49Z",
+  "issue_number": 8683,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=tests/test_review_conflict_resolve_smoke_deterministic.py:1-1; cited_path=tests/test_review_conflict_resolve_smoke_deterministic.py; files_touched=tests/e2e_smoke_canary_b.txt.",
+  "phase": "review_autofix",
+  "pr_number": 8684,
+  "record_id": "lesson_20261102134349_b1833e40b5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_review_conflict_resolve_smoke_deterministic.py",
+    "tests/e2e_smoke_canary_b.txt"
+  ]
+}
