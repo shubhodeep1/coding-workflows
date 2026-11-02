@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"\u00a715: no new gh API call. The marker check reads the comments_json the gate already has; the re-plan reuses the single comment POST of the existing retrigger_plan arm.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh::_plan_auto_approval_gate, the POST-failure confirmation branch (around line 18541 in the diff)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The failure-confirmation branch adds a new REST read at line 18541 (gh api .../issues/${issue_num}/comments?...), beyond the existing comments_json snapshot (gemini), the new REST GET `gh api \"repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100${gate_replan_since:+&since=${gate_replan_since}}\"` runs on the POST-failure branch, the \u00a714 audit comment acknowledges it is a new call, and the last run only capped it at one attempt (`GH_RETRY_MAX_ATTEMPTS=1 gh_retry`) without removing it (minimax), the marker check uses `comments_json` but the failed-POST branch adds a separate comments GET at `scripts/orchestrate_poll_process.sh:18541`, and setting `GH_RETRY_MAX_ATTEMPTS=1` limits retries but does not remove the call (luna). Severity disagreement: NIT (gemini, luna) vs MAJOR (minimax). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash chose not to re-report it: they treat it as an accepted prior-round item (a deliberate fix for the lost-response defect, with a \u00a714 audit comment, documented in the changelog and agents fragment, and made cheaper by the last run).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"\u00a715: no new gh API call. The marker check reads the comments_json the gate already has.\"\n  Expected change site: scripts/orchestrate_poll_process.sh::_plan_auto_approval_gate\n  Evidence of absence: The failure-confirmation branch adds a new REST read at line 18541 (gh api .../issues/${issue_num}/comments?...). This adds an API call beyond the existing comments_json snapshot, violating the explicit constraint in the linked issue.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"\u00a715: no new gh API call. The marker check reads the comments_json the gate already has; the re-plan reuses the single comment POST of the existing retrigger_plan arm.\"\n  Expected change site: scripts/orchestrate_poll_process.sh::_plan_auto_approval_gate, the POST-failure confirmation branch (around line 18541 in the diff)\n  Evidence of absence: The implementation contains a new REST GET `gh api \"repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100${gate_replan_since:+&since=${gate_replan_since}}\"` that runs on the POST-failure branch of the re-plan comment. The \u00a714 audit comment in the code acknowledges this is a new call; the last run only capped it at one attempt (`GH_RETRY_MAX_ATTEMPTS=1 gh_retry`) but did not remove it. The marker check itself does correctly read `comments_json`, but the confirmation read is an extra API call beyond what \u00a715 permits. The constraint is a hard requirement of the linked issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"\u00a715: no new gh API call. The marker check reads the comments_json the gate already has.\"\n  Expected change site: `scripts/orchestrate_poll_process.sh::_plan_auto_approval_gate`\n  Evidence of absence: The marker check uses `comments_json`, but the failed-POST branch adds a separate comments GET at `scripts/orchestrate_poll_process.sh:18541`. Setting `GH_RETRY_MAX_ATTEMPTS=1` limits retries; it does not remove this additional API call.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6f35bb3d5d3d729400b00bd348bec12b215cca76ce7b7066dc307aa8f191d965",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8666,
+    "run_id": "41429690382",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41429690382",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102105112_b40f9b1131",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8666,
+    "run_id": "41429690382"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T10:51:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
