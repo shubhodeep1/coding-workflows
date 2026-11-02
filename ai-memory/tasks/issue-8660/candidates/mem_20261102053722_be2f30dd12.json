@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. The re-plan cannot start unless the issue's label changes first. How should that happen, given the \"no new gh API call\" constraint?\nChoices:\nA. Allow exactly one extra call, only on the eligible re-plan path: one `gh issue edit` that adds `ai:planning` and removes `ai:awaiting-approval`, made before the `/answer` comment. If that edit fails, skip the re-plan and post today's hold notice instead. If the comment fails after the edit, the issue sits in `ai:planning`, where the existing `retrigger_plan` stall arm picks it up. (RECOMMENDED)\nB. Same single extra call, but only add `ai:planning` and leave `ai:awaiting-approval` in place (plan.yml checks `ai:planning` first). Downside: the issue briefly carries two phase labels until plan.yml moves it back to `ai:awaiting-approval`.\nC. Make no label call from the poller. Instead, change plan.yml's trigger check to also accept `ai:awaiting-approval` when the `/answer` comment carries the `ai:automation-path-replan:v1` marker. This moves part of the recovery into `plan.yml`, against the \"recovery happens in the poller only\" non-goal.\nD. Keep \"no new gh API call\" strict and drop the automatic re-plan. Only the `replannable` field and a log line ship; the hold notice still goes to a human. This does not meet the issue's main goal.",
+  "fingerprint": "2353900441300d190ceec0c5f6ef231fa5a489c54b8098e75b8a70cedba6487d",
+  "lineage": {
+    "issue_number": 8660,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41394121995",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41394121995",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261102053722_be2f30dd12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8660,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41394121995"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8660 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-02T05:37:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
