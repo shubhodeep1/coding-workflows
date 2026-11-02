@@ -5,13 +5,35 @@
   "entry_id": "processed_command_8644_6566386456_approved",
   "issue_number": 8644,
   "metadata": {
+    "branch": "ai/issue-8644",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      "agents.d/8427-p10-persist-redecompose.md",
+      "changelog.d/8427-p10-persist-redecompose.md",
+      "prompts/_templates/mode-judge-revise-option.txt",
+      "prompts/_templates/mode-orchestrate-revise.txt",
+      "prompts/mode-judge-revise-option.txt",
+      "prompts/mode-orchestrate-revise.txt",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/persist_orchestrator.py",
+      "tests/inventory_exemptions.txt",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_orchestrate_poll_workflow_contract.py",
+      "tests/test_persist_orchestrator.py",
+      "tests/test_workflow_untrusted_input_contract.py"
+    ],
+    "issue_number": 8644,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8644",
+    "pr_number": 8653,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8653",
+    "run_attempt": "1",
+    "run_id": "41368859525",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41368859525"
   },
   "run_attempt": 1,
   "run_id": "41368859525",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-02T00:47:01Z",
+  "status": "completed",
+  "timestamp": "2026-11-02T02:54:15Z",
   "workflow": "implement"
 }
