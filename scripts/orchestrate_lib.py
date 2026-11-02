@@ -4037,6 +4037,16 @@ _UNROUTED_PIPELINE_MARKER_RE = re.compile(
 	r"|[a-z][a-z0-9_]*_v[0-9]+\b)",
 	re.IGNORECASE,
 )
+# The attribution footer every Claude Code session puts on its GitHub posts.
+# Those sessions post under the owner's account, so author and association
+# look human. A footer comment is a status note, not an answer (#8287: a
+# "fixed in #8309, close once it merges" note was flagged and told the
+# operator to /reclarify). One that opens with a slash command still counts,
+# so a session's own unrouted command stays visible.
+_UNROUTED_CLAUDE_CODE_FOOTER_RE = re.compile(
+	r"Generated (?:by|with) \[Claude Code\]\(https://claude\.(?:ai|com)/[^)\s]*\)",
+	re.IGNORECASE,
+)
 # A reply has visible text; a body that is only HTML comments is bookkeeping.
 _UNROUTED_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
 # Openings of automation comments that predate their markers (or never carry
@@ -4085,6 +4095,9 @@ def _is_unrouted_non_human_body(body: Any) -> bool:
 		return True
 	text = body if isinstance(body, str) else ""
 	if _UNROUTED_PIPELINE_MARKER_RE.search(text):
+		return True
+	if (_UNROUTED_CLAUDE_CODE_FOOTER_RE.search(text) and not text.lstrip().startswith("/")
+			and not is_reclarify_command_body(text)):
 		return True
 	return not _UNROUTED_HTML_COMMENT_RE.sub("", text).strip()
 

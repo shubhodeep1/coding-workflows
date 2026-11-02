@@ -383,6 +383,69 @@ printf 'RC=%s\n' "${rc}"
 		assert "workflow run" not in result.stdout
 
 
+def test_automation_path_replan_waits_for_planning_cap() -> None:
+	# Issue #8339: a replannable hold waits for the ai:planning cap. While
+	# capped it moves no label, posts no /answer, marker or hold notice, so a
+	# later tick still gets its one re-plan.
+	with tempfile.TemporaryDirectory(prefix="caps-replan-") as td:
+		repo_dir = Path(td)
+		extracted = repo_dir / "extracted"
+		extracted.mkdir()
+		(extracted / "files_touched_scope_guard.py").write_text(
+			(REPO_ROOT / "scripts" / "files_touched_scope_guard.py").read_text(encoding="utf-8"), encoding="utf-8")
+		poller = POLLER_SCRIPT.read_text(encoding="utf-8").splitlines()
+		chunks = []
+		for name in ("phase_cap_running_for_state", "phase_cap_can_dispatch", "phase_cap_note_dispatch",
+				"_plan_auto_approval_gate"):
+			start = next(i for i, line in enumerate(poller) if line.startswith(f"{name}()"))
+			end = next(i for i in range(start, len(poller)) if poller[i] == "}")
+			chunks.append("\n".join(poller[start:end + 1]))
+		(extracted / "gate.sh").write_text("\n\n".join(chunks) + "\n", encoding="utf-8")
+		plan = "<!-- ai:plan-proposal:v1 -->\n## Files likely to change\n- `scripts/a.sh`\n- `scripts/`\n"
+		comments = [{"body": plan, "user": {"login": "pipeline[bot]"}, "author_association": "NONE",
+			"created_at": "2026-01-01T00:00:01Z"}]
+		details = {"42": {"body": "Fix it.\n\nfiles_touched:\n  - scripts/a.sh\n", "author_login": "maintainer",
+			"author_association": "OWNER", "labels": []}}
+		(repo_dir / "comments.json").write_text(json.dumps(comments), encoding="utf-8")
+		(repo_dir / "details.json").write_text(json.dumps(details), encoding="utf-8")
+		script = r'''
+set -euo pipefail
+source extracted/gate.sh
+GITHUB_REPOSITORY='octo/example'
+RUNTIME_DIR="$PWD"
+ALLOW_WORKFLOW_EDITS='true'
+AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED='true'
+PHASE_CAPS_ENABLED='true'
+PHASE_CAPS_MAX_BY_STATE='{"ai:planning":0}'
+PHASE_CAPS_RUNNING_BY_STATE='{"ai:planning":0}'
+PHASE_CAPS_GLOBAL_MAX='-1'
+PHASE_CAPS_GLOBAL_RUNNING='0'
+unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN='pipeline[bot]'; }
+_plan_heal_counterfactual_check() { return 0; }
+gh_retry() { echo "GH $*" >> gh.log; return 1; }
+tg_notify_issue() { :; }
+_heal_counterfactual_hold_notify() { :; }
+_plan_auto_approval_hold_notify() { echo notify >> notify.log; }
+if _plan_auto_approval_gate 42 "$(cat details.json)" "$(cat comments.json)" 'ai:awaiting-approval'; then
+	rc=0
+else
+	rc=$?
+fi
+printf 'RC=%s\n' "${rc}"
+[ -f gh.log ] && cat gh.log || true
+[ -f notify.log ] && cat notify.log || true
+'''
+		result = _run_bash(script, cwd=repo_dir)
+		assert result.returncode == 0, result.stderr
+		assert "phase_capped state=ai:planning action=automation_path_replan issue=42 limit=0 running=0" in result.stdout
+		assert ("STALL_SKIP issue=42 reason=phase_capped phase=ai:awaiting-approval "
+			"action=automation_path_replan") in result.stdout, result.stdout
+		assert "RC=1" in result.stdout
+		assert "GH " not in result.stdout, result.stdout
+		assert "notify" not in result.stdout, result.stdout
+		assert "outcome=defer" not in result.stdout, result.stdout
+
+
 def main() -> int:
 	try:
 		sys.stdout.reconfigure(line_buffering=True)

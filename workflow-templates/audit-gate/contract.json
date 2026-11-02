@@ -10,7 +10,8 @@
     },
     {
       "source": "assets/security/dependency-audit-allowlist.json",
-      "target": "security/dependency-audit-allowlist.json"
+      "target": "security/dependency-audit-allowlist.json",
+      "seed_only": true
     }
   ]
 }

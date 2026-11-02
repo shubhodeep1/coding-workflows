@@ -59,6 +59,8 @@ def _load_contract(contract_root: Path) -> dict:
 			raise ValueError(f"managed_files[{idx}].source must be a non-empty string")
 		if not isinstance(item.get("target"), str) or not item["target"].strip():
 			raise ValueError(f"managed_files[{idx}].target must be a non-empty string")
+		if "seed_only" in item and not isinstance(item["seed_only"], bool):
+			raise ValueError(f"managed_files[{idx}].seed_only must be a boolean when present")
 
 	return contract
 
@@ -93,14 +95,17 @@ def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResu
 	package_script = contract["package_script"]
 	managed_items = contract["managed_files"]
 
-	resolved_assets: list[tuple[Path, Path]] = []
+	# seed_only entries hold consumer-owned data (the npm audit allowlist): the
+	# upstream copy is written only when the target is missing, never over an
+	# existing file. Overwriting it emptied consumer allowlists on every sync.
+	resolved_assets: list[tuple[Path, Path, bool]] = []
 	for item in managed_items:
 		source_rel = _safe_relative_path(item["source"], field_name="managed_files.source")
 		target_rel = _safe_relative_path(item["target"], field_name="managed_files.target")
 		source_path = contract_root / source_rel
 		if not source_path.is_file():
 			raise FileNotFoundError(f"Audit-gate asset missing: {source_path.as_posix()}")
-		resolved_assets.append((source_path, target_rel))
+		resolved_assets.append((source_path, target_rel, item.get("seed_only") is True))
 
 	package_json_path = repo_root / "package.json"
 	if not package_json_path.is_file():
@@ -142,8 +147,15 @@ def _apply_assets(*, contract_root: Path, repo_root: Path) -> ApplyAuditGateResu
 	package_script_action = "unchanged"
 
 	try:
-		for source_path, target_rel in resolved_assets:
+		for source_path, target_rel, seed_only in resolved_assets:
 			target_path = repo_root / target_rel
+			if seed_only and (target_path.exists() or target_path.is_symlink()):
+				if target_path.is_symlink() or not target_path.is_file():
+					print(
+						f"warning: seed_only target {target_rel.as_posix()} is not a regular file; left untouched",
+						file=sys.stderr,
+					)
+				continue
 			target_dir = target_path.parent
 			missing_dirs: list[Path] = []
 			probe_dir = target_dir
