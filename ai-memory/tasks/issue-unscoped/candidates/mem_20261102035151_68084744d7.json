@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_clarify_respond.yml:63-68,173-181 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: A trusted comment that contains \"Clarification required\" but lacks the questions marker can cancel an in-progress valid run through the per-issue `cancel-in-progress` concurrency group, and the replacement run then skips at the marker gate.\n  WHY: Reviewers rated it differently: MAJOR (gemini, luna), NIT (sonnet-5_5, confidence 2, pre-existing and not worsened by this PR), NIT (glm, confidence 3). The highest severity is used, mapping MAJOR to high.\n- .github/workflows/orchestrate_clarify_respond.yml:173 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `printf | head -n1` pipeline under `set -euo pipefail` can fail with SIGPIPE/EPIPE for very large comment bodies, which fails the gate step.\n  WHY: Reviewers rated it differently: MAJOR (gemini, confidence 4), NIT (sonnet-5_5 and glm, confidence 2). The same pattern already exists at line 190, and openai_gpt-6-luna raised it only as a hardening suggestion. The highest severity is used, mapping MAJOR to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/orchestrate_clarify_respond.yml:63, 66-68, 173-177 | severity=NIT | confidence=2\n  PROBLEM: The marker check runs inside the job, after the per-issue concurrency group has already cancelled an in-progress run. A trusted comment that contains \"Clarification required\" but is not the questions comment can therefore cancel a valid answer run, and the new gate then skips the replacement run.\n  WHY: The reviewer rated this a pre-existing residual that the PR does not make worse. Only a wrapper-level `if:` change could close it, and the PR deliberately leaves the wrapper alone.\n- .github/workflows/orchestrate_clarify_respond.yml:173 | severity=NIT | confidence=2\n  PROBLEM: `head -n1` can exit before `printf` finishes writing a very large body, so `printf` can get SIGPIPE, and under `pipefail` the step fails.\n  WHY: It needs a body near the 64 KiB pipe buffer, and GitHub caps comment bodies at 65,536 characters. The failure is fail-closed. Line 190 already uses the same pattern.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_clarify_respond.yml:173 | severity=MAJOR | confidence=4\n  PROBLEM: The `head -n1` pipeline can cause the step to fail with SIGPIPE under `pipefail` when the comment body is large enough to exceed the pipe buffer.\n  WHY: `head` closes the pipe after the first line, `printf` then gets SIGPIPE, and the shell aborts the step and marks the run failed.\n- .github/workflows/orchestrate_clarify_respond.yml:(concurrency group configuration; no line given) | severity=MAJOR | confidence=4\n  PROBLEM: The concurrency group combined with the loose `contains(github.event.comment.body, 'Clarification required')` trigger lets a non-questions trusted comment cancel an in-progress valid clarification-questions run.\n  WHY: The new run hits the metadata gate and skips, so neither run completes the clarification.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/orchestrate_clarify_respond.yml:63, 66-68, 173-181 | severity=MAJOR | confidence=4\n  PROBLEM: A matching comment that lacks the questions marker can cancel an in-progress valid questions run for the same issue.\n  WHY: `cancel-in-progress: true` cancels the first run before the second reaches its marker check and skips, which leaves the valid questions comment unanswered.\n- (hardening suggestion, no severity or confidence given) .github/workflows/orchestrate_clarify_respond.yml:173\n  PROBLEM: The `head -n1` pipeline over the full comment body can make `printf` receive SIGPIPE under `pipefail` and fail the gate step.\n  WHY: The suggested fix is Bash parameter expansion to extract the first line.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/orchestrate_clarify_respond.yml:63-68, 173-177 | severity=NIT | confidence=3\n  PROBLEM: A trusted comment containing the phrase \"Clarification required\" but lacking the marker enters the per-issue concurrency group and cancels an in-progress run, and the replacement run now skips at the marker check, so nothing answers the questions for that cycle.\n  WHY: `cancel-in-progress` kills the answering run, and the cancelling run exits at the gate without answering. The questions stay unanswered until a re-clarify or capacity resume.\n- .github/workflows/orchestrate_clarify_respond.yml:173 | severity=NIT | confidence=2\n  PROBLEM: For a body near GitHub's 65536-character limit, `printf` can hit EPIPE/SIGPIPE after `head -n1` closes the pipe, and under `pipefail` the gate step fails.\n  WHY: An oversized trusted comment turns an intended silent skip into a red failed run. The same pattern already exists at line 190.\n- .github/workflows/orchestrate_clarify_respond.yml:16-17 | severity=NIT | confidence=5\n  PROBLEM: Reported as a positive verification, not a defect: no problem found in naming and backward compatibility. The new `gate=orchestrator_questions` key is additive, and the outputs keep their old values on the questions path.\n  WHY: N/A. Every downstream step gates on `respond == 'true'`.\n- (non-diff note) failed check-run `copilot-pull-request-reviewer` (run 41382495817)\n  PROBLEM: The check failed with `Error: Prompt too big after adding system message` (`custom_instructions_too_large`, HTTP 422) before analysing any file.\n  WHY: This is an infrastructure or tooling failure of that check, not a diff defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "614f2dd0892faff3195d7d582a966f2c9bde696e4924256a700fe91e4084a2b1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8656,
+    "run_id": "41382482234",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41382482234",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102035151_68084744d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8656,
+    "run_id": "41382482234"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T03:51:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
