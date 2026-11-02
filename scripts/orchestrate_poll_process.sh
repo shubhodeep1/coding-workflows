@@ -20379,7 +20379,7 @@ persist_orch_revise_option_block() {
 # prompts/mode-orchestrate-revise.txt are staged. Flow: persist_orchestrator.py
 # revise-input renders the fenced UNTRUSTED blocks from STATE_FILE, the tick's
 # _current_wave_details_json cache and revise_reason (zero API calls); one
-# sandboxed poller_claude_judge WAVE_JUDGE run (no retries, no host fallback;
+# sandboxed WAVE_JUDGE run through the poller judge runner (no retries, no host fallback;
 # rc 77 skips) writes the revised pending_issue_defs; revise-validate checks it
 # and only then writes the new state, which replaces STATE_FILE, and the
 # tracking comment, posted once. The next wave's deferred creation reads the
