@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: Issue #8640, rewrite `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `cec39fdb5f94ab267130b2f79c6604870cfce49c` (branch `main`). The integration branch mismatch line reads `unknown`, not `true`, so the plan goes ahead.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n- None. This is a data-only edit. Replace the whole file with exactly these bytes:\n  `status: ok\\nrun_id: 41367073667\\nupdated-by: ai-pipeline\\n`\n- The file currently holds `status: ok` followed by `decompose-run: 40427433026`. Both lines go away completely.\n\n## Data structures affected\n- None. The file is a plain-text canary.\n\n## API or interface changes\n- None.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue gives the exact content and limits the change to one existing file. There are no helpers or patterns to reuse beyond overwriting that file. A larger scope would break the \"only modify this file\" rule, and a smaller one would leave the task unfinished.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file instead of editing lines\n- Chosen: Overwrite the file with the exact three lines, ending in a final newline.\n- Alternatives considered: Edit the existing `decompose-run` line in place and add the third line.\n- Why: A full overwrite guarantees the exact bytes and leaves nothing from the old content behind.\n\n## Security considerations\n- No trust boundary, endpoint, input handling or secret is involved. The `run_id` value is a public workflow run ID, not a credential. The money-handling checks do not apply.\n\n## Potential risks or edge cases\n- A missing final newline, or a CRLF line ending, would break an exact-match check.\n- Any stray change to another file would break the issue's single-file rule.\n\n## Testing considerations\n- After the edit, run `cat -A tests/e2e_smoke_canary.txt`. It should show exactly three lines, each ending in `$`.\n- Run `git diff --stat`. It should list only `tests/e2e_smoke_canary.txt`.\n- No contract tests are needed.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "edee1bd4000f4011a8ff039b6946aa66d6376e5e97869e3f644139801bcfae4f",
+  "lineage": {
+    "issue_number": 8640,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41367701640",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41367701640",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8640"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261102003656_545b9654c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8640,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41367701640"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8640",
+  "timestamps": {
+    "created_at": "2026-11-02T00:36:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
