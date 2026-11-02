@@ -176,6 +176,12 @@ INVISIBLE_PREFIX_STEMS = {
 INVISIBLE_PREFIX_PATTERN = re.compile(r"^[\s\ufeff\u200b-\u200f\u202a-\u202e\u2060-\u2064\u180e\u00ad\u034f]+")
 
 
+def test_invisible_prefix_pattern_stays_in_sync_with_resolver() -> None:
+	# The shape test above copies the resolver's strip class; fail if they drift.
+	text = RESOLVER.read_text(encoding="utf-8")
+	assert text.count('r"' + INVISIBLE_PREFIX_PATTERN.pattern + '"') == 1
+
+
 def test_prose_marker_skip_default_is_on() -> None:
 	text = RESOLVER.read_text(encoding="utf-8")
 	assert '"${CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED:-true}"' in text
