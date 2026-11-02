@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/evidence_broker.py:592-606 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_run_log_tail` redacts a 64 KiB window and then keeps only the last 4 KiB, so a credential that spans the 4 KiB boundary may only be partly seen by the second redaction pass, which could leave its prefix exposed.\n  WHY: Part of a long API token could leak in the broker's result if the redactor's window does not fully cover the boundary (source severity BLOCKER, mapped to critical). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash said in their verification notes that the 64 KiB pre-cut redaction is correct and that the window's first line is dropped.\n- scripts/evidence_broker.py:525-540 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `Broker.answer` redacts `REDACTED_KINDS` after retrieval, but `run_log_tail` is redacted inside `_run_log_tail` itself, so the second pass in `answer` is redundant and `run_log_tail` handles its own redaction state.\n  WHY: This is a maintainability and correctness risk: if the `run_log_tail` redaction logic diverges or is applied incorrectly, sensitive data could leak (source severity MAJOR, mapped to high).\n- scripts/evidence_broker.py:576-580 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `_git_diffstat` omission marker counts raw `git show --numstat` lines beyond the `all_lines[:DIFFSTAT_MAX + 1]` window, but the loop skips blank lines. For a commit touching exactly 200 files (203 raw lines), it prints \"(2 more lines omitted)\" when only 1 file entry was dropped.\n  WHY: The planner reads the marker as a factual count, so it overstates the omitted entries by the number of blank lines that fell outside the 201-line window. There is no control-flow failure (source severity NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/evidence_broker.py | location: Broker.answer, the `if kind in REDACTED_KINDS:` block after dispatch\n  ISSUE: run_log_tail text is redacted twice, once over the 64 KiB window inside `_run_log_tail` and again on the 4 KiB tail. Nothing marks the second pass as intentional, so a later edit could remove the first pass, which is the one that matters.\n  FIX: add a one-line comment in `answer` saying run_log_tail is already redacted over the wider window and that the second pass is deliberate defence in depth (estimated lines changed: 1).\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/evidence_broker.py:`_run_log_tail` around lines 592-606 | severity=BLOCKER | confidence=4\n  PROBLEM: The function redacts a 64 KiB window and then keeps the last 4 KiB. If a credential spans the 4 KiB boundary, the second redaction pass may only see its trailing portion, which could leave the prefix exposed.\n  WHY: Long API tokens could be partly leaked in the broker's result if the redactor's window does not fully cover the boundary.\n- scripts/evidence_broker.py:`Broker.answer` around lines 525-540 | severity=MAJOR | confidence=3\n  PROBLEM: Other `REDACTED_KINDS` are redacted in `Broker.answer` after retrieval, but `run_log_tail` is redacted inside `_run_log_tail`. The second pass in `answer` is redundant, and `run_log_tail` has to handle its own redaction state.\n  WHY: This is a maintainability and correctness risk: if the `run_log_tail` redaction logic diverges or is applied incorrectly, sensitive data could leak.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/evidence_broker.py | location: _run_log_tail around line 599, then Broker.answer around line 509-511\n  ISSUE: run_log_tail text is redacted twice, over the 64 KiB window in _run_log_tail and again on the returned 4 KiB lines in Broker.answer. The second pass is redundant, and the redaction that actually catches a credential straddling the 64 KiB->4 KiB cut is buried in the kind-specific method.\n  FIX: add a comment in Broker.answer noting the second pass is intentional defence in depth, or skip the second pass when kind == \"run_log_tail\" (estimated lines changed: 2).\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/evidence_broker.py:`_git_diffstat`, lines ~576-580 (`all_lines[:DIFFSTAT_MAX + 1]` loop plus `if len(all_lines) > DIFFSTAT_MAX + 1: out.append(f\"({len(all_lines) - DIFFSTAT_MAX - 1} more lines omitted)\")`) | severity=NIT | confidence=3\n  PROBLEM: The omission marker counts raw `git show --numstat` lines beyond the window, but the loop skips blank lines. For a commit touching exactly 200 files (203 raw lines: header + blank + 200 entries + trailing blank), the marker prints \"(2 more lines omitted)\" when only 1 file entry was dropped.\n  WHY: The planner reads the marker as a factual count, so it overstates the omitted entries by the number of blank lines outside the 201-line window. There is no control-flow failure; only the count in the artifact is wrong.\n- HARDENING_SUGGESTION: scripts/evidence_broker.py | location: `answer()`, the `if kind in REDACTED_KINDS:` block (lines ~525-527)\n  ISSUE: `run_log_tail` text is redacted twice, over the 64 KiB window inside `_run_log_tail` and again in `answer()`, which hides where the pass that matters happens.\n  FIX: skip the second pass for that kind (`if kind in REDACTED_KINDS and kind != \"run_log_tail\":`) or add a one-line comment that the second pass is intentional defence in depth (estimated lines changed: 2).\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d40249093eeb3c4160f1222a08c739a572460dd6ab51e1797206b7f1090398fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8667,
+    "run_id": "41410236445",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41410236445",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102082748_1c5e1046b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8667,
+    "run_id": "41410236445"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-02T08:27:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
