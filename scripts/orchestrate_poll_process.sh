@@ -7925,6 +7925,11 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
+	# Optional: present|absent|unknown from
+	# security_pass_advisory_cited_code_status.  `absent` means the cited code
+	# did not survive to the default branch, so the body must not claim it did
+	# (fun-token-multi-chain#710).  Empty or anything else keeps the legacy text.
+	local cited_code_status="${7:-}"
   local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
@@ -7964,7 +7969,7 @@ create_security_pass_advisory_followup() {
   fi
   body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
   printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
-  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
+  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" "${cited_code_status}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -7980,6 +7985,7 @@ head_sha = sys.argv[5]
 justification = sys.argv[6]
 source = sys.argv[7]
 merged_pr = sys.argv[8] if len(sys.argv) > 8 else ""
+cited_code_status = sys.argv[9] if len(sys.argv) > 9 else ""
 
 
 def prose(value: object) -> str:
@@ -8009,7 +8015,17 @@ if source == "line_ownership":
 		"Its cited line predates the project (it was written before the integration base), so it does not gate the project. "
 		"The project completes without this fix; address it through the normal issue pipeline."
 	)
-if merged_pr.isdigit():
+if merged_pr.isdigit() and cited_code_status == "absent":
+	# The audited lines are not on the default branch: the code was removed or
+	# rewritten between the audit and the final merge (fun-token-multi-chain#710,
+	# where #667 reverted the cited coinflip code before PR #596 merged).
+	lines.extend(
+		[
+			f"The integration branch has since merged into the default branch via PR #{merged_pr}, but the cited lines are not on the default branch: the code at `{prose(location)}` was removed or rewritten after the audit at `{head_sha}`. Do not recreate the removed code. Plan and implement this issue against the default branch: find whether the vulnerable behaviour described below still exists in the current code and fix it if it does; in either case add a regression test for the invariant the recommendation protects, and record in the PR body whether the path was found absent or was fixed.",
+			"",
+		]
+	)
+elif merged_pr.isdigit():
 	lines.extend(
 		[
 			f"The integration branch has since merged into the default branch via PR #{merged_pr}, so the cited location refers to code that is already on the default branch. Plan and implement this issue against the default branch.",
@@ -8075,6 +8091,84 @@ PY
   return 0
 }
 
+# security_pass_advisory_cited_code_status <audited_head_sha> <default_branch> <file> <line>
+#
+# Print whether the code a security-pass finding cites at <audited_head_sha>
+# survived to `origin/<default_branch>`: `present`, `absent` or `unknown`.
+# Code can be removed between the audit and the final merge; then the
+# deferred advisory must not claim the cited location is on the default branch
+# (fun-token-multi-chain#710 cited coinflip code that #667 had reverted, and
+# planning blocked with "nothing to implement").
+#
+# The check takes the cited line and up to two lines either side at the
+# audited head, trims whitespace, drops blank lines, and looks for that block
+# as one contiguous run in the default-branch file.  A single line is not
+# enough: `}` or `} catch {` match almost any file.  `unknown` when the
+# audited blob cannot be read, the line is out of range, or the window holds
+# under 12 non-blank characters.  Blank lines are dropped and whitespace is
+# trimmed on both sides, so a moved, re-indented or blank-line-reformatted
+# block still reads `present`; only a content edit reads `absent`, which only
+# changes the advisory's wording (the issue is filed either way).
+# Local git only (the caller fetches the refs once): no GitHub API calls.
+# Fail-open: any error prints `unknown`.  Returns 0 always.
+security_pass_advisory_cited_code_status() {
+	local audited_head_sha="$1"
+	local default_branch="$2"
+	local cited_file="$3"
+	local cited_line="$4"
+	local cited_tmp_dir cited_status
+	if [ -z "${audited_head_sha}" ] || [ -z "${default_branch}" ] || [ -z "${cited_file}" ] \
+		|| ! [[ "${cited_line}" =~ ^[0-9]+$ ]]; then
+		echo "unknown"
+		return 0
+	fi
+	if ! cited_tmp_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/security-pass-cited-code.XXXXXX" 2>/dev/null)"; then
+		echo "unknown"
+		return 0
+	fi
+	if ! git show "${audited_head_sha}:${cited_file}" > "${cited_tmp_dir}/audited" 2>/dev/null; then
+		rm -rf "${cited_tmp_dir}"
+		echo "unknown"
+		return 0
+	fi
+	if ! git show "origin/${default_branch}:${cited_file}" > "${cited_tmp_dir}/current" 2>/dev/null; then
+		# The audited blob exists but the file is gone from the default branch.
+		rm -rf "${cited_tmp_dir}"
+		echo "absent"
+		return 0
+	fi
+	cited_status="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${cited_tmp_dir}/audited" "${cited_tmp_dir}/current" "${cited_line}" <<'PY' 2>/dev/null || echo "unknown"
+import sys
+from pathlib import Path
+
+
+def stripped(path: str) -> list[str]:
+	return [line.strip() for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines()]
+
+
+audited = stripped(sys.argv[1])
+current = [line for line in stripped(sys.argv[2]) if line]
+line_no = int(sys.argv[3])
+if line_no < 1 or line_no > len(audited):
+	print("unknown")
+	raise SystemExit(0)
+window = [line for line in audited[max(0, line_no - 3):line_no + 2] if line]
+if sum(len(line) for line in window) < 12:
+	print("unknown")
+	raise SystemExit(0)
+size = len(window)
+found = any(current[start:start + size] == window for start in range(len(current) - size + 1))
+print("present" if found else "absent")
+PY
+)"
+	rm -rf "${cited_tmp_dir}"
+	case "${cited_status}" in
+		present|absent) echo "${cited_status}" ;;
+		*) echo "unknown" ;;
+	esac
+	return 0
+}
+
 # security_pass_file_deferred_advisory_followups <integration_branch> <default_branch> <final_pr>
 #
 # File the `ai:security` advisory follow-ups that the exhaustion judge or
@@ -8103,6 +8197,19 @@ security_pass_file_deferred_advisory_followups() {
   if [ "${pending_count}" -eq 0 ]; then
     return 0
   fi
+	# One fetch per ref (local git, no API calls) so the cited-code check sees
+	# the merged default branch and the audited head.  Fail-open: a failed
+	# fetch makes the check print `unknown`, which keeps the legacy wording.
+	local row_cited_status cited_default_fetch_ok=true
+	git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || cited_default_fetch_ok=false
+	if [ -n "${integration_branch}" ]; then
+		git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 || true
+	fi
+	# The final merge deletes the integration branch; the PR head ref keeps
+	# the audited commit reachable on later ticks.
+	if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+		git fetch --no-tags origin "+refs/pull/${final_pr}/head:refs/orchestrator/security-pass/advisory-pr-${final_pr}-head" >/dev/null 2>&1 || true
+	fi
   while IFS= read -r row_json; do
     [ -n "${row_json}" ] || continue
     row_finding="$(printf '%s' "${row_json}" | jq -c '.finding')"
@@ -8112,7 +8219,13 @@ security_pass_file_deferred_advisory_followups() {
     if [ -z "${row_head_sha}" ]; then
       row_head_sha="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
     fi
-    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}"
+	row_cited_status="$(security_pass_advisory_cited_code_status "${row_head_sha}" "${default_branch}" \
+		"$(printf '%s' "${row_finding}" | jq -r '.file // ""')" \
+		"$(printf '%s' "${row_finding}" | jq -r '.line // ""')")"
+	# A failed default-branch fetch cannot prove the code is gone.
+	[ "${cited_default_fetch_ok}" = "true" ] || row_cited_status="unknown"
+	echo "SECURITY_PASS_ADVISORY_CITED_CODE tracking_issue=${TRACKING_NUM} finding=$(printf '%s' "${row_json}" | jq -r '.finding_id') default_branch=${default_branch} status=${row_cited_status}"
+    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}" "${row_cited_status}"
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
       filed_count=$((filed_count + 1))
       filed_lines="${filed_lines}"$'\n'"- \`$(printf '%s' "${row_json}" | jq -r '.finding_id')\` → #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
