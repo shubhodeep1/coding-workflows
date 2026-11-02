@@ -686,3 +686,145 @@ def test_clarify_route_wires_the_gate():
 	assert "::warning::Check-triage resolution gate failed" in gate_block
 	assert 'echo "check_triage_resolved=${CHECK_TRIAGE_RESOLVED}" >> "$GITHUB_OUTPUT"' in script
 	assert '[ "${CHECK_TRIAGE_RESOLVED}" != "true" ]' in script[script.index("Only a verified orchestrator fast path"):]
+
+
+# --- integration-branch evidence (issue #8685) -----------------------------------
+# A PR merged into orchestrator/project-<N> reaches main only inside the
+# project's squash commit (#8592/#8570/#8565/#8562/#8501 were stuck on
+# compare=diverged), so the gate verifies it through the integration PR.
+
+PROJECT = 900
+PROJECT_BRANCH = f"orchestrator/project-{PROJECT}"
+INT_PR = 950
+INT_HEAD_SHA = "5" * 40
+INT_MERGE_SHA = "6" * 40
+INT_RUN_ID = 37000000777
+INT_LIST = rf"repos/{REPO}/pulls\?head=shubhodeep1:orchestrator%2Fproject-{PROJECT}&base=main&state=all&per_page=5"
+INT_RUNS = rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?event=pull_request&head_sha={INT_HEAD_SHA}&status=completed&per_page=1"
+INT_CHECKS = rf"repos/{REPO}/commits/{INT_HEAD_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100"
+
+
+def _triaged_into_project(**kwargs):
+	pr = _pr(**kwargs)
+	pr["base"]["ref"] = PROJECT_BRANCH
+	return pr
+
+
+def _integration_pr(state="open", merged=False, head_repo=REPO, number=INT_PR, created_at="2026-11-01T00:00:00Z"):
+	return {
+		"number": number, "state": "closed" if merged else state, "created_at": created_at,
+		"merged_at": "2026-11-02T00:00:00Z" if merged else None,
+		"merge_commit_sha": INT_MERGE_SHA if merged else None,
+		"head": {"ref": PROJECT_BRANCH, "sha": INT_HEAD_SHA, "repo": {"full_name": head_repo}},
+		"base": {"ref": "main", "repo": {"full_name": REPO}},
+	}
+
+
+def _int_run(**overrides):
+	run = {
+		"id": INT_RUN_ID, "status": "completed", "conclusion": "success", "event": "pull_request",
+		"head_branch": PROJECT_BRANCH, "head_sha": INT_HEAD_SHA, "html_url": f"https://github.com/{REPO}/actions/runs/{INT_RUN_ID}",
+	}
+	run.update(overrides)
+	return run
+
+
+def _int_routes(integration=None, **overrides):
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _triaged_into_project(),
+		rf"repos/{REPO}/issues/{PROJECT}": {"number": PROJECT, "labels": [{"name": "ai:orchestrator-tracking"}]},
+		INT_LIST: [integration or _integration_pr()],
+		INT_RUNS: {"workflow_runs": [_int_run()]},
+		rf"repos/{REPO}/actions/runs/{INT_RUN_ID}/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+		rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{INT_HEAD_SHA}": {"status": "ahead"},
+		rf"repos/{REPO}/compare/{INT_MERGE_SHA}\.\.\.{EVIDENCE_SHA}": {"status": "ahead"},
+		rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{EVIDENCE_SHA}": {"status": "diverged"},
+	})
+	routes.update(overrides)
+	return routes
+
+
+def test_default_base_reports_default_evidence_ref(tmp_path, monkeypatch):
+	result, _, _ = _gate(tmp_path, monkeypatch)
+	assert result["status"] == "resolved" and result["evidence_ref"] == "default"
+	assert "- **Evidence ref:** `default`" in result["writes"][0]["payload"]["body"]
+
+
+def test_open_integration_pr_head_is_the_evidence(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_int_routes())
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["evidence_ref"] == f"integration_pr:{INT_PR}" and result["integration_pr"] == INT_PR
+	assert result["evidence_sha"] == INT_HEAD_SHA
+	body = result["writes"][0]["payload"]["body"]
+	assert f"- **Evidence ref:** `integration_pr:{INT_PR}`" in body
+	assert f"integration PR #{INT_PR}" in body
+	assert body.endswith(f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={INT_HEAD_SHA} -->")
+	assert not any(f"compare/{MERGE_SHA}...{EVIDENCE_SHA}" in call[-1] for call in fake.calls)
+	assert not any(f"pulls/{INT_PR}" in w["path"] or f"issues/{PROJECT}" in w["path"] for w in result["writes"])
+
+
+def test_open_integration_pr_check_run_triage(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	ok = {"total_count": 1, "check_runs": [{"head_sha": INT_HEAD_SHA, "status": "completed", "conclusion": "success"}]}
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_int_routes(**{INT_CHECKS: ok}))
+	assert result["status"] == "resolved" and result["evidence_ref"] == f"integration_pr:{INT_PR}"
+	failing = {"total_count": 1, "check_runs": [{"head_sha": INT_HEAD_SHA, "status": "completed", "conclusion": "failure"}]}
+	routes = _int_routes(**{INT_CHECKS: failing, rf"repos/{REPO}/check-runs/{FAILED_JOB_ID}": mod.GhApiError("rc=1")})
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "integration_check_failure"
+
+
+def test_merged_integration_pr_needs_both_compares(tmp_path, monkeypatch):
+	routes = _int_routes(integration=_integration_pr(merged=True))
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["evidence_sha"] == EVIDENCE_SHA and result["evidence_ref"] == f"integration_pr:{INT_PR}"
+	assert result["integration_compare_status"] == "ahead" and result["compare_status"] == "ahead"
+	compared = [call[-1] for call in fake.calls if "/compare/" in call[-1]]
+	assert compared == [f"repos/{REPO}/compare/{MERGE_SHA}...{INT_HEAD_SHA}", f"repos/{REPO}/compare/{INT_MERGE_SHA}...{EVIDENCE_SHA}"]
+	body = result["writes"][0]["payload"]["body"]
+	assert "Compare (merge commit...integration PR head):** `ahead`" in body
+	assert "Compare (integration PR merge commit...evidence commit):** `ahead`" in body
+
+
+@pytest.mark.parametrize(("integration", "overrides", "reason"), [
+	(None, {rf"repos/{REPO}/issues/{PROJECT}": {"number": PROJECT, "labels": [{"name": "enhancement"}]}}, "integration_base_untrusted"),
+	(None, {rf"repos/{REPO}/issues/{PROJECT}": {"number": PROJECT, "labels": [{"name": "ai:orchestrator-tracking"}], "pull_request": {}}},
+		"integration_base_untrusted"),
+	(None, {rf"repos/{REPO}/issues/{PROJECT}": mod.GhApiError("rc=1")}, "integration_issue_unreadable"),
+	(None, {INT_LIST: []}, "integration_pr_missing"),
+	(None, {INT_LIST: mod.GhApiError("rc=1")}, "integration_pr_unreadable"),
+	(_integration_pr(head_repo="fork/coding-workflows"), {}, "integration_pr_cross_repository"),
+	(_integration_pr(state="closed"), {}, "integration_pr_closed"),
+	(None, {INT_RUNS: {"workflow_runs": [_int_run(conclusion="failure")]}}, "integration_run_not_success"),
+	(None, {INT_RUNS: {"workflow_runs": [_int_run(head_branch="other")]}}, "integration_run_not_success"),
+	(None, {INT_RUNS: {"workflow_runs": []}}, "no_completed_integration_run"),
+	(None, {INT_RUNS: mod.GhApiError("rc=1")}, "integration_run_unreadable"),
+	(None, {rf"repos/{REPO}/actions/runs/{INT_RUN_ID}/jobs\?filter=latest&per_page=100": _jobs({"static-checks": "success"}, id_base=1)},
+		"failed_jobs_not_resolved"),
+	(None, {rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{INT_HEAD_SHA}": {"status": "diverged"}}, "compare_diverged"),
+	(_integration_pr(merged=True), {rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{INT_HEAD_SHA}": {"status": "diverged"}},
+		"integration_compare_diverged"),
+	(_integration_pr(merged=True), {rf"repos/{REPO}/compare/{INT_MERGE_SHA}\.\.\.{EVIDENCE_SHA}": {"status": "diverged"}}, "compare_diverged"),
+	(_integration_pr(merged=True), {rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {
+		"workflow_runs": [_base_run(conclusion="failure")]}}, "default_run_not_success"),
+])
+def test_integration_path_unverified(tmp_path, monkeypatch, integration, overrides, reason):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_int_routes(integration=integration, **overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == reason, result
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+def test_newest_integration_pr_is_used(tmp_path, monkeypatch):
+	older_closed = _integration_pr(state="closed", number=940, created_at="2026-10-01T00:00:00Z")
+	routes = _int_routes(**{INT_LIST: [older_closed, _integration_pr()]})
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "resolved" and result["integration_pr"] == INT_PR
+
+
+def test_non_project_base_keeps_the_default_path(tmp_path, monkeypatch):
+	pr = _pr()
+	pr["base"]["ref"] = "orchestrator/project-0"
+	result, _, fake = _gate(tmp_path, monkeypatch, routes=_routes(**{rf"repos/{REPO}/pulls/{PR}": pr}))
+	assert result["status"] == "resolved" and result["evidence_ref"] == "default"
+	assert not any("/pulls?head=" in call[-1] for call in fake.calls)
