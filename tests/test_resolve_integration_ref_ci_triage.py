@@ -164,7 +164,16 @@ PROSE_MARKER_FIXTURES = {
 	"prose_marker_skip_flag_unrecognised_refuses": (3, "label_missing"),
 	"prose_marker_body_with_label_refuses_marker_invalid": (3, "marker_invalid"),
 	"prose_marker_managed_child_without_tracking_line_refuses": (3, "label_missing"),
+	"prose_marker_header_behind_zero_width_joiner_refuses": (3, "label_missing"),
+	"prose_marker_header_behind_interleaved_invisibles_refuses": (3, "label_missing"),
 }
+# Fixtures whose canonical fp= header sits behind leading invisible characters
+# (and whitespace); the resolver must strip them and still refuse.
+INVISIBLE_PREFIX_STEMS = {
+	"prose_marker_header_behind_zero_width_joiner_refuses",
+	"prose_marker_header_behind_interleaved_invisibles_refuses",
+}
+INVISIBLE_PREFIX_PATTERN = re.compile(r"^[\s\ufeff\u200b-\u200f\u202a-\u202e\u2060-\u2064\u180e\u00ad\u034f]+")
 
 
 def test_prose_marker_skip_default_is_on() -> None:
@@ -189,6 +198,16 @@ def test_prose_marker_skip_fixtures_shape_and_run(stem: str) -> None:
 	if stem == "prose_marker_header_first_line_without_label_refuses":
 		assert "ai:check-triage" not in labels
 		assert FP_HEADER_PATTERN.fullmatch(first_line)
+		assert env.get("CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED") is None
+	elif stem in INVISIBLE_PREFIX_STEMS:
+		# The raw first line does not start with the marker, but after the
+		# leading invisibles are dropped the canonical header is first.
+		assert "ai:check-triage" not in labels
+		assert not labels
+		assert not PROSE_MARKER_PATTERN.match(body)
+		assert INVISIBLE_PREFIX_PATTERN.match(body)
+		stripped_first = INVISIBLE_PREFIX_PATTERN.sub("", body).split("\n", 1)[0]
+		assert FP_HEADER_PATTERN.fullmatch(stripped_first)
 		assert env.get("CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED") is None
 	else:
 		assert not PROSE_MARKER_PATTERN.match(first_line)
