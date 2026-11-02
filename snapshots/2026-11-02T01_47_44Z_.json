@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-01T04:56:15Z",
+  "tick_at": "2026-11-02T01:47:44Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 9
+    "tracking_issues": 10
   },
   "tracking_issues": [
     {
@@ -76,7 +76,7 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "61",
+      "integration_ahead_by": "66",
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -96,13 +96,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 7,
-      "integration_ahead_by": "37",
+      "current_wave": 10,
+      "integration_ahead_by": "45",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -117,11 +117,10 @@
       "wave_complete": false
     },
     {
-      "current_wave": 12,
-      "integration_ahead_by": "39",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -134,7 +133,7 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)",
-      "total_waves": 15,
+      "total_waves": 0,
       "wave_complete": false
     },
     {
@@ -178,11 +177,10 @@
       "wave_complete": false
     },
     {
-      "current_wave": 2,
-      "integration_ahead_by": "3",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -195,7 +193,27 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Apply workflow-optimization-2026-09-28 recommendations (CI single-file ledger overlap + report)",
-      "total_waves": 2,
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 0,
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8598,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-28-2.md",
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
