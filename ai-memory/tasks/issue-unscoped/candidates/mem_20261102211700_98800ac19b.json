@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_triage_resolution.py:def _fail(reason: str) -> dict[str, Any]: defined inside verify_resolution | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The nested `_fail` helper reads the outer `verdict` variable but also assigns to it in its own scope, so Python treats `verdict` as an unbound local and raises UnboundLocalError.\n  WHY: Every failed triage check calls `_fail`, so the UnboundLocalError crashes the triage gate. The source severity is BLOCKER, mapped here to critical. Only one reviewer flagged this.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"tests/test_orchestrate_tracking_auto_close.py (new): drive the function with a stub gh and fixture STATE_FILE, COMMENTS and labels.\" (issue #8685, Files & Modules and Tests sections)\n  expected_change_site: tests/test_orchestrate_tracking_auto_close.py at the repo root next to the other tests/test_*.py files\n  confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: No tests/test_orchestrate_tracking_auto_close.py exists, the cases are delivered in tests/orchestrate_tracking_auto_close_cases.py and collected via the `_collect_tracking_auto_close_cases` shim in tests/test_activation_verify.py (tests/test_activation_verify.py:962-980) with a minimum-count guard (collected >= 10), tests/test_ci_wires_every_test_file.py (test_every_test_file_runs_in_a_workflow, lines 57-62 / 53-63) requires every new tests/test_*.py to be wired in a workflow and .github/workflows/ci.yml is outside the issue's files_touched grant, all listed behaviors are functionally covered, the residual deviation is name/structure only and was accepted in prior rounds; severity disagreement: NIT (anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash) vs MAJOR (google_gemini-3_1-flash-lite, minimax_minimax-m3)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP\nRequirement: \"tests/test_orchestrate_tracking_auto_close.py (new): drive the function with a stub gh and fixture STATE_FILE, COMMENTS and labels.\"\nExpected change site: tests/test_orchestrate_tracking_auto_close.py\nEvidence of absence: The file does not exist. The cases are in tests/orchestrate_tracking_auto_close_cases.py and are collected through _collect_tracking_auto_close_cases in tests/test_activation_verify.py, which has a guard requiring at least 10 cases. The deviation is justified: tests/test_ci_wires_every_test_file.py (test_every_test_file_runs_in_a_workflow, lines 57-62) requires workflow wiring, UNWIRED_ALLOWLIST is empty, and .github/workflows/ci.yml is not in the files_touched grant. All listed behaviors are covered. Earlier rounds accepted the deviation; it is recorded only for visibility.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_triage_resolution.py:def _fail(reason: str) -> dict[str, Any]: defined inside verify_resolution | severity=BLOCKER | confidence=5\n  PROBLEM: UnboundLocalError, because `_fail` reads the outer-scope `verdict` variable while also shadowing it with a local assignment.\n  WHY: On a failed triage check, `_fail` reads `verdict` before it is assigned locally, which raises UnboundLocalError and crashes the triage gate.\nTASK_GAP\nRequirement: \"a brand-new test file driving close_completed_tracking_issue_if_ready with a stub gh and fixture STATE_FILE, COMMENTS and labels... tests/test_orchestrate_tracking_auto_close.py at the repo root.\"\nExpected change site: tests/test_orchestrate_tracking_auto_close.py at the repo root next to the other test_*.py files.\nEvidence of absence: The cases are delivered in tests/orchestrate_tracking_auto_close_cases.py and collected via a shim inside tests/test_activation_verify.py. No tests/test_orchestrate_tracking_auto_close.py exists.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\nRequirement: \"`tests/test_orchestrate_tracking_auto_close.py` (new)\", listed in Issue #8685's \"Files & Modules\" and \"Tests\" sections as a brand-new test module driving `close_completed_tracking_issue_if_ready` with a stub `gh` and fixture `STATE_FILE`, `COMMENTS` and labels.\nExpected change site: `tests/test_orchestrate_tracking_auto_close.py` at the repo root next to the other `tests/test_*.py` files.\nEvidence of absence: The cases are in `tests/orchestrate_tracking_auto_close_cases.py`, imported via a shim in `tests/test_activation_verify.py:962-980` `_collect_tracking_auto_close_cases`. No `tests/test_orchestrate_tracking_auto_close.py` exists. The `ci.yml` wiring constraint is real and the shim plus its minimum-count guard give functional coverage, so the deferral is defensible. However, the deliverable name and module shape named in the issue are not present.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\nRequirement: Add `tests/test_orchestrate_tracking_auto_close.py` to drive `close_completed_tracking_issue_if_ready` with a stub `gh` and fixture state, comments, and labels.\nExpected change site: `tests/test_orchestrate_tracking_auto_close.py`.\nEvidence of absence: The PR instead adds `tests/orchestrate_tracking_auto_close_cases.py` and collects its cases through `tests/test_activation_verify.py`. The named new test file is absent.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\nRequirement: \"Add tests (see Tests): tests/test_orchestrate_tracking_auto_close.py \u2014 drive the function with a stub gh and fixture STATE_FILE, COMMENTS and labels.\" (issue #8685, Files & Modules and Tests sections).\nExpected change site: tests/test_orchestrate_tracking_auto_close.py at the repo root next to the other wired test files.\nEvidence of absence: No file with that name exists. The identical cases are in tests/orchestrate_tracking_auto_close_cases.py, collected through the shim in tests/test_activation_verify.py (`_collect_tracking_auto_close_cases`). Coverage is functionally present. The path deviation is structurally forced by `tests/test_ci_wires_every_test_file.py` (lines 53-63), which requires workflow wiring outside the file grant. The residual deviation is name/structure only and was documented by the editor in two prior runs. It is raised so the aggregator records it as accepted-with-reason.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f22e4901a7303b1e1b4a5fb7371233db4351a7dec923215417413b53b1855c60",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8688,
+    "run_id": "41519722167",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41519722167",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102211700_98800ac19b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8688,
+    "run_id": "41519722167"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T21:17:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
