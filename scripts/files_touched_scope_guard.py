@@ -63,6 +63,11 @@ Inputs:
                           ALLOW_OUT_OF_SCOPE_FILES is not "true" and
                           PLAN_FILES_TOUCHED_GATE_ENABLED is not off
                           (all read from the environment).
+                          A hold with reason path_not_granted whose denied
+                          paths are all directory or glob tokens, and whose
+                          other protected paths would be granted, carries
+                          replannable: true (#8339); the poller re-plans
+                          once. No grant is written for that check.
   --plan-auto-approval-gate --plan-file PATH --heal-scope-file PATH
                           --flag-enabled VALUE --issue-number NUMBER
                           Workflow-heal plans (#7444): approve only when every
@@ -879,6 +884,35 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 		if not path_in_scope(path, allowlist, own_fragment_issue=issue_number)]
 
 
+# Re-plan of a hold caused only by non-exact tokens (#8339). A plan whose
+# Files section mentions a placeholder such as `scripts/<helper>` is read as
+# the bare directory `scripts/`, which can never be granted exactly, so the
+# plan is held with path_not_granted for good. When every denied path is a
+# directory or glob token and the rest of the plan would be approved, the
+# record carries ``replannable: true`` and the poller's stall recovery asks
+# for one new plan. The check is in memory only: it never changes the
+# decision, the denied list or any grant, and never writes a grant body.
+def _plan_hold_replannable(plan_text: str, protected: list[str], denied: list[str], replan_grant: object, *,
+	flag_on: bool, allow_workflow_edits: str, issue_number: str, metadata: object,
+	check_files_touched: bool) -> bool:
+	"""True when a path_not_granted hold would approve without its non-exact tokens."""
+	if not denied or not isinstance(metadata, dict):
+		return False
+	if not all(path.endswith("/") or any(char in path for char in _GLOB_CHARS) for path in denied):
+		return False
+	if _issue_on_heal_route(metadata.get("body") or "", metadata.get("labels")):
+		return False
+	remaining = [path for path in protected if path not in denied]
+	if not remaining:
+		return False
+	decision, reason, _ = evaluate_plan_auto_approval(remaining, replan_grant, flag_enabled=flag_on,
+		allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+	if decision != PLAN_DECISION_APPROVE or reason != "granted":
+		return False
+	return not (check_files_touched and plan_files_outside_files_touched(plan_text, metadata.get("body") or "",
+		metadata.get("labels"), issue_number=issue_number or metadata.get("number")))
+
+
 def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
 	pipeline_login: str, allow_workflow_edits: str, issue_number: str, origin_repo: str = "",
 	grant_body_out: str = "") -> tuple[dict, int]:
@@ -894,10 +928,14 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 	body is written to ``grant_body_out`` and the record carries
 	``pipeline_grant_body: true``; the caller must write it to the issue
 	before it posts /approved, and hold if that write fails.
+
+	A ``path_not_granted`` hold held only by directory or glob tokens, which
+	would approve without them, adds ``replannable: true`` (#8339).
 	"""
 	protected: list[str] = []
 	grant_proposed = False
 	plan_path_count = 0
+	replannable = False
 	try:
 		with open(plan_file, encoding="utf-8") as handle:
 			plan_text = handle.read()
@@ -928,6 +966,9 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 			grant = build_automation_grant(metadata, pipeline_login, fetch_origin if repo else None)
 		decision, reason, denied = evaluate_plan_auto_approval(protected, grant, flag_enabled=flag_on,
 			allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+		# The grant behind a path_not_granted hold, for the #8339 re-plan check.
+		replan_grant: object = grant
+		replan_via_proposal = False
 		if (grant_body_out and decision == PLAN_DECISION_HOLD and reason == "open_grant_not_exact"
 				and isinstance(grant, dict) and grant.get("open") is True
 				and grant.get("reason") == PIPELINE_AUTHOR_OPEN_REASON):
@@ -959,6 +1000,8 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 					# Report what the proposed grant still misses (a listed
 					# directory or glob, or a path the plan named only in prose).
 					decision, reason, denied = proposed
+					replan_grant = proposed_grant
+					replan_via_proposal = True
 		# An approval the implement scope guard would refuse is held. The
 		# pipeline plan grant is skipped: its block is written from this plan.
 		# Without issue metadata (the poller's cache had no body) there is no
@@ -976,16 +1019,31 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number"))
 			if outside:
 				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside
+		if decision == PLAN_DECISION_HOLD and reason == "path_not_granted":
+			# The counterfactual approval would be a proposed pipeline plan
+			# grant when the proposal produced this hold, and the real gate
+			# skips the files_touched check for that; otherwise it runs as
+			# above. Any error only means "not replannable".
+			try:
+				replannable = _plan_hold_replannable(plan_text, protected, denied, replan_grant,
+					flag_on=flag_on, allow_workflow_edits=allow_workflow_edits, issue_number=issue_number,
+					metadata=metadata, check_files_touched=(not replan_via_proposal and bool(issue_meta_file)
+						and plan_files_touched_gate_active()))
+			except Exception:  # noqa: BLE001 - advisory only; the hold stands
+				replannable = False
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
 		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
 		grant_proposed = False
 		plan_path_count = 0
+		replannable = False
 	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
 		"log_paths": plan_gate_log_paths(denied or protected)}
 	if grant_proposed:
 		record["pipeline_grant_body"] = True
 	if plan_path_count:
 		record["plan_path_count"] = plan_path_count
+	if replannable:
+		record["replannable"] = True
 	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
 
 
@@ -1016,6 +1074,64 @@ def heal_own_agents_fragment_entry(issue_number: object) -> str:
 _HEAL_BARE_GLOB_RE = re.compile(r"[A-Za-z0-9_.*?/\[\]-]+")
 
 
+# A heal plan that changes no file (#8241). After a partial delivery merges,
+# the re-plan can find every in-scope change already on the base branch and
+# answer "Files likely to change: None." Holding it parked the issue until
+# stall recovery posted /approved an hour later, and implement then closed it
+# through its success-no-op path. Only an explicit "None" counts: it must be
+# the first text under the section's single lead-in, no other line may be a
+# bullet, and no line may carry a backtick or a path- or filename-shaped token.
+# Anything else keeps the heal_scope_plan_paths_missing hold.
+HEAL_PLAN_NO_CHANGES_REASON = "heal_scope_plan_no_changes"
+_HEAL_PLAN_EMPHASIS = r"(?:\*\*|__|\*|_)?"
+_HEAL_PLAN_NONE_RE = re.compile(
+	r"^\s*(?:[-*+]\s+)?" + _HEAL_PLAN_EMPHASIS + r"none" + _HEAL_PLAN_EMPHASIS
+	+ r"(?:[.!:;]" + _HEAL_PLAN_EMPHASIS + r"(?:\s|$)|\s+(?:—|–|--?)\s|\s*$)", re.IGNORECASE)
+_HEAL_PLAN_LEADIN_REST_RE = re.compile(r"\bchange\w*\b[^:\n]*:\s*(?:\*\*|__)?\s*(.*)$", re.IGNORECASE)
+_HEAL_PLAN_PATHLIKE_RE = re.compile(r"[\w*?\[\]-]/|/[\w*?.\[\]-]|[\w*?\]-]\.[A-Za-z][A-Za-z0-9]{0,31}\b")
+# Common extensionless files the grant list does not name (README, OWNERS, ...).
+_HEAL_PLAN_EXTRA_BARE_FILE_RE = re.compile(
+	r"^(?:README|CHANGELOG|CONTRIBUTING|OWNERS|VERSION|AUTHORS|INSTALL|Caddyfile|Earthfile)$")
+# The same file names in any letter case (`readme`, `makefile`). Prose words
+# such as license, notice, version, authors and install stay uppercase-only.
+_HEAL_PLAN_BARE_FILE_ICASE_RE = re.compile(
+	r"^(?:readme|changelog|contributing|owners|codeowners|makefile|dockerfile|containerfile|gemfile|rakefile"
+	r"|procfile|justfile|vagrantfile|pipfile|jenkinsfile|brewfile|podfile|tiltfile|caddyfile|earthfile)$",
+	re.IGNORECASE)
+
+
+def _heal_plan_declares_no_file_changes(section: str | None) -> bool:
+	"""True when a Files section explicitly says the plan changes no file."""
+	if section is None:
+		return False
+	content: list[str] = []
+	raw_leadins: list[str] = []
+	leadins = 0
+	for line in section.splitlines():
+		if _PLAN_FILES_LEADIN_RE.match(line):
+			leadins += 1
+			# A file named on the lead-in line itself is checked below too.
+			raw_leadins.append(line)
+			rest = _HEAL_PLAN_LEADIN_REST_RE.search(line)
+			line = rest.group(1) if rest else ""
+		if line.strip():
+			content.append(line)
+	if leadins != 1 or not content or not _HEAL_PLAN_NONE_RE.match(content[0]):
+		return False
+	if any(_PLAN_GRANT_BULLET_RE.match(line) for line in content[1:]):
+		return False
+	# Extensionless names (`Makefile`, `CODEOWNERS`) and root dotfiles
+	# (`.gitignore`) are files too, though the path regex misses them. Any
+	# dot-led name (`.env`, `.ENV`, `.envrc`, `.npmrc`) counts, so an unlisted
+	# dotfile holds the plan instead of approving it (fail closed).
+	def _names_bare_file(line: str) -> bool:
+		return any(_PLAN_GRANT_BARE_FILE_RE.match(tok) or _HEAL_PLAN_EXTRA_BARE_FILE_RE.match(tok)
+			or _HEAL_PLAN_BARE_FILE_ICASE_RE.match(tok) or tok.startswith(".")
+			for tok in (raw.rstrip(".") for raw in re.findall(r"\.?[A-Za-z0-9_][A-Za-z0-9._-]*", line)))
+	return not any("`" in line or _HEAL_PLAN_PATHLIKE_RE.search(line) or _names_bare_file(line)
+		for line in content + raw_leadins)
+
+
 def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: str,
 	issue_number: str, allow_workflow_edits: str = "false") -> tuple[dict, int]:
 	"""Approve a heal plan only inside its verified heal scope; every error holds."""
@@ -1039,7 +1155,12 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 		elif protected and allow_workflow_edits != "true":
 			# Same switch check_automation_paths applies at implement time.
 			decision, reason, denied = PLAN_DECISION_HOLD, "workflow_edits_disabled", protected
-		elif _plan_files_section(plan_text) is None or (not files and not protected):
+		elif _plan_files_section(plan_text) is None:
+			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_plan_paths_missing", protected
+		elif not files and not protected and _heal_plan_declares_no_file_changes(_plan_files_section(plan_text)):
+			# The empty change set is inside any scope (#8241).
+			decision, reason, denied = PLAN_DECISION_APPROVE, HEAL_PLAN_NO_CHANGES_REASON, []
+		elif not files and not protected:
 			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_plan_paths_missing", protected
 		else:
 			# extract_plan_file_paths drops directory and glob tokens, so read

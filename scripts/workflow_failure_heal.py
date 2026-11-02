@@ -81,7 +81,7 @@ MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 # project validations fail on it.
 SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure", "synced_check_failure")
 
 # A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
 # non-capacity reason and the role failed instead of running codex. The report
@@ -96,10 +96,18 @@ ENGINE_FALLBACK_CAPACITY_REASONS: tuple[str, ...] = ("all_gated", "all_usage_lim
 _ENGINE_ROLE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
 _ENGINE_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
 ENGINE_FALLBACK_MAX_RECORDS = 20
+# The Claude pool step's reason token (scripts/claude_pool_token.sh), carried
+# as one evidence line of an engine_fallback report when the reporter has a
+# source for it (issue #8406). Anything outside the pattern becomes
+# "unavailable"; the line is diagnostic only and never enters the fingerprint.
+_ENGINE_POOL_REASON_RE = re.compile(r"^[a-z0-9_]{1,60}$")
+ENGINE_POOL_REASON_EVIDENCE_PREFIX = "Claude pool step reason: "
+ENGINE_POOL_REASON_UNAVAILABLE = "unavailable"
 # The heal scope of an engine_fallback issue: the engine support code that
 # decides, runs or reports a Claude fallback. Fixed, so neither the report nor
 # the diagnosis can widen it; each path is kept only when it exists at the
-# scope commit (render_heal_scope_marker).
+# scope commit (render_heal_scope_marker). The pool token step is included
+# because its OIDC request decides no_credential fallbacks (#8481).
 ENGINE_FALLBACK_SCOPE_PATHS: tuple[str, ...] = (
 	"scripts/ai_engine.sh",
 	"scripts/claude_engine.py",
@@ -109,6 +117,7 @@ ENGINE_FALLBACK_SCOPE_PATHS: tuple[str, ...] = (
 	"scripts/ai_engine_fallback_report.sh",
 	".github/actions/install-claude/action.yml",
 	".github/actions/claude-pool-token/action.yml",
+	"scripts/claude_pool_token.sh",
 )
 _ENGINE_REPORTER_RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
 _ENGINE_REPORTER_RUN_ATTEMPT_RE = re.compile(r"^[1-9][0-9]{0,3}$")
@@ -219,6 +228,22 @@ SYNCED_SECURITY_ISSUE_TITLE = "Synced-file security findings"
 SYNCED_SECURITY_WORKFLOW_NAME = "AI Security Audit"
 _SYNCED_SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
 _SYNCED_SECURITY_FILE_RE = re.compile(r"^[A-Za-z0-9._/+-]{1,300}$")
+# A consumer check that fails because of an unmodified upstream-managed file
+# (issue #8265): check-failure triage routes it here instead of filing a
+# consumer issue no consumer PR could fix. Pointers only, like
+# synced_security_finding (Q245): no log text and no diagnosis prose.
+SYNCED_CHECK_FAILURE_REASON = "synced_check_failure"
+SYNCED_CHECK_ISSUE_TITLE = "Synced workflow file breaks a consumer check"
+SYNCED_CHECK_WORKFLOW_NAME = "AI Check Failure Triage"
+SYNCED_CHECK_MAX_PATHS = 20
+SYNCED_CHECK_MAX_RUNS = 3
+SYNCED_CHECK_PAYLOAD_KEYS = frozenset({
+	"schema_version", "source_repo", "source_kind", "pr_number", "check_name", "check_run_ids", "paths",
+	"cause_path", "head_sha", "wrapper_sha", "reporter_run_url", "reporter_run_id", "reported_at", "run_refs",
+})
+_SYNCED_CHECK_NAME_DROP_RE = re.compile(r"[^A-Za-z0-9 ._:/()-]")
+AFFECTED_FILES_BEGIN = "AFFECTED_FILES_BEGIN"
+AFFECTED_FILES_END = "AFFECTED_FILES_END"
 # A01..A10 followed by the 2021 year (any of `:`, `-` or spaces before it) or
 # by no year at all. Any other number after the code (A01:2017, A011) is
 # rejected: 2017 numbering maps codes to different categories.
@@ -373,11 +398,16 @@ DEFAULT_FAILURE_FINGERPRINT_MAX_IDENTICAL = 3
 # REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL. review_conflict_resolve.sh writes
 # them as ``conflict_resolver_<fail-closed reason>`` (PR #6438: a conflict set
 # the resolver sandbox cannot carry failed ~28 identical runs on one head).
+# review_autofix_step_post_editor_summary.sh writes
+# ``review_editor_sandbox_path_excluded`` when the editor changed nothing and
+# declined a finding only as "sandbox-excluded path" (#8321: PR #8250 was
+# re-reviewed 29 times on unchanged heads).
 NON_RETRYABLE_FAILURE_REASONS = frozenset(
 	{
 		"conflict_resolver_sandbox_path_host_only",
 		"conflict_resolver_sandbox_path_unsupported",
 		"conflict_resolver_sandbox_support_missing",
+		"review_editor_sandbox_path_excluded",
 	}
 )
 # A non-retryable cap is re-armed once per verified review-support commit not
@@ -429,6 +459,8 @@ REPORT_IDENTITY_WORKFLOW_BY_KIND = {
 	"phase_failure": ("clarify.yml", "plan.yml", "implement.yml"),
 	# The consumer's security audit run (reusable security-audit.yml).
 	"synced_security_finding": ("security-audit.yml",),
+	# The consumer's check-failure triage run (reusable check_failure_triage.yml, #8265).
+	"synced_check_failure": ("check_failure_triage.yml",),
 	# The consumer's runtime validation run (reusable validate.yml).
 	"validation_failure": ("validate.yml",),
 }
@@ -542,6 +574,13 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 _STEP_HEADER_OPEN_RE = re.compile(r"^##\[group\]Run ")
 _STEP_HEADER_CLOSE_RE = re.compile(r"^##\[endgroup\]")
 _STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
+# Some runners (and logs re-rendered without ANSI codes) echo the script
+# unstyled. The runner always prints the script first and the `shell:` /
+# `with:` / `env:` sections after it, so inside a Run header every line before
+# the first section key is script too. Those lines are dropped once a section
+# key confirms the header; a header that closes or never closes without one
+# keeps them, so a log cut mid-header still carries its output (Refs #8602).
+_STEP_HEADER_SECTION_RE = re.compile(r"^(?:shell|with|env):")
 # The `env:` block of a step header prints every variable's value, and values
 # the runner does not know to be secrets (tokens minted in an earlier step,
 # derived credentials) are not masked. filter_log keeps only the names: an
@@ -566,9 +605,16 @@ _STEP_ENV_UNTERMINATED_MARKER = "[env block omitted: unterminated step header]"
 _CYCLE_RUN_NAME_SUFFIX_RE = re.compile(r"\s*\[cycle:[0-9]+\]\s*$", re.IGNORECASE)
 # The review/autofix reporter's evidence header (strip_autofix_evidence_header).
 _AUTOFIX_EVIDENCE_HEADER_RE = re.compile(r"^(?:failure_reason=|finalize_reason=|consecutive_failed_runs=|flags: )")
+# High-signal lines filter_log keeps even when they fall outside the tail. The
+# last line holds runtime lines from the runner and the engine wrapper
+# (scripts/ai_engine.sh): the runner's own `##[warning]` / `##[error]` lines, a
+# `CLAUDE_POOL run` line whose outcome is anything but `success`, the
+# `AI_ENGINE_FALLBACK role=... reason=...` line (not the `_REPORT` / `_POLICY`
+# bookkeeping lines), and an `exited with code` line (Refs #8602).
 _SOFT_LOG_PATTERNS = re.compile(
 	r"::error::|::warning::|\bERROR\b|\bFAIL(?:ED|URE)?\b|\bfatal\b|\bTraceback\b|"
-	r"\b[A-Z][A-Z0-9_]*_(?:FAILED|SKIPPED|ESCALATE|BLOCKED)\b|\bexit code\b|\btimed?[ -]?out\b|\brate.?limit",
+	r"\b[A-Z][A-Z0-9_]*_(?:FAILED|SKIPPED|ESCALATE|BLOCKED)\b|\bexit code\b|\btimed?[ -]?out\b|\brate.?limit|"
+	r"##\[(?:warning|error)\]|\bCLAUDE_POOL run\b.*\boutcome=(?!success\b)|\bAI_ENGINE_FALLBACK\b|\bexited with code\b",
 	re.IGNORECASE,
 )
 
@@ -733,6 +779,231 @@ def extract_run_refs(texts: Iterable[str], repo: str, limit: int = MAX_RUN_REFS)
 			seen[run_id] = {"repo": repo, "run_id": run_id, "url": match.group(0)}
 	refs = list(seen.values())
 	return refs[-limit:]
+
+
+# --- Linked runs (issue #8248) ----------------------------------------------
+# A failed release-gate job often only polls or dispatches the run where the
+# failure really happened. The intake follows same-repository run links found
+# in the failed jobs' filtered logs and renders their step timelines for the
+# network-isolated diagnosis. The timelines and logs are evidence only. A
+# linked run feeds the heal scope only through `heal-scope
+# linked-workflow-paths` (issue #8360): for a release or promotion source in
+# this repository, before the scope freeze, its workflow file (API `.path`),
+# the reusable workflows that file calls and the scripts its failed or longest
+# step runs, all read from the scope-commit tree. The diagnosis never adds a path.
+
+LINKED_RUN_LONG_STEP_SECS = 600
+LINKED_RUN_MAX_JOBS = 20
+LINKED_RUN_MAX_STEPS_PER_JOB = 40
+LINKED_RUN_TEXT_MAX_BYTES = 8 * 1024
+LINKED_RUN_NAME_MAX = 120
+_STALL_WINDOW_RES = (
+	re.compile(r"no activity for (\d{1,4}) minutes?", re.IGNORECASE),
+	re.compile(r"(\d{1,4})[- ]?min(?:ute)?s?[- ]stall window", re.IGNORECASE),
+	re.compile(r"stall window of (\d{1,4}) min", re.IGNORECASE),
+	re.compile(r"stall(?:ed)?\b[^\n]{0,80}?\b(\d{1,4}) minutes?", re.IGNORECASE),
+)
+_ACTIONS_LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?Z ")
+# Distinct from _CONTROL_CHARS_RE above (which keeps \t/\n/\r): run and step
+# names must stay on one line.
+_LINKED_RUN_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def select_linked_runs(texts: Iterable[str], repo: str, exclude_run_ids: Iterable[str], limit: int) -> list[dict[str, Any]]:
+	"""Same-repository run links in ``texts`` that are not already reported.
+
+	Reuses :func:`extract_run_refs` (same ``_RUN_URL_RE``, same repository
+	filter, newest mention last) without its cap, drops ``exclude_run_ids``,
+	then keeps the last ``limit``. ``limit <= 0`` returns ``[]``.
+	"""
+	if limit <= 0:
+		return []
+	excluded = {str(run_id).strip() for run_id in exclude_run_ids if str(run_id).strip()}
+	refs = [ref for ref in extract_run_refs(texts, repo, limit=10_000) if ref["run_id"] not in excluded]
+	return refs[-limit:]
+
+
+def stall_window_minutes(texts: Iterable[str]) -> list[int]:
+	"""Stall windows (minutes, 1-1440) named in the parent's failing logs."""
+	found: set[int] = set()
+	for text in texts:
+		for pattern in _STALL_WINDOW_RES:
+			for match in pattern.finditer(text or ""):
+				value = int(match.group(1))
+				if 1 <= value <= 1440:
+					found.add(value)
+	return sorted(found)
+
+
+def _parse_actions_ts(value: Any) -> datetime | None:
+	if not isinstance(value, str) or not value:
+		return None
+	try:
+		parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+	except ValueError:
+		return None
+	if parsed.tzinfo is None:
+		parsed = parsed.replace(tzinfo=timezone.utc)
+	return parsed.astimezone(timezone.utc)
+
+
+def _linked_run_name(value: Any) -> str:
+	text = _LINKED_RUN_CONTROL_CHARS_RE.sub(" ", str(value or ""))
+	text = " ".join(text.split())
+	return text[:LINKED_RUN_NAME_MAX] or "?"
+
+
+def _format_duration(seconds: int) -> str:
+	seconds = max(0, int(seconds))
+	hours, rest = divmod(seconds, 3600)
+	minutes, secs = divmod(rest, 60)
+	if hours:
+		return f"{hours}h{minutes:02d}m{secs:02d}s"
+	return f"{minutes}m{secs:02d}s"
+
+
+def render_linked_run_timeline(
+	run: Any,
+	jobs: Any,
+	*,
+	repo: str,
+	run_id: str,
+	stall_minutes: Iterable[int] = (),
+	long_step_secs: int = LINKED_RUN_LONG_STEP_SECS,
+) -> dict[str, Any]:
+	"""Render a compact step timeline of one linked run.
+
+	The run must be ``run_id`` in ``repo`` (case-insensitive): another
+	repository's run is ``other_repository``. A step is marked ``[LONG]`` when
+	it ran at least ``long_step_secs`` or longer than the shortest stall
+	window. Returns ``{"ok": False, "reason": ...}`` or
+	``{"ok": True, "text": ..., "longest": {"job_id", "start", "end"} | None}``.
+	"""
+	if not isinstance(run, dict) or str(run.get("id")) != str(run_id) or not str(run_id).isdigit():
+		return {"ok": False, "reason": "run_malformed"}
+	repository = run.get("repository")
+	full_name = repository.get("full_name") if isinstance(repository, dict) else None
+	if not isinstance(full_name, str) or not full_name:
+		return {"ok": False, "reason": "run_malformed"}
+	if full_name.casefold() != str(repo).casefold():
+		return {"ok": False, "reason": "other_repository"}
+	if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
+		return {"ok": False, "reason": "jobs_malformed"}
+	windows = [int(value) for value in stall_minutes if isinstance(value, int) and value > 0]
+	stall_secs = min(windows) * 60 if windows else None
+	run_updated = _parse_actions_ts(run.get("updated_at"))
+	lines = [
+		f"--- linked run https://github.com/{full_name}/actions/runs/{run_id}"
+		f" | workflow: {_linked_run_name(run.get('name'))}"
+		f" | status: {_linked_run_name(run.get('status'))}/{_linked_run_name(run.get('conclusion') or 'none')}"
+		f" | created: {_linked_run_name(run.get('created_at'))}"
+		f" | updated: {_linked_run_name(run.get('updated_at'))} ---"
+	]
+	# [LONG] marks and the longest step are decided over every job and step;
+	# the caps below only limit what is rendered, so a stalled step past the
+	# 40th (the Implement gate) is still shown and its log still fetched.
+	longest: dict[str, Any] | None = None
+	longest_secs = -1
+	longest_key: tuple[int, int] | None = None
+	job_list = [job for job in jobs["jobs"] if isinstance(job, dict)]
+	rendered_jobs: list[tuple[int, str, list[tuple[int, str, bool]], int]] = []
+	for job_index, job in enumerate(job_list):
+		job_id = job.get("id")
+		header = f"job: {_linked_run_name(job.get('name'))} (status: {_linked_run_name(job.get('status'))}, conclusion: {_linked_run_name(job.get('conclusion') or 'none')})"
+		steps = [step for step in (job.get("steps") or []) if isinstance(step, dict) and step.get("conclusion") != "skipped"]
+		step_lines: list[tuple[int, str, bool]] = []
+		for step_index, step in enumerate(steps):
+			start = _parse_actions_ts(step.get("started_at"))
+			end = _parse_actions_ts(step.get("completed_at"))
+			running = False
+			if start is not None and end is None and step.get("status") != "completed" and run_updated is not None:
+				end = run_updated
+				running = True
+			name = _linked_run_name(step.get("name"))
+			conclusion = _linked_run_name(step.get("conclusion") or step.get("status") or "unknown")
+			if start is None:
+				step_lines.append((step_index, f"  - {name}: not started ({conclusion})", False))
+				continue
+			start_text = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+			if end is None or end < start:
+				step_lines.append((step_index, f"  - {name}: {start_text} -> ? ({conclusion})", False))
+				continue
+			end_text = end.strftime("%Y-%m-%dT%H:%M:%SZ")
+			duration = int((end - start).total_seconds())
+			is_long = duration >= long_step_secs or (stall_secs is not None and duration > stall_secs)
+			mark = " [LONG]" if is_long else ""
+			suffix = " (still running)" if running else ""
+			step_lines.append((step_index, f"  - {name}: {start_text} -> {end_text}{suffix} ({_format_duration(duration)}) {conclusion}{mark}", is_long))
+			if isinstance(job_id, int) and duration > longest_secs:
+				longest_secs = duration
+				longest = {"job_id": job_id, "start": start_text, "end": end_text}
+				longest_key = (job_index, step_index)
+		rendered_jobs.append((job_index, header, step_lines, len(steps)))
+
+	def _is_priority(job_index: int, step_index: int, is_long: bool) -> bool:
+		return is_long or longest_key == (job_index, step_index)
+
+	def _render(priority_only: bool) -> str:
+		out = list(lines)
+		shown_jobs = 0
+		for job_index, header, step_lines, step_count in rendered_jobs:
+			has_priority = any(_is_priority(job_index, idx, flag) for idx, _line, flag in step_lines)
+			if job_index >= LINKED_RUN_MAX_JOBS and not has_priority:
+				continue
+			shown_jobs += 1
+			out.append(header)
+			shown_steps = 0
+			for step_index, line, is_long in step_lines:
+				keep = _is_priority(job_index, step_index, is_long)
+				if not priority_only and step_index < LINKED_RUN_MAX_STEPS_PER_JOB:
+					keep = True
+				if keep:
+					out.append(line)
+					shown_steps += 1
+			if step_count > shown_steps:
+				out.append(f"  ({step_count - shown_steps} more steps not shown)")
+		if len(job_list) > shown_jobs:
+			out.append(f"({len(job_list) - shown_jobs} more jobs not shown)")
+		total = jobs.get("total_count")
+		if isinstance(total, int) and total > 100:
+			out.append(f"(jobs listing truncated: {total} jobs, first 100 read)")
+		return "\n".join(out) + "\n"
+
+	text = _render(False)
+	if len(text.encode("utf-8")) > LINKED_RUN_TEXT_MAX_BYTES:
+		# Too long: keep only the [LONG] steps and the longest step.
+		text = _render(True)
+	encoded = text.encode("utf-8")
+	if len(encoded) > LINKED_RUN_TEXT_MAX_BYTES:
+		text = encoded[:LINKED_RUN_TEXT_MAX_BYTES].decode("utf-8", errors="ignore").rsplit("\n", 1)[0] + "\n(timeline truncated)\n"
+	return {"ok": True, "text": text, "longest": longest}
+
+
+def slice_log_to_window(text: str, start: str, end: str) -> str:
+	"""Keep the Actions log lines timestamped within ``start``..``end``.
+
+	Untimestamped lines follow the line before them. When the bounds or no
+	line can be parsed, or nothing falls in the window, the whole text is
+	returned unchanged (the caller still caps it with ``filter-log``).
+	"""
+	start_dt = _parse_actions_ts(start)
+	end_dt = _parse_actions_ts(end)
+	if start_dt is None or end_dt is None:
+		return text
+	start_dt = start_dt.replace(microsecond=0)
+	end_dt = end_dt.replace(microsecond=0) + timedelta(seconds=1)
+	kept: list[str] = []
+	keep = False
+	for line in text.splitlines(keepends=True):
+		match = _ACTIONS_LOG_TS_RE.match(line)
+		if match:
+			stamp = _parse_actions_ts(match.group(1) + "Z")
+			keep = stamp is not None and start_dt <= stamp <= end_dt
+		if keep:
+			kept.append(line)
+	if not kept:
+		return text
+	return "".join(kept)
 
 
 def phase_report_workflow_paths(phase: str, *, source_repo: str, self_repo: str) -> tuple[str, ...]:
@@ -1359,6 +1630,35 @@ def engine_fallback_fingerprint(role: str, reason: str) -> str:
 	return fingerprint("ai-engine-fallback", role, reason)
 
 
+def _engine_pool_reason_token(value: str | None) -> str:
+	"""The pool reason token when it matches the pattern, else "unavailable"."""
+	if isinstance(value, str) and _ENGINE_POOL_REASON_RE.fullmatch(value):
+		return value
+	return ENGINE_POOL_REASON_UNAVAILABLE
+
+
+def _filter_engine_pool_reason_lines(evidence: str) -> str:
+	"""Keep at most one valid ``Claude pool step reason:`` evidence line.
+
+	Evidence without such a line is returned unchanged (byte-identical).
+	Otherwise the first line whose token matches the pattern is kept and every
+	other prefixed line (invalid or duplicate) is dropped. Idempotent.
+	"""
+	lines = evidence.split("\n")
+	if not any(line.startswith(ENGINE_POOL_REASON_EVIDENCE_PREFIX) for line in lines):
+		return evidence
+	kept: list[str] = []
+	seen = False
+	for line in lines:
+		if line.startswith(ENGINE_POOL_REASON_EVIDENCE_PREFIX):
+			token = line[len(ENGINE_POOL_REASON_EVIDENCE_PREFIX):]
+			if seen or not _ENGINE_POOL_REASON_RE.fullmatch(token):
+				continue
+			seen = True
+		kept.append(line)
+	return "\n".join(kept)
+
+
 def build_engine_fallback_payload(
 	*,
 	repo: str,
@@ -1371,6 +1671,7 @@ def build_engine_fallback_payload(
 	records: Iterable[str],
 	now: datetime | None = None,
 	run_attempt: str | None = None,
+	pool_reason: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a refused (non-capacity) AI engine fallback.
 
@@ -1379,6 +1680,10 @@ def build_engine_fallback_payload(
 	the heal prompt. ``reporter_run`` names the reporting run and attempt
 	(``GITHUB_RUN_ID`` / ``GITHUB_RUN_ATTEMPT``, attempt 1 when unset); the
 	intake verifies it before using it as the heal scope's run.
+	``pool_reason`` (issue #8406), when not None, adds one
+	``Claude pool step reason: <token>`` evidence line; a token outside
+	``^[a-z0-9_]{1,60}$`` becomes "unavailable". None leaves the payload
+	exactly as before, and the fingerprint (role, reason) never changes.
 	"""
 	now = now or _utc_now()
 	if not _ENGINE_ROLE_RE.match(role or ""):
@@ -1398,7 +1703,10 @@ def build_engine_fallback_payload(
 		if len(kept) >= ENGINE_FALLBACK_MAX_RECORDS:
 			break
 	run_number = _positive_int(run_id)
-	evidence = "\n".join(["AI engine fallback records (v1 epoch role reason class action policy):", *kept])
+	evidence_lines = ["AI engine fallback records (v1 epoch role reason class action policy):", *kept]
+	if pool_reason is not None:
+		evidence_lines.append(f"{ENGINE_POOL_REASON_EVIDENCE_PREFIX}{_engine_pool_reason_token(pool_reason)}")
+	evidence = "\n".join(evidence_lines)
 	return {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -2108,6 +2416,25 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		failure_reason = SYNCED_SECURITY_FAILURE_REASON
 		failure_streak = 1
 		failure_fingerprint = None
+	elif kind == "synced_check_failure":
+		extra_keys = sorted(key for key in payload if key not in SYNCED_CHECK_PAYLOAD_KEYS)
+		if extra_keys:
+			raise ValueError("synced_check_failure reports carry no other fields: " + ", ".join(safe_token(key, 40) or "?" for key in extra_keys[:5]))
+		if payload.get("run_refs"):
+			raise ValueError("synced_check_failure reports carry no run references")
+		raw_reporter_run_id = payload.get("reporter_run_id")
+		if raw_reporter_run_id is not None and not re.fullmatch(r"[1-9][0-9]{0,19}", str(raw_reporter_run_id) if not isinstance(raw_reporter_run_id, bool) else ""):
+			raise ValueError("reporter_run_id must be a positive integer")
+		for sha_key in ("wrapper_sha", "head_sha"):
+			raw_sha = payload.get(sha_key)
+			if not (isinstance(raw_sha, str) and is_valid_sha(raw_sha.lower())):
+				raise ValueError(f"{sha_key} must be a 40-hex commit SHA for synced_check_failure reports")
+		validate_synced_check_fields(payload)
+		issue_number = None
+		label = None
+		failure_reason = SYNCED_CHECK_FAILURE_REASON
+		failure_streak = 1
+		failure_fingerprint = None
 	elif kind == "validation_failure":
 		extra_keys = sorted(key for key in payload if key not in VALIDATION_FAILURE_PAYLOAD_KEYS)
 		if extra_keys:
@@ -2230,7 +2557,9 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	}
 	if kind == "engine_fallback":
 		normalized.update({"engine_role": payload["engine_role"], "engine_reason": payload["engine_reason"],
-			"reporter_run": _engine_reporter_run(payload.get("reporter_run"))})
+			"reporter_run": _engine_reporter_run(payload.get("reporter_run")),
+			# At most one valid pool reason line survives (issue #8406).
+			"failure_evidence": _filter_engine_pool_reason_lines(normalized["failure_evidence"])})
 	if kind == "synced_security_finding":
 		# Only validated fields: no title, excerpt, label, branch or conclusion
 		# text from the report reaches the public issue (Q245).
@@ -2249,6 +2578,23 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			"failure_evidence": "",
 			"reported_at": _iso(_utc_now()),
 			"findings": validate_synced_security_findings(payload.get("findings")),
+		})
+	if kind == "synced_check_failure":
+		# Only validated pointers reach the public issue (no log or diagnosis text).
+		normalized.update({
+			"issue_title": SYNCED_CHECK_ISSUE_TITLE,
+			"issue_url": None,
+			"labels": [],
+			"source_gen": None,
+			"source_root": None,
+			"issue_excerpt": "",
+			"comments_excerpt": "",
+			"workflow_name": SYNCED_CHECK_WORKFLOW_NAME,
+			"head_branch": None,
+			"conclusion": None,
+			"failure_evidence": "",
+			"reported_at": _iso(_utc_now()),
+			**validate_synced_check_fields(payload),
 		})
 	if kind == "validation_failure":
 		# Only fixed vocabulary plus the neutralised signature reaches the
@@ -2669,22 +3015,70 @@ def bind_report_claims(
 def _drop_step_script_lines(text: str) -> str:
 	"""Remove the echoed step script from raw Actions job-log text.
 
-	Only ANSI-cyan lines inside a ``##[group]Run`` header block are dropped;
-	the header line itself, the ``shell:`` / ``env:`` block, and every line of
-	real step output are kept. Text without such headers (reporter evidence,
-	already-sanitised logs) is returned unchanged.
+	Inside a ``##[group]Run`` header block, ANSI-cyan lines are dropped, and
+	so are unstyled lines between the header line and the header's first
+	``shell:`` / ``with:`` / ``env:`` section key (the echoed script printed
+	without colour). Those unstyled lines are buffered and dropped only once
+	a section key confirms the header; a header that never closes, closes
+	with ``##[endgroup]`` before any section key (a user-defined ``Run ...``
+	group, since the runner prints a script step's ``shell:`` before the
+	close), or is reopened by another ``##[group]Run`` first keeps them
+	(fail open), so a log cut mid-header still carries the step's output. The
+	header line itself, the ``shell:`` / ``with:`` / ``env:`` block (left for
+	``_strip_step_env_values``), and every line after ``##[endgroup]`` are
+	kept. Text without such headers (reporter evidence, already-sanitised
+	logs) is returned unchanged.
+	Marker shapes are read the way ``_strip_step_env_values`` reads them, so
+	this pass never removes a line that pass needs to bound an ``env:`` block:
+	a ``##[group]Run`` line after the header's first section key is a value
+	line, not a new header, and in a timestamped header a ``##[endgroup]`` is
+	real only when it is timestamped and not followed by an unstamped
+	non-empty line.
 	"""
 	kept: list[str] = []
+	pending: list[str] = []
 	in_header = False
-	for line in text.split("\n"):
+	in_script = False
+	header_stamped = False
+	all_lines = text.split("\n")
+	for index, line in enumerate(all_lines):
 		content = _LOG_TIMESTAMP_RE.sub("", line)
-		if _STEP_HEADER_OPEN_RE.match(content):
+		real_close = bool(_STEP_HEADER_CLOSE_RE.match(content)) and (
+			not header_stamped
+			or (
+				content != line
+				and not (
+					index + 1 < len(all_lines)
+					and all_lines[index + 1].strip()
+					and not _LOG_TIMESTAMP_RE.match(all_lines[index + 1])
+				)
+			)
+		)
+		if _STEP_HEADER_OPEN_RE.match(content) and (not in_header or in_script):
+			# An earlier header that never closed keeps its buffered lines.
+			kept.extend(pending)
+			pending = []
 			in_header = True
-		elif in_header and _STEP_HEADER_CLOSE_RE.match(content):
+			in_script = True
+			header_stamped = content != line
+		elif in_header and real_close:
+			# Closed before any section key: not an echoed script, keep them.
+			if in_script:
+				kept.extend(pending)
+			pending = []
 			in_header = False
+			in_script = False
+			header_stamped = False
 		elif in_header and content.startswith(_STEP_SCRIPT_LINE_PREFIX):
 			continue
+		elif in_script and _STEP_HEADER_SECTION_RE.match(content):
+			pending = []
+			in_script = False
+		elif in_script:
+			pending.append(line)
+			continue
 		kept.append(line)
+	kept.extend(pending)
 	return "\n".join(kept)
 
 
@@ -3296,6 +3690,14 @@ def heal_scope_guard_subjects(test_files: Iterable[str], exists: Any, oversized_
 
 # Explicit scope slots reserved for failing-test subjects ahead of changed_files.
 HEAL_SCOPE_SUBJECT_RESERVE = 8
+# Linked-run scope paths (issue #8360) one intake may add to self_workflows.
+# They count toward the marker's 20 explicit slots but sit ahead of the subject
+# reserve in workflow_paths, so this sub-cap keeps HEAL_SCOPE_SUBJECT_RESERVE
+# slots free: without it linked runs could take every explicit slot and confine
+# a test-failure heal to tests/** again (#6907/#6916). The intake's scope freeze
+# also subtracts the source workflow, engine and crash paths already ahead of
+# the subjects, so the reserve holds when those are present too.
+HEAL_SCOPE_LINKED_PATHS_MAX = 20 - HEAL_SCOPE_SUBJECT_RESERVE
 
 
 def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = ()) -> str:
@@ -3962,6 +4364,9 @@ def verify_run_provenance(
 		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES + SCHEDULED_CHECK_WORKFLOW_FILES)
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
+	report_head = str(payload.get("head_sha") or "").strip().lower()
+	# Run ids of autofix_failure runs that a trusted failure marker binds to report_head.
+	result["marker_head_run_ids"] = []
 	for position, ref in enumerate(refs):
 		run_id = str(ref["run_id"])
 		run = runs.get(run_id) if isinstance(runs, dict) else None
@@ -4007,20 +4412,28 @@ def verify_run_provenance(
 			)
 			if not linked:
 				reason = "not_linked_to_issue"
+		marker_head_bound = False
 		if not reason and kind == "autofix_failure":
 			linked = False
 			for comment in comments or []:
 				if not isinstance(comment, dict) or _comment_author(comment) != trusted_login.strip().lower():
 					continue
 				body = sanitize_text(comment.get("body"))
-				if _marker_fields(_canonical_failure_marker(body)).get("run") == run_id or any(
-					_marker_fields(match).get("run") == run_id for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body)
-				):
+				run_markers = [fields for fields in (
+					_marker_fields(_canonical_failure_marker(body)),
+					*(_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body)),
+				) if fields.get("run") == run_id]
+				if run_markers:
 					linked = True
-					break
+					# A trusted marker naming this run and the report's PR head
+					# binds the run to that head even when the run itself was
+					# dispatched on another ref (verify-run --marker-head-bound).
+					if any(is_valid_sha(report_head) and fields.get("head", "").lower() == report_head for fields in run_markers):
+						marker_head_bound = True
+						break
+					continue
 				if body.strip().startswith(AUTOFIX_FAILURE_COMMENT_MARKERS) and any(item["run_id"] == run_id for item in extract_run_refs([body], repo)):
 					linked = True
-					break
 			pr_number = payload.get("issue_number")
 			if not linked and isinstance(run.get("pull_requests"), list):
 				linked = any(isinstance(pr, dict) and pr.get("number") == pr_number for pr in run["pull_requests"])
@@ -4035,6 +4448,8 @@ def verify_run_provenance(
 				result["reason"] = f"current_run_rejected:{reason}"
 		else:
 			result["run_refs"].append(ref)
+			if marker_head_bound:
+				result["marker_head_run_ids"].append(run_id)
 			if pending:
 				result["pending_current_run"] = run_id
 	if result["reason"]:
@@ -4592,6 +5007,7 @@ _NON_RETRYABLE_EXPLANATIONS = {
 	"conflict_resolver_sandbox_path_host_only": "Another review/autofix run cannot resolve this: the conflicted path(s) are executed on the host and the resolver sandbox refuses them by design. Merge the conflict by hand, push, then remove `ai:needs-human`.",
 	"conflict_resolver_sandbox_path_unsupported": "Another review/autofix run cannot resolve this: the conflicted path(s) are symlinks or have names the resolver sandbox cannot carry, so it refuses them. Merge the conflict by hand, push, then remove `ai:needs-human`.",
 	"conflict_resolver_sandbox_support_missing": "Another review/autofix run cannot resolve this: the verified workflow support commit is missing the conflict resolver's sandbox support files, so no resolver run can start until workflow support is fixed. Ask a maintainer to fix workflow support, or merge the conflict by hand and push, then remove `ai:needs-human`.",
+	"review_editor_sandbox_path_excluded": "Another review/autofix run cannot fix this: the fix needs a path the review editor sandbox does not admit (a `.claude/` file other than the admitted command and docs reference files, or a new file there). Make that change by hand, push, then remove `ai:needs-human`.",
 }
 _NON_RETRYABLE_EXPLANATION_DEFAULT = "Another review/autofix run cannot resolve this failure. Resolve it by hand, push, then remove `ai:needs-human`."
 
@@ -4611,7 +5027,7 @@ def render_non_retryable_comment(decision: dict[str, Any], *, pr_number: Any, he
 		lines.append("Conflicted path(s) that need a manual merge:")
 		lines.append("")
 		lines.extend(f"- `{sanitize_text(path).replace('@', '')}`" for path in paths)
-	elif reason != "conflict_resolver_sandbox_support_missing":
+	elif reason not in ("conflict_resolver_sandbox_support_missing", "review_editor_sandbox_path_excluded"):
 		lines.append("The conflicted path(s) could not be read from the failure comment; see the latest review/autofix failure comment on this pull request.")
 	lines.extend(["", _NON_RETRYABLE_EXPLANATIONS.get(reason, _NON_RETRYABLE_EXPLANATION_DEFAULT), "", "No heal issue was opened."])
 	run_match = _RUN_URL_RE.fullmatch(str(intake_run_url or ""))
@@ -5452,7 +5868,8 @@ def synced_security_source_paths(file: str, audit_gate_contract: Any = None) -> 
 	Same mapping as build_sync_manifest.derive_managed_digests: a top-level
 	wrapper comes from workflow-templates/<name>.yml, a .claude/ file from
 	workflow-templates/.claude/, CLAUDE.md from CLAUDE.md, an audit-gate target
-	from its contract source. A retired file maps to nothing.
+	from its contract source. A retired file and a ``seed_only`` audit-gate
+	target (consumer-owned once created) map to nothing.
 	"""
 	paths: list[str] = []
 	prefix = ".github/workflows/"
@@ -5464,7 +5881,7 @@ def synced_security_source_paths(file: str, audit_gate_contract: Any = None) -> 
 		paths.append("CLAUDE.md")
 	contract = audit_gate_contract if isinstance(audit_gate_contract, dict) else {}
 	for item in contract.get("managed_files") or []:
-		if not isinstance(item, dict):
+		if not isinstance(item, dict) or item.get("seed_only") is True:
 			continue
 		source, target = item.get("source"), item.get("target")
 		if target == file and isinstance(source, str) and source and is_valid_repo_path("workflow-templates/audit-gate/" + source):
@@ -5681,6 +6098,432 @@ def _cmd_compose_synced_security_occurrence(args: argparse.Namespace) -> int:
 	payload = _load_synced_security_payload(args.payload_json)
 	group = _load_synced_security_group(args.group_json)
 	sys.stdout.write(compose_synced_security_occurrence(payload=payload, group=group, intake_run_url=args.intake_run_url))
+	return 0
+
+
+# ---------------------------------------------------------------------------
+# Synced-file check failures (source_kind synced_check_failure, issue #8265)
+# ---------------------------------------------------------------------------
+
+def sanitize_synced_check_name(value: Any) -> str:
+	"""A consumer check name reduced to a safe charset (100 chars; ``check`` when empty)."""
+	text = _SYNCED_CHECK_NAME_DROP_RE.sub("", value if isinstance(value, str) else "")
+	text = " ".join(text.split())[:100].strip()
+	return text or "check"
+
+
+def _synced_check_paths(raw: Any) -> list[str]:
+	if not isinstance(raw, list) or not raw:
+		raise ValueError("paths must be a non-empty list")
+	if len(raw) > SYNCED_CHECK_MAX_PATHS:
+		raise ValueError(f"paths holds more than {SYNCED_CHECK_MAX_PATHS} entries")
+	paths: list[str] = []
+	for item in raw:
+		if not _synced_security_file_ok(item):
+			raise ValueError("paths holds an invalid repository-relative path")
+		if item in paths:
+			raise ValueError("paths holds a duplicate entry")
+		paths.append(item)
+	return paths
+
+
+def validate_synced_check_fields(payload: dict[str, Any]) -> dict[str, Any]:
+	"""Validate and normalise the pointer fields of a synced_check_failure report."""
+	paths = _synced_check_paths(payload.get("paths"))
+	cause = payload.get("cause_path")
+	if cause is not None and cause not in paths:
+		raise ValueError("cause_path must be one of paths")
+	pr_number = _positive_int(payload.get("pr_number"))
+	if pr_number is None or isinstance(payload.get("pr_number"), bool):
+		raise ValueError("pr_number must be a positive integer")
+	raw_runs = payload.get("check_run_ids") or []
+	if not isinstance(raw_runs, list) or len(raw_runs) > SYNCED_CHECK_MAX_RUNS:
+		raise ValueError(f"check_run_ids must be a list of at most {SYNCED_CHECK_MAX_RUNS} run ids")
+	runs: list[str] = []
+	for item in raw_runs:
+		if isinstance(item, bool) or not re.fullmatch(r"[1-9][0-9]{0,19}", str(item)):
+			raise ValueError("check_run_ids holds an invalid run id")
+		if str(item) not in runs:
+			runs.append(str(item))
+	return {
+		"pr_number": pr_number,
+		"check_name": sanitize_synced_check_name(payload.get("check_name")),
+		"check_run_ids": runs,
+		"paths": paths,
+		"cause_path": cause,
+		"head_sha": str(payload.get("head_sha") or "").lower(),
+	}
+
+
+def synced_check_fingerprint(paths: Iterable[str]) -> str:
+	"""One fingerprint per set of consumer paths, whatever PR, check or release reported it."""
+	return hashlib.sha256(("synced_check_failure\n" + "\n".join(sorted(set(paths)))).encode("utf-8")).hexdigest()
+
+
+def parse_check_triage_affected_files(text: Any) -> dict[str, Any]:
+	"""Read the triage diagnosis's AFFECTED_FILES block (untrusted model output).
+
+	Status ``ok``, ``missing`` (no block), ``malformed`` (anything but one
+	well-formed block of at most SYNCED_CHECK_MAX_PATHS valid paths) or
+	``empty`` (a well-formed block that lists no path).
+	"""
+	result: dict[str, Any] = {"status": "missing", "paths": [], "cause": None}
+	if not isinstance(text, str):
+		return result
+	lines = text.split("\n")
+	begins = [index for index, line in enumerate(lines) if line.strip() == AFFECTED_FILES_BEGIN]
+	ends = [index for index, line in enumerate(lines) if line.strip() == AFFECTED_FILES_END]
+	if not begins and not ends:
+		return result
+	result["status"] = "malformed"
+	if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
+		return result
+	paths: list[str] = []
+	cause = None
+	for raw_line in lines[begins[0] + 1:ends[0]]:
+		line = raw_line.strip()
+		if not line:
+			continue
+		if line.startswith("- "):
+			path = line[2:].strip()
+			if not _synced_security_file_ok(path):
+				return result
+			if path not in paths:
+				paths.append(path)
+		elif line.startswith("cause:"):
+			value = line[len("cause:"):].strip()
+			if cause is not None or not _synced_security_file_ok(value):
+				return result
+			cause = value
+		else:
+			return result
+	if len(paths) > SYNCED_CHECK_MAX_PATHS:
+		return result
+	if cause is not None and cause not in paths:
+		if len(paths) >= SYNCED_CHECK_MAX_PATHS:
+			return result
+		paths.append(cause)
+	result.update({"status": "ok" if paths else "empty", "paths": paths, "cause": cause})
+	return result
+
+
+def _load_sync_manifest_module():
+	"""Load the sibling build_sync_manifest.py by path (callers run ``python3 -I``)."""
+	import importlib.util
+
+	module_path = Path(__file__).resolve().with_name("build_sync_manifest.py")
+	spec = importlib.util.spec_from_file_location("heal_build_sync_manifest", module_path)
+	if spec is None or spec.loader is None:
+		raise ValueError("build_sync_manifest.py is missing")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def check_triage_route(
+	*,
+	diagnosis: str,
+	digests: Any,
+	repo_root: str,
+	commit: str,
+	enabled: str,
+	repo: str,
+	upstream_repo: str,
+	historical: str,
+) -> dict[str, Any]:
+	"""Decide whether a failing consumer check belongs upstream (issue #8265).
+
+	``route`` only when every listed path is an unmodified managed file, or the
+	named cause is an unmodified managed workflow; anything else ``file``s the
+	consumer issue as before. Never raises for bad input.
+	"""
+	decision: dict[str, Any] = {"decision": "file", "reason": "", "paths": [], "statuses": {}, "cause": None, "heal_fp": ""}
+	if str(enabled or "").strip().lower() != "true":
+		decision["reason"] = "disabled"
+		return decision
+	if (repo or "").lower() == (upstream_repo or "").lower():
+		decision["reason"] = "self_repo"
+		return decision
+	if str(historical or "").strip().lower() == "true":
+		decision["reason"] = "historical_mode"
+		return decision
+	block = parse_check_triage_affected_files(diagnosis)
+	decision["paths"], decision["cause"] = block["paths"], block["cause"]
+	if block["status"] != "ok":
+		decision["reason"] = {"missing": "no_block", "malformed": "malformed_block"}.get(block["status"], "no_paths")
+		return decision
+	if not isinstance(digests, dict) or not digests:
+		decision["reason"] = "manifest_unavailable"
+		return decision
+	try:
+		statuses = _load_sync_manifest_module().classify_paths(Path(repo_root), str(commit), digests, block["paths"])
+	except Exception:  # noqa: BLE001 - any classifier failure files the consumer issue
+		decision["reason"] = "classify_failed"
+		return decision
+	decision["statuses"] = statuses
+	values = [statuses.get(path) for path in block["paths"]]
+	if "modified" in values or any(value not in ("unmanaged", "unmodified") for value in values):
+		decision["reason"] = "consumer_modified"
+		return decision
+	cause = block["cause"]
+	if all(value == "unmodified" for value in values):
+		decision["reason"] = "all_unmodified_managed"
+	elif cause and cause.startswith(".github/workflows/") and statuses.get(cause) == "unmodified":
+		decision["reason"] = "managed_wrapper_cause"
+	else:
+		decision["reason"] = "unmanaged_paths"
+		return decision
+	managed = [path for path in block["paths"] if statuses.get(path) == "unmodified"]
+	decision.update({"decision": "route", "paths": managed, "heal_fp": synced_check_fingerprint(managed)})
+	if cause not in managed:
+		decision["cause"] = None
+	return decision
+
+
+def build_synced_check_payload(
+	*,
+	decision: dict[str, Any],
+	repo: str,
+	pr_number: Any,
+	check_name: Any,
+	check_run_id: Any,
+	details_url: Any,
+	head_sha: Any,
+	wrapper_sha: Any,
+	run_id: Any,
+) -> dict[str, Any]:
+	"""The dispatch payload for a routed check failure (pointers only)."""
+	# A check-run id is not an Actions run id; only a same-repository Actions
+	# details URL yields a run link.
+	runs: list[str] = []
+	match = _RUN_URL_RE.search(str(details_url or ""))
+	if match and match.group("repo") == repo:
+		runs.append(match.group("run_id"))
+	payload: dict[str, Any] = {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "synced_check_failure",
+		"pr_number": _positive_int(pr_number),
+		"check_name": sanitize_synced_check_name(check_name),
+		"check_run_ids": runs[:SYNCED_CHECK_MAX_RUNS],
+		"paths": list(decision.get("paths") or []),
+		"head_sha": str(head_sha or "").lower(),
+		"wrapper_sha": str(wrapper_sha or "").lower(),
+		"run_refs": [],
+		"reported_at": _iso(_utc_now()),
+	}
+	if decision.get("cause"):
+		payload["cause_path"] = decision["cause"]
+	if re.fullmatch(r"[1-9][0-9]{0,19}", str(run_id or "")):
+		payload["reporter_run_id"] = str(run_id)
+		payload["reporter_run_url"] = f"https://github.com/{repo}/actions/runs/{run_id}"
+	return payload
+
+
+def check_synced_check_managed_paths(paths: Iterable[str], digests: Any) -> str | None:
+	"""None when every path is a managed path of the release, else a reason token."""
+	if not isinstance(digests, dict) or not digests:
+		return "release_unavailable"
+	for path in paths:
+		if path not in digests:
+			return "unmanaged_path"
+	return None
+
+
+def synced_check_source_paths(paths: Iterable[str], audit_gate_contract: Any = None) -> list[str]:
+	sources: list[str] = []
+	for path in paths:
+		for source in synced_security_source_paths(path, audit_gate_contract):
+			if source not in sources:
+				sources.append(source)
+	return sources
+
+
+def _synced_check_run_links(payload: dict[str, Any]) -> str:
+	repo = payload["source_repo"]
+	links = [f"https://github.com/{repo}/actions/runs/{run}" for run in payload.get("check_run_ids") or []]
+	return ", ".join(links) or "(unavailable)"
+
+
+def _synced_check_rows(payload: dict[str, Any], sources: list[str]) -> list[str]:
+	rows = [f"- **Consumer file:** `{path}`" for path in payload["paths"]]
+	if payload.get("cause_path"):
+		rows.append(f"- **Named cause:** `{payload['cause_path']}`")
+	rows.append("- **Source in this repository:** " + (", ".join(f"`{path}`" for path in sources) or "the source of these files"))
+	return rows
+
+
+def compose_synced_check_issue(
+	*,
+	payload: dict[str, Any],
+	fp: str,
+	gen: int,
+	root: str,
+	scope_marker: str,
+	max_depth: int,
+	intake_run_url: str,
+	sources: list[str],
+) -> tuple[str, str]:
+	"""Title and body of a synced-file check-failure heal issue (validated pointers only)."""
+	if not _FP_HEX_RE.match(fp or "") or not _FP_HEX_RE.match(root or ""):
+		raise ValueError("invalid fingerprint")
+	repo = payload["source_repo"]
+	release = payload.get("wrapper_sha") or ""
+	if not is_valid_repo_slug(repo) or not is_valid_sha(release):
+		raise ValueError("invalid source repository or release SHA")
+	first = payload["paths"][0]
+	more = f" (+{len(payload['paths']) - 1} more)" if len(payload["paths"]) > 1 else ""
+	title = f"[synced] {first}{more} breaks a consumer check"
+	parts = [
+		f"<!-- {MARKER_PREFIX}fp={fp} -->",
+		f"<!-- {MARKER_PREFIX}gen={int(gen)} -->",
+		f"<!-- {MARKER_PREFIX}root={root} -->",
+		f"<!-- {MARKER_PREFIX}source={repo}#run -->",
+		f"<!-- {MARKER_PREFIX}classification=workflow-defect -->",
+		"",
+		f"## Synced file breaks a consumer check (generation {int(gen)} of max {int(max_depth)})",
+		"",
+		("A consumer's check-failure triage traced a failing check to a file the `@stable` workflow sync "
+		"manages and the consumer has not modified. The consumer cannot change that file (the managed-wrapper "
+		"integrity check refuses it), so this issue was filed here instead of in the consumer repository."),
+		"",
+		*_synced_check_rows(payload, sources),
+		f"- **Consumer repository:** `{repo}`",
+		# No bare #N: GitHub would resolve it against this repository (#8265).
+		f"- **Pull request:** `{repo}` PR {int(payload['pr_number'])}",
+		f"- **Failing check:** `{payload['check_name']}`",
+		f"- **Failing check run:** {_synced_check_run_links(payload)}",
+		f"- **Release SHA (wrapper pin):** `{release}`",
+		f"- **Consumer head SHA:** `{payload.get('head_sha') or ''}`",
+		f"- **Reporting triage run:** {_synced_security_run_url(payload)}",
+		f"- **Heal intake run:** {intake_run_url}",
+		"",
+		("The failing check's logs and the triage diagnosis stay in the consumer repository; they are not copied "
+		"into this public repository. Read them from the run link above when access allows."),
+		"",
+		"## Fix constraints",
+		"",
+		("- Fix the template in this repository, never the consumer's copy: the next workflow sync overwrites it, "
+		"and the integrity check rejects a hand-edited managed wrapper."),
+		"- Add a regression test that would have caught the defect in the rendered template.",
+		"- Keep the change minimal and backward compatible; never rename or remove existing identifiers, env vars, labels, or log prefixes.",
+		"",
+		(f"_Filed by the workflow failure heal intake. Lineage generation {int(gen)} (cap {int(max_depth)}). "
+		"Further reports of the same files are recorded as occurrence comments on this issue while it stays open._"),
+	]
+	marker = (scope_marker or "").strip()
+	if marker:
+		parts.extend(["", marker])
+	return title, "\n".join(parts) + "\n"
+
+
+def compose_synced_check_occurrence(*, payload: dict[str, Any], intake_run_url: str) -> str:
+	lines = [
+		f"<!-- {MARKER_PREFIX}occurrence -->",
+		"Another consumer check failed because of these synced files:",
+		"",
+		f"- **Consumer repository:** `{payload['source_repo']}`",
+		f"- **Pull request:** `{payload['source_repo']}` PR {int(payload['pr_number'])}",
+		f"- **Failing check:** `{payload['check_name']}`",
+		f"- **Failing check run:** {_synced_check_run_links(payload)}",
+		f"- **Release SHA (wrapper pin):** `{payload.get('wrapper_sha') or ''}`",
+		f"- **Reporting triage run:** {_synced_security_run_url(payload)}",
+		f"- **Heal intake run:** {intake_run_url}",
+	]
+	return "\n".join(lines) + "\n"
+
+
+def _load_synced_check_payload(path: str) -> dict[str, Any]:
+	payload = _load_json_file(path)
+	if not isinstance(payload, dict) or payload.get("source_kind") != "synced_check_failure":
+		raise ValueError("not a synced_check_failure payload")
+	payload = dict(payload)
+	payload.update(validate_synced_check_fields(payload))
+	return payload
+
+
+def _cmd_synced_check_fingerprint(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	print(synced_check_fingerprint(payload["paths"]))
+	return 0
+
+
+def _cmd_synced_check_check_paths(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	try:
+		digests = _load_json_file(args.managed_digests_json)
+	except (OSError, ValueError):
+		digests = None
+	reason = check_synced_check_managed_paths(payload["paths"], digests)
+	_write_json({"reason": reason or "managed"})
+	return 1 if reason else 0
+
+
+def _cmd_synced_check_sources(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	contract: Any = {}
+	if args.audit_gate_contract_json:
+		try:
+			contract = _load_json_file(args.audit_gate_contract_json)
+		except (OSError, ValueError):
+			contract = {}
+	_write_json(synced_check_source_paths(payload["paths"], contract))
+	return 0
+
+
+def _cmd_check_triage_route(args: argparse.Namespace) -> int:
+	try:
+		diagnosis = Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace")
+	except OSError:
+		diagnosis = ""
+	try:
+		digests = _load_json_file(args.digests_json) if args.digests_json else None
+	except (OSError, ValueError):
+		digests = None
+	_write_json(check_triage_route(
+		diagnosis=diagnosis, digests=digests, repo_root=args.repo_root, commit=args.commit,
+		enabled=args.enabled, repo=args.repo, upstream_repo=args.upstream_repo, historical=args.historical,
+	))
+	return 0
+
+
+def _cmd_build_synced_check_payload(args: argparse.Namespace) -> int:
+	decision = _load_json_file(args.decision_json)
+	if not isinstance(decision, dict) or decision.get("decision") != "route":
+		raise ValueError("decision is not a route")
+	_write_json(build_synced_check_payload(
+		decision=decision, repo=args.repo, pr_number=args.pr, check_name=args.check_name,
+		check_run_id=args.check_run_id, details_url=args.details_url, head_sha=args.head_sha,
+		wrapper_sha=args.wrapper_sha, run_id=args.run_id,
+	))
+	return 0
+
+
+def _cmd_compose_synced_check_issue(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	marker = Path(args.scope_marker_file).read_text(encoding="utf-8").strip() if args.scope_marker_file else ""
+	if marker and not HEAL_SCOPE_RE.fullmatch(marker):
+		raise ValueError("scope marker is malformed")
+	contract: Any = {}
+	if args.audit_gate_contract_json:
+		try:
+			contract = _load_json_file(args.audit_gate_contract_json)
+		except (OSError, ValueError):
+			contract = {}
+	fp = synced_check_fingerprint(payload["paths"])
+	title, body = compose_synced_check_issue(
+		payload=payload, fp=fp, gen=args.gen, root=args.root or fp, scope_marker=marker,
+		max_depth=args.max_depth, intake_run_url=args.intake_run_url,
+		sources=synced_check_source_paths(payload["paths"], contract),
+	)
+	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
+	Path(args.body_out).write_text(body, encoding="utf-8")
+	return 0
+
+
+def _cmd_compose_synced_check_occurrence(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	sys.stdout.write(compose_synced_check_occurrence(payload=payload, intake_run_url=args.intake_run_url))
 	return 0
 
 
@@ -6058,6 +6901,7 @@ def _cmd_build_engine_fallback_payload(args: argparse.Namespace) -> int:
 		reporter_run_url=args.reporter_run_url or None,
 		records=[line for line in records if f"\t{args.role}\t{args.reason}\t" in line],
 		run_attempt=args.run_attempt or None,
+		pool_reason=args.pool_reason,
 	)
 	validate_payload(payload)
 	_write_json(payload)
@@ -6418,7 +7262,20 @@ def _autofix_dispatch_run_for_pr(run_json: dict[str, Any], *, kind: str, pr_numb
 	return bool(match and match.group("n") == str(pr_number))
 
 
-def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "", allow_pending: bool = False, pr_number: int = 0) -> dict[str, Any]:
+def _autofix_dispatch_run_marker_bound(run_json: dict[str, Any], *, kind: str, marker_head_bound: bool) -> bool:
+	"""True for a dispatched review run that a trusted failure marker binds to the PR head.
+
+	A self-dispatched ``review_autofix.yml`` run has no ``[pr:N]`` title and
+	runs on the dispatch ref, so neither its title nor its ``head_sha`` names
+	the PR. `verify_run_provenance` links it by the pipeline's own failure
+	marker instead, and lists it in ``marker_head_run_ids`` only when that
+	marker names this run and the report's PR head; the intake passes that
+	verdict here as ``marker_head_bound``.
+	"""
+	return kind == "autofix_failure" and marker_head_bound and run_json.get("event") == "workflow_dispatch"
+
+
+def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "", allow_pending: bool = False, pr_number: int = 0, marker_head_bound: bool = False) -> dict[str, Any]:
 	if not isinstance(run_json, dict) or (run_json.get("repository") or {}).get("full_name") != repo or not isinstance(run_json.get("id"), int) or run_json["id"] < 1:
 		raise ValueError("run identity mismatch")
 	# A phase reporter dispatches while its own run is still in progress; the
@@ -6426,7 +7283,8 @@ def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str 
 	pending = allow_pending and run_json.get("conclusion") is None and run_json.get("status") in ("queued", "in_progress", "pending")
 	if not pending and run_json.get("conclusion") not in (("failure", "timed_out", "cancelled", "success") if kind == "autofix_failure" else ("failure", "timed_out", "cancelled")):
 		raise ValueError("run not completed with expected conclusion")
-	if head_sha and run_json.get("head_sha") != head_sha and not _autofix_dispatch_run_for_pr(run_json, kind=kind, pr_number=pr_number):
+	if head_sha and run_json.get("head_sha") != head_sha and not _autofix_dispatch_run_for_pr(run_json, kind=kind, pr_number=pr_number) \
+		and not _autofix_dispatch_run_marker_bound(run_json, kind=kind, marker_head_bound=marker_head_bound):
 		raise ValueError("run head mismatch")
 	path = run_json.get("path") or ""
 	paths = [path] if isinstance(path, str) and _safe_heal_path(path) else []
@@ -6444,7 +7302,7 @@ def _cmd_select_evidence_jobs(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify_run(args: argparse.Namespace) -> int:
-	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending, pr_number=args.pr_number))
+	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending, pr_number=args.pr_number, marker_head_bound=args.marker_head_bound))
 	return 0
 
 
@@ -6452,6 +7310,271 @@ def _heal_regular_file_at_ref(checkout: str, ref: str, path: str) -> bool:
 	result = subprocess.run(["git", "ls-tree", "-z", ref, "--", path], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
 	return (result.returncode == 0 and result.stdout.endswith(b"\t" + path.encode("ascii") + b"\0")
 		and result.stdout.startswith((b"100644 blob ", b"100755 blob ")) and result.stdout.count(b"\0") == 1)
+
+
+# --- Linked-run heal scope (issue #8360) ------------------------------------
+# A release-gate step often only dispatches or polls another workflow, and the
+# defect sits in that workflow. For a release or promotion source in this
+# repository, each same-repository linked run (already read by the intake for
+# its timeline, #8248) adds to the frozen scope: (1) its own workflow file,
+# from the run's API `.path`; (2) the reusable workflows in this repository
+# that file calls in a `jobs.<id>.uses:` line, one hop only; (3) the
+# `scripts/...` paths named in the `run:` body of its first failed step, else
+# its longest step, matched by exact name. Every path is read from the tree at
+# the scope commit and must pass _safe_heal_path and exist there as a regular
+# file; none comes from the diagnosis. Files reached only through imports or
+# `source` lines are not followed.
+_LINKED_SCOPE_WORKFLOW_PATH_RE = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
+_LINKED_SCOPE_LOCAL_USES_RE = re.compile(r"^\./(\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)$")
+_LINKED_SCOPE_REMOTE_USES_RE = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)@[A-Za-z0-9_./-]+$")
+_LINKED_SCOPE_FAILED_CONCLUSIONS = ("failure", "timed_out")
+HEAL_SCOPE_LINKED_YAML_MAX_BYTES = 600_000
+# Existing script paths kept per matched step (counted after the existence check).
+# Equal to the linked-path cap, so only that cap (and the marker's 20 slots)
+# bounds a step's scripts; issue #8360 asks for no narrower per-step limit.
+HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP = HEAL_SCOPE_LINKED_PATHS_MAX
+
+
+def heal_scope_linked_workflows_gate(*, enabled: Any, source_kind: Any, source_repo: Any, self_repo: Any, source_workflow_paths: Iterable[Any]) -> str:
+	"""``disabled``, ``eligible`` or ``ineligible`` for linked-run scope paths.
+
+	Eligible only for a ``workflow_run`` report from this repository whose
+	verified run is a release or promotion workflow (RELEASE_WORKFLOW_FILES,
+	read from the authenticated run ``.path``). Only the literal ``false``
+	(any case) disables it; an empty value keeps it on.
+	"""
+	if str(enabled if enabled is not None else "").strip().lower() == "false":
+		return "disabled"
+	if source_kind != "workflow_run" or not isinstance(source_repo, str) or not isinstance(self_repo, str) \
+		or not source_repo or source_repo.casefold() != self_repo.casefold():
+		return "ineligible"
+	for path in source_workflow_paths or ():
+		if isinstance(path, str) and _run_workflow_file({"path": path}) in RELEASE_WORKFLOW_FILES:
+			return "eligible"
+	return "ineligible"
+
+
+def _linked_scope_step_name(run: dict[str, Any], jobs: dict[str, Any]) -> str | None:
+	"""The first failed step's name in job order, else the longest step's.
+
+	Durations follow render_linked_run_timeline: a step still running ends at
+	the run's ``updated_at``; a step without a usable start or end is ignored.
+	"""
+	job_list = [job for job in jobs.get("jobs") or [] if isinstance(job, dict)]
+	step_lists = [[step for step in (job.get("steps") or []) if isinstance(step, dict) and step.get("conclusion") != "skipped"] for job in job_list]
+	for steps in step_lists:
+		for step in steps:
+			if step.get("conclusion") in _LINKED_SCOPE_FAILED_CONCLUSIONS and isinstance(step.get("name"), str) and step["name"]:
+				return step["name"]
+	run_updated = _parse_actions_ts(run.get("updated_at"))
+	longest_name: str | None = None
+	longest_secs = -1
+	for steps in step_lists:
+		for step in steps:
+			start = _parse_actions_ts(step.get("started_at"))
+			end = _parse_actions_ts(step.get("completed_at"))
+			if start is None:
+				continue
+			if end is None and step.get("status") != "completed" and run_updated is not None:
+				end = run_updated
+			if end is None or end < start:
+				continue
+			duration = int((end - start).total_seconds())
+			if duration > longest_secs and isinstance(step.get("name"), str) and step["name"]:
+				longest_secs = duration
+				longest_name = step["name"]
+	return longest_name
+
+
+def _linked_scope_workflow_steps(doc: Any) -> list[dict[str, Any]]:
+	steps: list[dict[str, Any]] = []
+	workflow_jobs = doc.get("jobs") if isinstance(doc, dict) else None
+	if isinstance(workflow_jobs, dict):
+		for job in workflow_jobs.values():
+			if isinstance(job, dict) and isinstance(job.get("steps"), list):
+				steps.extend(step for step in job["steps"] if isinstance(step, dict))
+	return steps
+
+
+def heal_scope_linked_workflow_paths(run: Any, jobs: Any, *, repo: str, exists: Any, read_file: Any) -> dict[str, Any]:
+	"""Scope paths one linked run adds (issue #8360), with skip reasons.
+
+	``exists(path)`` checks for a regular file at the scope commit and
+	``read_file(path)`` returns its text (``None`` when unreadable). Returns
+	``{"paths": [...], "skipped": [{"run_id", "reason"}]}``; paths are unique
+	and in order (own workflow, called workflows, step scripts). The caller
+	applies HEAL_SCOPE_LINKED_PATHS_MAX.
+	"""
+	paths: list[str] = []
+	skipped: list[dict[str, str]] = []
+	run_id = "?"
+	if isinstance(run, dict) and isinstance(run.get("id"), int) and not isinstance(run.get("id"), bool) and run["id"] > 0:
+		run_id = str(run["id"])
+
+	def _skip(reason: str) -> None:
+		skipped.append({"run_id": run_id, "reason": reason})
+
+	def _result() -> dict[str, Any]:
+		return {"paths": paths, "skipped": skipped}
+
+	if run_id == "?":
+		_skip("run_malformed")
+		return _result()
+	repository = run.get("repository")
+	full_name = repository.get("full_name") if isinstance(repository, dict) else None
+	if not isinstance(full_name, str) or not full_name:
+		_skip("run_malformed")
+		return _result()
+	if full_name.casefold() != str(repo).casefold():
+		_skip("other_repository")
+		return _result()
+	head_repository = run.get("head_repository")
+	head_name = head_repository.get("full_name") if isinstance(head_repository, dict) else None
+	if isinstance(head_name, str) and head_name and head_name.casefold() != str(repo).casefold():
+		_skip("fork_head")
+		return _result()
+	raw_path = run.get("path")
+	own_path = raw_path.split("@", 1)[0] if isinstance(raw_path, str) else ""
+	if not _LINKED_SCOPE_WORKFLOW_PATH_RE.fullmatch(own_path) or ".." in own_path:
+		_skip("path_malformed")
+		return _result()
+	if not _safe_heal_path(own_path):
+		_skip("path_unsafe")
+		return _result()
+	if not exists(own_path):
+		_skip("file_missing")
+		return _result()
+	paths.append(own_path)
+	try:
+		import yaml  # noqa: PLC0415 - optional; without it only the run's own workflow is added
+	except ImportError:
+		_skip("yaml_unavailable")
+		return _result()
+
+	def _load(path: str) -> dict[str, Any] | None:
+		try:
+			text = read_file(path)
+		except (OSError, ValueError):
+			return None
+		if not isinstance(text, str) or len(text.encode("utf-8", errors="replace")) > HEAL_SCOPE_LINKED_YAML_MAX_BYTES:
+			return None
+		try:
+			doc = yaml.safe_load(text)
+		except (yaml.YAMLError, ValueError, RecursionError):
+			return None
+		return doc if isinstance(doc, dict) else None
+
+	own_doc = _load(own_path)
+	if own_doc is None:
+		_skip("yaml_unreadable")
+		return _result()
+	docs = [own_doc]
+	own_jobs = own_doc.get("jobs")
+	for job in (own_jobs.values() if isinstance(own_jobs, dict) else ()):
+		uses = job.get("uses") if isinstance(job, dict) else None
+		if not isinstance(uses, str):
+			continue
+		uses = uses.strip()
+		callee = None
+		local_match = _LINKED_SCOPE_LOCAL_USES_RE.fullmatch(uses)
+		remote_match = _LINKED_SCOPE_REMOTE_USES_RE.fullmatch(uses)
+		if local_match:
+			callee = local_match.group(1)
+		elif remote_match and remote_match.group(1).casefold() == str(repo).casefold():
+			callee = remote_match.group(2)
+		if callee is None or ".." in callee:
+			_skip("uses_foreign")
+			continue
+		if not _safe_heal_path(callee) or not exists(callee):
+			_skip("file_missing")
+			continue
+		if callee in paths:
+			continue
+		paths.append(callee)
+		# One hop: the callee is read for its steps only, never for its own uses:.
+		callee_doc = _load(callee)
+		if callee_doc is None:
+			_skip("yaml_unreadable")
+		else:
+			docs.append(callee_doc)
+	if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
+		_skip("jobs_malformed")
+		return _result()
+	step_name = _linked_scope_step_name(run, jobs)
+	matching = [step for doc in docs for step in _linked_scope_workflow_steps(doc) if step_name is not None and step.get("name") == step_name]
+	if not matching:
+		_skip("step_unmatched")
+		return _result()
+	for step in matching:
+		body = step.get("run")
+		if not isinstance(body, str):
+			continue
+		candidates: list[str] = []
+		for match in _CRASH_ERROR_PATH_RE.finditer(body):
+			candidate = match.group("path")
+			if candidate.startswith("scripts/") and candidate not in candidates:
+				candidates.append(candidate)
+		step_scripts = 0
+		for candidate in candidates:
+			if step_scripts >= HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP:
+				_skip("cap_reached")
+				break
+			if not _safe_heal_path(candidate) or not exists(candidate):
+				_skip("script_missing")
+			elif candidate not in paths:
+				paths.append(candidate)
+				step_scripts += 1
+	return _result()
+
+
+def heal_scope_linked_paths_for_runs(pairs: Iterable[tuple[str, str]], *, repo: str, exists: Any, read_file: Any) -> dict[str, Any]:
+	"""Merge heal_scope_linked_workflow_paths over cached (run, jobs) files.
+
+	Paths are de-duplicated in run order and capped at
+	HEAL_SCOPE_LINKED_PATHS_MAX (each dropped path adds ``cap_reached``); an
+	unreadable cache file adds ``cache_unreadable``.
+	"""
+	pair_list = list(pairs)
+	paths: list[str] = []
+	skipped: list[dict[str, str]] = []
+	for run_file, jobs_file in pair_list:
+		try:
+			run = _load_json_file(run_file)
+			jobs = _load_json_file(jobs_file)
+		except (OSError, ValueError):
+			skipped.append({"run_id": "?", "reason": "cache_unreadable"})
+			continue
+		found = heal_scope_linked_workflow_paths(run, jobs, repo=repo, exists=exists, read_file=read_file)
+		skipped.extend(found["skipped"])
+		for path in found["paths"]:
+			if path in paths:
+				continue
+			if len(paths) >= HEAL_SCOPE_LINKED_PATHS_MAX:
+				skipped.append({"run_id": str(run.get("id")) if isinstance(run, dict) else "?", "reason": "cap_reached"})
+				continue
+			paths.append(path)
+	return {"outcome": "added" if paths else "none", "paths": paths, "skipped": skipped, "runs": len(pair_list)}
+
+
+def _heal_scope_linked_workflow_paths_cli(args: argparse.Namespace) -> dict[str, Any]:
+	gate = heal_scope_linked_workflows_gate(enabled=args.enabled, source_kind=args.source_kind, source_repo=args.source_repo,
+		self_repo=args.self_repo, source_workflow_paths=args.source_workflow_paths or [])
+	if gate != "eligible" or not _SHA_RE.match(args.ref or ""):
+		return {"outcome": "disabled" if gate == "disabled" else "skipped", "paths": [], "skipped": [], "runs": 0}
+	run_files = list(args.run_json or [])
+	jobs_files = list(args.jobs_json or [])
+	pairs = [(run_file, jobs_files[index] if index < len(jobs_files) else "") for index, run_file in enumerate(run_files)]
+
+	def _exists(path: str) -> bool:
+		return _heal_regular_file_at_ref(args.checkout, args.ref, path)
+
+	def _read_file(path: str) -> str | None:
+		result = subprocess.run(["git", "show", f"{args.ref}:{path}"], cwd=args.checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+		if result.returncode != 0 or len(result.stdout) > HEAL_SCOPE_LINKED_YAML_MAX_BYTES:
+			return None
+		return result.stdout.decode("utf-8", errors="replace")
+
+	return heal_scope_linked_paths_for_runs(pairs, repo=args.repo or args.self_repo, exists=_exists, read_file=_read_file)
 
 
 def _heal_test_files_for_names(checkout: str, ref: str, names: Iterable[str]) -> list[str]:
@@ -6540,6 +7663,14 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 					if item not in merged[key] and len(merged[key]) < FAILING_TEST_LIMIT:
 						merged[key].append(item)
 		_write_json(merged)
+	elif args.operation == "linked-workflow-paths":
+		# Fail open (issue #8360): any error adds no path, which is the
+		# behaviour without this operation.
+		try:
+			linked_result = _heal_scope_linked_workflow_paths_cli(args)
+		except Exception:  # noqa: BLE001 - never block the scope freeze
+			linked_result = {"outcome": "skipped", "paths": [], "skipped": [{"run_id": "?", "reason": "helper_failed"}], "runs": 0}
+		_write_json(linked_result)
 	elif args.operation == "check-marker":
 		result = check_heal_scope_marker_file(args.marker_file)
 		_write_json(result)
@@ -6743,6 +7874,51 @@ def _cmd_unwrap_dispatch(args: argparse.Namespace) -> int:
 def _cmd_filter_log(args: argparse.Namespace) -> int:
 	text = Path(args.log_file).read_text(encoding="utf-8", errors="replace")
 	sys.stdout.write(filter_log(text, max_lines=args.max_lines, max_bytes=args.max_bytes))
+	return 0
+
+
+def _read_text_files(paths: Iterable[str]) -> list[str]:
+	texts: list[str] = []
+	for path in paths:
+		try:
+			texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
+		except OSError:
+			continue
+	return texts
+
+
+def _cmd_linked_runs(args: argparse.Namespace) -> int:
+	excluded = [value for value in str(args.exclude_run_ids or "").split(",")]
+	refs = select_linked_runs(_read_text_files(args.log_files or []), args.repo, excluded, args.limit)
+	sys.stdout.write(json.dumps(refs) + "\n")
+	return 0
+
+
+def _cmd_linked_run_timeline(args: argparse.Namespace) -> int:
+	# Always exits 0: the intake fails open on {"ok": false, ...}.
+	try:
+		run = json.loads(Path(args.run_json).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		sys.stdout.write(json.dumps({"ok": False, "reason": "run_malformed"}) + "\n")
+		return 0
+	try:
+		jobs = json.loads(Path(args.jobs_json).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		jobs = None
+	try:
+		result = render_linked_run_timeline(
+			run, jobs, repo=args.repo, run_id=args.run_id,
+			stall_minutes=stall_window_minutes(_read_text_files(args.stall_hint_files or [])),
+		)
+	except Exception:  # noqa: BLE001 - fail open, evidence only
+		result = {"ok": False, "reason": "timeline_failed"}
+	sys.stdout.write(json.dumps(result) + "\n")
+	return 0
+
+
+def _cmd_log_window(args: argparse.Namespace) -> int:
+	text = Path(args.log_file).read_text(encoding="utf-8", errors="replace")
+	sys.stdout.write(slice_log_to_window(text, args.start, args.end))
 	return 0
 
 
@@ -6965,6 +8141,9 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--reporter-run-url", default="")
 	p.add_argument("--records-file", default="")
 	p.add_argument("--run-attempt", default="", help="GITHUB_RUN_ATTEMPT of the reporting run (default 1)")
+	# Default None, not "": omitted keeps today's payload; "" means a source
+	# existed but was empty, which becomes "unavailable" (issue #8406).
+	p.add_argument("--pool-reason", default=None, help="Claude pool step reason token ([a-z0-9_]{1,60}; anything else becomes 'unavailable')")
 	p.set_defaults(func=_cmd_build_engine_fallback_payload)
 
 	p = sub.add_parser("verify-engine-reporter-run", help="Bind an engine_fallback report's reporter_run to the fetched run object; exit 1 when it does not bind")
@@ -7046,6 +8225,60 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--group-json", required=True)
 	p.add_argument("--intake-run-url", required=True)
 	p.set_defaults(func=_cmd_compose_synced_security_occurrence)
+
+	p = sub.add_parser("check-triage-route", help="Decide whether a failing consumer check belongs upstream (issue #8265); prints the decision JSON, exits 0")
+	p.add_argument("--diagnosis-file", required=True)
+	p.add_argument("--digests-json", default="")
+	p.add_argument("--repo-root", required=True)
+	p.add_argument("--commit", required=True)
+	p.add_argument("--enabled", default="true")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--upstream-repo", default="shubhodeep1/coding-workflows")
+	p.add_argument("--historical", default="false")
+	p.set_defaults(func=_cmd_check_triage_route)
+
+	p = sub.add_parser("build-synced-check-payload", help="Print the synced_check_failure dispatch payload for a route decision")
+	p.add_argument("--decision-json", required=True)
+	p.add_argument("--repo", required=True)
+	p.add_argument("--pr", required=True)
+	p.add_argument("--check-name", default="")
+	p.add_argument("--check-run-id", default="")
+	p.add_argument("--details-url", default="")
+	p.add_argument("--head-sha", required=True)
+	p.add_argument("--wrapper-sha", required=True)
+	p.add_argument("--run-id", default="")
+	p.set_defaults(func=_cmd_build_synced_check_payload)
+
+	p = sub.add_parser("synced-check-fingerprint", help="Print the dedup fingerprint of a synced_check_failure report (its sorted paths)")
+	p.add_argument("--payload-json", required=True)
+	p.set_defaults(func=_cmd_synced_check_fingerprint)
+
+	p = sub.add_parser("synced-check-check-paths", help="Exit 0 when every path is a managed path of the release, else print {reason} and exit 1")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--managed-digests-json", required=True)
+	p.set_defaults(func=_cmd_synced_check_check_paths)
+
+	p = sub.add_parser("synced-check-sources", help="Print the coding-workflows source paths of a synced_check_failure report")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--audit-gate-contract-json", default="")
+	p.set_defaults(func=_cmd_synced_check_sources)
+
+	p = sub.add_parser("compose-synced-check-issue", help="Compose the heal issue of a synced_check_failure report")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--scope-marker-file", default="")
+	p.add_argument("--audit-gate-contract-json", default="")
+	p.add_argument("--gen", type=int, default=1)
+	p.add_argument("--root", default="")
+	p.add_argument("--max-depth", type=int, default=3)
+	p.add_argument("--intake-run-url", default="")
+	p.add_argument("--title-out", required=True)
+	p.add_argument("--body-out", required=True)
+	p.set_defaults(func=_cmd_compose_synced_check_issue)
+
+	p = sub.add_parser("compose-synced-check-occurrence", help="Print the occurrence comment of a synced_check_failure report")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--intake-run-url", default="")
+	p.set_defaults(func=_cmd_compose_synced_check_occurrence)
 
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
 	p.add_argument("--payload-json", required=True)
@@ -7170,6 +8403,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--allow-pending", action="store_true")
 	p.add_argument("--pr-number", type=int, default=0, help="autofix_failure: the PR a dispatched review run must name in its title")
+	p.add_argument("--marker-head-bound", action="store_true", help="autofix_failure: verify-run-provenance listed this run in marker_head_run_ids")
 	p.set_defaults(func=_cmd_verify_run)
 
 	p = sub.add_parser("heal-route")
@@ -7189,8 +8423,17 @@ def build_parser() -> argparse.ArgumentParser:
 	p.set_defaults(func=_cmd_heal_queue)
 
 	p = sub.add_parser("heal-scope")
-	p.add_argument("operation", choices=("render", "verify", "verify-edits", "carry", "strip", "failing-tests", "check-marker"))
+	p.add_argument("operation", choices=("render", "verify", "verify-edits", "carry", "strip", "failing-tests", "check-marker", "linked-workflow-paths"))
 	p.add_argument("--log-files", nargs="*")
+	# linked-workflow-paths (issue #8360): cached linked run / jobs JSON pairs.
+	p.add_argument("--run-json", action="append", default=[])
+	p.add_argument("--jobs-json", action="append", default=[])
+	p.add_argument("--repo", default="")
+	p.add_argument("--source-kind", default="")
+	p.add_argument("--source-repo", default="")
+	p.add_argument("--self-repo", default="")
+	p.add_argument("--source-workflow-paths", nargs="*", default=[])
+	p.add_argument("--enabled", default="true")
 	p.add_argument("--marker-file", default="")
 	p.add_argument("--input-json", default="")
 	p.add_argument("--body-file", default="")
@@ -7268,6 +8511,27 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--max-lines", type=int, default=400)
 	p.add_argument("--max-bytes", type=int, default=60_000)
 	p.set_defaults(func=_cmd_filter_log)
+
+	p = sub.add_parser("linked-runs", help="Same-repository run links in failed-job logs, not already reported")
+	p.add_argument("--log-files", nargs="*", default=[])
+	p.add_argument("--repo", required=True)
+	p.add_argument("--exclude-run-ids", default="")
+	p.add_argument("--limit", type=int, default=4)
+	p.set_defaults(func=_cmd_linked_runs)
+
+	p = sub.add_parser("linked-run-timeline", help="Render a linked run's step timeline (always exits 0)")
+	p.add_argument("--run-json", required=True)
+	p.add_argument("--jobs-json", required=True)
+	p.add_argument("--repo", required=True)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--stall-hint-files", nargs="*", default=[])
+	p.set_defaults(func=_cmd_linked_run_timeline)
+
+	p = sub.add_parser("log-window", help="Keep the log lines inside a step's time window")
+	p.add_argument("--log-file", required=True)
+	p.add_argument("--start", required=True)
+	p.add_argument("--end", required=True)
+	p.set_defaults(func=_cmd_log_window)
 
 	p = sub.add_parser("error-signature", help="Derive the normalised error signature of one or more logs")
 	p.add_argument("--log-file", action="append", required=True)

@@ -36,6 +36,9 @@ SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
+# Full §21 text moved out of CLAUDE.md to keep the always-loaded file small.
+CLAUDE_MD_S21_REFERENCE = REPO_ROOT / ".claude" / "docs" / "s21-merged-pr-commit-guard.md"
+TEMPLATE_CLAUDE_MD_S21_REFERENCE = REPO_ROOT / "workflow-templates" / ".claude" / "docs" / "s21-merged-pr-commit-guard.md"
 _WORKER_ACCOUNT_ID = "a" * 32
 _OTHER_WORKER_ACCOUNT_ID = "b" * 32
 _WORKER_URL = f"https://api.cloudflare.com/client/v4/accounts/{_WORKER_ACCOUNT_ID}/workers/scripts/name"
@@ -2468,11 +2471,14 @@ def test_review_editor_can_transfer_guard_without_opening_other_claude_hooks() -
 
 def test_claude_md_documents_the_guard() -> None:
 	text = CLAUDE_MD.read_text(encoding="utf-8")
+	reference = CLAUDE_MD_S21_REFERENCE.read_text(encoding="utf-8")
+	assert TEMPLATE_CLAUDE_MD_S21_REFERENCE.read_text(encoding="utf-8") == reference
 	assert "## §21. Merged-PR Commit Guard (MANDATORY)" in text
 	assert ".claude/hooks/pr_merge_status_guard.py" in text
+	assert ".claude/docs/s21-merged-pr-commit-guard.md" in text
 	assert "CLAUDE_PR_MERGE_GUARD=off" in text
-	assert "The guard is skipped entirely" not in text
-	assert "The API-write\nconfirmation safeguard remains active in both cases." in text
+	assert "The guard is skipped entirely" not in text + reference
+	assert "The API-write\nconfirmation safeguard remains active in both cases." in reference
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -2862,7 +2868,7 @@ def test_guard_is_wired_for_the_mcp_push_tools(path: Path) -> None:
 
 
 def test_claude_md_documents_the_history_fallback() -> None:
-	text = CLAUDE_MD.read_text(encoding="utf-8")
+	text = CLAUDE_MD.read_text(encoding="utf-8") + CLAUDE_MD_S21_REFERENCE.read_text(encoding="utf-8")
 	assert "mcp__github__push_files" in text
 	assert "first-parent" in text
 	assert "git history" in text

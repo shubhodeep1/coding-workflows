@@ -133,10 +133,12 @@ def test_default_serial_budget_leaves_required_headroom() -> None:
 		+ phase_timeout
 		+ _integer_contract_value(job, "PHASE7_WAIT_BUDGET_MINUTES")
 		+ finalization_reserve
+		# Issue #8244: the pre-push gate step's extra Phase 3b wait.
+		+ max(0, _integer_contract_value(job, "PREPUSH_GATE_STEP_STALL_MINUTES") - phase_timeout)
 	)
 	assert review_handoff_budget == 15
 	assert review_effective_budget == 90
-	assert serial_budget == 295
+	assert serial_budget == 300
 	assert serial_budget <= job_timeout
 	assert job_timeout - (serial_budget - finalization_reserve) >= finalization_reserve
 
@@ -186,6 +188,67 @@ def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
 	job_timeout = _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES")
 	assert shared_budget + max(review_timeout, review_step_override) > job_timeout
 	assert shared_budget + max(review_timeout, min(review_step_override, 90) + review_handoff_budget) > job_timeout
+
+
+def _prerequisites_budget_block(workflow: str) -> str:
+	job = _e2e_job(workflow)
+	prerequisites = _slice_between(job, "- name: Validate prerequisites", "# Fast-fail the hottest")
+	return _slice_between(prerequisites, "for timeout_value in", 'echo "Target repo:')
+
+
+def _run_prerequisites_budget(**overrides: str) -> subprocess.CompletedProcess[str]:
+	workflow = _read_workflow()
+	job = _e2e_job(workflow)
+	env = dict(os.environ)
+	env.update({
+		"PHASE_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "phase_timeout")),
+		"PLAN_PHASE_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "plan_timeout")),
+		"REVIEW_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "review_timeout")),
+		"REVIEW_STEP_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "review_step_timeout")),
+	})
+	for name in (
+		"E2E_JOB_TIMEOUT_MINUTES",
+		"REVIEW_PHASE_HANDOFF_BUDGET_MINUTES",
+		"EDITOR_RETRY_BUDGET_MINUTES",
+		"PHASE7_WAIT_BUDGET_MINUTES",
+		"E2E_FINALIZATION_RESERVE_MINUTES",
+		"PREPUSH_GATE_STEP_STALL_MINUTES",
+	):
+		env[name] = str(_integer_contract_value(job, name))
+	env.update(overrides)
+	body = "set -euo pipefail\n" + _prerequisites_budget_block(workflow)
+	return subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
+
+
+def test_prepush_gate_stall_minutes_is_validated_and_budgeted() -> None:
+	# Issue #8244: the extended Phase 3b limit for the pre-push gate step is a
+	# positive integer and its extra minutes count toward the serial budget.
+	block = _prerequisites_budget_block(_read_workflow())
+	loop = block[: block.index("done")]
+	assert '"${PREPUSH_GATE_STEP_STALL_MINUTES}"' in loop
+	assert "PREPUSH_GATE_EXTRA_BUDGET_MINUTES=$((PREPUSH_GATE_STEP_STALL_MINUTES - PHASE_TIMEOUT))" in block
+	assert "E2E_FINALIZATION_RESERVE_MINUTES +\n            PREPUSH_GATE_EXTRA_BUDGET_MINUTES" in block
+	assert "prepush-gate-extra(${PREPUSH_GATE_EXTRA_BUDGET_MINUTES})" in block
+
+
+def test_prepush_gate_stall_budget_defaults_fit_and_bad_values_fail() -> None:
+	result = _run_prerequisites_budget()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "E2E conservative serial budget: 300/300 minutes" in result.stdout
+
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="abc")
+	assert result.returncode == 1
+	assert "positive integers" in result.stdout
+
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="36")
+	assert result.returncode == 1
+	assert "require 301m" in result.stdout
+	assert "prepush-gate-extra(6)" in result.stdout
+
+	# A value at or below PHASE_TIMEOUT adds nothing.
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="10")
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "E2E conservative serial budget: 295/300 minutes" in result.stdout
 
 
 def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:

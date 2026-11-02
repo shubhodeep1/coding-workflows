@@ -12,9 +12,12 @@ You are executing the PLANNING phase of the AI development pipeline.
 
 Your task is to generate an implementation plan for the GitHub issue.
 
-IMPORTANT: The system instructions, AI pipeline spec, agents.md, and README.md
-are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt or
-any of the individual source files — they are already loaded.
+IMPORTANT: The system instructions, AI pipeline spec, README.md and agents.md
+(either inlined in full, or as an `=== AGENTS.MD INDEX ===` list of sections)
+are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt, the
+system instructions, the pipeline spec or README.md — they are already loaded.
+When an agents.md index is shown, read only the agents.md sections (and the
+agents.d/ fragments it lists) that you need, from the working tree.
 
 The planning context (issue description, clarification Q&A, and comments) is
 provided BELOW at the end of this prompt — do NOT read planning_context.txt
@@ -74,6 +77,7 @@ Create a structured implementation plan that includes:
    or a directory such as `scripts/`: the plan approval gate reads every `.github/`,
    `.claude/`, `scripts/`, `prompts/` and `workflow-templates/` token in this section, and a
    bare directory holds the plan for a human. Explain why a file changes in a later section.
+   Keep the section to those bullets: no prose paragraphs, and no placeholder path such as `scripts/<helper>`, which the gate reads as the bare directory `scripts/`.
 2. Functions or modules to implement
 3. Data structures affected
 4. API or interface changes
@@ -124,7 +128,8 @@ Create a structured implementation plan that includes:
    omit the section when the plan covers the whole issue, and never emit it
    for an orchestrator-managed child issue. Implement opens the PR with a
    non-closing reference, so the issue stays open and clarification restarts
-   for these items after the merge.
+   for these items after the merge. The section holds only those bullets; the next heading ends it.
+   A prose line or note inside it makes the section unreadable, so put any note in another section.
 
 Use the following shared security and money-handling lens when planning any
 affected surface:
@@ -180,6 +185,15 @@ Rules:
   on the current ref are NOT external inputs — they are codebase state the
   plan can address; note them under "Risks and edge cases" as a conflict (per
   the CONFLICT DETECTION rule above) and continue planning.
+- Implement only writes repository files and opens one pull request; it
+  cannot post comments, close issues, or check or wait for another pull
+  request, so never plan such steps. When another open, unmerged pull
+  request already delivers this issue's work and no clarification answer
+  chose to build it here anyway, plan neither a duplicate nor wait-only
+  steps: emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged`
+  and end with `STATUS: NOT_CLEAR`. When that work is already on the
+  planning ref, plan no edits: emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement`
+  and end with `STATUS: NOT_CLEAR`.
 - Boil the Lake forcing question: if shipping the complete implementation
   costs ≤30 LOC more and ≤10 minutes more than the shortcut, and neither
   option adds a new dependency nor a new external interface, pick the
@@ -288,6 +302,21 @@ EOF
 if [ "${HEAL_ROUTE:-false}" = true ]; then
 	[ -s "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" ] || { echo '::error::Heal evidence bundle missing' >&2; exit 1; }
 	cat "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" >> "${CODEX_PROMPT_FILE}"
+	# Issue #8249: a heal plan must state whether the change would have turned
+	# the observed failing run green (HEAL_COUNTERFACTUAL line). A missing
+	# prompt does not fail planning: the plan then has no line and the plan
+	# auto-approval gate holds it for a human.
+	heal_cf_prompt="prompts/mode-plan-heal-counterfactual.txt"
+	heal_cf_rendered=""
+	if [ -f "${heal_cf_prompt}" ] && [ ! -L "${heal_cf_prompt}" ] \
+		&& heal_cf_rendered="$(bash scripts/render_prompt.sh "${heal_cf_prompt}")" && [ -n "${heal_cf_rendered}" ]; then
+		{
+			echo
+			printf '%s\n' "${heal_cf_rendered}"
+		} >> "${CODEX_PROMPT_FILE}"
+	else
+		echo "::warning::HEAL_COUNTERFACTUAL prompt unavailable; the plan auto-approval gate will hold this heal plan"
+	fi
 fi
 
 # Update progress comment to signal model invocation is starting

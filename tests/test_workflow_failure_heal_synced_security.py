@@ -224,6 +224,9 @@ def test_source_paths_follow_the_sync_mapping() -> None:
 	assert heal.synced_security_source_paths("CLAUDE.md") == ["CLAUDE.md"]
 	contract = {"managed_files": [{"source": "gate.sh", "target": "scripts/audit_gate.sh"}]}
 	assert heal.synced_security_source_paths("scripts/audit_gate.sh", contract) == ["workflow-templates/audit-gate/gate.sh"]
+	# A seed_only target is consumer-owned once created: no upstream source.
+	seeded = {"managed_files": [{"source": "allow.json", "target": "security/allow.json", "seed_only": True}]}
+	assert heal.synced_security_source_paths("security/allow.json", seeded) == []
 	assert heal.synced_security_source_paths(".github/retired.txt") == []
 
 
@@ -465,7 +468,7 @@ def test_intake_groups_two_findings_of_one_report_into_one_issue() -> None:
 def test_intake_budget_exhausted_opens_nothing() -> None:
 	open_issues = [
 		{"number": 800 + i, "state": "open", "state_reason": None, "title": "x", "body": f"<!-- workflow-failure-heal:fp={i:064x} -->", "author": "workflow-bot",
-		 "created_at": "2026-01-01T00:00:00Z", "closed_at": None, "html_url": "", "pull_request": False}
+			"created_at": "2026-01-01T00:00:00Z", "closed_at": None, "html_url": "", "pull_request": False}
 		for i in range(10)
 	]
 	result, state = _intake(_payload(), {"compare": {"status": "ahead"}, "heal_issues": open_issues}, extra_env=SCOPE_GUARD_ON)
@@ -629,3 +632,116 @@ def test_workflow_and_script_default_the_switches() -> None:
 	assert '"${HEAL_SYNCED_SECURITY_LINE_BUCKET:-25}"' in intake
 	assert heal.REPORT_IDENTITY_WORKFLOW_BY_KIND["synced_security_finding"] == ("security-audit.yml",)
 	assert "synced_security_finding" in heal.SOURCE_KINDS
+
+
+# ---------------------------------------------------------------------------
+# Issue #8265: synced_check_failure intake (check-failure triage routed upstream)
+# ---------------------------------------------------------------------------
+
+
+def _check_payload(repo: str = CONSUMER_A, paths: list | None = None, **overrides) -> dict:
+	payload = {
+		"schema_version": heal.SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "synced_check_failure",
+		"pr_number": 688,
+		"check_name": "Workflow Ref Pinning Gate",
+		"check_run_ids": ["555"],
+		"paths": paths if paths is not None else [HOOK],
+		"head_sha": "e" * 40,
+		"wrapper_sha": RELEASE,
+		"reporter_run_url": f"https://github.com/{repo}/actions/runs/{base._ID_RUN_ID}",
+		"run_refs": [],
+	}
+	payload.update(overrides)
+	return payload
+
+
+def _check_intake(payload: dict, state: dict | None = None, **kwargs):
+	kwargs.setdefault("workflow_file", "check_failure_triage.yml")
+	kwargs.setdefault("extra_env", SCOPE_GUARD_ON)
+	return _intake(payload, state, **kwargs)
+
+
+def test_synced_check_intake_opens_one_issue_then_records_an_occurrence() -> None:
+	result, state = _check_intake(_check_payload())
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "WORKFLOW_HEAL received kind=synced_check_failure paths=1 outcome=opened" in result.stdout
+	assert len(state["issues_created"]) == 1
+	created = state["issues_created"][0]
+	assert created["repo"] == SELF_REPO and created["labels"] == ["ai:workflow-heal"]
+	body = created["body"]
+	fp = heal.synced_check_fingerprint([HOOK])
+	assert body.splitlines()[0] == f"<!-- workflow-failure-heal:fp={fp} -->"
+	assert body.count("ai:workflow-heal-scope:v1") == 1
+	assert "paths=workflow-templates/.claude/hooks/guard.py,tests/**,changelog.d/*.md" in body
+	# No log, run or diagnosis read for this kind.
+	assert not [call for call in state.get("calls", []) if any("/actions/" in arg or "/logs" in arg for arg in call)]
+
+	heal_issue = {
+		"number": 902, "state": "open", "state_reason": None, "title": created["title"], "body": body, "author": "workflow-bot",
+		"created_at": "2026-10-28T00:00:00Z", "closed_at": None, "html_url": f"https://github.com/{SELF_REPO}/issues/902", "pull_request": False,
+	}
+	second, state2 = _check_intake(_check_payload(CONSUMER_B, pr_number=699), {"compare": {"status": "identical"}, "heal_issues": [heal_issue]})
+	assert second.returncode == 0, second.stdout + second.stderr
+	assert "outcome=occurrence" in second.stdout
+	assert "issues_created" not in state2
+	comments = state2["comments_posted"]
+	assert len(comments) == 1 and comments[0]["path"] == f"repos/{SELF_REPO}/issues/902/comments"
+	assert f"`{CONSUMER_B}` PR 699" in comments[0]["body"] and "#699" not in comments[0]["body"]
+
+
+@pytest.mark.parametrize(
+	("release_kwargs", "state", "reason"),
+	[
+		({"identity": False}, None, "identity_required"),
+		({"ref_sha": "d" * 40}, None, "release_mismatch"),
+		({"workflow_file": "security-audit.yml"}, None, "job_workflow_ref_mismatch"),
+		({}, {"compare": {"status": "diverged"}, "heal_issues": []}, "release_not_on_stable"),
+	],
+)
+def test_synced_check_intake_rejects_unverified_reports(release_kwargs, state, reason) -> None:
+	result, state_after = _check_intake(_check_payload(), state, **release_kwargs)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"report_auth=rejected reason={reason} " in result.stdout
+	assert not _api_writes(state_after)
+
+
+def test_synced_check_intake_rejects_unmanaged_paths() -> None:
+	result, state = _check_intake(_check_payload(paths=[".claude/hooks/not-synced.py"]))
+	assert "report_auth=rejected reason=unmanaged_path " in result.stdout
+	assert not _api_writes(state)
+
+
+def test_synced_check_intake_skips_retired_files() -> None:
+	result, state = _check_intake(_check_payload(paths=[RETIRED]), retired=(RETIRED,))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"skip reason=retired_file file={RETIRED}" in result.stdout
+	assert "outcome=skipped reason=retired_file" in result.stdout
+	assert not _api_writes(state)
+
+
+def test_synced_check_intake_skips_a_release_superseded_on_stable() -> None:
+	compare = {"status": "ahead", "files": [{"filename": "workflow-templates/.claude/hooks/guard.py"}]}
+	result, state = _check_intake(_check_payload(), {"compare": compare, "heal_issues": []})
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "skip reason=release_superseded" in result.stdout
+	assert not _api_writes(state)
+	# A compare page of 300 files is unknown: the report is processed.
+	full = {"status": "ahead", "files": [{"filename": "workflow-templates/.claude/hooks/guard.py"}] + [{"filename": f"x{index}"} for index in range(299)]}
+	result, state = _check_intake(_check_payload(), {"compare": full, "heal_issues": []})
+	assert "release_superseded" not in result.stdout
+	assert len(state["issues_created"]) == 1
+
+
+def test_synced_check_intake_skips_its_own_repository() -> None:
+	result, state = _check_intake(_check_payload(SELF_REPO))
+	assert "skip reason=synced_check_self_repo" in result.stdout or "report_auth=rejected" in result.stdout
+	assert not _api_writes(state)
+
+
+def test_synced_check_intake_scope_guard_off_creates_nothing() -> None:
+	result, state = _check_intake(_check_payload(), extra_env={})
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "skip reason=scope_guard_disabled" in result.stdout
+	assert not _api_writes(state)

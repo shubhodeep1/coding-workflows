@@ -23,6 +23,17 @@
 #   2. Fetches the failed jobs + a filtered tail of their logs for the linked
 #      runs (bounded: WORKFLOW_HEAL_MAX_RUNS runs, WORKFLOW_HEAL_MAX_FAILED_JOBS
 #      jobs per run, WORKFLOW_HEAL_MAX_RUN_LOG_BYTES per job).
+#      Runs those logs link to (same repository only, #8248) are read before
+#      the heal-scope freeze (the run and its jobs) and rendered after it as
+#      diagnosis evidence: WORKFLOW_HEAL_MAX_LINKED_RUNS runs (default 4, 0
+#      turns it off), each with a step timeline and the log of its longest
+#      step (WORKFLOW_HEAL_LINKED_RUN_LOG_BYTES, default 30000). For a release
+#      or promotion workflow_run report of this repository they also feed the
+#      frozen scope (#8360): each linked run's workflow file, the reusable
+#      workflows it calls (one hop) and the scripts its failed or longest step
+#      runs, read from the scope-commit tree, never from the diagnosis.
+#      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED=false (default true)
+#      turns that scope part off and leaves the frozen inputs as before.
 #   3. Fingerprints the failure (workflow + failing step + normalised error
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
@@ -106,6 +117,10 @@
 #   WORKFLOW_HEAL_MAX_FAILED_JOBS         failed jobs inspected per run (default 3)
 #   WORKFLOW_HEAL_MAX_RUN_LOG_BYTES       filtered log bytes kept per job (default 60000)
 #   WORKFLOW_HEAL_LOG_TAIL_LINES          log tail lines kept per job (default 400)
+#   WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED  default "true": a release or promotion
+#                                         workflow_run report's linked runs add their workflow,
+#                                         called workflows and step scripts to the frozen scope
+#                                         (#8360); "false" (any case) turns that off
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
@@ -182,6 +197,23 @@ set -euo pipefail
 log()
 {
 	echo "WORKFLOW_HEAL $*"
+}
+
+# _heal_issue_create_detail <stderr_file> <title> <body_file>: the log fields
+# for a failed `gh issue create`, so the reason GitHub gave is visible (run
+# 41071146143 logged only issue_create_failed). Prints
+# `detail=<last 300 bytes of stderr, one line> title_bytes=<n> body_bytes=<n>`.
+# gh_retry writes its own notices first and gh's error last, hence the tail.
+# The sizes (bytes, never fewer than characters) show whether a title or body
+# could be over GitHub's limits without logging either.
+_heal_issue_create_detail()
+{
+	local err_file="$1" title="$2" body_file="$3" detail="" body_bytes="unknown"
+	if [ -s "${err_file}" ]; then
+		detail="$(tail -c 300 "${err_file}" | tr -d '\r' | tr '\n\t' '  ' | tr -cd '[:print:]' | sed -E -e 's/::[a-z]+:://g' -e 's/^ +//' -e 's/ +$//' -e 's/ +/ /g')"
+	fi
+	[ -f "${body_file}" ] && body_bytes="$(wc -c < "${body_file}" 2>/dev/null | tr -d '[:space:]')"
+	printf 'detail=%s title_bytes=%s body_bytes=%s' "${detail:-none}" "$(printf '%s' "${title}" | wc -c | tr -d '[:space:]')" "${body_bytes:-unknown}"
 }
 
 # --- Helpers (fail open if unavailable) ------------------------------------
@@ -268,6 +300,11 @@ MAX_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUNS:-}" 3)"
 MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
 MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
 LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
+# Linked runs (#8248): runs the failed-job logs link to. 0 turns it off.
+MAX_LINKED_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_LINKED_RUNS:-}" 4)"
+LINKED_RUN_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_LINKED_RUN_LOG_BYTES:-}" 30000)"
+# Linked-run scope paths (#8360): only the literal 'false' turns them off.
+SCOPE_LINKED_WORKFLOWS_ENABLED="${WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED:-true}"
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
@@ -452,8 +489,9 @@ case "${REPORT_ORIGIN}" in
 esac
 # A synced_security_finding report needs a verified identity whatever
 # WORKFLOW_HEAL_REQUIRE_REPORT_AUTH says, and its release SHA must be the ref
-# the consumer's security-audit.yml ran at.
-if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+# the consumer's security-audit.yml ran at. A synced_check_failure report
+# (issue #8265) is held to the same rule against check_failure_triage.yml.
+if [ "${SOURCE_KIND}" = "synced_security_finding" ] || [ "${SOURCE_KIND}" = "synced_check_failure" ]; then
 	if [ "${REPORT_AUTH}" != "verified" ]; then
 		_report_auth_reject "identity_required"
 	fi
@@ -486,6 +524,10 @@ fi
 # coding-workflows files its own audit findings in-repo.
 if [ "${SOURCE_KIND}" = "synced_security_finding" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
 	log "skip reason=synced_security_self_repo source=${SOURCE_REPO}"
+	exit 0
+fi
+if [ "${SOURCE_KIND}" = "synced_check_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+	log "skip reason=synced_check_self_repo source=${SOURCE_REPO}"
 	exit 0
 fi
 
@@ -654,6 +696,7 @@ _git_fetch_diagnosis_ref()
 _heal_report_claimed_no_runs()
 {
 	[ "${SOURCE_KIND:-}" != "synced_security_finding" ] \
+		&& [ "${SOURCE_KIND:-}" != "synced_check_failure" ] \
 		&& [ -z "${ENGINE_REPORTER_RUN_REF:-}" ] \
 		&& [ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
@@ -725,6 +768,51 @@ _heal_intake_scope_guard_permits_create()
 	return 1
 }
 
+# --- Shared release checks for pointer-only synced reports -------------------
+#
+# synced_security_finding and synced_check_failure reports name a consumer's
+# release SHA (bound to the verified identity above). Writes into <dir>:
+# release_compare.json, managed_digests.json, audit_gate_contract.json and
+# retired_paths.txt, and sets SYNCED_REPORTER_RUN. Any failure rejects the
+# report (_report_auth_reject exits).
+_synced_release_prepare()
+{
+	local sr_dir="$1"
+	mkdir -p "${sr_dir}"
+	SYNCED_REPORTER_RUN="$(jq -r '.claims.run_id // ""' "${VERIFY_FILE}" 2>/dev/null || echo "")"
+	[[ "${SYNCED_REPORTER_RUN}" =~ ^[1-9][0-9]*$ ]] || _report_auth_reject "reporter_run_unbound"
+
+	# The release tree the consumer synced from.
+	if ! git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null; then
+		_git_fetch_diagnosis_ref "${WRAPPER_SHA}" || true
+	fi
+	git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null || _report_auth_reject "release_unavailable"
+	# CLAUDE.md §14 audit: no other intake call proves that the release SHA is
+	# on `stable` (a fetch by SHA can return a fork-network commit whose tree
+	# would forge the managed-paths list). One call per report, not per finding.
+	if ! gh_api_json_to_file "${sr_dir}/release_compare.json" gh api --method GET "repos/${SELF_REPO}/compare/${WRAPPER_SHA}...stable" 2>/dev/null; then
+		_report_auth_reject "release_unavailable"
+	fi
+	jq -e '.status == "ahead" or .status == "identical"' "${sr_dir}/release_compare.json" >/dev/null 2>&1 || _report_auth_reject "release_not_on_stable"
+	if ! timeout 120 env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B "$(dirname "${HEAL_PY}")/build_sync_manifest.py" managed-digests --repo-root . --commit "${WRAPPER_SHA}" > "${sr_dir}/managed_digests.json" 2>/dev/null \
+		|| ! jq -e 'type == "object" and length > 0' "${sr_dir}/managed_digests.json" >/dev/null 2>&1; then
+		_report_auth_reject "release_unavailable"
+	fi
+	if ! git show "${WRAPPER_SHA}:workflow-templates/audit-gate/contract.json" > "${sr_dir}/audit_gate_contract.json" 2>/dev/null \
+		|| ! jq -e 'type == "object"' "${sr_dir}/audit_gate_contract.json" >/dev/null 2>&1; then
+		printf '{}' > "${sr_dir}/audit_gate_contract.json"
+	fi
+	# Retired files are managed paths (the consumer's sync deletes byte-identical
+	# copies), but coding-workflows no longer ships them, so a finding on one has
+	# no source to fix. Their consumer paths come from the release's own list
+	# and from HEAD's (a file retired after the consumer's pin has no source at
+	# HEAD either); an absent or unreadable list means no file is retired.
+	{ git show "${WRAPPER_SHA}:workflow-templates/retired_files.txt" 2>/dev/null || true
+		git show "HEAD:workflow-templates/retired_files.txt" 2>/dev/null || true; } \
+		| awk '$1 != "" && substr($1, 1, 1) != "#" { print $1 }' > "${sr_dir}/retired_paths.txt" 2>/dev/null || : > "${sr_dir}/retired_paths.txt"
+}
+
 # --- Synced-file security findings (synced_security_finding) ----------------
 #
 # A consumer security audit reports high / critical findings on files the
@@ -744,7 +832,7 @@ _synced_security_finding_intake()
 	local ss_dir="${RUNTIME_DIR}/synced_security"
 	local ss_bucket="${HEAL_SYNCED_SECURITY_LINE_BUCKET:-25}"
 	local ss_findings=0 ss_opened=0 ss_occurrences=0 ss_skipped=0 ss_failed=0 ss_attention=0
-	local ss_reporter_run="" ss_compare="" ss_digests="" ss_contract="" ss_groups="" ss_issues=""
+	local ss_reporter_run="" ss_digests="" ss_contract="" ss_groups="" ss_issues=""
 	local ss_path_check="" ss_count=0 ss_index=0 ss_links="" ss_action="" ss_reason="" ss_level="DEBUG"
 	local ss_group="" ss_decision="" ss_existing="" ss_prior="" ss_gen="" ss_root="" ss_label=""
 	local ss_scope="" ss_scope_input="" ss_scope_status="" ss_title="" ss_body="" ss_url="" ss_number=""
@@ -754,42 +842,11 @@ _synced_security_finding_intake()
 	CLASSIFICATION="workflow-defect"
 	FP="none"
 	ss_findings="$(jq -r '.findings | length' "${PAYLOAD_FILE}" 2>/dev/null || echo 0)"
-	ss_reporter_run="$(jq -r '.claims.run_id // ""' "${VERIFY_FILE}" 2>/dev/null || echo "")"
-	[[ "${ss_reporter_run}" =~ ^[1-9][0-9]*$ ]] || _report_auth_reject "reporter_run_unbound"
-
-	# The release tree the consumer synced from.
-	if ! git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null; then
-		_git_fetch_diagnosis_ref "${WRAPPER_SHA}" || true
-	fi
-	git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null || _report_auth_reject "release_unavailable"
-	# CLAUDE.md §14 audit: no other intake call proves that the release SHA is
-	# on `stable` (a fetch by SHA can return a fork-network commit whose tree
-	# would forge the managed-paths list). One call per report, not per finding.
-	ss_compare="${ss_dir}/release_compare.json"
-	if ! gh_api_json_to_file "${ss_compare}" gh api --method GET "repos/${SELF_REPO}/compare/${WRAPPER_SHA}...stable" 2>/dev/null; then
-		_report_auth_reject "release_unavailable"
-	fi
-	jq -e '.status == "ahead" or .status == "identical"' "${ss_compare}" >/dev/null 2>&1 || _report_auth_reject "release_not_on_stable"
+	_synced_release_prepare "${ss_dir}"
+	ss_reporter_run="${SYNCED_REPORTER_RUN}"
 	ss_digests="${ss_dir}/managed_digests.json"
-	if ! timeout 120 env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
-		python3 -I -B "$(dirname "${HEAL_PY}")/build_sync_manifest.py" managed-digests --repo-root . --commit "${WRAPPER_SHA}" > "${ss_digests}" 2>/dev/null \
-		|| ! jq -e 'type == "object" and length > 0' "${ss_digests}" >/dev/null 2>&1; then
-		_report_auth_reject "release_unavailable"
-	fi
 	ss_contract="${ss_dir}/audit_gate_contract.json"
-	if ! git show "${WRAPPER_SHA}:workflow-templates/audit-gate/contract.json" > "${ss_contract}" 2>/dev/null \
-		|| ! jq -e 'type == "object"' "${ss_contract}" >/dev/null 2>&1; then
-		printf '{}' > "${ss_contract}"
-	fi
-	# Retired files are managed paths (the consumer's sync deletes byte-identical
-	# copies), but coding-workflows no longer ships them, so a finding on one has
-	# no source to fix. Their consumer paths come from the release's own list
-	# and from HEAD's (a file retired after the consumer's pin has no source at
-	# HEAD either); an absent or unreadable list means no file is retired.
 	ss_retired="${ss_dir}/retired_paths.txt"
-	{ git show "${WRAPPER_SHA}:workflow-templates/retired_files.txt" 2>/dev/null || true
-		git show "HEAD:workflow-templates/retired_files.txt" 2>/dev/null || true; } \
-		| awk '$1 != "" && substr($1, 1, 1) != "#" { print $1 }' > "${ss_retired}" 2>/dev/null || : > "${ss_retired}"
 	if ! ss_path_check="$(python3 "${HEAL_PY}" synced-security-check-paths --payload-json "${PAYLOAD_FILE}" --managed-digests-json "${ss_digests}" 2>/dev/null)"; then
 		ss_reason="$(jq -r '.reason // "unmanaged_path"' <<< "${ss_path_check}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
 		_report_auth_reject "${ss_reason:-unmanaged_path}"
@@ -917,10 +974,10 @@ _synced_security_finding_intake()
 					ss_failed=1
 					continue
 				fi
-				ss_url="$(gh_retry gh issue create --repo "${SELF_REPO}" --title "$(head -1 "${ss_title}")" --body-file "${ss_body}" --label "${HEAL_LABEL}" 2>/dev/null || echo '')"
+				ss_url="$(gh_retry gh issue create --repo "${SELF_REPO}" --title "$(head -1 "${ss_title}")" --body-file "${ss_body}" --label "${HEAL_LABEL}" 2>"${RUNTIME_DIR}/issue_create_error.txt" || echo '')"
 				ss_url="${ss_url%%[[:space:]]*}"
 				if [ -z "${ss_url}" ]; then
-					log "error issue_create_failed fp=${FP} source=${SOURCE_REPO}"
+					log "error issue_create_failed fp=${FP} source=${SOURCE_REPO} $(_heal_issue_create_detail "${RUNTIME_DIR}/issue_create_error.txt" "$(head -1 "${ss_title}")" "${ss_body}")"
 					ss_skipped=$((ss_skipped + 1))
 					ss_failed=1
 					continue
@@ -962,10 +1019,181 @@ _synced_security_finding_intake()
 	[ "${ss_failed}" -eq 0 ]
 }
 
+# --- Synced-file check failures (synced_check_failure, issue #8265) ----------
+#
+# A consumer's check-failure triage traced a failing check to files the
+# @stable sync manages and the consumer has not modified. Pointers only (no
+# log read, no diagnosis model): the release must be on `stable`, every path a
+# managed path of that release. One fingerprint over the sorted paths, so the
+# same defect from several PRs or consumers becomes one issue with occurrence
+# comments. A path whose template source changed between the release and
+# `stable` is skipped: the consumer's next sync brings the change.
+_synced_check_failure_intake()
+{
+	local sc_dir="${RUNTIME_DIR}/synced_check"
+	local sc_paths=0 sc_outcome="skipped" sc_reason="" sc_level="DEBUG" sc_link="" sc_check=""
+	local sc_sources="" sc_decision="" sc_action="" sc_gen="" sc_root="" sc_existing="" sc_prior="" sc_label=""
+	local sc_scope="" sc_scope_input="" sc_scope_json="" sc_scope_rc=0 sc_scope_status="" sc_title="" sc_body="" sc_url=""
+	local sc_issues="" sc_files_count="" sc_path=""
+	mkdir -p "${sc_dir}"
+	HEAL_SCOPE_RECOVERY_ACTIVE="false"
+	CLASSIFICATION="workflow-defect"
+	FP="none"
+	sc_paths="$(jq -r '.paths | length' "${PAYLOAD_FILE}" 2>/dev/null || echo 0)"
+	_synced_release_prepare "${sc_dir}"
+	if ! sc_check="$(python3 "${HEAL_PY}" synced-check-check-paths --payload-json "${PAYLOAD_FILE}" --managed-digests-json "${sc_dir}/managed_digests.json" 2>/dev/null)"; then
+		sc_reason="$(jq -r '.reason // "unmanaged_path"' <<< "${sc_check}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+		_report_auth_reject "${sc_reason:-unmanaged_path}"
+	fi
+	FP="$(python3 "${HEAL_PY}" synced-check-fingerprint --payload-json "${PAYLOAD_FILE}" 2>/dev/null | tr -cd '0-9a-f' | head -c 64)"
+	if [ "${#FP}" -ne 64 ]; then
+		log "error synced_check_fingerprint_failed source=${SOURCE_REPO}"
+		exit 1
+	fi
+	sc_sources="${sc_dir}/sources.json"
+	python3 "${HEAL_PY}" synced-check-sources --payload-json "${PAYLOAD_FILE}" --audit-gate-contract-json "${sc_dir}/audit_gate_contract.json" > "${sc_sources}" 2>/dev/null \
+		|| printf '[]' > "${sc_sources}"
+
+	while IFS= read -r sc_path; do
+		[ -n "${sc_path}" ] || continue
+		if [ -s "${sc_dir}/retired_paths.txt" ] && grep -Fxq -- "${sc_path}" "${sc_dir}/retired_paths.txt"; then
+			log "skip reason=retired_file file=${sc_path} fp=${FP} source=${SOURCE_REPO}"
+			sc_reason="retired_file"
+			break
+		fi
+	done < <(jq -r '.paths[]' "${PAYLOAD_FILE}")
+	if [ -z "${sc_reason}" ]; then
+		# The compare response lists at most 300 files; a full page is unknown.
+		sc_files_count="$(jq -r '(.files // []) | length' "${sc_dir}/release_compare.json" 2>/dev/null || echo 300)"
+		if [[ "${sc_files_count}" =~ ^[0-9]+$ ]] && [ "${sc_files_count}" -lt 300 ] \
+			&& jq -e --slurpfile sources "${sc_sources}" '[(.files // [])[] | .filename] as $changed | any($sources[0][]; . as $s | $changed | index($s) != null)' \
+				"${sc_dir}/release_compare.json" >/dev/null 2>&1; then
+			log "skip reason=release_superseded fp=${FP} source=${SOURCE_REPO}"
+			sc_reason="release_superseded"
+		fi
+	fi
+
+	if [ -z "${sc_reason}" ]; then
+		sc_issues="${sc_dir}/heal_issues.json"
+		if ! _heal_fetch_issue_list "${SELF_REPO}" "${sc_issues}"; then
+			log "error heal_issue_list_failed"
+			tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; synced-file check failure from ${SOURCE_REPO} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+			exit 1
+		fi
+		jq -e 'type == "array"' "${sc_issues}" >/dev/null 2>&1 || printf '[]' > "${sc_issues}"
+		sc_decision="${sc_dir}/decision.json"
+		if ! python3 "${HEAL_PY}" budget --issues-json "${sc_issues}" --fingerprint "${FP}" --preferred-repo "${SELF_REPO}" \
+			--max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}" > "${sc_decision}"; then
+			log "error budget_failed fp=${FP} source=${SOURCE_REPO}"
+			exit 1
+		fi
+		sc_action="$(jq -r '.action' "${sc_decision}")"
+		sc_gen="$(jq -r '.gen // 1' "${sc_decision}")"
+		sc_root="$(jq -r '.root // ""' "${sc_decision}")"
+		case "${sc_action}" in
+			duplicate)
+				sc_existing="$(jq -r '.existing_issue // ""' "${sc_decision}")"
+				if ! python3 "${HEAL_PY}" compose-synced-check-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${sc_dir}/occurrence.md"; then
+					log "error occurrence_compose_failed fp=${FP} source=${SOURCE_REPO}"
+					exit 1
+				fi
+				if [[ "${sc_existing}" =~ ^[0-9]+$ ]] && gh_retry gh api "repos/${SELF_REPO}/issues/${sc_existing}/comments" \
+					-F body=@"${sc_dir}/occurrence.md" >/dev/null 2>&1; then
+					log "duplicate fp=${FP} existing_issue=${sc_existing} occurrence=recorded source=${SOURCE_REPO}"
+					sc_outcome="occurrence"
+					sc_link="occurrence on #${sc_existing}"
+				else
+					log "warn occurrence_comment_failed fp=${FP} existing_issue=${sc_existing:-none} source=${SOURCE_REPO}"
+					sc_reason="occurrence_comment_failed"
+					sc_level="WARNING"
+				fi
+				;;
+			escalate)
+				sc_prior="$(jq -r '.prior_issue // ""' "${sc_decision}")"
+				sc_label="none"
+				if [[ "${sc_prior}" =~ ^[0-9]+$ ]]; then
+					sc_label="applied"
+					gh_retry gh issue edit "${sc_prior}" --repo "${SELF_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || sc_label="failed"
+				fi
+				log "escalate reason=lineage_cap fp=${FP} gen=${sc_gen} prior_issue=${sc_prior:-none} label=${sc_label} source=${SOURCE_REPO}"
+				sc_reason="lineage_cap"
+				sc_level="WARNING"
+				;;
+			budget_exhausted)
+				log "skip reason=budget_exhausted detail=$(jq -r '.reason // "unknown"' "${sc_decision}" | tr -cd 'a-z_') fp=${FP} source=${SOURCE_REPO}"
+				sc_reason="budget_exhausted"
+				sc_level="WARNING"
+				;;
+			open)
+				sc_scope="${sc_dir}/scope_marker.txt"
+				sc_scope_input="${sc_dir}/scope_input.json"
+				: > "${sc_scope}"
+				jq -n --arg run "${SOURCE_REPO}:${SYNCED_REPORTER_RUN}" --slurpfile sources "${sc_sources}" \
+					'{crash_file: null, workflow_paths: $sources[0], changed_files: [], runs: [$run], failing_tests: {names: [], files: [], pairs: []}}' \
+					> "${sc_scope_input}"
+				python3 "${HEAL_PY}" heal-scope render --input-json "${sc_scope_input}" --checkout . --ref HEAD > "${sc_scope}" 2>/dev/null || : > "${sc_scope}"
+				sc_scope_json=""
+				sc_scope_rc=0
+				sc_scope_json="$(python3 "${HEAL_PY}" heal-scope check-marker --marker-file "${sc_scope}" 2>/dev/null)" || sc_scope_rc=$?
+				sc_scope_status="$(jq -r '.status // "unknown"' <<< "${sc_scope_json}" 2>/dev/null || echo unknown)"
+				[[ "${sc_scope_status}" =~ ^[a-z_]{1,20}$ ]] || sc_scope_status="unknown"
+				if [ "${sc_scope_rc}" -ne 0 ] && [ "${sc_scope_status}" = "valid" ]; then
+					sc_scope_status="unknown"
+				fi
+				if [ "${sc_scope_status}" != "valid" ]; then
+					log "skip reason=scope_unresolved fp=${FP} status=${sc_scope_status} source=${SOURCE_REPO}"
+					sc_reason="scope_unresolved"
+					sc_level="WARNING"
+				elif ! _heal_intake_scope_guard_is_on; then
+					log "skip reason=scope_guard_disabled fp=${FP} source=${SOURCE_REPO}"
+					sc_reason="scope_guard_disabled"
+					sc_level="WARNING"
+				else
+					sc_title="${sc_dir}/issue_title.txt"
+					sc_body="${sc_dir}/issue_body.md"
+					if ! python3 "${HEAL_PY}" compose-synced-check-issue --payload-json "${PAYLOAD_FILE}" --scope-marker-file "${sc_scope}" \
+						--audit-gate-contract-json "${sc_dir}/audit_gate_contract.json" --gen "${sc_gen}" --root "${sc_root}" \
+						--max-depth "${MAX_DEPTH}" --intake-run-url "${RUN_URL}" --title-out "${sc_title}" --body-out "${sc_body}"; then
+						log "error issue_compose_failed fp=${FP} source=${SOURCE_REPO}"
+						exit 1
+					fi
+					if ! _heal_intake_scope_guard_permits_create "${SELF_REPO}" "${sc_body}" "${HEAL_LABEL}" ""; then
+						exit 1
+					fi
+					sc_url="$(gh_retry gh issue create --repo "${SELF_REPO}" --title "$(head -1 "${sc_title}")" --body-file "${sc_body}" --label "${HEAL_LABEL}" 2>"${RUNTIME_DIR}/issue_create_error.txt" || echo '')"
+					sc_url="${sc_url%%[[:space:]]*}"
+					if [ -z "${sc_url}" ]; then
+						log "error issue_create_failed fp=${FP} source=${SOURCE_REPO} $(_heal_issue_create_detail "${RUNTIME_DIR}/issue_create_error.txt" "$(head -1 "${sc_title}")" "${sc_body}")"
+						exit 1
+					fi
+					log "opened issue=${sc_url} fp=${FP} gen=${sc_gen} source=${SOURCE_REPO}"
+					sc_outcome="opened"
+					sc_link="opened ${sc_url}"
+				fi
+				;;
+			*)
+				log "error unknown_decision action=$(printf '%s' "${sc_action}" | tr -cd 'a-z_') fp=${FP}"
+				exit 1
+				;;
+		esac
+	fi
+
+	log "received kind=synced_check_failure paths=${sc_paths} outcome=${sc_outcome}${sc_reason:+ reason=${sc_reason}} fp=${FP}"
+	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+		echo "Workflow failure heal: synced-file check failure from \`${SOURCE_REPO}\`: paths=${sc_paths} outcome=${sc_outcome}${sc_reason:+ (${sc_reason})}${sc_link:+ - ${sc_link}}." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+	fi
+	tg_send_msg "Workflow failure heal: synced-file check failure from ${SOURCE_REPO}: paths=${sc_paths} outcome=${sc_outcome}${sc_reason:+ (${sc_reason})}${sc_link:+ - ${sc_link}}."$'\n'"Run: ${RUN_URL}" "${sc_level}" >/dev/null 2>&1 || true
+	return 0
+}
+
 if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
 	# A plain call keeps `set -e` active inside the function; a failed group
 	# makes it return 1, which ends the run red.
 	_synced_security_finding_intake
+	exit 0
+fi
+if [ "${SOURCE_KIND}" = "synced_check_failure" ]; then
+	_synced_check_failure_intake
 	exit 0
 fi
 
@@ -1270,6 +1498,8 @@ _non_retryable_route_apply()
 	NON_RETRYABLE_PATHS="$(jq -r '.paths | join(", ")' "${NON_RETRYABLE_FILE}")"
 	if [ "${NON_RETRYABLE_REASON}" = "conflict_resolver_sandbox_support_missing" ]; then
 		NON_RETRYABLE_ACTION="workflow support lacks the conflict resolver's sandbox files; a maintainer must fix workflow support (or merge the conflict by hand)"
+	elif [ "${NON_RETRYABLE_REASON}" = "review_editor_sandbox_path_excluded" ]; then
+		NON_RETRYABLE_ACTION="the fix needs a path the review editor sandbox does not admit; make that change by hand"
 	elif [ -n "${NON_RETRYABLE_PATHS}" ]; then
 		NON_RETRYABLE_ACTION="${NON_RETRYABLE_PATHS} need a manual merge"
 	else
@@ -1399,6 +1629,13 @@ while IFS=$'\t' read -r run_id run_url; do
 	verify_pr_args=()
 	if [ "${SOURCE_KIND}" = autofix_failure ] && [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
 		verify_pr_args=(--pr-number "${ISSUE_NUMBER}")
+	fi
+	# A self-dispatched review_autofix.yml run has no `[pr:N]` title either; the
+	# provenance gate binds it by a trusted failure marker that names this run
+	# and the PR head (marker_head_run_ids).
+	if [ "${SOURCE_KIND}" = autofix_failure ] && [ -s "${PROVENANCE_RESULT:-}" ] \
+		&& jq -e --arg id "${run_id}" '(.marker_head_run_ids // []) | index($id) != null' "${PROVENANCE_RESULT}" >/dev/null 2>&1; then
+		verify_pr_args+=(--marker-head-bound)
 	fi
 	if [ "${run_info_ready}" != true ] \
 		|| ! python3 "${HEAL_PY}" verify-run --run-json "${RUN_INFO_FILE}" --repo "${SOURCE_REPO}" --target-repo "${SELF_REPO}" --kind "${SOURCE_KIND}" "${verify_pending_args[@]}" "${verify_pr_args[@]}" \
@@ -2294,6 +2531,11 @@ fi
 # untrusted evidence (#6463): only validated report fields, authenticated run metadata
 # and the ownership facts computed above. _open_issue reads this snapshot,
 # never the diagnosis, so neither evidence nor a model verdict can widen it.
+# self_workflows has three authenticated inputs: the verified runs' own and
+# referenced workflow paths, the engine_fallback support paths, and (#8360,
+# release and promotion sources only) the linked runs' workflow and script
+# paths from API metadata and the scope-commit tree (_heal_scope_linked_paths
+# below). An empty linked list leaves the snapshot byte-identical.
 SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"
 # Failing tests reported by the verified runs' own job logs (Q37: A): the
 # render step resolves them to test files and the subjects they cover at the
@@ -2312,17 +2554,230 @@ _heal_slurp_verified_runs()
 	slurped_json="$(jq -s "${slurp_filter}" "${LOG_DIR}"/*.verified 2>/dev/null)" || slurped_json='[]'
 	printf '%s\n' "${slurped_json}"
 }
+# --- Linked runs: fetch half (#8248, #8360) ---------------------------------
+
+# _heal_fetch_linked_runs
+#   Selects the same-repository `actions/runs/<id>` links found in the failed
+#   jobs' filtered logs (runs already in run_refs excluded, at most
+#   MAX_LINKED_RUNS, newest mention last), then reads each run, checks its
+#   identity and reads its jobs, before the heal-scope freeze. The files stay
+#   under ${RUNTIME_DIR}/linked_runs/ (never ${LOG_DIR}) and the ids that passed
+#   go to fetched_ids.txt, which _heal_scope_linked_paths and the render half
+#   (_heal_collect_linked_runs, after the freeze) reuse, so no read repeats.
+#   API budget (CLAUDE.md §15): the run and jobs reads are two of the 3 REST
+#   calls per linked run; each makes a single attempt (GH_RETRY_MAX_ATTEMPTS=1).
+#   Fails open: a failed, malformed or foreign read logs
+#   `warn linked_run_skipped run=<id> reason=<token>` and the run is skipped.
+#   Defaults keep the freeze block runnable on its own (_run_scope_freeze in
+#   tests/test_workflow_failure_heal_scope_tests.py); the real intake sets every
+#   variable before this point, so production behaviour is unchanged (#8377).
+_heal_fetch_linked_runs()
+{
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
+	local exclude_ids="" linked_json="" linked_id="" linked_run_file="" linked_jobs_file=""
+	local -a parent_logs=()
+	# A stale id list from an earlier call must never be reused.
+	rm -f "${fetched_ids_file}"
+	[ "${MAX_LINKED_RUNS:-0}" -gt 0 ] 2>/dev/null || return 0
+	[ -s "${SUMMARIES_FILE:-}" ] || return 0
+	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE:-}" 2>/dev/null)
+	[ "${#parent_logs[@]}" -gt 0 ] || return 0
+	exclude_ids="$(jq -r '[.run_refs[]?.run_id | tostring] | join(",")' "${PAYLOAD_FILE:-}" 2>/dev/null || true)"
+	linked_json="$(python3 "${HEAL_PY}" linked-runs --log-files "${parent_logs[@]}" --repo "${SOURCE_REPO}" \
+		--exclude-run-ids "${exclude_ids}" --limit "${MAX_LINKED_RUNS:-0}" 2>/dev/null)" || return 1
+	jq -e 'type == "array" and length > 0' <<< "${linked_json}" >/dev/null 2>&1 || return 0
+	mkdir -p "${linked_dir}" || return 1
+	: > "${fetched_ids_file}" || return 1
+	while IFS= read -r linked_id; do
+		[[ "${linked_id}" =~ ^[0-9]+$ ]] || continue
+		linked_run_file="${linked_dir}/run-${linked_id}.json"
+		linked_jobs_file="${linked_dir}/run-${linked_id}-jobs.json"
+		if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${linked_run_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${linked_id}" 2>/dev/null; then
+			log "warn linked_run_skipped run=${linked_id} reason=run_unreadable"
+			continue
+		fi
+		# Identity before the jobs read: the run must be this repository's.
+		if ! jq -e --arg id "${linked_id}" 'type == "object" and ((.id | tostring) == $id) and (.repository.full_name | type == "string")' "${linked_run_file}" >/dev/null 2>&1; then
+			log "warn linked_run_skipped run=${linked_id} reason=run_malformed"
+			continue
+		fi
+		if ! jq -e --arg repo "${SOURCE_REPO}" '(.repository.full_name | ascii_downcase) == ($repo | ascii_downcase)' "${linked_run_file}" >/dev/null 2>&1; then
+			log "warn linked_run_skipped run=${linked_id} reason=other_repository"
+			continue
+		fi
+		if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${linked_jobs_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${linked_id}/jobs" -F per_page=100 2>/dev/null; then
+			log "warn linked_run_skipped run=${linked_id} reason=jobs_unreadable"
+			continue
+		fi
+		printf '%s\n' "${linked_id}" >> "${fetched_ids_file}"
+	done < <(jq -r '.[].run_id' <<< "${linked_json}")
+	return 0
+}
+_heal_fetch_linked_runs || log "warn linked_runs_failed"
+
+# _heal_scope_linked_paths (#8360)
+#   Sets LINKED_SCOPE_PATHS_JSON, the scope paths the linked runs add, and logs
+#   exactly one `scope_linked outcome=<added|none|disabled|skipped> paths=<n>
+#   runs=<n>` line. Only a workflow_run report of this repository whose
+#   verified run is a release or promotion workflow (RELEASE_WORKFLOW_FILES)
+#   qualifies; `heal-scope linked-workflow-paths` takes each cached run's
+#   workflow file (API `.path`), the reusable workflows it calls (one hop) and
+#   the scripts its failed or longest step runs, from the tree at HEAD_SHA (the
+#   commit _open_issue renders the scope against), at most
+#   HEAL_SCOPE_LINKED_PATHS_MAX (12). The freeze below then keeps only as many
+#   as fit in the 12 explicit slots ahead of the 8-subject reserve that the
+#   source workflow, engine and crash paths leave free (#6907/#6916). No REST
+#   call: a missing HEAD_SHA commit gets the same git fetch _open_issue makes.
+#   Fails open: any failure leaves `[]`, today's scope.
+#   WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED=false skips the helper.
+#   Defaults keep the freeze block runnable on its own (_run_scope_freeze); the
+#   real intake sets every variable it reads. An unset SOURCE_KIND or SELF_REPO
+#   only fails the eligibility check, so it never widens the scope (#8377).
+LINKED_SCOPE_PATHS_JSON='[]'
+_heal_scope_linked_paths()
+{
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
+	local linked_id="" scope_linked_out="" scope_linked_outcome="skipped" scope_linked_paths='[]' scope_linked_runs=0
+	local scope_linked_sources='[]' scope_linked_count=0
+	local scope_linked_switch="${SCOPE_LINKED_WORKFLOWS_ENABLED:-true}" scope_linked_self_repo="${SELF_REPO:-}"
+	local scope_linked_source_kind="${SOURCE_KIND:-}"
+	local -a scope_linked_pairs=() scope_linked_source_paths=()
+	LINKED_SCOPE_PATHS_JSON='[]'
+	if [ -s "${fetched_ids_file}" ]; then
+		while IFS= read -r linked_id; do
+			[[ "${linked_id}" =~ ^[0-9]+$ ]] || continue
+			scope_linked_pairs+=(--run-json "${linked_dir}/run-${linked_id}.json" --jobs-json "${linked_dir}/run-${linked_id}-jobs.json")
+			scope_linked_runs=$((scope_linked_runs + 1))
+		done < "${fetched_ids_file}"
+	fi
+	if [ "${scope_linked_switch,,}" = "false" ]; then
+		scope_linked_outcome="disabled"
+	elif [ "${scope_linked_source_kind}" = workflow_run ] && [ -n "${scope_linked_self_repo}" ] && [ "${SOURCE_REPO,,}" = "${scope_linked_self_repo,,}" ] && [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		if ! git rev-parse --verify --quiet "${HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+			_git_fetch_ownership_refs "${HEAD_SHA}" || true
+		fi
+		if git rev-parse --verify --quiet "${HEAD_SHA}^{commit}" >/dev/null 2>&1; then
+			scope_linked_sources="$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')"
+			mapfile -t scope_linked_source_paths < <(jq -r '.[]? | strings' <<< "${scope_linked_sources}" 2>/dev/null)
+			if scope_linked_out="$(python3 "${HEAL_PY}" heal-scope linked-workflow-paths --checkout . --ref "${HEAD_SHA}" \
+				--repo "${SOURCE_REPO}" --self-repo "${scope_linked_self_repo}" --source-kind "${scope_linked_source_kind}" --source-repo "${SOURCE_REPO}" \
+				--enabled "${scope_linked_switch}" --source-workflow-paths "${scope_linked_source_paths[@]}" "${scope_linked_pairs[@]}" 2>/dev/null)" \
+				&& jq -e '(.paths | type == "array") and all(.paths[]; type == "string") and (.outcome | type == "string")' <<< "${scope_linked_out}" >/dev/null 2>&1; then
+				scope_linked_outcome="$(jq -r '.outcome' <<< "${scope_linked_out}" | tr -cd 'a-z' | head -c 20)"
+				case "${scope_linked_outcome}" in
+					added|none|skipped|disabled) scope_linked_paths="$(jq -c '.paths' <<< "${scope_linked_out}")" ;;
+					*) scope_linked_outcome="skipped" ;;
+				esac
+			fi
+		fi
+	fi
+	scope_linked_count="$(jq 'length' <<< "${scope_linked_paths}" 2>/dev/null || echo 0)"
+	LINKED_SCOPE_PATHS_JSON="${scope_linked_paths}"
+	log "scope_linked outcome=${scope_linked_outcome} paths=${scope_linked_count} runs=${scope_linked_runs}"
+	return 0
+}
+_heal_scope_linked_paths || { LINKED_SCOPE_PATHS_JSON='[]'; log "scope_linked outcome=skipped paths=0 runs=0"; }
+jq -e 'type == "array" and all(.[]; type == "string")' <<< "${LINKED_SCOPE_PATHS_JSON}" >/dev/null 2>&1 || LINKED_SCOPE_PATHS_JSON='[]'
+
+# In the freeze program below, 20 is the explicit-path cap of render_heal_scope_marker
+# and 8 is HEAL_SCOPE_SUBJECT_RESERVE (scripts/workflow_failure_heal.py); change them
+# together. test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker pins it.
 jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 	--argjson failing_tests "${FAILING_TESTS_JSON}" \
 	--argjson engine_runs "${ENGINE_SCOPE_RUNS_JSON:-[]}" \
 	--argjson engine_paths "${ENGINE_SCOPE_PATHS_JSON:-[]}" \
+	--argjson linked_paths "${LINKED_SCOPE_PATHS_JSON:-[]}" \
 	--argjson runs "$(_heal_slurp_verified_runs '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique')" \
 	--argjson self_workflows "$(_heal_slurp_verified_runs '[.[] | .referenced_paths[]?] | unique')" \
 	--argjson consumer_workflows "$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')" \
 	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
-	'{crash_file: $crash, runs: (($runs + $engine_runs) | unique), self_workflows: ($self_workflows + $engine_paths), consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
+	'($self_workflows + $engine_paths) as $base
+	| ([20 - 8 - ($base | unique | length) - (if $crash != "" and ($base | any(. == $crash) | not) then 1 else 0 end), 0] | max) as $linked_room
+	| {crash_file: $crash, runs: (($runs + $engine_runs) | unique), self_workflows: ($base + (($linked_paths - $base)[:$linked_room])), consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
 	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
 	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
+
+# --- Linked runs: render half (evidence only, #8248) ------------------------
+
+# _heal_collect_linked_runs
+#   Renders the step timelines of the linked runs _heal_fetch_linked_runs read
+#   before the freeze (ids in ${RUNTIME_DIR}/linked_runs/fetched_ids.txt, run
+#   and jobs JSON cached beside them) plus the filtered log window of each
+#   run's longest step to ${RUNTIME_DIR}/linked_run_timelines.txt. Files live
+#   under ${RUNTIME_DIR}/linked_runs/, never ${LOG_DIR}. Nothing here feeds the
+#   scope marker, the ownership inputs or the fingerprint; only the pre-freeze
+#   _heal_scope_linked_paths adds linked paths to the scope (#8360).
+#   API budget (CLAUDE.md §15): unchanged at most 3 REST calls per linked run,
+#   split across the two halves (the run and its jobs before the freeze, one
+#   job log here), so at most 3 x WORKFLOW_HEAL_MAX_LINKED_RUNS per intake, and
+#   none when no linked run is found. Each read makes a single attempt
+#   (GH_RETRY_MAX_ATTEMPTS=1, no retry), so the cap counts HTTP requests, not
+#   logical reads. No existing call returns these runs: run_refs and the
+#   provenance reads cover only reported runs.
+#   Fails open: a failed timeline or log logs
+#   `warn linked_run_skipped run=<id> reason=<token>` and the run is skipped.
+_heal_collect_linked_runs()
+{
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local out_file="${RUNTIME_DIR}/linked_run_timelines.txt"
+	local fetched_ids_file="${RUNTIME_DIR}/linked_runs/fetched_ids.txt"
+	local linked_id="" linked_run_file="" linked_jobs_file=""
+	local timeline_json="" timeline_reason="" longest_job="" longest_start="" longest_end=""
+	local linked_raw="" linked_window="" linked_filtered=""
+	local -a parent_logs=()
+	: > "${out_file}"
+	[ "${MAX_LINKED_RUNS:-0}" -gt 0 ] 2>/dev/null || return 0
+	[ -s "${fetched_ids_file}" ] || return 0
+	[ -s "${SUMMARIES_FILE:-}" ] || return 0
+	# The parent logs again, for the stall-window hints of the timelines.
+	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE:-}" 2>/dev/null)
+	[ "${#parent_logs[@]}" -gt 0 ] || return 0
+	while IFS= read -r linked_id; do
+		[[ "${linked_id}" =~ ^[0-9]+$ ]] || continue
+		linked_run_file="${linked_dir}/run-${linked_id}.json"
+		linked_jobs_file="${linked_dir}/run-${linked_id}-jobs.json"
+		if ! timeline_json="$(python3 "${HEAL_PY}" linked-run-timeline --run-json "${linked_run_file}" --jobs-json "${linked_jobs_file}" \
+			--repo "${SOURCE_REPO}" --run-id "${linked_id}" --stall-hint-files "${parent_logs[@]}" 2>/dev/null)" \
+			|| ! jq -e 'type == "object" and (.ok | type == "boolean")' <<< "${timeline_json}" >/dev/null 2>&1; then
+			log "warn linked_run_skipped run=${linked_id} reason=timeline_failed"
+			continue
+		fi
+		if [ "$(jq -r '.ok' <<< "${timeline_json}")" != true ]; then
+			timeline_reason="$(jq -r '.reason // "timeline_failed"' <<< "${timeline_json}" | tr -cd 'a-z_' | head -c 40)"
+			log "warn linked_run_skipped run=${linked_id} reason=${timeline_reason:-timeline_failed}"
+			continue
+		fi
+		if ! jq -r '.text // ""' <<< "${timeline_json}" | python3 "${HEAL_PY}" redact-stream >> "${out_file}"; then
+			log "warn linked_run_skipped run=${linked_id} reason=timeline_failed"
+			continue
+		fi
+		longest_job="$(jq -r '.longest.job_id // empty' <<< "${timeline_json}")"
+		longest_start="$(jq -r '.longest.start // empty' <<< "${timeline_json}")"
+		longest_end="$(jq -r '.longest.end // empty' <<< "${timeline_json}")"
+		if [[ "${longest_job}" =~ ^[0-9]+$ ]]; then
+			linked_raw="${linked_dir}/run-${linked_id}-job-${longest_job}.raw"
+			linked_window="${linked_dir}/run-${linked_id}-job-${longest_job}.window"
+			linked_filtered="${linked_dir}/run-${linked_id}-job-${longest_job}.txt"
+			echo "--- log of job ${longest_job} (window of its longest step: ${longest_start} -> ${longest_end}) ---" >> "${out_file}"
+			# Same direct, redact-before-disk fetch as the failed-job loop above.
+			if gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${longest_job}/logs" 2>/dev/null \
+				| python3 "${HEAL_PY}" redact-stream > "${linked_raw}" && [ -s "${linked_raw}" ] \
+				&& python3 "${HEAL_PY}" log-window --log-file "${linked_raw}" --start "${longest_start}" --end "${longest_end}" > "${linked_window}" 2>/dev/null \
+				&& python3 "${HEAL_PY}" filter-log --log-file "${linked_window}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${LINKED_RUN_LOG_BYTES}" > "${linked_filtered}" 2>/dev/null; then
+				cat "${linked_filtered}" >> "${out_file}"
+			else
+				log "warn linked_run_skipped run=${linked_id} reason=log_unavailable"
+				echo "(job log unavailable)" >> "${out_file}"
+			fi
+			rm -f "${linked_raw}" "${linked_window}"
+		fi
+		echo >> "${out_file}"
+	done < "${fetched_ids_file}"
+	return 0
+}
+_heal_collect_linked_runs || log "warn linked_runs_failed"
 
 # --- Run the diagnosis model -----------------------------------------------
 
@@ -2413,6 +2868,11 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	echo
 	if [ -n "${OWNERSHIP_FACTS_FILE}" ] && [ -s "${OWNERSHIP_FACTS_FILE}" ]; then
 		cat "${OWNERSHIP_FACTS_FILE}"
+		echo
+	fi
+	if [ -s "${RUNTIME_DIR}/linked_run_timelines.txt" ]; then
+		echo "=== LINKED RUN TIMELINES (UNTRUSTED) ==="
+		cat "${RUNTIME_DIR}/linked_run_timelines.txt"
 		echo
 	fi
 	echo "=== FAILED RUN LOGS (UNTRUSTED) ==="
@@ -2826,10 +3286,10 @@ _open_issue()
 	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
 		ensure_label_exists "ai:orchestrator-managed" "${repo}" || true
 	fi
-	local issue_url
-	issue_url="$(gh_retry gh issue create --repo "${repo}" --title "${title}" --body-file "${body_file}" "${label_args[@]}" 2>/dev/null || echo '')"
+	local issue_url issue_create_err="${RUNTIME_DIR}/issue_create_error.txt"
+	issue_url="$(gh_retry gh issue create --repo "${repo}" --title "${title}" --body-file "${body_file}" "${label_args[@]}" 2>"${issue_create_err}" || echo '')"
 	if [ -z "${issue_url}" ]; then
-		log "error issue_create_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
+		log "error issue_create_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL} $(_heal_issue_create_detail "${issue_create_err}" "${title}" "${body_file}")"
 		tg_send_msg "Workflow failure heal FAILED to open an issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		return 1
 	fi

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -126,6 +127,29 @@ def test_managed_paths_are_the_allowlist_minus_consumer_edited_entries(tmp_path)
 		assert consumer_owned not in managed
 
 
+def test_non_boolean_seed_only_is_rejected(tmp_path):
+	repo, _sha = make_upstream_repo(tmp_path)
+	contract = {"managed_files": [{"source": "assets/allow.json", "target": "security/allow.json", "seed_only": "true"}]}
+	assets = repo / "workflow-templates" / "audit-gate" / "assets"
+	assets.mkdir(parents=True)
+	(assets / "allow.json").write_text("[]\n", encoding="utf-8")
+	(repo / "workflow-templates" / "audit-gate" / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "bad seed-only")
+	sha = _git(repo, "rev-parse", "HEAD")
+	for mode in ("allowed-paths", "managed-paths", "managed-digests"):
+		assert run_builder(mode, "--repo-root", str(repo), "--commit", sha).returncode != 0
+
+
+def test_canonical_contract_marks_the_allowlist_seed_only():
+	"""Issue shubhodeep1/multi-user-ai-agent#322: overwriting the allowlist on
+	every sync emptied consumer allowlists and failed their npm Audit Gate."""
+	contract = json.loads((REPO_ROOT / "workflow-templates" / "audit-gate" / "contract.json").read_text(encoding="utf-8"))
+	by_target = {item["target"]: item for item in contract["managed_files"]}
+	assert by_target["security/dependency-audit-allowlist.json"].get("seed_only") is True
+	assert by_target["scripts/security/check-npm-audit.js"].get("seed_only", False) is False
+
+
 def test_managed_paths_defaults_to_head_and_rejects_a_missing_commit(tmp_path):
 	repo, _sha = make_upstream_repo(tmp_path)
 	assert run_builder("managed-paths", "--repo-root", str(repo)).returncode == 0
@@ -167,6 +191,33 @@ def test_managed_digests_hold_the_bytes_a_sync_writes(tmp_path):
 	assert ".claude/commands/link.md" not in digests
 	# Consumer-edited paths are never managed.
 	assert not {"CHANGELOG.md", "agents.md", "package.json"} & set(digests)
+
+
+def test_seed_only_audit_gate_target_is_allowed_but_consumer_owned(tmp_path):
+	"""The sync creates a seed_only target (the advisory allowlist) once and then leaves it to the consumer."""
+	repo, _sha = make_upstream_repo(tmp_path)
+	contract = {"managed_files": [
+		{"source": "assets/x.js", "target": "scripts/security/x.js"},
+		{"source": "assets/allow.json", "target": "security/allow.json", "seed_only": True},
+	]}
+	(repo / "workflow-templates" / "audit-gate" / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+	(repo / "workflow-templates" / "audit-gate" / "assets").mkdir(parents=True)
+	(repo / "workflow-templates" / "audit-gate" / "assets" / "x.js").write_text("audit()\n", encoding="utf-8")
+	(repo / "workflow-templates" / "audit-gate" / "assets" / "allow.json").write_text("[]\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "seed only")
+	sha = _git(repo, "rev-parse", "HEAD")
+
+	allowed = run_builder("allowed-paths", "--repo-root", str(repo), "--commit", sha).stdout.splitlines()
+	managed = run_builder("managed-paths", "--repo-root", str(repo), "--commit", sha).stdout.splitlines()
+	result = run_builder("managed-digests", "--repo-root", str(repo), "--commit", sha)
+	assert result.returncode == 0, result.stderr
+	digests = json.loads(result.stdout)
+	assert "security/allow.json" in allowed
+	assert "security/allow.json" not in managed
+	assert "security/allow.json" not in digests
+	assert "scripts/security/x.js" in managed
+	assert "scripts/security/x.js" in digests
 
 
 def test_managed_digests_skip_a_wrapper_the_renderer_rejects(tmp_path):
@@ -277,6 +328,113 @@ def test_changelog_ensure_assets_paths_are_allowed(tmp_path):
 	assert paths, "ensure-assets reported no changed paths in an empty consumer"
 	for path in paths:
 		assert module.path_allowed(path, compiled), path
+
+
+
+# ---------------------------------------------------------------------------
+# Issue #8265: classify-paths and parity with the security audit's inline copy
+# ---------------------------------------------------------------------------
+
+SECURITY_AUDIT = REPO_ROOT / "scripts" / "security_audit.sh"
+_PIN_A = "1" * 40
+_PIN_B = "2" * 40
+_WRAPPER_TEMPLATE = (
+	"jobs:\n  review:\n    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{pin} # stable\n"
+	"      - uses: actions/checkout@v5\n        with:\n          ref: {pin} # stable\n"
+)
+
+
+def _audit_namespace(repo_root: Path, digests: dict) -> dict:
+	"""Exec the audit's inline WRAPPER_PIN_PATTERNS / normalize_wrapper_pins /
+	upstream_managed_status from scripts/security_audit.sh."""
+	text = SECURITY_AUDIT.read_text(encoding="utf-8")
+	start = text.index("WRAPPER_PIN_PATTERNS = (")
+	end = text.index("\n\n\nraw_findings = ", start)
+	namespace = {"re": re, "hashlib": hashlib, "Path": Path, "repo_root": repo_root.resolve(), "upstream_managed_digests": digests}
+	exec(compile(text[start:end], "security_audit_inline", "exec"), namespace)  # noqa: S102 - trusted repository source
+	return namespace
+
+
+def _classify_fixture(tmp_path: Path) -> tuple[Path, dict, list]:
+	module = _load_builder()
+	repo = tmp_path / "consumer"
+	(repo / ".github" / "workflows").mkdir(parents=True)
+	(repo / ".claude" / "commands").mkdir(parents=True)
+	files = {
+		".github/workflows/same-pin.yml": _WRAPPER_TEMPLATE.format(pin=_PIN_A),
+		".github/workflows/other-pin.yml": _WRAPPER_TEMPLATE.format(pin=_PIN_B),
+		".github/workflows/edited.yml": _WRAPPER_TEMPLATE.format(pin=_PIN_B) + "# edit\n",
+		".claude/commands/do.md": "do\n",
+		".claude/commands/changed.md": "changed\n",
+		"app.js": "x\n",
+	}
+	for rel, content in files.items():
+		(repo / rel).write_text(content, encoding="utf-8")
+	(repo / ".github" / "workflows" / "linked.yml").symlink_to("same-pin.yml")
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "consumer")
+	rendered = _WRAPPER_TEMPLATE.format(pin=_PIN_A).encode("utf-8")
+	normalized = module.normalize_wrapper_pins(rendered)
+	wrapper_digests = sorted({hashlib.sha256(rendered).hexdigest(), hashlib.sha256(normalized).hexdigest()})
+	digests = {
+		".github/workflows/same-pin.yml": wrapper_digests,
+		".github/workflows/other-pin.yml": wrapper_digests,
+		".github/workflows/edited.yml": wrapper_digests,
+		".github/workflows/linked.yml": wrapper_digests,
+		".github/workflows/missing.yml": wrapper_digests,
+		".claude/commands/do.md": [hashlib.sha256(b"do\n").hexdigest()],
+		".claude/commands/changed.md": [hashlib.sha256(b"do\n").hexdigest()],
+	}
+	paths = [*files, ".github/workflows/linked.yml", ".github/workflows/missing.yml", "unknown.txt"]
+	return repo, digests, paths
+
+
+def test_classify_paths_reads_git_objects(tmp_path):
+	module = _load_builder()
+	repo, digests, paths = _classify_fixture(tmp_path)
+	# A working-tree edit after the commit must not change the result.
+	(repo / ".claude" / "commands" / "do.md").write_text("edited in the working tree\n", encoding="utf-8")
+	result = module.classify_paths(repo, _git(repo, "rev-parse", "HEAD"), digests, paths)
+	assert result == {
+		".github/workflows/same-pin.yml": "unmodified",
+		".github/workflows/other-pin.yml": "unmodified",
+		".github/workflows/edited.yml": "modified",
+		".github/workflows/linked.yml": "modified",
+		".github/workflows/missing.yml": "modified",
+		".claude/commands/do.md": "unmodified",
+		".claude/commands/changed.md": "modified",
+		"app.js": "unmanaged",
+		"unknown.txt": "unmanaged",
+	}
+
+
+def test_classify_paths_cli(tmp_path):
+	repo, digests, paths = _classify_fixture(tmp_path)
+	digests_file = tmp_path / "digests.json"
+	digests_file.write_text(json.dumps(digests), encoding="utf-8")
+	paths_file = tmp_path / "paths.txt"
+	paths_file.write_text("\n".join(paths) + "\n", encoding="utf-8")
+	result = run_builder("classify-paths", "--digests-json", str(digests_file), "--repo-root", str(repo), "--commit", "HEAD", "--paths-file", str(paths_file))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["app.js"] == "unmanaged"
+	digests_file.write_text("{}", encoding="utf-8")
+	assert run_builder("classify-paths", "--digests-json", str(digests_file), "--repo-root", str(repo), "--commit", "HEAD", "--paths-file", str(paths_file)).returncode == 1
+	assert run_builder("classify-paths", "--digests-json", str(tmp_path / "missing.json"), "--repo-root", str(repo), "--commit", "HEAD", "--paths-file", str(paths_file)).returncode == 1
+
+
+def test_classifier_matches_the_security_audit_inline_copy(tmp_path):
+	"""The audit keeps its own inline copy (D1 of the #8265 plan); both must agree."""
+	module = _load_builder()
+	repo, digests, paths = _classify_fixture(tmp_path)
+	audit = _audit_namespace(repo, digests)
+	assert [pattern.pattern for pattern in audit["WRAPPER_PIN_PATTERNS"]] == [pattern.pattern for pattern in module.WRAPPER_PIN_PATTERNS]
+	for pin in (_PIN_A, _PIN_B):
+		data = _WRAPPER_TEMPLATE.format(pin=pin).encode("utf-8")
+		assert audit["normalize_wrapper_pins"](data) == module.normalize_wrapper_pins(data)
+	shared = module.classify_paths(repo, _git(repo, "rev-parse", "HEAD"), digests, paths)
+	for path in paths:
+		assert audit["upstream_managed_status"](path) == shared[path], path
 
 
 if __name__ == "__main__":

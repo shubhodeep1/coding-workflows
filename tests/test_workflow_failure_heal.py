@@ -144,6 +144,78 @@ def test_autofix_intake_verifies_a_review_run_dispatched_for_the_pr() -> None:
 	assert "run_ref_rejected run=500 reason=unverified detail=error:_run_head_mismatch\n" in result.stdout
 
 
+def test_verify_run_binds_a_self_dispatched_review_run_by_its_marker_head() -> None:
+	# review_autofix.yml re-dispatches itself with no `[pr:N]` run name, so only
+	# the provenance gate's marker-head verdict binds it to the PR head.
+	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "event": "workflow_dispatch", "head_sha": SHA_A,
+		"display_title": "Codex PR Self-Healing Semantic Agent", "conclusion": "failure", "path": ".github/workflows/review_autofix.yml"}
+	assert heal.verify_run(run, repo=SELF_REPO, kind="autofix_failure", head_sha=SHA_B, pr_number=4174, marker_head_bound=True)["run_id"] == 500
+	rejected = (
+		{"marker_head_bound": False},
+		{"marker_head_bound": True, "run": dict(run, event="pull_request")},
+		{"marker_head_bound": True, "kind": "workflow_run"},
+	)
+	for case in rejected:
+		try:
+			heal.verify_run(case.get("run", run), repo=SELF_REPO, kind=case.get("kind", "autofix_failure"), head_sha=SHA_B, pr_number=4174, marker_head_bound=case["marker_head_bound"])
+		except ValueError as exc:
+			assert str(exc) == "run head mismatch"
+		else:
+			raise AssertionError(f"head mismatch accepted: {case}")
+
+
+def test_verify_run_provenance_lists_runs_a_trusted_marker_binds_to_the_pr_head() -> None:
+	payload = heal.validate_payload(_autofix_payload())
+	assert payload["head_sha"] == SHA_B
+	review = dict(_provenance_run(path="review_autofix.yml"), event="workflow_dispatch", head_sha=SHA_A)
+
+	def check(body: str, login: str = "workflow-bot") -> dict:
+		return heal.verify_run_provenance(payload, runs={"500": review}, comments=[{"body": body, "user": {"login": login}}], trusted_login="workflow-bot", self_repo=SELF_REPO)
+
+	canonical = f"AI review/autofix failed\n\n<!-- review-autofix-failure:v1 head={SHA_B} reason=workflow_failure fp={FP_HEX} degraded=0 run=500 -->"
+	assert check(canonical)["status"] == "ok" and check(canonical)["marker_head_run_ids"] == ["500"]
+	cap = f"capped\n<!-- review-autofix-failure-cap:v1 head={SHA_B.upper()} fp={FP_HEX} run=500 -->\nmore"
+	assert check(cap)["marker_head_run_ids"] == ["500"]
+	# A marker for another head still links the run, but does not bind its head.
+	other_head = canonical.replace(f"head={SHA_B}", f"head={SHA_A}")
+	assert check(other_head)["status"] == "ok" and check(other_head)["marker_head_run_ids"] == []
+	# A marker naming another run, or written by anyone else, binds nothing.
+	assert check(canonical.replace("run=500", "run=501"))["marker_head_run_ids"] == []
+	assert check(canonical, login="attacker")["marker_head_run_ids"] == []
+	# The report must carry a valid head for any binding.
+	headless = dict(payload, head_sha=None)
+	assert heal.verify_run_provenance(headless, runs={"500": review}, comments=[{"body": canonical, "user": {"login": "workflow-bot"}}], trusted_login="workflow-bot", self_repo=SELF_REPO)["marker_head_run_ids"] == []
+
+
+def test_autofix_intake_verifies_a_self_dispatched_review_run_bound_by_its_marker() -> None:
+	# coding-workflows#8285 (intake run 40814586379): review_autofix.yml
+	# re-dispatched itself on main, so the run's title has no `[pr:N]` and its
+	# head is main's tip. Only the pipeline's failure marker on the PR names
+	# the run and the PR head; verify-run dropped it, and the intake failed on
+	# an unresolved scope marker with a CRITICAL alert.
+	payload = _autofix_payload()
+	dispatched = {
+		"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "workflow_dispatch", "head_sha": SHA_A, "head_branch": "main",
+		"display_title": "Codex PR Self-Healing Semantic Agent", "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/review_autofix.yml", "pull_requests": [],
+	}
+	marker = f"<!-- review-autofix-failure:v1 head={SHA_B} reason=workflow_failure fp={FP_HEX} degraded=0 run=500 -->"
+	jobs = {"500": [{"id": 9001, "name": "codex-agent", "workflow_name": "Codex PR Self-Healing Semantic Agent", "conclusion": "failure", "steps": [{"name": "Run editor", "conclusion": "failure"}]}]}
+
+	def state_with(body: str) -> dict:
+		state = _intake_state(jobs=jobs, run_details={"500": dispatched})
+		state["comments"][f"repos/{CONSUMER_REPO}/issues/4174/comments"] = [{"body": f"AI review/autofix failed\n\n{body}", "user": {"login": "workflow-bot"}}]
+		return state
+
+	result, _, _ = _run_intake(payload, state_with(marker), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "run_ref_rejected" not in result.stdout and "runs=1" in result.stdout
+	# A marker for an older PR head still links the run but cannot bind its head.
+	stale = marker.replace(f"head={SHA_B}", f"head={SHA_A}")
+	result, _, _ = _run_intake(payload, state_with(stale), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "run_ref_rejected run=500 reason=unverified detail=error:_run_head_mismatch\n" in result.stdout
+
+
 def test_verify_run_accepts_pending_run_only_when_allowed() -> None:
 	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "status": "in_progress", "conclusion": None, "path": ".github/workflows/internal-plan.yml"}
 	assert heal.verify_run(run, repo=SELF_REPO, kind="phase_failure", allow_pending=True)["run_id"] == 500
@@ -979,6 +1051,194 @@ def test_error_signature_uses_executed_errors_not_the_echoed_script() -> None:
 	# A step that fails a different way in the same script gets a different signature.
 	other = RAW_STEP_LOG.replace("Retry review run did not complete within 25 minutes", "Retry review run concluded failure")
 	assert heal.error_signature(heal.filter_log(other)) != signature
+
+
+# btc_sweeper#248 shapes (Refs #8602): the runner echoed the step script
+# without ANSI colour, so `echo "::error::..."` source lines looked like output,
+# and the runtime lines (`##[warning]`, a failed `CLAUDE_POOL run`,
+# `AI_ENGINE_FALLBACK`, `exited with code`) fell outside the tail.
+BTC_SWEEPER_WARNING_LINE = "2026-10-31T09:12:01.1000000Z ##[warning]Claude pool account TEAM1 at capacity; trying next account"
+BTC_SWEEPER_ERROR_LINE = "2026-10-31T09:40:12.2000000Z ##[error]Process completed with exit code 1."
+BTC_SWEEPER_POOL_CRASHED_LINE = (
+	"2026-10-31T09:12:02.1000000Z CLAUDE_POOL run role=implement account=TEAM1 outcome=crashed reason=relay_unavailable exit_code=1"
+)
+BTC_SWEEPER_POOL_REFUSED_LINE = (
+	"2026-10-31T09:12:03.1000000Z CLAUDE_POOL run role=implement account=TEAM2 outcome=refused reason=capacity exit_code=1"
+)
+BTC_SWEEPER_POOL_UNAVAILABLE_LINE = (
+	"2026-10-31T09:12:04.1000000Z CLAUDE_POOL run role=implement account=TEAM3 outcome=unavailable reason=no_token exit_code=1"
+)
+BTC_SWEEPER_POOL_SUCCESS_LINE = (
+	"2026-10-31T09:12:05.1000000Z CLAUDE_POOL run role=plan account=TEAM1 outcome=success reason=ok exit_code=0"
+)
+BTC_SWEEPER_FALLBACK_LINE = "2026-10-31T09:12:06.1000000Z AI_ENGINE_FALLBACK role=IMPLEMENT reason=capacity"
+BTC_SWEEPER_EXITED_LINE = "2026-10-31T09:12:07.1000000Z claude exited with code 1"
+BTC_SWEEPER_UNSTYLED_STEP_LOG = (
+	"2026-10-31T09:10:00.0000000Z ##[group]Run set -euo pipefail\n"
+	"2026-10-31T09:10:00.0000100Z set -euo pipefail\n"
+	"2026-10-31T09:10:00.0000200Z if [ \"${rc}\" -ne 0 ]; then\n"
+	"2026-10-31T09:10:00.0000300Z   echo \"::error::implement attempt failed for issue ${ISSUE_NUMBER}\"\n"
+	"2026-10-31T09:10:00.0000400Z   echo \"retry budget exhausted\"\n"
+	"2026-10-31T09:10:00.0000500Z fi\n"
+	"2026-10-31T09:10:00.0000600Z shell: /usr/bin/bash -e {0}\n"
+	"2026-10-31T09:10:00.0000700Z env:\n"
+	"2026-10-31T09:10:00.0000800Z   ISSUE_NUMBER: 248\n"
+	"2026-10-31T09:10:00.0000900Z ##[endgroup]\n"
+	"2026-10-31T09:10:01.0000000Z retry budget exhausted\n"
+	f"{BTC_SWEEPER_ERROR_LINE}\n"
+)
+
+
+def test_filter_log_keeps_runtime_lines_outside_tail() -> None:
+	lines = [f"line {i}" for i in range(1000)]
+	early = {
+		10: BTC_SWEEPER_WARNING_LINE,
+		11: BTC_SWEEPER_ERROR_LINE,
+		12: BTC_SWEEPER_POOL_CRASHED_LINE,
+		13: BTC_SWEEPER_POOL_REFUSED_LINE,
+		14: BTC_SWEEPER_POOL_UNAVAILABLE_LINE,
+		15: BTC_SWEEPER_FALLBACK_LINE,
+		16: BTC_SWEEPER_EXITED_LINE,
+		17: BTC_SWEEPER_POOL_SUCCESS_LINE,
+	}
+	for index, text in early.items():
+		lines[index] = text
+	filtered = heal.filter_log("\n".join(lines), max_lines=50, max_bytes=100_000)
+	for kept_line in (
+		BTC_SWEEPER_WARNING_LINE,
+		BTC_SWEEPER_ERROR_LINE,
+		BTC_SWEEPER_POOL_CRASHED_LINE,
+		BTC_SWEEPER_POOL_REFUSED_LINE,
+		BTC_SWEEPER_POOL_UNAVAILABLE_LINE,
+		BTC_SWEEPER_FALLBACK_LINE,
+		BTC_SWEEPER_EXITED_LINE,
+	):
+		assert kept_line in filtered
+	# A successful pool run and plain filler before the tail are not kept.
+	assert "outcome=success" not in filtered
+	assert "line 20\n" not in filtered and "line 500" not in filtered
+	assert "line 999" in filtered
+	# Only the stable fallback line is kept, not the report bookkeeping.
+	report = ["filler"] * 100
+	report[0] = "AI_ENGINE_FALLBACK_REPORT role=IMPLEMENT entries=2"
+	assert "AI_ENGINE_FALLBACK_REPORT" not in heal.filter_log("\n".join(report), max_lines=10)
+
+
+def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
+	dropped = heal._drop_step_script_lines(BTC_SWEEPER_UNSTYLED_STEP_LOG)
+	assert "set -euo pipefail\n" not in dropped.split("##[group]Run set -euo pipefail", 1)[1]
+	assert "implement attempt failed" not in dropped
+	assert "if [ " not in dropped and "0000500Z fi" not in dropped
+	# Header line, `shell:` / `env:` block and all output after the close stay.
+	assert "##[group]Run set -euo pipefail" in dropped
+	assert "2026-10-31T09:10:00.0000600Z shell: /usr/bin/bash -e {0}" in dropped
+	assert "2026-10-31T09:10:00.0000800Z   ISSUE_NUMBER: 248" in dropped
+	assert "2026-10-31T09:10:00.0000900Z ##[endgroup]" in dropped
+	# Output with the same text as a script line is kept; the script copy is not.
+	assert dropped.count("retry budget exhausted") == 1
+	assert "2026-10-31T09:10:01.0000000Z retry budget exhausted" in dropped
+	assert BTC_SWEEPER_ERROR_LINE in dropped
+	filtered = heal.filter_log(BTC_SWEEPER_UNSTYLED_STEP_LOG)
+	assert "ISSUE_NUMBER: [redacted]" in filtered
+	assert "ISSUE_NUMBER: 248" not in filtered
+	assert "implement attempt failed" not in filtered
+	assert "##[error]Process completed with exit code 1." in filtered
+
+
+def test_drop_step_script_lines_drops_mixed_cyan_and_unstyled_script() -> None:
+	log = (
+		"2026-10-31T09:10:00Z ##[group]Run ./sweep.sh\n"
+		"2026-10-31T09:10:00Z \x1b[36;1m./sweep.sh --cyan-line\x1b[0m\n"
+		"2026-10-31T09:10:00Z ./sweep.sh --plain-line\n"
+		"2026-10-31T09:10:00Z shell: /usr/bin/bash -e {0}\n"
+		"2026-10-31T09:10:00Z ##[endgroup]\n"
+		"2026-10-31T09:10:01Z sweep output\n"
+	)
+	dropped = heal._drop_step_script_lines(log)
+	assert "--cyan-line" not in dropped
+	assert "--plain-line" not in dropped
+	assert "shell: /usr/bin/bash -e {0}" in dropped
+	assert "sweep output" in dropped
+
+
+def test_drop_step_script_lines_keeps_uses_step_header() -> None:
+	log = (
+		"2026-10-31T09:10:00Z ##[group]Run actions/checkout@v4\n"
+		"2026-10-31T09:10:00Z with:\n"
+		"2026-10-31T09:10:00Z   repository: x\n"
+		"2026-10-31T09:10:00Z ##[endgroup]\n"
+		"2026-10-31T09:10:01Z checkout output\n"
+	)
+	assert heal._drop_step_script_lines(log) == log
+	# A header with no sections closes at once and is unchanged.
+	bare = "2026-10-31T09:10:00Z ##[group]Run true\n2026-10-31T09:10:00Z ##[endgroup]\n2026-10-31T09:10:01Z out\n"
+	assert heal._drop_step_script_lines(bare) == bare
+	# A group closed before any section key is a user-defined `Run ...` group,
+	# not an echoed script: its output lines are kept.
+	user_group = (
+		"2026-10-31T09:10:00Z ##[group]Run tests\n"
+		"2026-10-31T09:10:00Z FAILED test_x\n"
+		"2026-10-31T09:10:00Z ##[endgroup]\n"
+		"2026-10-31T09:10:01Z after group\n"
+	)
+	assert heal._drop_step_script_lines(user_group) == user_group
+
+
+def test_drop_step_script_lines_keeps_unconfirmed_header_lines() -> None:
+	# A header that never reaches a section key or a close keeps its lines.
+	unterminated = (
+		"2026-10-31T09:10:00Z ##[group]Run codex\n"
+		"2026-10-31T09:10:01Z ::error::step output from a cut log\n"
+	)
+	assert heal._drop_step_script_lines(unterminated) == unterminated
+	# A second header that opens before the first is confirmed flushes the
+	# first header's lines (fail open); the second header's script is dropped.
+	reopened = (
+		"2026-10-31T09:10:00Z ##[group]Run first\n"
+		"2026-10-31T09:10:00Z first-header-line\n"
+		"2026-10-31T09:10:01Z ##[group]Run second\n"
+		"2026-10-31T09:10:01Z second-script-line\n"
+		"2026-10-31T09:10:01Z shell: /usr/bin/bash -e {0}\n"
+		"2026-10-31T09:10:01Z ##[endgroup]\n"
+		"2026-10-31T09:10:02Z second output\n"
+	)
+	dropped = heal._drop_step_script_lines(reopened)
+	assert "first-header-line" in dropped
+	assert "second-script-line" not in dropped
+	assert "second output" in dropped
+	# Text without a Run header comes back byte-for-byte.
+	plain = "line one\n##[endgroup]\nshell: x\n\x1b[36;1mcyan\x1b[0m\n"
+	assert heal._drop_step_script_lines(plain) == plain
+
+
+def test_drop_step_script_lines_never_removes_env_block_context() -> None:
+	# A timestamp-shaped `##[endgroup]` / `##[group]Run` env value followed by
+	# an unstamped continuation is a value line for _strip_step_env_values; the
+	# drop pass must not treat it as a header boundary and remove lines that
+	# bound the env block, or filter_log would keep part of the value.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"2026-01-01T00:00:00Z ##[endgroup]\n"
+		"leaked-after-close\n"
+		"2026-01-01T00:00:00Z ##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	assert heal._drop_step_script_lines(log) == log
+	filtered = heal.filter_log(log)
+	for secret in ("leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry", "2026-01-01"):
+		assert secret not in filtered
+	assert "step output kept" in filtered
+
+
+def test_error_signature_ignores_unstyled_echoed_script() -> None:
+	signature = heal.error_signature(heal.filter_log(BTC_SWEEPER_UNSTYLED_STEP_LOG))
+	assert "implement attempt failed" not in signature
+	assert signature == "##[error]process completed with exit code <n>."
 
 
 def _heal_issue(number: int, *, state: str, fp: str, gen: int = 1, root: str | None = None, created: datetime | None = None) -> dict:
@@ -2801,6 +3061,23 @@ def test_intake_scope_comes_from_support_ref_not_diagnosis_files_touched() -> No
 	assert "scripts/evil.py" not in body
 
 
+def test_intake_issue_create_failure_logs_github_reason_and_sizes() -> None:
+	# Run 41071146143 logged only `issue_create_failed`: the create's stderr went
+	# to /dev/null. The failure line now carries gh's reason and the sizes.
+	payload = _self_repo_autofix_payload() | {"script_ref": "stable", "crash_file": "scripts/safe.py", "changed_files": ["scripts/safe.py"]}
+	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]) | {"issue_create_fail": True}
+	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_prepare_scope_support, scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 1, result.stdout
+	assert len(state_after["issues_created"]) == 1  # one attempt only: the create is not idempotent
+	line = next(entry for entry in result.stdout.splitlines() if "error issue_create_failed" in entry)
+	match = re.search(r" detail=(.*) title_bytes=([0-9]+) body_bytes=([0-9]+)$", line)
+	assert match, line
+	assert "HTTP 500" in match.group(1)
+	assert "::" not in match.group(1)
+	assert int(match.group(2)) == len(state_after["issues_created"][0]["title"].encode("utf-8"))
+	assert int(match.group(3)) == len(state_after["issues_created"][0]["body"].encode("utf-8"))
+
+
 def test_intake_scope_guard_off_files_no_issue() -> None:
 	# #6871: with HEAL_INTAKE_SCOPE_GUARD_ENABLED switched off (any value other
 	# than unset, empty or "true"; _stage sets "false"), the intake composes the
@@ -3351,6 +3628,7 @@ def test_count_identical_failures_flags_non_retryable_reasons() -> None:
 		"conflict_resolver_sandbox_path_host_only",
 		"conflict_resolver_sandbox_path_unsupported",
 		"conflict_resolver_sandbox_support_missing",
+		"review_editor_sandbox_path_excluded",
 	}
 	for reason in sorted(heal.NON_RETRYABLE_FAILURE_REASONS):
 		assert heal._FAILURE_REASON_RE.match(reason)
@@ -6592,6 +6870,115 @@ def test_intake_fingerprints_engine_fallback_without_logs() -> None:
 	assert '"${SOURCE_KIND}" == "engine_fallback"' not in text
 
 
+# --- engine_fallback: Claude pool step reason evidence line (issue #8406) ----------
+
+_ENGINE_POOL_NOW = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+_ENGINE_POOL_RECORDS = ["v1\t1700000000\tPLAN\tno_credential\tnon_capacity\trefused\tcapacity"]
+_ENGINE_POOL_EVIDENCE_TODAY = (
+	"AI engine fallback records (v1 epoch role reason class action policy):\n"
+	"v1 1700000000 PLAN no_credential non_capacity refused capacity"
+)
+
+
+def _engine_pool_payload(**kwargs) -> dict:
+	return heal.build_engine_fallback_payload(
+		repo="owner/consumer", role="PLAN", reason="no_credential", workflow_name="AI Plan",
+		run_id="42", wrapper_sha=None, reporter_run_url=None, records=list(_ENGINE_POOL_RECORDS),
+		now=_ENGINE_POOL_NOW, **kwargs,
+	)
+
+
+def _engine_pool_lines(evidence: str) -> list[str]:
+	return [line for line in evidence.split("\n") if line.startswith(heal.ENGINE_POOL_REASON_EVIDENCE_PREFIX)]
+
+
+def test_engine_fallback_pool_reason_token_present() -> None:
+	payload = _engine_pool_payload(pool_reason="pool_dir_invalid")
+	assert payload["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY + "\nClaude pool step reason: pool_dir_invalid"
+	normalized = heal.validate_payload(payload)
+	assert _engine_pool_lines(normalized["failure_evidence"]) == ["Claude pool step reason: pool_dir_invalid"]
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+
+
+@pytest.mark.parametrize("token", ["Bad", "a b", "x" * 61, "", "@x", "all-gated", "pool`x`", "a\nb", "selected\n", "-x"])
+def test_engine_fallback_pool_reason_token_invalid_is_unavailable(token: str) -> None:
+	payload = _engine_pool_payload(pool_reason=token)
+	assert _engine_pool_lines(payload["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(heal.validate_payload(payload)["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+
+
+def test_engine_fallback_pool_reason_omitted_is_byte_identical() -> None:
+	omitted = _engine_pool_payload()
+	explicit_none = _engine_pool_payload(pool_reason=None)
+	assert json.dumps(omitted, sort_keys=True) == json.dumps(explicit_none, sort_keys=True)
+	assert omitted["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+	assert _engine_pool_lines(omitted["failure_evidence"]) == []
+	normalized = heal.validate_payload(omitted)
+	assert normalized["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+
+
+def test_engine_fallback_pool_reason_keeps_the_fingerprint_and_title() -> None:
+	plain = heal.validate_payload(_engine_pool_payload())
+	with_reason = heal.validate_payload(_engine_pool_payload(pool_reason="selected"))
+	for key in ("engine_role", "engine_reason", "issue_title", "failure_reason", "failure_fingerprint"):
+		assert plain[key] == with_reason[key], key
+	assert with_reason["engine_reason"] == "no_credential"
+	assert heal.engine_fallback_fingerprint(plain["engine_role"], plain["engine_reason"]) == \
+		heal.engine_fallback_fingerprint(with_reason["engine_role"], with_reason["engine_reason"]) == \
+		heal.fingerprint("ai-engine-fallback", "PLAN", "no_credential")
+
+
+def test_engine_fallback_validator_drops_invalid_and_duplicate_pool_lines() -> None:
+	forged = _engine_pool_payload()
+	forged["failure_evidence"] = "\n".join([
+		_ENGINE_POOL_EVIDENCE_TODAY,
+		"Claude pool step reason: @someone",
+		"Claude pool step reason: first_valid",
+		"Claude pool step reason: second_valid",
+		"Claude pool step reason: ",
+	])
+	normalized = heal.validate_payload(forged)
+	assert normalized["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY + "\nClaude pool step reason: first_valid"
+	# Idempotent: validating the normalized payload again changes nothing.
+	assert heal.validate_payload(normalized) == normalized
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+
+
+def test_engine_fallback_pool_reason_cli(tmp_path: Path) -> None:
+	records = tmp_path / "records.tsv"
+	records.write_text("\n".join(_ENGINE_POOL_RECORDS) + "\n", encoding="utf-8")
+	script = str(REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	base = [sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
+		"--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)]
+
+	def build(*extra: str) -> dict:
+		return json.loads(subprocess.run([*base, *extra], capture_output=True, text=True, env=env, check=True).stdout)
+
+	omitted = build()
+	expected = _engine_pool_payload()
+	omitted.pop("reported_at")
+	expected.pop("reported_at")
+	assert omitted == expected
+	assert omitted["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+	assert _engine_pool_lines(build("--pool-reason", "")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(build("--pool-reason", "Not Valid")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(build("--pool-reason", "selected")["failure_evidence"]) == ["Claude pool step reason: selected"]
+	assert _engine_pool_lines(build("--pool-reason=-x")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+
+
+def test_engine_fallback_reporter_passes_the_pool_reason_only_with_a_source() -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
+	build = text[text.index("build-engine-fallback-payload --repo"):text.index("wrap-dispatch --payload-json")]
+	assert '${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"}' in build
+	assert 'report_pool_reason_args=("--pool-reason=${report_pool_reason_token}")' in text
+	assert 'if [ "${report_pool_reason_source}" != "none" ]; then' in text
+	# The record format and the fingerprint inputs stay role + reason.
+	assert '--role "${role}" --reason "${reason}"' in build
+
+
 # --- engine_fallback reporting run: heal scope instead of scope_unavailable_no_runs ---
 
 ENGINE_RUN_ID = "39565576987"
@@ -7053,6 +7440,55 @@ def test_non_retryable_route_decisions() -> None:
 	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B, intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/777")
 	assert "`.claude/hooks/pr_merge_status_guard.py`" in body and "manual merge" in body.lower()
 	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={HOST_ONLY_REASON} -->")
+
+
+SANDBOX_EXCLUDED_REASON = "review_editor_sandbox_path_excluded"
+
+
+def _sandbox_excluded_summary_comment(*, head: str = SHA_A, run: str = "801", support: str | None = None, author: str = CAP_AUTHOR) -> dict:
+	"""An editor-summary comment that ends with the #8321 sandbox-excluded marker."""
+	fp = heal.autofix_failure_fingerprint(failure_reason=SANDBOX_EXCLUDED_REASON, evidence_text="")["fp"]
+	marker = heal.render_failure_marker(head, SANDBOX_EXCLUDED_REASON, fp, True, run, support)
+	assert marker
+	body = (
+		"AI autofix editor summary\n\nChanges made:\n- none\n\nChange status:\n- not-edited\n\n"
+		"Ignored suggestions (with short reason):\n- .claude/docs/s25-x.md test failure \u2014 sandbox-excluded path\n\n"
+		"Files changed / commit status:\n- none\n\n" + marker
+	)
+	return {"id": int(run), "author_login": author, "body": body}
+
+
+def test_sandbox_excluded_editor_summary_trips_the_cap_on_its_first_marker() -> None:
+	"""#8321: one editor summary declining a fix as sandbox-excluded stops the head."""
+	one = [_sandbox_excluded_summary_comment()]
+	result = heal.count_identical_failures(one, head_sha=SHA_A, author_login=CAP_AUTHOR)
+	assert result["count"] == 1 and result["reason"] == SANDBOX_EXCLUDED_REASON and result["non_retryable"] is True
+	# A new head resets the count; an untrusted author never trips it.
+	assert heal.count_identical_failures(one, head_sha=SHA_B, author_login=CAP_AUTHOR)["count"] == 0
+	forged = [_sandbox_excluded_summary_comment(author="attacker")]
+	assert heal.count_identical_failures(forged, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
+	# A newer verified support SHA re-arms the stop once (#6911).
+	supported = [_sandbox_excluded_summary_comment(support=SUPPORT_S1)]
+	rearmed = heal.count_identical_failures(supported, head_sha=SHA_A, author_login=CAP_AUTHOR, current_support_sha=SUPPORT_S2)
+	assert rearmed["non_retryable"] is True and rearmed["rearm"] is True
+	same = heal.count_identical_failures(supported, head_sha=SHA_A, author_login=CAP_AUTHOR, current_support_sha=SUPPORT_S1)
+	assert same["rearm"] is False
+
+
+def test_non_retryable_route_explains_sandbox_excluded_editor_stop() -> None:
+	"""#8321: the diagnosis names the editor sandbox, not a conflict merge."""
+	payload = heal.validate_payload(_autofix_payload(failure_reason=SANDBOX_EXCLUDED_REASON))
+	decision = heal.non_retryable_route(payload, comments=[], trusted_login=NR_LOGIN)
+	assert decision["route"] is True and decision["reason"] == SANDBOX_EXCLUDED_REASON
+	assert decision["suffix"] == SANDBOX_EXCLUDED_REASON and decision["paths"] == []
+	cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap"))
+	capped = heal.non_retryable_route(cap, comments=[_sandbox_excluded_summary_comment(head=SHA_B, author=NR_LOGIN)], trusted_login=NR_LOGIN)
+	assert capped["route"] is True and capped["reason"] == SANDBOX_EXCLUDED_REASON
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B)
+	assert heal._NON_RETRYABLE_EXPLANATIONS[SANDBOX_EXCLUDED_REASON] in body
+	assert "review editor sandbox does not admit" in body
+	assert "conflicted path(s) could not be read" not in body
+	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={SANDBOX_EXCLUDED_REASON} -->")
 
 
 def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
@@ -9070,3 +9506,465 @@ def test_intake_compose_payload_keys_match_validation_failure_keys() -> None:
 	assert match, body
 	keys = {key.strip() for key in match.group(1).split(",")}
 	assert keys == set(heal.VALIDATION_FAILURE_PAYLOAD_KEYS)
+
+
+# --- Linked runs (issue #8248) ----------------------------------------------
+# Heal #8241 diagnosed release run 40608957733 from the failed jobs' own logs:
+# the real causes sat in the Orchestrate and Implement runs those jobs
+# dispatched or polled. The intake now follows same-repository run links in
+# the filtered logs and gives the diagnosis their step timelines.
+
+
+def _linked_run(run_id: int, *, repo: str = CONSUMER_REPO, name: str = "AI Implement") -> dict:
+	return {
+		"id": run_id, "repository": {"full_name": repo}, "name": name, "status": "completed", "conclusion": "failure",
+		"created_at": "2026-10-27T10:00:00Z", "updated_at": "2026-10-27T10:40:00Z",
+		"html_url": f"https://github.com/{repo}/actions/runs/{run_id}",
+	}
+
+
+def _linked_jobs(job_id: int, step_secs: int = 1868) -> list[dict]:
+	start = datetime(2026, 10, 27, 10, 2, 0, tzinfo=timezone.utc)
+	end = start + timedelta(seconds=step_secs)
+	return [{
+		"id": job_id, "name": "implement", "status": "completed", "conclusion": "cancelled",
+		"steps": [
+			{"name": "Checkout", "status": "completed", "conclusion": "success", "started_at": "2026-10-27T10:00:05Z", "completed_at": "2026-10-27T10:00:10Z"},
+			{"name": "Skipped step", "status": "completed", "conclusion": "skipped", "started_at": None, "completed_at": None},
+			{"name": "Pre-push affected-test gate", "status": "completed", "conclusion": "cancelled",
+				"started_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": end.strftime("%Y-%m-%dT%H:%M:%SZ")},
+		],
+	}]
+
+
+LINKED_JOB_LOG = (
+	"2026-10-27T10:00:06.0000000Z checkout done\n"
+	"2026-10-27T10:02:01.0000000Z PREPUSH_TEST_GATE phase=implement running 214 tests\n"
+	"2026-10-27T10:20:00.0000000Z still running tests\n"
+)
+
+
+def _default_run_detail(run_id: int = 500) -> dict:
+	# Mirrors the default fixture _run_intake builds for the reported run.
+	return {
+		"id": run_id, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_A,
+		"html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/{run_id}",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml",
+		"pull_requests": [{"number": 42}],
+	}
+
+
+def _linked_state(job_log: str, *, run_details: dict | None = None, jobs: dict | None = None, job_logs: dict | None = None) -> dict:
+	base = _intake_state()
+	details = {"500": _default_run_detail()}
+	details.update(run_details if run_details is not None else {"600": _linked_run(600)})
+	all_jobs = dict(base["jobs"])
+	all_jobs.update(jobs if jobs is not None else {"600": _linked_jobs(9600)})
+	logs = {"9001": job_log}
+	logs.update(job_logs if job_logs is not None else {"9600": LINKED_JOB_LOG})
+	return _intake_state(run_details=details, jobs=all_jobs, job_logs=logs)
+
+
+LINKED_PARENT_LOG = JOB_LOG + (
+	f"2026-09-20T10:00:04.000Z ::error::Implement phase stalled — no activity for 30 minutes (watched runs: https://github.com/{CONSUMER_REPO}/actions/runs/600)\n"
+)
+
+
+def _linked_calls(state: dict, run_id: str, job_id: str) -> list[list[str]]:
+	return [call for call in state.get("calls", []) if any(f"/actions/runs/{run_id}" in part or f"/actions/jobs/{job_id}/" in part for part in call)]
+
+
+def test_select_linked_runs_same_repo_dedup_exclusion_cap_and_order() -> None:
+	texts = [
+		f"https://github.com/{CONSUMER_REPO}/actions/runs/1 https://github.com/other/repo/actions/runs/2",
+		f"https://github.com/{CONSUMER_REPO}/actions/runs/3 https://github.com/{CONSUMER_REPO}/actions/runs/1",
+		f"https://github.com/{CONSUMER_REPO}/actions/runs/500 https://github.com/{CONSUMER_REPO}/actions/runs/4",
+	]
+	refs = heal.select_linked_runs(texts, CONSUMER_REPO, ["500"], 10)
+	assert [ref["run_id"] for ref in refs] == ["3", "1", "4"]
+	assert [ref["run_id"] for ref in heal.select_linked_runs(texts, CONSUMER_REPO, ["500"], 2)] == ["1", "4"]
+	assert heal.select_linked_runs(texts, CONSUMER_REPO, [], 0) == []
+	assert heal.select_linked_runs(texts, "other/repo", [], 4) == [{"repo": "other/repo", "run_id": "2", "url": "https://github.com/other/repo/actions/runs/2"}]
+
+
+def test_stall_window_minutes_reads_named_windows() -> None:
+	text = (
+		"::error::Implement phase stalled — no activity for 30 minutes\n"
+		"the 45-min stall window elapsed\nstall window of 20 min\nvalue 9999 minutes ignored by range: no activity for 5000 minutes\n"
+	)
+	assert heal.stall_window_minutes([text]) == [20, 30, 45]
+	assert heal.stall_window_minutes(["nothing here"]) == []
+
+
+def test_linked_run_timeline_identity_checks() -> None:
+	jobs = {"jobs": _linked_jobs(9600)}
+	assert heal.render_linked_run_timeline(_linked_run(600, repo="other/repo"), jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "other_repository"
+	assert heal.render_linked_run_timeline(_linked_run(601), jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "run_malformed"
+	assert heal.render_linked_run_timeline({"id": 600}, jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "run_malformed"
+	assert heal.render_linked_run_timeline("x", jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "run_malformed"
+	assert heal.render_linked_run_timeline(_linked_run(600), {"jobs": None}, repo=CONSUMER_REPO, run_id="600")["reason"] == "jobs_malformed"
+	# The repository name is compared case-insensitively.
+	assert heal.render_linked_run_timeline(_linked_run(600, repo=CONSUMER_REPO.upper()), jobs, repo=CONSUMER_REPO, run_id="600")["ok"] is True
+
+
+def test_linked_run_timeline_rendering_and_long_steps() -> None:
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": _linked_jobs(9600)}, repo=CONSUMER_REPO, run_id="600", stall_minutes=[30])
+	assert result["ok"] is True
+	text = result["text"]
+	assert f"https://github.com/{CONSUMER_REPO}/actions/runs/600" in text
+	assert "Skipped step" not in text
+	assert "Pre-push affected-test gate: 2026-10-27T10:02:00Z -> 2026-10-27T10:33:08Z (31m08s) cancelled [LONG]" in text
+	assert "Checkout: 2026-10-27T10:00:05Z -> 2026-10-27T10:00:10Z (0m05s) success\n" in text
+	assert result["longest"] == {"job_id": 9600, "start": "2026-10-27T10:02:00Z", "end": "2026-10-27T10:33:08Z"}
+	# A 5-minute step is long only against a shorter stall window.
+	short = {"jobs": _linked_jobs(9600, step_secs=300)}
+	assert "[LONG]" not in heal.render_linked_run_timeline(_linked_run(600), short, repo=CONSUMER_REPO, run_id="600")["text"]
+	assert "[LONG]" in heal.render_linked_run_timeline(_linked_run(600), short, repo=CONSUMER_REPO, run_id="600", stall_minutes=[4])["text"]
+	assert "[LONG]" in heal.render_linked_run_timeline(_linked_run(600), {"jobs": _linked_jobs(9600, step_secs=600)}, repo=CONSUMER_REPO, run_id="600")["text"]
+
+
+def test_linked_run_timeline_running_steps_sanitized_names_and_caps() -> None:
+	jobs = _linked_jobs(9600)
+	jobs[0]["steps"][2].update({"status": "in_progress", "conclusion": None, "completed_at": None, "name": "Gate\x1b[31m\n::error::forged" + "x" * 300})
+	jobs.extend({"id": 9700 + index, "name": f"job {index}", "steps": []} for index in range(25))
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": jobs, "total_count": 150}, repo=CONSUMER_REPO, run_id="600")
+	text = result["text"]
+	assert "(still running)" in text and "-> 2026-10-27T10:40:00Z (still running)" in text
+	assert "\x1b" not in text and "\n::error::" not in text
+	assert all(len(line) < 400 for line in text.splitlines())
+	assert "more jobs not shown" in text and "jobs listing truncated: 150 jobs" in text
+	assert len(text.encode("utf-8")) <= heal.LINKED_RUN_TEXT_MAX_BYTES + 32
+
+
+def test_linked_run_timeline_finds_long_steps_past_the_display_caps() -> None:
+	# The Implement gate sits after more than 40 non-skipped steps: it must
+	# still be marked [LONG], shown and chosen as the longest step.
+	base = datetime(2026, 10, 27, 10, 0, 0, tzinfo=timezone.utc)
+	steps = []
+	for index in range(55):
+		start = base + timedelta(seconds=index * 10)
+		steps.append({"name": f"step {index}", "status": "completed", "conclusion": "success",
+			"started_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": (start + timedelta(seconds=5)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+	gate_start = base + timedelta(seconds=600)
+	steps.append({"name": "Pre-push affected-test gate", "status": "completed", "conclusion": "cancelled",
+		"started_at": gate_start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": (gate_start + timedelta(seconds=1868)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+	jobs = [{"id": 9000 + index, "name": f"job {index}", "steps": []} for index in range(25)]
+	jobs.append({"id": 9600, "name": "implement", "status": "completed", "conclusion": "cancelled", "steps": steps})
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": jobs}, repo=CONSUMER_REPO, run_id="600")
+	assert result["ok"] is True
+	assert result["longest"]["job_id"] == 9600
+	assert result["longest"]["start"] == gate_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+	assert "Pre-push affected-test gate:" in result["text"] and "[LONG]" in result["text"]
+	assert "job: implement" in result["text"]
+	assert "more steps not shown" in result["text"] and "more jobs not shown" in result["text"]
+	assert len(result["text"].encode("utf-8")) <= heal.LINKED_RUN_TEXT_MAX_BYTES + 32
+
+
+def test_slice_log_to_window() -> None:
+	assert heal.slice_log_to_window(LINKED_JOB_LOG, "2026-10-27T10:02:00Z", "2026-10-27T10:33:08Z") == (
+		"2026-10-27T10:02:01.0000000Z PREPUSH_TEST_GATE phase=implement running 214 tests\n"
+		"2026-10-27T10:20:00.0000000Z still running tests\n"
+	)
+	# Untimestamped continuation lines follow the line before them.
+	text = "2026-10-27T10:02:01.0Z a\ncontinued\n2026-10-27T11:00:00.0Z b\n"
+	assert heal.slice_log_to_window(text, "2026-10-27T10:02:00Z", "2026-10-27T10:03:00Z") == "2026-10-27T10:02:01.0Z a\ncontinued\n"
+	# No match, no timestamps or bad bounds keep the whole text.
+	assert heal.slice_log_to_window(LINKED_JOB_LOG, "2027-01-01T00:00:00Z", "2027-01-01T00:01:00Z") == LINKED_JOB_LOG
+	assert heal.slice_log_to_window("plain\nlines\n", "2026-10-27T10:02:00Z", "2026-10-27T10:03:00Z") == "plain\nlines\n"
+	assert heal.slice_log_to_window(LINKED_JOB_LOG, "bad", "") == LINKED_JOB_LOG
+
+
+def test_intake_adds_linked_run_timeline_before_failed_logs() -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL classification=workflow-defect" in result.stdout
+	assert "=== LINKED RUN TIMELINES (UNTRUSTED) ===" in prompt
+	assert prompt.index("=== LINKED RUN TIMELINES (UNTRUSTED) ===") < prompt.index("=== FAILED RUN LOGS (UNTRUSTED) ===")
+	assert f"--- linked run https://github.com/{CONSUMER_REPO}/actions/runs/600" in prompt
+	assert "Pre-push affected-test gate: 2026-10-27T10:02:00Z -> 2026-10-27T10:33:08Z (31m08s) cancelled [LONG]" in prompt
+	assert "--- log of job 9600 (window of its longest step" in prompt and "PREPUSH_TEST_GATE phase=implement running 214 tests" in prompt
+	assert "checkout done" not in prompt  # outside the step's window
+	# Budget: three REST reads for the linked run (run, jobs, one job log).
+	assert len(_linked_calls(state, "600", "9600")) == 3
+	assert "linked_run_skipped" not in result.stdout
+
+
+def test_intake_without_links_makes_no_extra_reads_and_omits_the_section() -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(JOB_LOG), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	# The diagnosis template mentions the block by name; the section header is absent.
+	assert "=== LINKED RUN TIMELINES (UNTRUSTED) ===" not in prompt
+	assert _linked_calls(state, "600", "9600") == []
+
+
+def test_intake_linked_runs_switch_off() -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_MAX_LINKED_RUNS": "0"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	# The diagnosis template mentions the block by name; the section header is absent.
+	assert "=== LINKED RUN TIMELINES (UNTRUSTED) ===" not in prompt
+	assert _linked_calls(state, "600", "9600") == []
+
+
+@pytest.mark.parametrize(
+	("state_kwargs", "reason", "timeline"),
+	[
+		({"run_details": {}}, "run_unreadable", False),
+		({"run_details": {"600": _linked_run(600, repo="someone/else")}}, "other_repository", False),
+		({"run_details": {"600": {"id": 601, "repository": {"full_name": CONSUMER_REPO}}}}, "run_malformed", False),
+		({"jobs": {}}, "jobs_unreadable", False),
+		({"job_logs": {}}, "log_unavailable", True),
+	],
+)
+def test_intake_linked_run_failures_fail_open(state_kwargs: dict, reason: str, timeline: bool) -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG, **state_kwargs), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL warn linked_run_skipped run=600 reason={reason}" in result.stdout
+	assert "WORKFLOW_HEAL classification=workflow-defect" in result.stdout
+	assert "=== FAILED RUN LOGS (UNTRUSTED) ===" in prompt
+	assert ("=== LINKED RUN TIMELINES (UNTRUSTED) ===" in prompt) is timeline
+	if timeline:
+		assert "(job log unavailable)" in prompt
+	if reason == "other_repository":
+		# A foreign run's jobs and logs are never read.
+		assert not any(part.endswith("/actions/runs/600/jobs") for call in state["calls"] for part in call)
+
+
+def test_intake_linked_runs_never_change_the_heal_scope_inputs() -> None:
+	frozen = []
+	for max_linked in ("0", "4"):
+		with tempfile.TemporaryDirectory(prefix="heal-linked-scope-") as tmp_name:
+			runtime = Path(tmp_name) / "runtime"
+			result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_MAX_LINKED_RUNS": max_linked, "RUNTIME_DIR": str(runtime)})
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert ("=== LINKED RUN TIMELINES (UNTRUSTED) ===" in prompt) is (max_linked == "4")
+			frozen.append((runtime / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+			body = state.get("composed_issue", {}).get("body", "")
+			frozen.append(next((line for line in body.splitlines() if "ai:workflow-heal-scope:v1" in line), ""))
+			assert "600" not in frozen[-2]
+	assert frozen[0] == frozen[2] and frozen[1] == frozen[3]
+
+
+def test_intake_replays_release_run_40608957733_evidence() -> None:
+	# The decompose job named its Orchestrate run; the e2e stall line (#8248
+	# watched runs) named the Implement run whose test gate ran past the
+	# 30-minute stall window.
+	orchestrate_id, implement_id = 40609251819, 40610855593
+	parent_log = JOB_LOG + (
+		f"2026-10-27T09:58:00.000Z Dispatched orchestrate run https://github.com/{CONSUMER_REPO}/actions/runs/{orchestrate_id}\n"
+		f"2026-10-27T11:00:00.000Z ::error::Implement phase stalled — no activity for 30 minutes (watched runs: https://github.com/{CONSUMER_REPO}/actions/runs/{implement_id})\n"
+	)
+	orchestrate_jobs = [{"id": 7001, "name": "decompose", "status": "completed", "conclusion": "success", "steps": [
+		{"name": "Validate decomposition JSON", "status": "completed", "conclusion": "success", "started_at": "2026-10-27T09:59:00Z", "completed_at": "2026-10-27T09:59:40Z"},
+	]}]
+	state = _linked_state(
+		parent_log,
+		run_details={str(orchestrate_id): _linked_run(orchestrate_id, name="AI Orchestrate"), str(implement_id): _linked_run(implement_id)},
+		jobs={str(orchestrate_id): orchestrate_jobs, str(implement_id): _linked_jobs(7002)},
+		job_logs={"7001": "2026-10-27T09:59:10.0000000Z PREPUSH_TEST_GATE phase=augment issue=smoke-canary-a added=11\n2026-10-27T09:59:20.0000000Z Will serialize: smoke-canary-a -> smoke-canary-b\n", "7002": LINKED_JOB_LOG},
+	)
+	result, _state_after, prompt = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	section = prompt.split("=== LINKED RUN TIMELINES (UNTRUSTED) ===", 1)[1].split("=== FAILED RUN LOGS (UNTRUSTED) ===", 1)[0]
+	assert f"actions/runs/{orchestrate_id} | workflow: AI Orchestrate" in section
+	assert "PREPUSH_TEST_GATE phase=augment issue=smoke-canary-a added=11" in section
+	assert f"actions/runs/{implement_id} | workflow: AI Implement" in section
+	assert "Pre-push affected-test gate: 2026-10-27T10:02:00Z -> 2026-10-27T10:33:08Z (31m08s) cancelled [LONG]" in section
+
+
+def test_heal_prompt_lists_linked_run_timelines() -> None:
+	text = PROMPT_FILE.read_text(encoding="utf-8")
+	assert "LINKED RUN TIMELINES" in text
+	assert "before attributing a stall or a missing artefact to the polling run" in text
+	assert "name its run id" in text
+	assert (REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt").read_text(encoding="utf-8") == text
+
+
+# ---------------------------------------------------------------------------
+# Issue #8265: synced_check_failure (check-failure triage routed upstream)
+# ---------------------------------------------------------------------------
+
+_SYNCED_CHECK_WRAPPER = ".github/workflows/ai-review.yml"
+
+
+def _synced_check_payload(**overrides) -> dict:
+	payload = {
+		"schema_version": heal.SCHEMA_VERSION,
+		"source_repo": CONSUMER_REPO,
+		"source_kind": "synced_check_failure",
+		"pr_number": 688,
+		"check_name": "Workflow Ref Pinning Gate",
+		"check_run_ids": ["555"],
+		"paths": [_SYNCED_CHECK_WRAPPER],
+		"head_sha": "e" * 40,
+		"wrapper_sha": "c" * 40,
+		"reporter_run_id": "4242",
+		"reporter_run_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/4242",
+		"run_refs": [],
+	}
+	payload.update(overrides)
+	return payload
+
+
+def test_synced_check_kind_is_registered_with_its_reporter_workflow() -> None:
+	assert "synced_check_failure" in heal.SOURCE_KINDS
+	assert heal.SOURCE_KINDS[:8] == ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure")
+	assert heal.REPORT_IDENTITY_WORKFLOW_BY_KIND["synced_check_failure"] == ("check_failure_triage.yml",)
+
+
+def test_synced_check_payload_validates_to_pointers_only() -> None:
+	normalized = heal.validate_payload(_synced_check_payload(check_name="CI `<!-- x -->` lint", cause_path=_SYNCED_CHECK_WRAPPER))
+	assert normalized["failure_reason"] == heal.SYNCED_CHECK_FAILURE_REASON
+	assert normalized["workflow_name"] == heal.SYNCED_CHECK_WORKFLOW_NAME
+	assert normalized["issue_title"] == heal.SYNCED_CHECK_ISSUE_TITLE
+	assert normalized["issue_number"] is None and normalized["label"] is None
+	assert normalized["issue_excerpt"] == "" and normalized["comments_excerpt"] == "" and normalized["failure_evidence"] == ""
+	assert normalized["paths"] == [_SYNCED_CHECK_WRAPPER] and normalized["cause_path"] == _SYNCED_CHECK_WRAPPER
+	assert "`" not in normalized["check_name"] and "<" not in normalized["check_name"]
+	assert normalized["pr_number"] == 688 and normalized["check_run_ids"] == ["555"]
+	assert heal.validate_payload(_synced_check_payload(check_name="!!!"))["check_name"] == "check"
+
+
+@pytest.mark.parametrize(
+	"overrides",
+	[
+		{"extra_field": "x"},
+		{"run_refs": [{"repo": CONSUMER_REPO, "run_id": "1"}]},
+		{"wrapper_sha": "abc"},
+		{"head_sha": None},
+		{"paths": []},
+		{"paths": [f"dir/file{index}.js" for index in range(21)]},
+		{"paths": ["../etc/passwd"]},
+		{"paths": ["/abs/path"]},
+		{"paths": ["a//b"]},
+		{"paths": [_SYNCED_CHECK_WRAPPER, _SYNCED_CHECK_WRAPPER]},
+		{"cause_path": "app.js"},
+		{"pr_number": 0},
+		{"pr_number": True},
+		{"check_run_ids": ["1", "2", "3", "4"]},
+		{"check_run_ids": ["abc"]},
+		{"reporter_run_id": "x"},
+	],
+)
+def test_synced_check_payload_rejects_bad_fields(overrides) -> None:
+	with pytest.raises(ValueError):
+		heal.validate_payload(_synced_check_payload(**overrides))
+
+
+def test_synced_check_fingerprint_ignores_order_duplicates_pr_and_release() -> None:
+	first = heal.synced_check_fingerprint([_SYNCED_CHECK_WRAPPER, ".claude/commands/do.md"])
+	assert first == heal.synced_check_fingerprint([".claude/commands/do.md", _SYNCED_CHECK_WRAPPER, _SYNCED_CHECK_WRAPPER])
+	assert first != heal.synced_check_fingerprint([_SYNCED_CHECK_WRAPPER])
+	assert re.fullmatch(r"[0-9a-f]{64}", first)
+
+
+@pytest.mark.parametrize(
+	("text", "status", "paths", "cause"),
+	[
+		("no block", "missing", [], None),
+		("AFFECTED_FILES_BEGIN\n- a.yml\n- a.yml\nAFFECTED_FILES_END\n", "ok", ["a.yml"], None),
+		("AFFECTED_FILES_BEGIN\ncause: b.yml\n- a.yml\nAFFECTED_FILES_END\n", "ok", ["a.yml", "b.yml"], "b.yml"),
+		("AFFECTED_FILES_BEGIN\n\nAFFECTED_FILES_END\n", "empty", [], None),
+		("AFFECTED_FILES_BEGIN\n- a.yml\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\n- a.yml\nAFFECTED_FILES_END\nAFFECTED_FILES_BEGIN\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\nsome prose\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\n- ../x\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\n- dir/*.yml\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\ncause: a\ncause: b\n- a\nAFFECTED_FILES_END\n", "malformed", [], None),
+	],
+)
+def test_parse_check_triage_affected_files(text, status, paths, cause) -> None:
+	result = heal.parse_check_triage_affected_files(text)
+	assert result["status"] == status
+	if status == "ok":
+		assert result["paths"] == paths and result["cause"] == cause
+
+
+def test_parse_check_triage_affected_files_caps_the_count() -> None:
+	block = "AFFECTED_FILES_BEGIN\n" + "".join(f"- f{index}.js\n" for index in range(21)) + "AFFECTED_FILES_END\n"
+	assert heal.parse_check_triage_affected_files(block)["status"] == "malformed"
+
+
+def _route_repo(tmp_path: Path, wrapper_pin: str) -> tuple[Path, dict]:
+	repo = tmp_path / "consumer"
+	(repo / ".github" / "workflows").mkdir(parents=True)
+	text = "uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{} # stable\n"
+	(repo / _SYNCED_CHECK_WRAPPER).write_text(text.format(wrapper_pin), encoding="utf-8")
+	(repo / "app.js").write_text("x\n", encoding="utf-8")
+	env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+	for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(name, None)
+	subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+	subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
+	subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false", "commit", "-qm", "x"], check=True, env=env)
+	digest = hashlib.sha256(text.format("0" * 40).encode("utf-8")).hexdigest()
+	return repo, {_SYNCED_CHECK_WRAPPER: [digest]}
+
+
+def _route(tmp_path: Path, diagnosis: str, *, pin: str = "1" * 40, digests: object = "default", **overrides) -> dict:
+	repo, default_digests = _route_repo(tmp_path, pin)
+	args = {
+		"diagnosis": diagnosis,
+		"digests": default_digests if digests == "default" else digests,
+		"repo_root": str(repo),
+		"commit": "HEAD",
+		"enabled": "true",
+		"repo": CONSUMER_REPO,
+		"upstream_repo": SELF_REPO,
+		"historical": "false",
+	}
+	args.update(overrides)
+	return heal.check_triage_route(**args)
+
+
+def _block(*paths: str, cause: str | None = None) -> str:
+	return "AFFECTED_FILES_BEGIN\n" + (f"cause: {cause}\n" if cause else "") + "".join(f"- {path}\n" for path in paths) + "AFFECTED_FILES_END\n"
+
+
+def test_check_triage_route_decision_matrix(tmp_path: Path) -> None:
+	routed = _route(tmp_path / "a", _block(_SYNCED_CHECK_WRAPPER))
+	assert routed["decision"] == "route" and routed["reason"] == "all_unmodified_managed"
+	assert routed["heal_fp"] == heal.synced_check_fingerprint([_SYNCED_CHECK_WRAPPER])
+	assert _route(tmp_path / "b", _block(_SYNCED_CHECK_WRAPPER, "app.js"))["reason"] == "unmanaged_paths"
+	cause = _route(tmp_path / "c", _block(_SYNCED_CHECK_WRAPPER, "app.js", cause=_SYNCED_CHECK_WRAPPER))
+	assert cause["decision"] == "route" and cause["reason"] == "managed_wrapper_cause" and cause["paths"] == [_SYNCED_CHECK_WRAPPER]
+	assert _route(tmp_path / "d", "no block")["reason"] == "no_block"
+	assert _route(tmp_path / "e", "AFFECTED_FILES_BEGIN\n")["reason"] == "malformed_block"
+	assert _route(tmp_path / "f", _block(_SYNCED_CHECK_WRAPPER), digests={})["reason"] == "manifest_unavailable"
+	assert _route(tmp_path / "g", _block(_SYNCED_CHECK_WRAPPER), enabled="false")["reason"] == "disabled"
+	assert _route(tmp_path / "h", _block(_SYNCED_CHECK_WRAPPER), repo=SELF_REPO)["reason"] == "self_repo"
+	assert _route(tmp_path / "i", _block(_SYNCED_CHECK_WRAPPER), historical="true")["reason"] == "historical_mode"
+	assert _route(tmp_path / "j", _block(_SYNCED_CHECK_WRAPPER), commit="0" * 40)["reason"] == "classify_failed"
+	modified = _route(tmp_path / "k", _block(_SYNCED_CHECK_WRAPPER), digests={_SYNCED_CHECK_WRAPPER: ["f" * 64]})
+	assert modified["decision"] == "file" and modified["reason"] == "consumer_modified"
+
+
+def test_build_synced_check_payload_takes_only_same_repo_run_links() -> None:
+	decision = {"decision": "route", "paths": [_SYNCED_CHECK_WRAPPER], "cause": None}
+	payload = heal.build_synced_check_payload(
+		decision=decision, repo=CONSUMER_REPO, pr_number="688", check_name="Gate", check_run_id="1",
+		details_url="https://github.com/evil/repo/actions/runs/9", head_sha="E" * 40, wrapper_sha="c" * 40, run_id="77",
+	)
+	assert payload["check_run_ids"] == [] and payload["run_refs"] == []
+	assert payload["head_sha"] == "e" * 40 and "cause_path" not in payload
+	assert heal.validate_payload(payload)["reporter_run_url"].endswith("/actions/runs/77")
+
+
+def test_synced_check_issue_and_occurrence_carry_no_free_text() -> None:
+	payload = heal.validate_payload(_synced_check_payload(check_name="SECRET-LOG-TEXT", cause_path=_SYNCED_CHECK_WRAPPER))
+	fp = heal.synced_check_fingerprint(payload["paths"])
+	title, body = heal.compose_synced_check_issue(
+		payload=payload, fp=fp, gen=1, root=fp, scope_marker="", max_depth=3, intake_run_url="https://example.invalid/run",
+		sources=heal.synced_check_source_paths(payload["paths"]),
+	)
+	assert title.startswith("[synced] .github/workflows/ai-review.yml")
+	assert body.splitlines()[0] == f"<!-- workflow-failure-heal:fp={fp} -->"
+	assert "`workflow-templates/ai-review.yml`" in body
+	assert "https://github.com/" + CONSUMER_REPO + "/actions/runs/555" in body
+	assert "regression test" in body
+	occurrence = heal.compose_synced_check_occurrence(payload=payload, intake_run_url="https://example.invalid/run")
+	assert occurrence.startswith("<!-- workflow-failure-heal:occurrence -->")
+	assert f"`{CONSUMER_REPO}` PR 688" in occurrence and f"`{CONSUMER_REPO}` PR 688" in body
+	assert "#688" not in occurrence and "#688" not in body
+	assert heal.check_synced_check_managed_paths(payload["paths"], {_SYNCED_CHECK_WRAPPER: ["x"]}) is None
+	assert heal.check_synced_check_managed_paths(payload["paths"], {"other": ["x"]}) == "unmanaged_path"
+	assert heal.check_synced_check_managed_paths(payload["paths"], {}) == "release_unavailable"

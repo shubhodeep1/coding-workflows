@@ -51,6 +51,24 @@ non-code failure.
 ## Affected files
 A bullet list of the files most likely to need changes (repo-relative paths).
 
+End this section with one machine-readable block that lists the
+repository-relative files the fix must change, exactly in this shape:
+
+AFFECTED_FILES_BEGIN
+cause: <path>
+- <path>
+- <path>
+AFFECTED_FILES_END
+
+Rules for the block:
+- One `- <path>` line per file, at most 20 files. Exact file paths only: no
+  globs, no directories, no absolute paths, no `..`.
+- The `cause:` line is optional. Add it only when a single file is the root
+  cause of the failure, and list that file below it too.
+- Nothing else goes between the two marker lines.
+- Leave the whole block out when the failure looks environmental, flaky or
+  external, or when the evidence is inconclusive.
+
 Hard rules:
 - Stay within the evidence. A confident wrong diagnosis is worse than an honest
   "inconclusive -- here is what to check next".

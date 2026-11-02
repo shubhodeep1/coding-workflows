@@ -350,17 +350,6 @@ Copy this block when adding a new entry:
   - `grep -n -- '--repair-turn' scripts/review_apply_fixes.sh` and `grep -n -- '--extra-allowed-file' scripts/check_resolver_diff.sh` are either removed with it or still have another caller.
 - **Owner:** @shubhodeep1
 
-### `.github/workflows/pr6576-shard-followup.yml` + `scripts/pr6576_shard_followup.py` + `tests/test_pr6576_shard_followup.py`
-
-- **Introduced in:** issue #7072 (2026-10-10); PR number assigned when the implementation PR opens.
-- **Type:** single-use
-- **Removal trigger:** the `report` job's result comment is posted on #7072 by the GH_PAT account (first line `<!-- ai:pr6576-shard-followup:v1 -->`, second line the `## PR #6576 ... follow-up result` header; the clarify `/answer` and `Implementation Plan` comments that only quote the marker do not count), and any defect issue it filed is closed.
-- **Removal preflight checks:**
-  - `gh api --paginate repos/shubhodeep1/coding-workflows/issues/7072/comments --jq '.[] | select(.body | startswith("<!-- ai:pr6576-shard-followup:v1 -->\n## PR #6576 ")) | .user.login'` prints the pipeline (GH_PAT) login. A `contains` match is not enough: the 2026-10-10 clarify and plan comments quote the marker. This check is byte-exact; the runtime guard also accepts leading whitespace and CRLF, but `build_report` writes neither.
-  - `gh issue list -R shubhodeep1/coding-workflows --state open --search "ai:pr6576-shard-followup-defect in:body"` returns no issues.
-  - `gh api 'repos/shubhodeep1/coding-workflows/actions/workflows/pr6576-shard-followup.yml/runs?status=in_progress&per_page=1' --jq .total_count` returns `0`.
-- **Owner:** @shubhodeep1
-
 ### `scripts/consumer_health_check.sh` + `scripts/consumer_health_check.py` (daily step in `.github/workflows/orchestrate_poll.yml`)
 
 - **Introduced in:** #7415 (2026-10-15)

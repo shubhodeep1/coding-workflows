@@ -770,6 +770,118 @@ def test_list_runs_for_repo_uses_etag_and_returns_not_modified() -> None:
 	assert capped is False
 	assert meta["not_modified"] is True
 	assert meta["etag"] == "W/\"cached\""
+	assert meta["duplicate_runs_skipped"] == 0
+
+
+def _list_runs_with_pages(pages: dict[int, list[dict]], *, max_runs: int = 0):
+	orig = collector.gh_api_json
+	calls = []
+
+	def fake_gh_api_json(
+		endpoint: str,
+		*,
+		token: str,
+		retries: int = 3,
+		backoff_seconds: float = 1.0,
+		request_headers: dict[str, str] | None = None,
+		include_response_meta: bool = False,
+	):
+		calls.append(endpoint)
+		page = int(parse_qs(urlparse("https://x/" + endpoint).query).get("page", ["1"])[0])
+		meta = {"status_code": 200, "headers": {"etag": "W/\"abc\""}}
+		payload = {"workflow_runs": [dict(item) for item in pages.get(page, [])]}
+		return (payload, meta) if include_response_meta else payload
+
+	collector.gh_api_json = fake_gh_api_json
+	try:
+		runs, capped, meta = collector.list_runs_for_repo(
+			"owner/repo",
+			since_utc=datetime(2026, 4, 1, tzinfo=timezone.utc),
+			per_page=100,
+			max_pages=3,
+			max_runs=max_runs,
+			token="x",
+		)
+	finally:
+		collector.gh_api_json = orig
+	return runs, capped, meta, calls
+
+
+def test_list_runs_for_repo_drops_cross_page_duplicate_run() -> None:
+	runs, capped, meta, _calls = _list_runs_with_pages(
+		{
+			1: [
+				{"id": 1, "run_attempt": 1, "name": "AI Plan", "path": ".github/workflows/plan.yml"},
+				# No run_attempt: defaults to attempt 1, same key as the page-2 copy.
+				{"id": 2, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+			],
+			2: [
+				{"id": 2, "run_attempt": 1, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+				{"id": 3, "run_attempt": 1, "name": "AI Implement", "path": ".github/workflows/implement.yml"},
+			],
+		}
+	)
+
+	assert [r["id"] for r in runs] == [1, 2, 3]
+	assert "run_attempt" not in runs[1]  # first occurrence kept
+	assert capped is False
+	assert meta["duplicate_runs_skipped"] == 1
+
+
+def test_list_runs_for_repo_keeps_same_id_with_different_attempts() -> None:
+	runs, capped, meta, _calls = _list_runs_with_pages(
+		{
+			1: [{"id": 5, "run_attempt": 1, "name": "AI Plan", "path": ".github/workflows/plan.yml"}],
+			2: [{"id": 5, "run_attempt": 2, "name": "AI Plan", "path": ".github/workflows/plan.yml"}],
+		}
+	)
+
+	assert [(r["id"], r["run_attempt"]) for r in runs] == [(5, 1), (5, 2)]
+	assert capped is False
+	assert meta["duplicate_runs_skipped"] == 0
+
+
+def test_list_runs_for_repo_max_runs_counts_unique_runs_only() -> None:
+	runs, capped, meta, _calls = _list_runs_with_pages(
+		{
+			1: [
+				{"id": 1, "name": "AI Plan", "path": ".github/workflows/plan.yml"},
+				{"id": 2, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+			],
+			2: [
+				{"id": 2, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+				{"id": 3, "name": "AI Implement", "path": ".github/workflows/implement.yml"},
+			],
+		},
+		max_runs=3,
+	)
+
+	assert [r["id"] for r in runs] == [1, 2, 3]
+	assert capped is True
+	assert meta["duplicate_runs_skipped"] == 1
+
+
+def test_list_runs_for_repo_no_duplicates_reports_zero() -> None:
+	runs, capped, meta, calls = _list_runs_with_pages(
+		{
+			1: [
+				{"id": 1, "name": "AI Plan", "path": ".github/workflows/plan.yml"},
+				{"id": 2, "name": "AI Validate", "path": ".github/workflows/validate.yml"},
+			],
+			2: [
+				{"id": 3, "name": "AI Implement", "path": ".github/workflows/implement.yml"},
+				{"id": 4, "name": "Release CI", "path": ".github/workflows/ci.yml"},
+			],
+		}
+	)
+
+	assert capped is False
+	assert [r["id"] for r in runs] == [1, 2, 3, 4]
+	assert [r["_workflow_family"] for r in runs] == ["plan", "validate", "implement", "ci"]
+	assert meta["not_modified"] is False
+	assert meta["etag"] == "W/\"abc\""
+	assert meta["duplicate_runs_skipped"] == 0
+	assert len(calls) == 3
 
 
 def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
@@ -1716,6 +1828,154 @@ def test_dedupe_structured_cost_telemetry_full_logs_handles_malformed_inputs():
 	assert collector._dedupe_structured_cost_telemetry_full_logs(None) == []
 
 
+_TIMESTAMP_SKEW_OPENROUTER_PAYLOAD = (
+	"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 "
+	"cache_enabled=true cache_breakpoint_enabled=false cache_breakpoint_fallback_retry=false "
+	"prompt_tokens=100 completion_tokens=25 total_tokens=125 "
+	"cache_creation_input_tokens=30 cache_read_input_tokens=40"
+)
+_TIMESTAMP_SKEW_QUERY_PAYLOAD = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
+
+
+def test_apply_cost_telemetry_from_full_logs_dedupes_parent_child_timestamp_skew():
+	parent_openrouter = "2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	parent_query = "2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD
+	child_openrouter = "2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	child_query = "2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD
+	run = {
+		"repository": "owner/repo",
+		"run_id": 415,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "review_autofix",
+	}
+	full_logs = [
+		{
+			"step_name": "review",
+			"content": "\n".join([parent_openrouter, parent_query, "wrapper detail"]) + "\n",
+		},
+		{
+			"step_name": "review/pass1",
+			"content": "\n".join([child_openrouter, child_query, "pass1 detail"]) + "\n",
+		},
+	]
+
+	deduped_full_logs = collector._dedupe_structured_cost_telemetry_full_logs(full_logs)
+	assert parent_openrouter not in deduped_full_logs[0]["content"]
+	assert parent_query not in deduped_full_logs[0]["content"]
+	assert "wrapper detail" in deduped_full_logs[0]["content"]
+	assert child_openrouter + "\n" in deduped_full_logs[1]["content"]
+	assert child_query + "\n" in deduped_full_logs[1]["content"]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	telemetry = run["cost_telemetry"]
+	assert telemetry["or_calls"] == 1
+	assert telemetry["or_prompt_tokens"] == 100
+	assert telemetry["or_completion_tokens"] == 25
+	assert telemetry["or_total_tokens"] == 125
+	assert telemetry["semble_query_calls"] == 1
+	assert telemetry["semble_query_bytes"] == 88
+
+
+def test_apply_cost_telemetry_from_full_logs_keeps_sibling_duplicates_with_timestamp_skew():
+	run = {
+		"repository": "owner/repo",
+		"run_id": 416,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "review_autofix",
+	}
+	full_logs = [
+		{
+			"step_name": "review/pass1",
+			"content": "\n".join(
+				[
+					"2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD,
+					"2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD,
+				]
+			) + "\n",
+		},
+		{
+			"step_name": "review/pass2",
+			"content": "\n".join(
+				[
+					"2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD,
+					"2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD,
+				]
+			) + "\n",
+		},
+	]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	telemetry = run["cost_telemetry"]
+	assert telemetry["or_calls"] == 2
+	assert telemetry["or_total_tokens"] == 250
+	assert telemetry["semble_query_calls"] == 2
+	assert telemetry["semble_query_bytes"] == 176
+
+
+def test_apply_cost_telemetry_from_full_logs_dedupes_parent_child_codex_usage_timestamp_skew():
+	parent_header = "2026-09-22T00:00:00.0000000Z tokens used"
+	parent_number = "2026-09-22T00:00:00.0000001Z 12,345"
+	child_header = "2026-09-22T00:00:00.0000050Z tokens used"
+	child_number = "2026-09-22T00:00:00.0000051Z 12,345"
+	run = {
+		"repository": "owner/repo",
+		"run_id": 417,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "implement",
+	}
+	full_logs = [
+		{"step_name": "review", "content": "\n".join([parent_header, parent_number, "wrapper detail"]) + "\n"},
+		{"step_name": "review/pass1", "content": "\n".join([child_header, child_number, "pass1 detail"]) + "\n"},
+	]
+
+	deduped_full_logs = collector._dedupe_structured_cost_telemetry_full_logs(full_logs)
+	assert parent_header not in deduped_full_logs[0]["content"]
+	assert child_header in deduped_full_logs[1]["content"]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	assert run["cost_telemetry"]["codex_tokens_used"] == 12345
+	assert run["cost_telemetry"]["codex_calls"] == 1
+
+
+def test_structured_cost_telemetry_line_key_only_strips_leading_timestamp():
+	assert (
+		collector._structured_cost_telemetry_line_key(
+			"2026-09-22T00:00:00.1234567Z " + _TIMESTAMP_SKEW_QUERY_PAYLOAD
+		)
+		== _TIMESTAMP_SKEW_QUERY_PAYLOAD
+	)
+	mid_line = "seen=2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	assert collector._structured_cost_telemetry_line_key(mid_line + "  \n") == mid_line
+	assert (
+		collector._strip_structured_cost_telemetry_key_timestamp("INFO: seen 2026-09-22T00:00:00Z later")
+		== "INFO: seen 2026-09-22T00:00:00Z later"
+	)
+
+	parent_line = "seen=2026-09-22T00:00:00.0000000Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	child_line = "seen=2026-09-22T00:00:00.0000137Z " + _TIMESTAMP_SKEW_OPENROUTER_PAYLOAD
+	run = {
+		"repository": "owner/repo",
+		"run_id": 418,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "review_autofix",
+	}
+	full_logs = [
+		{"step_name": "review", "content": parent_line + "\n"},
+		{"step_name": "review/pass1", "content": child_line + "\n"},
+	]
+	deduped_full_logs = collector._dedupe_structured_cost_telemetry_full_logs(full_logs)
+	assert deduped_full_logs[0]["content"] == parent_line + "\n"
+	assert deduped_full_logs[1]["content"] == child_line + "\n"
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	assert run["cost_telemetry"]["or_calls"] == 2
+	assert run["cost_telemetry"]["or_total_tokens"] == 250
+
+
 def test_fetch_run_log_archive_retries_transient_then_succeeds():
 	orig_gh_api_bytes = collector.gh_api_bytes
 	orig_sleep = collector.time.sleep
@@ -2589,6 +2849,11 @@ print(json.dumps({}))
 		env.update(
 			{
 				"GH_TOKEN": "token",
+				# Issue #8268: without this the collector cloned the real
+				# ai-memory branch from origin and retried a cache push with
+				# CI's read-only token, about 5 minutes per CI run, and the
+				# test could write fixture data to the shared branch.
+				"AI_MEMORY_ENABLED": "false",
 				"GH_MOCK_STORE": str(store_file),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
@@ -2691,7 +2956,7 @@ def test_pat_budget_workflow_listing_marks_api_ceiling_incomplete():
 	day = datetime(2026, 10, 5, tzinfo=timezone.utc)
 	with patch.object(collector, "gh_api_json", return_value=(
 		{"workflow_runs": [{"id": 1, "name": "Internal Review", "path": ".github/workflows/internal-review.yml"}],
-		 "total_count": 1000},
+			"total_count": 1000},
 		{"status_code": 200, "headers": {}},
 	)) as api:
 		runs, capped, metadata = collector.list_runs_for_repo(

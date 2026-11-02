@@ -170,7 +170,8 @@ TERMINAL_VERDICT = "close"
 # itself on its next runs (scripts/unblock_judge.sh unblock_hold_condition).
 # pr_on_branch: pull request <pr> merged and its merge commit is on <branch>;
 # item_closed: issue or pull request <n> is closed; placeholder_retired: the
-# `_UNSET_OPERATOR_STEP` placeholder no longer appears on the default branch.
+# `_UNSET_OPERATOR_STEP` operator step is done (set as a repository variable
+# or secret; a name missing from code alone does not count).
 HOLD_KINDS = ("pr_on_branch", "item_closed", "placeholder_retired")
 HOLD_STATES = ("done", "expired")
 MAX_HOLDS_PER_ITEM = 3

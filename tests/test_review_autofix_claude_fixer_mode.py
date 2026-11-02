@@ -294,6 +294,52 @@ def test_unreadable_marker_comments_keep_the_normal_review():
 	assert "reason=freshness_ci_failed_unverifiable pr=42 candidate=small_diff detail=comments_api_error" in proc.stdout
 
 
+def _run_security_pass_gate(switch: str | None, labels: list[str]) -> tuple[subprocess.CompletedProcess, dict]:
+	env = {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "true", "DEFAULT_BRANCH": "main"}
+	if switch is not None:
+		env["AUTOFIX_SKIP_RUNS_SECURITY_PASS"] = switch
+	with tempfile.TemporaryDirectory() as td:
+		return _run_gate(Path(td), head_ref="ai/issue-7", comments=[], event_name="pull_request",
+			files=DOCS_FILES, extra_env=env,
+			pr_overrides={"changed_files": 2, "base": {"ref": "main"}, "labels": [{"name": name} for name in labels]})
+
+
+def test_skip_runs_security_pass_keeps_the_docs_only_skip_for_the_skip_job():
+	"""#8333: an eligible docs-only PR keeps the skip; the skip job audits it."""
+	proc, out = _run_security_pass_gate("true", [])
+	assert proc.returncode == 0, proc.stderr
+	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "docs_only"
+	assert out["should_run"] == "false"
+	assert out["det_skip_security_pass"] == "true"
+	assert json.loads(out["det_skip_security_pass_pr_json"]) == {
+		"state": "open", "base": {"ref": "main"},
+		"head": {"ref": "ai/issue-7", "sha": HEAD, "repo": {"full_name": "o/r"}}, "labels": [],
+	}
+	assert "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS pr=42 candidate=docs_only route=skip_job" in proc.stdout
+	assert "reason=single_issue_security_pass" not in proc.stdout
+
+
+def test_skip_runs_security_pass_sends_an_exhausted_pass_to_codex_agent():
+	proc, out = _run_security_pass_gate("true", ["ai:security-pass-failed"])
+	assert proc.returncode == 0, proc.stderr
+	assert out["deterministic_skip"] == "false" and out["should_run"] == "true"
+	assert out["det_skip_security_pass"] == "false" and out["det_skip_security_pass_pr_json"] == ""
+	assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=security_pass_failed pr=42 candidate=docs_only" in proc.stdout
+
+
+def test_skip_runs_security_pass_off_or_unset_keeps_todays_suppression():
+	results = {}
+	for switch in ("false", None):
+		proc, out = _run_security_pass_gate(switch, [])
+		assert proc.returncode == 0, proc.stderr
+		assert out["deterministic_skip"] == "false" and out["should_run"] == "true", switch
+		assert "det_skip_security_pass" not in out and "det_skip_security_pass_pr_json" not in out, switch
+		assert "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=42 candidate=docs_only" in proc.stdout
+		assert "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS" not in proc.stdout
+		results[switch] = out
+	assert results["false"] == results[None]
+
+
 def test_unverified_pr_head_never_enters_deterministic_merge():
 	assert WORKFLOW["jobs"]["codex-agent"]["if"] == "${{ needs.gate.outputs.should_run == 'true' }}"
 	assert WORKFLOW["jobs"]["deterministic-skip-merge"]["if"] == "${{ needs.gate.outputs.deterministic_skip == 'true' }}"

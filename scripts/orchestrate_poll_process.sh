@@ -1430,10 +1430,43 @@ write_state_snapshot_tracker_export() {
 		}' > "${out_file}" 2>/dev/null || true
 }
 
+# Print `index` or `inline` from STATIC_CONTEXT_AGENTS_MODE (issue #8269),
+# with the rules of _static_context_agents_mode in build_static_context.sh:
+# unset, empty or `index` (any letter case) mean index, `inline` means inline,
+# anything else inline with one warning that never prints the value.
+_judge_static_agents_mode() {
+  local judge_static_agents_mode_value
+  judge_static_agents_mode_value="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  case "${judge_static_agents_mode_value}" in
+    ""|index)
+      echo index
+      ;;
+    inline)
+      echo inline
+      ;;
+    *)
+      echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+      echo inline
+      ;;
+  esac
+  return 0
+}
+
+# assemble_judge_static_context OUT [inline]
+# The optional second argument `inline` always inlines the agents file. The
+# review-blocked, integration-conflict and security-pass exhaustion judges pass
+# it (issue #8269): their sandboxes snapshot a PR head, a merge worktree or the
+# audit worktree (SECURITY_PASS_AUDIT_WORKTREE), not the tree the index is
+# built from.
 assemble_judge_static_context() {
   local out_file="$1"
+  local judge_static_override="${2:-}"
   local missing=""
   local judge_readme_context=""
+  local judge_static_agents_requested="" judge_static_agents_effective=""
+  local judge_static_agents_fallback="" judge_static_agents_absent=false
+  local judge_static_agents_index_tmp="" judge_static_agents_indexed=false
+  local judge_static_size_line="" judge_static_size_bytes=""
 
   if [ ! -s unattended_system_instructions.md ]; then
     missing="unattended_system_instructions.md"
@@ -1459,12 +1492,40 @@ assemble_judge_static_context() {
     cat ai_pipeline.md
     echo
     local judge_agents_file="" judge_agents_render=""
-    if [ -f AGENTS.md ]; then
+    # A symlinked agents file reads as absent (issue #8269): the inline
+    # fallback below must never cat through a link the checkout controls.
+    if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
       judge_agents_file="AGENTS.md"
-    elif [ -f agents.md ]; then
+    elif [ -f agents.md ] && [ ! -L agents.md ]; then
       judge_agents_file="agents.md"
     fi
-    if [ -n "${judge_agents_file}" ]; then
+    if [ "${judge_static_override}" = inline ]; then
+      judge_static_agents_requested=inline
+    else
+      judge_static_agents_requested="$(_judge_static_agents_mode)"
+    fi
+    judge_static_agents_effective="${judge_static_agents_requested}"
+    if [ -z "${judge_agents_file}" ]; then
+      judge_static_agents_absent=true
+    elif [ "${judge_static_agents_requested}" = index ]; then
+      if judge_static_agents_index_tmp="$(mktemp "${RUNTIME_DIR:-/tmp}/judge-agents-index.XXXXXX" 2>/dev/null)"; then
+        if bash scripts/build_static_context.sh agents-index "${judge_static_agents_index_tmp}" "${judge_agents_file}" && [ -s "${judge_static_agents_index_tmp}" ]; then
+          cat "${judge_static_agents_index_tmp}"
+          echo
+          judge_static_agents_indexed=true
+        else
+          judge_static_agents_fallback=index_unavailable
+        fi
+        rm -f "${judge_static_agents_index_tmp}"
+      else
+        judge_static_agents_fallback=tmp_unavailable
+      fi
+      if [ "${judge_static_agents_indexed}" != true ]; then
+        judge_static_agents_effective=inline
+        echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+      fi
+    fi
+    if [ -n "${judge_agents_file}" ] && [ "${judge_static_agents_indexed}" != true ]; then
       echo "=== AGENTS.MD ==="
       # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
       if [ -d agents.d ] && [ ! -L agents.d ] && judge_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${judge_agents_file}" 2>/dev/null)"; then
@@ -1482,6 +1543,21 @@ assemble_judge_static_context() {
     fi
   } > "${out_file}"
   rm -f "${judge_readme_context}"
+  judge_static_size_bytes="$(wc -c < "${out_file}" 2>/dev/null | tr -d '[:space:]')"
+  case "${judge_static_size_bytes}" in
+    ''|*[!0-9]*) judge_static_size_bytes=0 ;;
+  esac
+  judge_static_size_line="STATIC_CONTEXT_SIZE phase=judge mode=${judge_static_agents_effective} bytes=${judge_static_size_bytes}"
+  if [ "${judge_static_override}" = inline ]; then
+    judge_static_size_line="${judge_static_size_line} override=inline"
+  fi
+  if [ -n "${judge_static_agents_fallback}" ]; then
+    judge_static_size_line="${judge_static_size_line} fallback=inline reason=${judge_static_agents_fallback}"
+  fi
+  if [ "${judge_static_agents_absent}" = true ]; then
+    judge_static_size_line="${judge_static_size_line} agents=absent"
+  fi
+  echo "${judge_static_size_line}" >&2
 }
 
 # ---------------------------------------------------------------
@@ -2646,6 +2722,11 @@ fi
 # On by default; set the variable to false to hold every such plan for a
 # human /approved (see _plan_auto_approval_gate).
 AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"
+
+# Issue #8249: heal-route counterfactual gate for stall-recovery
+# auto-approval (see _plan_heal_counterfactual_check). On by default; `false`
+# turns it off, any other value is treated as `true` with a warning.
+HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"
 
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
@@ -6380,6 +6461,67 @@ prepare_security_pass_final_pr_head() {
   return 0
 }
 
+# external_finalize_validation_notice <merged_head_sha> [<pr_number>] (#8232)
+# Decides whether the merged final-PR head passed runtime validation, for the
+# external-finalize completion comment. Writes one EXTERNAL_FINALIZE_VALIDATION
+# log line to stdout (do not capture it); always returns 0.
+# Sets:
+#   EXTFIN_VALIDATION_OUTCOME  validated | unvalidated | unknown | skipped
+#   EXTFIN_VALIDATION_REASON   short token
+#   EXTFIN_LAST_VALIDATED_SHA  state validation_last_passed_sha (40-hex) or ""
+# Reads the validation history from the memory branch only; no GitHub API
+# call. A failed history read gives `unknown` (completion fails open), even
+# when the state field names the merged head: only the history confirms a
+# pass. With ENABLE_VALIDATION off there is no validation to report, so the
+# outcome is `skipped` and the caller adds nothing.
+external_finalize_validation_notice() {
+  local merged_head_sha="${1:-}"
+  local pr_number="${2:-}"
+  local decision_json=""
+  local available=""
+  local allow=""
+  local reason=""
+  EXTFIN_VALIDATION_OUTCOME="unknown"
+  EXTFIN_VALIDATION_REASON=""
+  EXTFIN_LAST_VALIDATED_SHA="$(jq -r '.validation_last_passed_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  EXTFIN_LAST_VALIDATED_SHA="$(printf '%s' "${EXTFIN_LAST_VALIDATED_SHA}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${EXTFIN_LAST_VALIDATED_SHA}" =~ ^[0-9a-f]{40}$ ]] || EXTFIN_LAST_VALIDATED_SHA=""
+  merged_head_sha="$(printf '%s' "${merged_head_sha}" | tr '[:upper:]' '[:lower:]')"
+  if [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
+    EXTFIN_VALIDATION_OUTCOME="skipped"
+    EXTFIN_VALIDATION_REASON="validation_disabled"
+    [[ "${merged_head_sha}" =~ ^[0-9a-f]{40}$ ]] || merged_head_sha=""
+  elif ! [[ "${merged_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    EXTFIN_VALIDATION_REASON="merged_head_unavailable"
+    merged_head_sha=""
+  else
+    decision_json="$(validation_history_gate_decision_for_sha "${merged_head_sha}" 2>/dev/null || echo "")"
+    if [ -n "${decision_json}" ] && printf '%s' "${decision_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      available="$(printf '%s' "${decision_json}" | jq -r '(.available // false) | tostring' 2>/dev/null || echo "false")"
+      allow="$(printf '%s' "${decision_json}" | jq -r '(.allow // false) | tostring' 2>/dev/null || echo "false")"
+      reason="$(printf '%s' "${decision_json}" | jq -r '.reason // ""' 2>/dev/null || echo "")"
+    else
+      available="false"
+      reason="history_read_invalid"
+    fi
+    # Reasons are interpolated into comments; keep them to a token shape.
+    reason="$(printf '%s' "${reason}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-80)"
+    [ -n "${reason}" ] || reason="unknown"
+    if [ "${available}" = "true" ] && [ "${allow}" = "true" ]; then
+      EXTFIN_VALIDATION_OUTCOME="validated"
+      EXTFIN_VALIDATION_REASON="${reason}"
+    elif [ "${available}" = "true" ]; then
+      EXTFIN_VALIDATION_OUTCOME="unvalidated"
+      EXTFIN_VALIDATION_REASON="${reason}"
+    else
+      EXTFIN_VALIDATION_OUTCOME="unknown"
+      EXTFIN_VALIDATION_REASON="${reason}"
+    fi
+  fi
+  echo "EXTERNAL_FINALIZE_VALIDATION tracking_issue=${TRACKING_NUM:-unknown} pr=${pr_number:-unknown} merged_head=${merged_head_sha:-none} outcome=${EXTFIN_VALIDATION_OUTCOME} reason=${EXTFIN_VALIDATION_REASON} last_validated=${EXTFIN_LAST_VALIDATED_SHA:-none}"
+  return 0
+}
+
 # external_finalize_delivery_check <integration_branch> <default_branch> <final_pr_number> <final_pr_json>
 #
 # Issue #7611: before the external-finalize path marks a project complete,
@@ -7783,6 +7925,11 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
+	# Optional: present|absent|unknown from
+	# security_pass_advisory_cited_code_status.  `absent` means the cited code
+	# did not survive to the default branch, so the body must not claim it did
+	# (fun-token-multi-chain#710).  Empty or anything else keeps the legacy text.
+	local cited_code_status="${7:-}"
   local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
@@ -7822,7 +7969,7 @@ create_security_pass_advisory_followup() {
   fi
   body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
   printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
-  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
+  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" "${cited_code_status}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -7838,6 +7985,7 @@ head_sha = sys.argv[5]
 justification = sys.argv[6]
 source = sys.argv[7]
 merged_pr = sys.argv[8] if len(sys.argv) > 8 else ""
+cited_code_status = sys.argv[9] if len(sys.argv) > 9 else ""
 
 
 def prose(value: object) -> str:
@@ -7867,7 +8015,17 @@ if source == "line_ownership":
 		"Its cited line predates the project (it was written before the integration base), so it does not gate the project. "
 		"The project completes without this fix; address it through the normal issue pipeline."
 	)
-if merged_pr.isdigit():
+if merged_pr.isdigit() and cited_code_status == "absent":
+	# The audited lines are not on the default branch: the code was removed or
+	# rewritten between the audit and the final merge (fun-token-multi-chain#710,
+	# where #667 reverted the cited coinflip code before PR #596 merged).
+	lines.extend(
+		[
+			f"The integration branch has since merged into the default branch via PR #{merged_pr}, but the cited lines are not on the default branch: the code at `{prose(location)}` was removed or rewritten after the audit at `{head_sha}`. Do not recreate the removed code. Plan and implement this issue against the default branch: find whether the vulnerable behaviour described below still exists in the current code and fix it if it does; in either case add a regression test for the invariant the recommendation protects, and record in the PR body whether the path was found absent or was fixed.",
+			"",
+		]
+	)
+elif merged_pr.isdigit():
 	lines.extend(
 		[
 			f"The integration branch has since merged into the default branch via PR #{merged_pr}, so the cited location refers to code that is already on the default branch. Plan and implement this issue against the default branch.",
@@ -7933,6 +8091,98 @@ PY
   return 0
 }
 
+# security_pass_advisory_cited_code_status <audited_head_sha> <default_branch> <file> <line>
+#
+# Print whether the code a security-pass finding cites at <audited_head_sha>
+# survived to `origin/<default_branch>`: `present`, `absent` or `unknown`.
+# Code can be removed between the audit and the final merge; then the
+# deferred advisory must not claim the cited location is on the default branch
+# (fun-token-multi-chain#710 cited coinflip code that #667 had reverted, and
+# planning blocked with "nothing to implement").
+#
+# The check takes the cited line and up to two lines either side at the
+# audited head, trims whitespace, drops blank lines, and looks for that block
+# as one contiguous run in the default-branch file.  A single line is not
+# enough: `}` or `} catch {` match almost any file.  `unknown` when the
+# audited head is not a hex commit id, the audited blob cannot be read, the
+# line is out of range, the window holds under 12 non-blank characters, or the
+# file is missing on the default branch and `origin/<default_branch>` does not
+# resolve to a commit.  Blank lines are dropped and whitespace is
+# trimmed on both sides, so a moved, re-indented or blank-line-reformatted
+# block still reads `present`; only a content edit reads `absent`, which only
+# changes the advisory's wording (the issue is filed either way).
+# Local git only (the caller fetches the refs once): no GitHub API calls.
+# Fail-open: any error prints `unknown`.  Returns 0 always.
+security_pass_advisory_cited_code_status() {
+	local audited_head_sha="$1"
+	local default_branch="$2"
+	local cited_file="$3"
+	local cited_line="$4"
+	local cited_tmp_dir cited_status
+	if [ -z "${audited_head_sha}" ] || [ -z "${default_branch}" ] || [ -z "${cited_file}" ] \
+		|| ! [[ "${audited_head_sha}" =~ ^[0-9a-fA-F]{7,64}$ ]] \
+		|| ! [[ "${cited_line}" =~ ^[0-9]+$ ]]; then
+		echo "unknown"
+		return 0
+	fi
+	if ! cited_tmp_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/security-pass-cited-code.XXXXXX" 2>/dev/null)"; then
+		echo "unknown"
+		return 0
+	fi
+	if ! git show "${audited_head_sha}:${cited_file}" > "${cited_tmp_dir}/audited" 2>/dev/null; then
+		rm -rf "${cited_tmp_dir}"
+		echo "unknown"
+		return 0
+	fi
+	if ! git show "origin/${default_branch}:${cited_file}" > "${cited_tmp_dir}/current" 2>/dev/null; then
+		# The audited blob exists but the file is gone from the default branch,
+		# unless the default-branch ref itself does not resolve (then unknown).
+		rm -rf "${cited_tmp_dir}"
+		if git rev-parse --verify --quiet "origin/${default_branch}^{commit}" >/dev/null 2>&1; then
+			echo "absent"
+		else
+			echo "unknown"
+		fi
+		return 0
+	fi
+	cited_status="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${cited_tmp_dir}/audited" "${cited_tmp_dir}/current" "${cited_line}" <<'PY' 2>/dev/null || echo "unknown"
+import sys
+from pathlib import Path
+
+
+def stripped(path: str) -> list[str]:
+	# Split on "\n" only, as git numbers lines; splitlines() also breaks on
+	# form feed, \x85, U+2028 and others, which would shift the cited window.
+	# read_bytes() avoids read_text()'s newline translation of a lone "\r".
+	lines = Path(path).read_bytes().decode("utf-8", errors="replace").split("\n")
+	if lines and lines[-1] == "":
+		lines.pop()
+	return [line.strip() for line in lines]
+
+
+audited = stripped(sys.argv[1])
+current = [line for line in stripped(sys.argv[2]) if line]
+line_no = int(sys.argv[3])
+if line_no < 1 or line_no > len(audited):
+	print("unknown")
+	raise SystemExit(0)
+window = [line for line in audited[max(0, line_no - 3):line_no + 2] if line]
+if sum(len(line) for line in window) < 12:
+	print("unknown")
+	raise SystemExit(0)
+size = len(window)
+found = any(current[start:start + size] == window for start in range(len(current) - size + 1))
+print("present" if found else "absent")
+PY
+)"
+	rm -rf "${cited_tmp_dir}"
+	case "${cited_status}" in
+		present|absent) echo "${cited_status}" ;;
+		*) echo "unknown" ;;
+	esac
+	return 0
+}
+
 # security_pass_file_deferred_advisory_followups <integration_branch> <default_branch> <final_pr>
 #
 # File the `ai:security` advisory follow-ups that the exhaustion judge or
@@ -7961,6 +8211,19 @@ security_pass_file_deferred_advisory_followups() {
   if [ "${pending_count}" -eq 0 ]; then
     return 0
   fi
+	# One fetch per ref (local git, no API calls) so the cited-code check sees
+	# the merged default branch and the audited head.  Fail-open: a failed
+	# fetch makes the check print `unknown`, which keeps the legacy wording.
+	local row_cited_status cited_default_fetch_ok=true
+	git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || cited_default_fetch_ok=false
+	if [ -n "${integration_branch}" ]; then
+		git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 || true
+	fi
+	# The final merge deletes the integration branch; the PR head ref keeps
+	# the audited commit reachable on later ticks.
+	if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+		git fetch --no-tags origin "+refs/pull/${final_pr}/head:refs/orchestrator/security-pass/advisory-pr-${final_pr}-head" >/dev/null 2>&1 || true
+	fi
   while IFS= read -r row_json; do
     [ -n "${row_json}" ] || continue
     row_finding="$(printf '%s' "${row_json}" | jq -c '.finding')"
@@ -7970,7 +8233,13 @@ security_pass_file_deferred_advisory_followups() {
     if [ -z "${row_head_sha}" ]; then
       row_head_sha="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
     fi
-    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}"
+	row_cited_status="$(security_pass_advisory_cited_code_status "${row_head_sha}" "${default_branch}" \
+		"$(printf '%s' "${row_finding}" | jq -r '.file // ""')" \
+		"$(printf '%s' "${row_finding}" | jq -r '.line // ""')")"
+	# A failed default-branch fetch cannot prove the code is gone.
+	[ "${cited_default_fetch_ok}" = "true" ] || row_cited_status="unknown"
+	echo "SECURITY_PASS_ADVISORY_CITED_CODE tracking_issue=${TRACKING_NUM} finding=$(printf '%s' "${row_json}" | jq -r '.finding_id' | tr -d '\r\n') default_branch=${default_branch} status=${row_cited_status}"
+    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}" "${row_cited_status}"
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
       filed_count=$((filed_count + 1))
       filed_lines="${filed_lines}"$'\n'"- \`$(printf '%s' "${row_json}" | jq -r '.finding_id')\` → #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
@@ -8223,13 +8492,15 @@ security_pass_exhaustion_judge() {
   error_file="${RUNTIME_DIR}/security_pass_judge_${TRACKING_NUM}.err"
   verdict_file="${RUNTIME_DIR}/security_pass_judge_verdict_${TRACKING_NUM}.json"
   semble_query_file="${RUNTIME_DIR}/security_pass_judge_semble_query_${TRACKING_NUM}.txt"
-  static_file="${RUNTIME_DIR}/judge_static.txt"
+  # Own, always-inline static file (issue #8269): this judge runs in the
+  # audit worktree, not the tree an index would be built from.
+  static_file="${RUNTIME_DIR}/judge_static_sec.txt"
   {
     printf '%s\n' 'Security-pass exhaustion judge context.'
     append_judge_semble_query_text "Remaining findings:" "$(security_pass_findings_rows_json "${findings_file}")" 7000
   } > "${semble_query_file}"
   if [ ! -s "${static_file}" ]; then
-    if ! assemble_judge_static_context "${static_file}"; then
+    if ! assemble_judge_static_context "${static_file}" inline; then
       echo "WARNING: failed to assemble security-pass judge static context; continuing without it" >&2
       : > "${static_file}"
     fi
@@ -10661,7 +10932,7 @@ invoke_judge_for_integration_conflict() {
   output_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_output.XXXXXX")"
   judge_static_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_static.XXXXXX")"
 
-  if ! assemble_judge_static_context "${judge_static_file}"; then
+  if ! assemble_judge_static_context "${judge_static_file}" inline; then
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
     _integration_judge_remove_worktree "${judge_wt}"
     rm -rf -- "${baseline_dir}"
@@ -11859,11 +12130,19 @@ validation_history_gate_next_action() {
 }
 
 validation_history_gate_decision_for_current_sha() {
-	local integration_sha=""
+	local current_integration_sha=""
+	current_integration_sha="$(validation_history_current_integration_sha 2>/dev/null || true)"
+	validation_history_gate_decision_for_sha "${current_integration_sha}"
+}
+
+# validation_history_gate_decision_for_sha <sha>: the validation-history
+# decision for one integration SHA (#8232). An empty SHA returns
+# {available:false, allow:true, reason:"integration_sha_unavailable"}.
+validation_history_gate_decision_for_sha() {
+	local integration_sha="${1:-}"
 	local history_json=""
 	local warning_code=""
 
-	integration_sha="$(validation_history_current_integration_sha 2>/dev/null || true)"
 	if [ -z "${integration_sha}" ]; then
 		jq -cn '{available: false, allow: true, reason: "integration_sha_unavailable", integration_sha: null}'
 		return 0
@@ -13846,8 +14125,15 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   fi
 
   if [ -n "${merge_err}" ]; then
+    # Store gh_retry's escaped "::warning::  stderr:" line decoded (#8505),
+    # as the refusal path below does; merge_err itself stays raw for it.
+    # Decode before the 5000-byte cap so the cut cannot split a %XX token.
+    local merge_err_for_state=""
+    merge_err_for_state="$(printf '%s\n' "${merge_err}" \
+      | awk '{ line = $0; if (sub(/^::warning::[ \t]*stderr: /, "", line)) { gsub(/%0[AD]/, "\n", line); gsub(/%25/, "%", line) } print line }' \
+      | head -c 5000)"
     merge_err="$(printf '%s' "${merge_err}" | head -c 5000)"
-    jq --arg err "${merge_err}" '.final_merge_error = $err' \
+    jq --arg err "${merge_err_for_state}" '.final_merge_error = $err' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
 
@@ -13883,8 +14169,11 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   # is a ruleset or required-status block (for example a failing required
   # commit status, which the check-runs gate above never reads), and only the
   # merge error names it. gh_retry ends a failed call with its
-  # "::error::gh command failed after" line followed by gh's raw stderr, so
-  # only that raw text is kept when present. Flattened to one line,
+  # "::error::gh command failed after" line followed by one
+  # "::warning::  stderr: <text>" line whose text is escaped with
+  # _gh_actions_escape and capped (#8505), so only that text is kept when
+  # present: the "stderr: " prefix is dropped and %0A / %0D / %25 are decoded
+  # (%25 last, so an escaped literal "%0A" stays literal). Flattened to one line,
   # workflow-command prefixes and backticks dropped, capped so it fits the
   # tracking comment.
   local final_pr_mergeable_state=""
@@ -13892,7 +14181,7 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   final_pr_mergeable_state="$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')"
   if [ -n "${merge_err}" ]; then
     merge_refusal_detail="$(printf '%s\n' "${merge_err}" \
-      | awk '/^::error::gh command failed after / { buf = ""; next } { buf = buf $0 "\n" } END { printf "%s", buf }')"
+      | awk '/^::error::gh command failed after / { buf = ""; next } { line = $0; if (sub(/^::warning::[ \t]*stderr: /, "", line)) { gsub(/%0[AD]/, "\n", line); gsub(/%25/, "%", line) } buf = buf line "\n" } END { printf "%s", buf }')"
     [ -n "${merge_refusal_detail//[[:space:]]/}" ] || merge_refusal_detail="${merge_err}"
     merge_refusal_detail="$(printf '%s\n' "${merge_refusal_detail}" \
       | sed -E 's/^::(warning|error|notice)::[[:space:]]*//' \
@@ -16386,6 +16675,19 @@ mark_validation_complete() {
 		"${validation_cycle}" \
 		"validation passed" \
 		"orchestrate_poll.mark_validation_complete"
+	# #8232: remember the last integration SHA that passed runtime
+	# validation, so an external merge of a later head can name it.
+	# The append helper sets VALIDATION_HISTORY_LAST_APPEND_SHA from its own
+	# branch-head lookup; empty means that lookup failed, so no second call.
+	local _validation_last_passed_sha="${VALIDATION_HISTORY_LAST_APPEND_SHA:-}"
+	_validation_last_passed_sha="$(printf '%s' "${_validation_last_passed_sha}" | tr '[:upper:]' '[:lower:]')"
+	if [[ "${_validation_last_passed_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		if ! { jq --arg sha "${_validation_last_passed_sha}" '.validation_last_passed_sha = $sha' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+			rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+			echo "::warning::Could not record validation_last_passed_sha=${_validation_last_passed_sha} in state."
+		fi
+	fi
 
   if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}" "${_security_final_pr_json}"; then
     # Budget-ineligible final-merge deferrals/failures should return without
@@ -17986,6 +18288,169 @@ _plan_auto_approval_gate_comments()
   fi
 }
 
+# Issue #8249: heal-route counterfactual check for stall-recovery
+# auto-approval. A workflow-heal issue (the ai:workflow-heal label or the
+# workflow-failure-heal:fp= body marker, decided by workflow_failure_heal.py
+# heal-route from the batched details map) is approved only when its plan's
+# single HEAL_COUNTERFACTUAL line is PASS, or PARTIAL with every listed job
+# under ## Deferred scope (partial_delivery.py heal-counterfactual, the same
+# parser plan.yml calls). Runs in the main shell and sets HEAL_CF_GATE_DECISION,
+# HEAL_CF_GATE_RESULT, HEAL_CF_GATE_REASON, HEAL_CF_GATE_JSON and
+# HEAL_CF_GATE_PLAN_COMMENT. Non-heal issues return 0 without a log line.
+# Every error on a heal (or unknown) route holds. No GitHub API call.
+# Args: <issue_num> <details_map_json> <plan_file> <comments_json> <login>
+# Returns 0 to continue to the automation-path gate, 1 to hold.
+_plan_heal_counterfactual_check()
+{
+  local issue_num="$1"
+  local details_map_json="$2"
+  local plan_file="$3"
+  local comments_json="$4"
+  local login="$5"
+  local script_dir="" heal_py="" partial_py="" route_file="" route="" cf_json="" flag_norm=""
+
+  HEAL_CF_GATE_DECISION="approve"
+  HEAL_CF_GATE_RESULT=""
+  HEAL_CF_GATE_REASON=""
+  HEAL_CF_GATE_JSON='{}'
+  HEAL_CF_GATE_PLAN_COMMENT="unknown"
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  heal_py="${script_dir}/workflow_failure_heal.py"
+  partial_py="${script_dir}/partial_delivery.py"
+  route_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_cf_issue.XXXXXX" 2>/dev/null || true)"
+  if [ -n "${route_file}" ] && [ -f "${heal_py}" ] \
+    && printf '%s' "${details_map_json:-{\}}" | jq -ce --arg n "${issue_num}" '
+        .[$n]
+        | select(type == "object")
+        | select(((.labels // []) | type) == "array")
+        | select(((.labels // []) | length) > 0 or (((.body // "") | type) == "string" and ((.body // "") | length) > 0))
+        | {labels: (.labels // []), body: ((.body // "") | strings)}
+      ' > "${route_file}" 2>/dev/null; then
+    route="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-route --issue-json "${route_file}" 2>/dev/null)" || route=""
+  fi
+  [ -z "${route_file}" ] || rm -f "${route_file}"
+  case "${route}" in
+    false) return 0 ;;
+    true) ;;
+    *) route="unknown" ;;
+  esac
+  HEAL_CF_GATE_PLAN_COMMENT="$(printf '%s' "${comments_json:-[]}" | jq -r --arg login "${login}" '
+      [ .[]?
+        | select(type == "object")
+        | select((.user.login // "") == $login)
+        | select(((.body // "") | split("\n") | map(sub("\r$"; "") | gsub("^[ \t]+|[ \t]+$"; "")) | any(. == "<!-- ai:plan-proposal:v1 -->")))
+      ]
+      | sort_by(.created_at // "")
+      | last
+      | ((.id // .databaseId // "") | tostring)' 2>/dev/null || true)"
+  [[ "${HEAL_CF_GATE_PLAN_COMMENT}" =~ ^[0-9]+$ ]] || HEAL_CF_GATE_PLAN_COMMENT="unknown"
+  # sed, not xargs: xargs fails on an unmatched quote in the flag value.
+  flag_norm="$(printf '%s' "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+  if [ "${route}" = "unknown" ] && [ "${flag_norm}" = "false" ]; then
+    # The rollback switch also releases an unknown-route hold.
+    cf_json='{"decision":"approve","result":"missing","reason":"gate_disabled","line":"","unmatched_jobs":[]}'
+  elif [ "${route}" = "unknown" ]; then
+    cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[]}'
+    case "${flag_norm}" in
+      ""|true) ;;
+      *) cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[],"flag_invalid":true}' ;;
+    esac
+  elif [ -f "${partial_py}" ] \
+    && cf_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${partial_py}" heal-counterfactual --plan-file "${plan_file}" \
+      --gate-flag "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" 2>/dev/null)" \
+    && printf '%s' "${cf_json}" | jq -e '.decision | IN("approve", "hold")' >/dev/null 2>&1; then
+    :
+  else
+    cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[]}'
+    case "${flag_norm}" in
+      ""|true) ;;
+      false) cf_json='{"decision":"approve","result":"missing","reason":"gate_disabled","line":"","unmatched_jobs":[]}' ;;
+      *) cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[],"flag_invalid":true}' ;;
+    esac
+  fi
+  if printf '%s' "${cf_json}" | jq -e '.flag_invalid == true' >/dev/null 2>&1; then
+    echo "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true"
+  fi
+  HEAL_CF_GATE_JSON="${cf_json}"
+  HEAL_CF_GATE_DECISION="$(printf '%s' "${cf_json}" | jq -r '.decision' 2>/dev/null | tr -cd 'a-z' || true)"
+  HEAL_CF_GATE_RESULT="$(printf '%s' "${cf_json}" | jq -r '.result // "missing"' 2>/dev/null | tr -cd 'A-Za-z_' | cut -c1-20 || true)"
+  HEAL_CF_GATE_REASON="$(printf '%s' "${cf_json}" | jq -r '.reason // "heal_counterfactual_check_unavailable"' 2>/dev/null | tr -cd 'a-z_' | cut -c1-80 || true)"
+  [ -n "${HEAL_CF_GATE_RESULT}" ] || HEAL_CF_GATE_RESULT="missing"
+  [ -n "${HEAL_CF_GATE_REASON}" ] || HEAL_CF_GATE_REASON="heal_counterfactual_check_unavailable"
+  if [ "${HEAL_CF_GATE_DECISION}" = "approve" ]; then
+    echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=approve result=${HEAL_CF_GATE_RESULT} reason=${HEAL_CF_GATE_REASON} issue=${issue_num}"
+    return 0
+  fi
+  HEAL_CF_GATE_DECISION="hold"
+  return 1
+}
+
+# Issue #8249: a poller heal counterfactual hold reaches a human once per
+# plan comment and result. Posts one ai:heal-counterfactual-hold:v1 comment
+# (source=poller) and one WARNING unless a trusted marker for this issue,
+# plan comment and result (plan.yml's included) is already in the caller's
+# comment snapshot. heal_route_unknown (the batched details map had no usable
+# entry this tick) only logs: the next tick re-checks, and a transient cache
+# miss must not page on ordinary issues. Failures only warn.
+# Args: <issue_num> <comments_json> <login>; reads the HEAL_CF_GATE_* globals.
+_heal_counterfactual_hold_notify()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local login="$3"
+  local plan_comment="${HEAL_CF_GATE_PLAN_COMMENT:-unknown}"
+  local result="${HEAL_CF_GATE_RESULT:-missing}"
+  local reason="${HEAL_CF_GATE_REASON:-heal_counterfactual_check_unavailable}"
+  local duplicate="false" hold_body=""
+
+  if [ "${reason}" = "heal_route_unknown" ]; then
+    return 0
+  fi
+  duplicate="$(printf '%s' "${comments_json:-[]}" | jq -r --arg prefix "<!-- ai:heal-counterfactual-hold:v1 issue=${issue_num} plan_comment=${plan_comment} result=${result} " --arg login "${login}" '
+    [ .[]?
+      | select(type == "object")
+      | select(((.user.login // "") == $login and $login != "")
+          or ((.user.login // "") | test("\\[bot\\]$"))
+          or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+      | (.body // "")
+      | select(contains($prefix))
+    ] | length > 0' 2>/dev/null)" || duplicate="false"
+  if [ "${duplicate}" = "true" ]; then
+    return 0
+  fi
+  if ! hold_body="$(printf '%s' "${HEAL_CF_GATE_JSON:-{\}}" | jq -r --arg issue "${issue_num}" --arg plan "${plan_comment}" \
+    --arg result "${result}" --arg reason "${reason}" '
+      def clean: tostring | gsub("[[:cntrl:]`]"; " ") | gsub("<!--"; "&lt;!--") | gsub("-->"; "--&gt;") | .[0:300];
+      ((.line // "") | clean) as $line
+      | [(.unmatched_jobs // [])[]? | clean] as $unmatched
+      | [
+          "**Automatic approval withheld: the plan does not show that the change would have made the failing run pass.**",
+          "",
+          (if $line != "" then "Counterfactual line: `\($line)`" else "Counterfactual line: _(none found)_" end),
+          "Reason: `\($reason | gsub("[^a-z_]"; ""))`",
+          "",
+          (if $reason == "fail" then "The plan says the observed run would still fail for a reason it does not address. The plan has to cover that cause, or list the job under `## Deferred scope` and say `PARTIAL`."
+           elif $reason == "unverified" then "The plan says the heal evidence cannot show whether the change helps. The evidence named on the line is missing: add it to the heal issue (for example the failing job step timeline) and re-plan."
+           elif $reason == "partial_jobs_not_deferred" then "These jobs would still fail but are not listed under `## Deferred scope`:\n" + ($unmatched | map("- " + .) | join("\n")) + "\nAdd them to `## Deferred scope` or fix them."
+           elif $reason == "deferred_scope_missing" then "The line says `PARTIAL`, but the plan has no readable `## Deferred scope` section listing the jobs that would still fail. The section must appear once and hold only `- ` bullets: a prose line or note inside it makes it unreadable."
+           elif $reason == "partial_job_list_invalid" then "The `PARTIAL:` line must list the still-failing jobs, comma-separated (at most 20)."
+           elif $reason == "heal_counterfactual_check_unavailable" then "The heal counterfactual check could not run."
+           else "The plan must end its `## Counterfactual check` with exactly one `HEAL_COUNTERFACTUAL:` line." end),
+          "",
+          "Stall recovery did not post `/approved`. A maintainer can review the plan and reply `/approved`, or `/reclarify`.",
+          "",
+          "<!-- ai:heal-counterfactual-hold:v1 issue=\($issue) plan_comment=\($plan) result=\($result) source=poller -->"
+        ] | join("\n")' 2>/dev/null)"; then
+    echo "::warning::Could not render the heal counterfactual hold comment for issue #${issue_num}."
+    return 0
+  fi
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+    echo "::warning::Could not post the heal counterfactual hold comment for issue #${issue_num}."
+  fi
+  tg_notify_issue "${issue_num}" "Stall recovery: heal plan auto-approval held (counterfactual ${result}, ${reason}); a maintainer must reply /approved." "WARNING" || true
+  return 0
+}
+
 # Issue #6769: hold automatic /approved posts from stall recovery for plans
 # that list automation paths (.github/, .claude/, scripts/, prompts/,
 # workflow-templates/). The plan is the newest comment carrying the
@@ -17998,6 +18463,12 @@ _plan_auto_approval_gate_comments()
 # which is written to the issue body before the approval. Every
 # error holds. A hold leaves the issue in its phase for a human /approved and
 # does not increment the recovery count; the implement-time guard still runs.
+# Issue #8339: a path_not_granted hold that the guard marks replannable (only
+# directory or glob tokens denied, the rest would be granted) gets one
+# automatic re-plan per issue from ai:awaiting-approval: the label moves to
+# ai:planning and an /answer comment carrying the
+# ai:automation-path-replan:v1 marker is posted. Once that marker is on the
+# issue, a later hold gets the ordinary hold notice for a human.
 # Args: <issue_num> <details_map_json> <comments_json> <phase>
 # Returns 0 to approve, 1 to hold (after logging).
 _plan_auto_approval_gate()
@@ -18018,6 +18489,14 @@ _plan_auto_approval_gate()
   local gate_display_paths="[]"
   local gate_grant_body_file=""
   local gate_fresh_file=""
+  local gate_replannable="false"
+  local gate_replan_marker=""
+  local gate_replan_seen="true"
+  local gate_replan_body=""
+  local gate_replan_jq=""
+  local gate_replan_since=""
+  local gate_replan_recent=""
+  local gate_replan_landed="false"
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -18047,6 +18526,11 @@ _plan_auto_approval_gate()
           | strings
         ' > "${gate_plan_file}" 2>/dev/null || [ ! -s "${gate_plan_file}" ]; then
         gate_reason="plan_comment_unavailable"
+      elif ! _plan_heal_counterfactual_check "${issue_num}" "${details_map_json}" "${gate_plan_file}" \
+        "${comments_json:-[]}" "${gate_login}"; then
+        # Issue #8249: checked before the automation-path guard so a held
+        # heal plan never gets a Q108 grant written into its issue body.
+        gate_reason="heal_counterfactual_hold"
       else
         # Issue metadata comes from the batched GraphQL cache (author fields
         # added for this gate). The guard needs it only when the flag is on
@@ -18074,6 +18558,10 @@ _plan_auto_approval_gate()
           --issue-number "${issue_num}" 2>/dev/null || true)"
         gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
         gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+        # Issue #8339: strict check; a missing field or bad JSON is false.
+        if printf '%s' "${gate_result}" | jq -e '.replannable == true' >/dev/null 2>&1; then
+          gate_replannable="true"
+        fi
         # Q108: write the proposed exact grant before approving. The body the
         # guard extended comes from this tick's batched snapshot, so it is
         # re-read first (one REST read; no batched call carries a live body)
@@ -18120,6 +18608,91 @@ _plan_auto_approval_gate()
   # Sanitize model-derived values before logging.
   gate_reason="$(printf '%s' "${gate_reason}" | tr -cd 'a-z_' | cut -c1-80)"
   gate_paths="$(printf '%s' "${gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
+  if [ "${gate_reason}" = "heal_counterfactual_hold" ]; then
+    # Issue #8249: the issue keeps its phase and no recovery attempt counts.
+    echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=hold result=${HEAL_CF_GATE_RESULT:-missing} reason=${HEAL_CF_GATE_REASON:-heal_counterfactual_check_unavailable} issue=${issue_num}"
+    echo "STALL_SKIP issue=${issue_num} reason=heal_counterfactual_hold phase=${phase} action=none"
+    _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+    return 1
+  fi
+  if [ "${gate_reason}" = "path_not_granted" ] && [ "${gate_replannable}" = "true" ] \
+    && [ "${phase}" = "ai:awaiting-approval" ]; then
+    # Issue #8339: one automatic re-plan per issue. The marker counts only in
+    # a trusted comment (same filter as _plan_auto_approval_hold_notify); a
+    # jq failure counts as "seen", so the hold notice below runs as before.
+    gate_replan_marker="<!-- ai:automation-path-replan:v1 issue=${issue_num} -->"
+    gate_replan_jq='
+      [ .[]?
+        | select(type == "object")
+        | select(((.user.login // "") == $login and $login != "")
+            or ((.user.login // "") | test("\\[bot\\]$"))
+            or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+        | (.body // "")
+        | select(contains($marker))
+      ] | length > 0'
+    gate_replan_seen="$(printf '%s' "${comments_json:-[]}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" || gate_replan_seen="true"
+    [ "${gate_replan_seen}" = "false" ] || gate_replan_seen="true"
+    if [ "${gate_replan_seen}" = "false" ] \
+      && ! phase_cap_can_dispatch "ai:planning" "automation_path_replan" "${issue_num}"; then
+      # The callers checked only the ai:implementing cap; a re-plan starts a
+      # plan run, so it waits for the ai:planning cap. No marker is posted,
+      # so a later tick retries the re-plan.
+      echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=automation_path_replan"
+      return 1
+    fi
+    if [ "${gate_replan_seen}" = "false" ]; then
+      # §14 audit: comments_json, details_map_json and the retrigger_plan
+      # comment POST were checked; none of them can change labels, and
+      # plan.yml skips an /answer unless the issue carries ai:planning
+      # (AD-1). This edit runs only on the eligible path and at most once
+      # per issue, because the marker comment below ends eligibility.
+      if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --add-label 'ai:planning' --remove-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+        echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_label_failed issue=${issue_num}"
+      else
+        gate_replan_body="/answer
+
+_Orchestrator stall recovery: the plan's \"Files likely to change\" section listed a directory or glob token (for example from placeholder text), and such a token can never be granted exactly. Re-planning once. The earlier clarification answers still apply. List only exact file paths in that section, with no placeholder text. If the new plan is held again, it goes to a maintainer._
+
+${gate_replan_marker}"
+        gate_replan_since="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="${gate_replan_body}" >/dev/null 2>&1; then
+          gate_replan_landed="true"
+        else
+          # gh_retry makes one attempt for this POST, so a failure can be a
+          # lost response for a comment GitHub accepted. §14 audit:
+          # comments_json predates the POST, so one read of the recent
+          # comments runs here, only on this failure branch, with one
+          # attempt. A failed read keeps the rollback below.
+          if gate_replan_recent="$(GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100${gate_replan_since:+&since=${gate_replan_since}}" 2>/dev/null)" \
+            && [ "$(printf '%s' "${gate_replan_recent}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" = "true" ]; then
+            gate_replan_landed="true"
+            echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_confirmed issue=${issue_num}"
+          fi
+        fi
+        if [ "${gate_replan_landed}" = "true" ]; then
+          phase_cap_note_dispatch "ai:planning"
+          echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan issue=${issue_num}"
+          tg_notify_issue "${issue_num}" "Stall recovery: plan held only by directory or glob tokens; re-planning once." "DEBUG" || true
+        else
+          # Put the issue back in ai:awaiting-approval so the next tick retries
+          # the whole re-plan with its marker; without the marker a plain
+          # retrigger_plan /answer could allow a second automatic re-plan.
+          # If the rollback fails too, the retrigger_plan arm recovers it.
+          # Residual case: if the POST landed but both its response and the
+          # confirmation read were lost, the marker is already on the issue,
+          # so the next tick posts the hold notice for a maintainer instead
+          # of re-planning (never a second re-plan, never a stuck issue).
+          echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_failed issue=${issue_num}"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 \
+            || echo "::warning::Could not restore ai:awaiting-approval on issue #${issue_num} after a failed re-plan comment; it is left in ai:planning and the re-plan marker could not be confirmed (it may have landed)."
+        fi
+        return 1
+      fi
+    fi
+  fi
   echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason:-plan_gate_error} outcome=defer issue=${issue_num} paths=${gate_paths:-none}"
   echo "STALL_SKIP issue=${issue_num} reason=automation_path_plan_hold phase=${phase} action=none"
   _plan_auto_approval_hold_notify "${issue_num}" "${comments_json}" "${gate_reason:-plan_gate_error}" "${gate_paths:-none}" "${gate_login}" "${gate_display_paths:-[]}" || true
@@ -25728,9 +26301,35 @@ Delivery check: \`${EXTFIN_DELIVERY_OUTCOME}\` — merged final-PR head \`${EXTF
               _orch_extfin_complete_body+="
 Security pass audited \`${_orch_extfin_audited}\`."
             fi
+            # #8232: say when the merged head never passed runtime
+            # validation. Completion still proceeds (fail open).
+            external_finalize_validation_notice "${EXTFIN_MERGED_HEAD_SHA:-}" "${_orch_extfin_pr}"
+            _orch_extfin_validation_line=""
+            case "${EXTFIN_VALIDATION_OUTCOME}" in
+              unvalidated)
+                _orch_extfin_validation_line="⚠️ Runtime validation: merged head \`${EXTFIN_MERGED_HEAD_SHA:-unknown}\` has no successful runtime validation (reason=${EXTFIN_VALIDATION_REASON}). Last validated integration SHA: "
+                if [ -n "${EXTFIN_LAST_VALIDATED_SHA}" ]; then
+                  _orch_extfin_validation_line+="\`${EXTFIN_LAST_VALIDATED_SHA}\`"
+                else
+                  _orch_extfin_validation_line+="none recorded"
+                fi
+                _orch_extfin_validation_line+=". The merged code was not runtime-validated before reaching ${DEFAULT_BRANCH_TRACKING:-the default branch}."
+                ;;
+              unknown)
+                _orch_extfin_validation_line="Runtime validation status of merged head \`${EXTFIN_MERGED_HEAD_SHA:-unknown}\` could not be confirmed (reason=${EXTFIN_VALIDATION_REASON})."
+                ;;
+            esac
+            if [ -n "${_orch_extfin_validation_line}" ]; then
+              _orch_extfin_complete_body+="
+
+${_orch_extfin_validation_line}"
+            fi
             post_tracking_comment "${_orch_extfin_complete_body}"
             tg_cleanup_msgs "${TRACKING_NUM}"
             MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
+            if [ -n "${_orch_extfin_validation_line}" ]; then
+              MSG+=$'\n'"${_orch_extfin_validation_line}"
+            fi
             MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
             if [ -n "${GITHUB_RUN_ID:-}" ]; then
               MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
@@ -28551,13 +29150,16 @@ ${FOLLOWUP_BLOCK_REASON}"
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
 
-      if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
-        assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
+      # The review-blocked judge keeps its own, always-inline static file
+      # (issue #8269): its sandbox snapshots the PR head, so it must not be
+      # pointed at an agents file the PR controls.
+      if [ ! -s "${RUNTIME_DIR}/judge_static_rb.txt" ]; then
+        assemble_judge_static_context "${RUNTIME_DIR}/judge_static_rb.txt" inline
       fi
-      RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${RUNTIME_DIR}/judge_static.txt")"
+      RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${RUNTIME_DIR}/judge_static_rb.txt")"
 
       {
-        cat "${RUNTIME_DIR}/judge_static.txt"
+        cat "${RUNTIME_DIR}/judge_static_rb.txt"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
