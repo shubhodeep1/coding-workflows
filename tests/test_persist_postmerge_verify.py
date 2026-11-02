@@ -271,8 +271,13 @@ def test_phase_labels_mirror_label_helpers_and_label_is_registered():
 	assert ppv.LABEL not in phase
 	assert '["ai:verify-pending"]="c5def5"' in helpers
 	assert '["ai:verify-pending"]="Merged; waiting for the check after merge"' in helpers
-	contract = json.loads((REPO_ROOT / ".github" / "ai" / "label_contract.v1.json").read_text(encoding="utf-8"))
-	assert contract["labels"]["ai:verify-pending"] == {"color": "c5def5", "description": "Merged; waiting for the check after merge"}
+	contract_path = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
+	# Partial checkouts (the credential-free pre-push container) omit the contract;
+	# the label_helpers.sh catalog asserts above still run there, and a full checkout
+	# (CI) checks the contract registration too.
+	if contract_path.is_file():
+		contract = json.loads(contract_path.read_text(encoding="utf-8"))
+		assert contract["labels"]["ai:verify-pending"] == {"color": "c5def5", "description": "Merged; waiting for the check after merge"}
 
 
 # --- check --------------------------------------------------------------------
@@ -550,6 +555,17 @@ def test_check_lists_oldest_first_and_reads_more_pages_only_when_full(fake, monk
 	lists = [e for e in fake.endpoints() if "/issues?labels=" in e]
 	assert [e.rsplit("&page=", 1)[1] for e in lists] == ["1", "2", "3", "4", "5"]
 	assert "outcome=partial reason=page_cap" in capsys.readouterr().err
+
+
+def test_check_logs_a_failed_later_page_and_dedupes_repeated_issues(fake, monkeypatch, tmp_path, capsys):
+	assert [i["number"] for i in ppv._candidates([{"number": 5}, {"number": 6}, {"number": 5}])] == [5, 6]
+	monkeypatch.setenv("PERSIST_POSTMERGE_VERIFY_ENABLED", "false")
+	fake.issues = [{"number": n} for n in range(1, 101)]
+	fake.fail = ("&page=2",)
+	_check(fake, monkeypatch, tmp_path)
+	err = capsys.readouterr().err
+	assert "outcome=partial reason=gh_read_page" in err
+	assert "reason=gh_read\n" not in err and "page_cap" not in err
 
 
 def test_check_honours_max_per_tick(fake, monkeypatch, tmp_path):

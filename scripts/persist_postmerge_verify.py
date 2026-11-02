@@ -31,7 +31,7 @@ removed and nothing is reopened.
 Switches (each defaulted here, unattended instructions section 8):
 	PERSIST_POSTMERGE_VERIFY_ENABLED  default false. Off: `arm` makes no call;
 			`check` only removes leftover labels whose
-			window has passed (one list read per tick).
+			window has passed (up to LIST_MAX_PAGES list reads per tick).
 	PERSIST_POSTMERGE_WINDOW_HOURS    default 24, clamped to 1..168
 	PERSIST_POSTMERGE_MAX_PER_TICK    default 3, clamped to 1..10
 	PERSIST_MAX_APPROACHES            default 3, clamped to 1..20 (fallback cap)
@@ -45,13 +45,14 @@ CLI (always exits 0):
 	check --repo R --out F [--runs-file F] [--trusted-login L]
 
 Log lines (stderr, tokens only):
-	PERSIST postmerge outcome=<armed|ok|held|pending|recurred|unverified|cleaned|skipped|deferred|error> reason=<token> [issue=<n>]
+	PERSIST postmerge outcome=<armed|ok|held|pending|recurred|unverified|cleaned|skipped|deferred|partial|error> reason=<token> [issue=<n>]
 
 API budget (section 14): `arm` makes at most 1 identity read (cached by
 attempt_journal.resolve_login), 1 issue read (only with
 WORKFLOW_HEAL_VERIFY_ENABLED=true), 1 paginated comments read and at most 4
-writes (label with one retry, comment, journal). `check` makes 1 list read per
-tick plus, per candidate (at most MAX_PER_TICK), 1 comments read, 1
+writes (label with one retry, comment, journal). `check` makes up to LIST_MAX_PAGES (5)
+list reads of 100 issues per tick (oldest-updated first; past 500 issues the
+rest wait for a later tick and `partial reason=page_cap` is logged) plus, per candidate (at most MAX_PER_TICK), 1 comments read, 1
 workflow-runs read (unless the poller's per-tick runs cache, which keeps only
 the 20 newest completed runs repo-wide, holds the run on the merge commit), 1
 more runs read with head_sha=<merge sha> (only when that page is cut off and
@@ -573,11 +574,15 @@ def _candidates(data: Any) -> list[dict]:
 	if not isinstance(data, list):
 		return []
 	out = []
+	seen: set[int] = set()
 	for item in data:
 		if not isinstance(item, dict) or "pull_request" in item:
 			continue
-		if _positive(item.get("number")) is None:
+		# Pages are read separately: an issue updated between reads can be listed twice.
+		number = _positive(item.get("number"))
+		if number is None or number in seen:
 			continue
+		seen.add(number)
 		out.append(item)
 	out.sort(key=_updated_key)
 	return out
@@ -803,6 +808,7 @@ def cmd_check(args: argparse.Namespace) -> None:
 			if page == 1:
 				log("error", "gh_read")
 				return
+			log("partial", "gh_read_page")
 			break
 		data.extend(chunk)
 		if len(chunk) < 100:
