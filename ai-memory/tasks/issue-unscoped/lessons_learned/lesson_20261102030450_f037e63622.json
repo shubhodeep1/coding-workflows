@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-02T03:04:50Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=AGENTS.md:1-1; cited_path=AGENTS.md, CLAUDE.md; files_touched=analysis/validation-selftest-status.json.",
+  "phase": "review_autofix",
+  "pr_number": 8652,
+  "record_id": "lesson_20261102030450_f037e63622",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md, CLAUDE.md",
+    "AGENTS.md",
+    "analysis/validation-selftest-status.json"
+  ]
+}
