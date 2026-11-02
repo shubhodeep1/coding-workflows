@@ -540,6 +540,18 @@ def test_check_disabled_with_no_labels_makes_one_read(fake, monkeypatch, tmp_pat
 	assert len(fake.calls) == 1 and fake.writes() == []
 
 
+def test_check_lists_oldest_first_and_reads_more_pages_only_when_full(fake, monkeypatch, tmp_path, capsys):
+	monkeypatch.setenv("PERSIST_POSTMERGE_VERIFY_ENABLED", "false")
+	_check(fake, monkeypatch, tmp_path)
+	assert fake.endpoints() == [f"repos/{REPO}/issues?labels=ai%3Averify-pending&state=all&sort=updated&direction=asc&per_page=100&page=1"]
+	fake.calls.clear()
+	fake.issues = [{"number": n} for n in range(1, 101)]
+	_check(fake, monkeypatch, tmp_path)
+	lists = [e for e in fake.endpoints() if "/issues?labels=" in e]
+	assert [e.rsplit("&page=", 1)[1] for e in lists] == ["1", "2", "3", "4", "5"]
+	assert "outcome=partial reason=page_cap" in capsys.readouterr().err
+
+
 def test_check_honours_max_per_tick(fake, monkeypatch, tmp_path):
 	monkeypatch.setenv("PERSIST_POSTMERGE_MAX_PER_TICK", "2")
 	fake.issues = [_candidate(n, updated_at=f"2026-10-20T1{n % 10}:00:00Z") for n in (21, 22, 23, 24)]

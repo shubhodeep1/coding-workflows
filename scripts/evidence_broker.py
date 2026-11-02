@@ -378,7 +378,10 @@ def _git_head_bytes(root: Path, args: list[str], limit: int) -> bytes | None:
 		data = proc.stdout.read(limit) if proc.stdout is not None else b""
 	finally:
 		proc.kill()
-		proc.wait(timeout=FETCH_TIMEOUT_SECS)
+		try:
+			proc.wait(timeout=FETCH_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			pass
 	return data
 
 

@@ -772,6 +772,9 @@ def check_one(repo: str, item: dict, login: str, runs_cache: Any, now: datetime,
 	return True
 
 
+LIST_MAX_PAGES = 5
+
+
 def rotate_window(candidates: list[dict], cap: int, run_number: Any) -> list[dict]:
 	"""At most `cap` candidates, starting at (run_number * cap) mod len, so a
 	waiting candidate (which writes nothing and keeps its updated_at) cannot
@@ -791,10 +794,21 @@ def cmd_check(args: argparse.Namespace) -> None:
 	if not REPO_RE.match(args.repo or ""):
 		log("error", "invalid_repo")
 		return
-	data = _gh_json([f"repos/{args.repo}/issues?labels={LABEL_ENC}&state=all&per_page=50"])
-	if not isinstance(data, list):
-		log("error", "gh_read")
-		return
+	# Oldest-updated first, up to LIST_MAX_PAGES pages of 100, so issues near
+	# the end of their window are never pushed off a single newest-first page.
+	data: list = []
+	for page in range(1, LIST_MAX_PAGES + 1):
+		chunk = _gh_json([f"repos/{args.repo}/issues?labels={LABEL_ENC}&state=all&sort=updated&direction=asc&per_page=100&page={page}"])
+		if not isinstance(chunk, list):
+			if page == 1:
+				log("error", "gh_read")
+				return
+			break
+		data.extend(chunk)
+		if len(chunk) < 100:
+			break
+	else:
+		log("partial", "page_cap")
 	candidates = _candidates(data)
 	now = _now()
 	window_h = window_hours()
