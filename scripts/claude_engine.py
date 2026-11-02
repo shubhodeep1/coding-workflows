@@ -720,10 +720,17 @@ def parse_probe(text: str, account: str, exit_code: int = 0) -> dict[str, Any]:
 
 
 def _max_utilization(probe: dict[str, Any]) -> float | None:
-	values = [probe.get("five_hour"), probe.get("seven_day")]
-	if any(value is None for value in values):
+	"""Rank key for ``choose_account``: ``max(five_hour, seven_day)``.
+
+	A missing ``five_hour`` reading means the account has no 5-hour limit
+	(many accounts no longer report one), so it ranks by ``seven_day`` alone.
+	A missing ``seven_day`` reading is unknown and returns ``None``.
+	"""
+	seven_day = probe.get("seven_day")
+	if seven_day is None:
 		return None
-	return max(values)
+	five_hour = probe.get("five_hour")
+	return seven_day if five_hour is None else max(five_hour, seven_day)
 
 
 def _known_peak(probe: dict[str, Any]) -> float | None:
@@ -747,8 +754,9 @@ def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 	"""Order the accounts for one job: the least used under ``gate`` first.
 
 	Rank: the lowest ``max(five_hour, seven_day)`` strictly below ``gate``,
-	ties to the alphabetically first name; then accounts whose probe succeeded
-	without a full reading. A window at or over the gate, or a ``rejected``
+	ties to the alphabetically first name, where a missing ``five_hour``
+	reading counts as no 5-hour limit (ranked by ``seven_day`` alone); then
+	accounts whose probe succeeded without a ``seven_day`` reading. A window at or over the gate, or a ``rejected``
 	status, gates the account; a probe error skips it. ``order`` lists every
 	usable account in that rank, so ``claude_run`` can move to the next one on
 	``usage_limit`` or ``auth_failed``. Verdicts when nothing is usable:

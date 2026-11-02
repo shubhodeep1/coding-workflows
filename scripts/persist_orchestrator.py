@@ -1240,6 +1240,9 @@ def validate_revise_output(obj: Any, state: dict, ids: list[str]) -> tuple[str, 
 			# "@" mention the scrub neutralised stays neutralised.
 			if isinstance(item.get(key), str):
 				item[key] = item[key].replace("#\u2060", "#")
+				# A mention the model wrote itself would notify that user when the
+				# issue is created; neutralise it as attempt_journal._scrub does.
+				item[key] = re.sub(r"@(?=[A-Za-z0-9_-])", "@\u2060", item[key])
 		if not _is_bounded_str(item.get("title"), REVISE_TITLE_MAX) or not _is_bounded_str(item.get("body"), REVISE_BODY_MAX):
 			return "schema", {}, []
 		priority = item.get("priority")
@@ -1262,7 +1265,9 @@ def validate_revise_output(obj: Any, state: dict, ids: list[str]) -> tuple[str, 
 	if any(edge["from"] not in defs or edge["to"] not in defs for edge in edges):
 		return "edge_scope", {}, []
 	for item in defs.values():
-		text = (item["title"] + "\n" + item["body"]).lower()
+		# Deferred creation turns a literal "\\n" into a newline (sed 's/\\\\n/\\n/g'
+		# in orchestrate_poll_process.sh), so check the text as it will be rendered.
+		text = (item["title"] + "\n" + item["body"]).replace("\\n", "\n").lower()
 		if any(marker in text for marker in REVISE_MARKERS) or _REVISE_METADATA_LINE_RE.search(text) \
 				or _REVISE_ISSUE_REF_RE.search(text):
 			return "marker_forgery", {}, []

@@ -19,7 +19,9 @@ Rules:
   longer matches the code. Leave both fields out when the plan still fits.
 - Revising never changes an issue that already exists, never touches the
   current wave, and never replaces `new_issues`: gaps in the current wave still
-  go into `new_issues` as before.
+  go into `new_issues` as before. A revise request in a verdict that also
+  adds `new_issues` is not acted on: the orchestrator stays on the current
+  wave, so ask again in a later verdict for this wave that adds none.
 - The orchestrator may ignore the request (for example when it has already
   re-planned this project as often as allowed). The project then goes on with
   the existing plan, so never hold back `in_progress` waiting for a revise.
