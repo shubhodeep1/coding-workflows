@@ -34,7 +34,8 @@ EVIDENCE_REQUEST: issue <n>
   history. Short SHAs and commits outside that history are refused.
 - `<run_id>`, `<job_id>` and `<n>` are plain numbers of this repository.
   References to other repositories (`owner/repo#5`) and URLs are refused.
-- Lines beyond the tenth, duplicates and unknown kinds are refused.
+- Request lines after the tenth accepted request, duplicates and unknown
+  kinds are refused.
 
 The host answers the valid requests once and runs this planning task again
 with the answers appended as fenced, untrusted data. Exactly one round is

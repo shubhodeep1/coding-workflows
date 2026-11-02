@@ -406,7 +406,7 @@ else:
 ENGINE_STUB = '''#!/usr/bin/env bash
 cat > /dev/null
 echo engine >> "${STUB_LOG}"
-[ "${STUB_ENGINE_FAIL:-}" = 1 ] && exit 3
+[ -n "${STUB_ENGINE_FAIL:-}" ] && exit "${STUB_ENGINE_FAIL}"
 echo "SECOND PLAN"
 '''
 PROMPT_FIXTURE = "PROMPT HEAD\n=== PLANNING CONTEXT ===\ncontext line\n"
@@ -421,8 +421,8 @@ def _between(text: str, start: str, end: str) -> str:
 	return text[begin:text.index(end, begin)]
 
 
-def _run_round(tmp_path: Path, persist: str | None, appended: str = "true", count: str = "2", engine_fail: bool = False,
-	helper: bool = True) -> SimpleNamespace:
+def _run_round(tmp_path: Path, persist: str | None, appended: str = "true", count: str = "2", engine_fail: bool | str = False,
+	helper: bool = True, engine: str = "codex", prelude: str = "") -> SimpleNamespace:
 	block = _between(_script_text(), "# BEGIN plan evidence broker (#8427 P11)", "# END plan evidence broker (#8427 P11)")
 	root = tmp_path / "root"
 	runtime = root / "runtime"
@@ -430,20 +430,21 @@ def _run_round(tmp_path: Path, persist: str | None, appended: str = "true", coun
 	runtime.mkdir()
 	if helper:
 		(root / "scripts" / "evidence_broker.py").write_text(BROKER_STUB, encoding="utf-8")
-	engine = root / "engine.sh"
-	engine.write_text(ENGINE_STUB, encoding="utf-8")
-	engine.chmod(0o755)
+	engine_path = root / "engine.sh"
+	engine_path.write_text(ENGINE_STUB, encoding="utf-8")
+	engine_path.chmod(0o755)
 	prompt, output, stub_log = runtime / "prompt.txt", runtime / "out.txt", runtime / "stub.log"
 	prompt.write_text(PROMPT_FIXTURE, encoding="utf-8")
 	output.write_text("FIRST PLAN\n" + TAIL, encoding="utf-8")
 	env = {k: v for k, v in os.environ.items() if not k.startswith(("PERSIST_", "GITHUB_"))}
 	env.update({"RUNTIME_DIR": str(runtime), "CODEX_PROMPT_FILE": str(prompt), "CODEX_OUTPUT_FILE": str(output),
-		"CODEX_ISOLATED_EXEC": str(engine), "PLAN_ENGINE": "codex", "attempt_model": "m", "STUB_LOG": str(stub_log),
+		"CODEX_ISOLATED_EXEC": str(engine_path), "PLAN_ENGINE": engine, "attempt_model": "m", "STUB_LOG": str(stub_log),
 		"STUB_COUNT": count, "evidence_broker_prompt_appended": appended, "PYTHONDONTWRITEBYTECODE": "1",
-		"STUB_ENGINE_FAIL": "1" if engine_fail else ""})
+		"STUB_ENGINE_FAIL": (engine_fail if isinstance(engine_fail, str) else "3") if engine_fail else "",
+		"GITHUB_ENV": str(runtime / "github_env")})
 	if persist is not None:
 		env["PERSIST_EVIDENCE_BROKER_ENABLED"] = persist
-	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block + "\nplan_evidence_broker_round\n"], cwd=root, env=env,
+	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + prelude + block + "\nplan_evidence_broker_round\n"], cwd=root, env=env,
 		capture_output=True, text=True, timeout=60)
 	assert proc.returncode == 0, proc.stderr
 	calls = stub_log.read_text(encoding="utf-8").splitlines() if stub_log.exists() else []
@@ -515,3 +516,39 @@ def test_fragment_block_is_byte_identical_off_and_appends_on(tmp_path):
 		assert _run_fragment_block(tmp_path / str(n), persist) == PROMPT_FIXTURE + "|appended=false"
 	assert _run_fragment_block(tmp_path / "on", "true") == PROMPT_FIXTURE + "\nFRAGMENT\n|appended=true"
 	assert _run_fragment_block(tmp_path / "absent", "true", fragment=False) == PROMPT_FIXTURE + "|appended=false"
+
+
+def test_a_capacity_wait_on_the_rerun_defers_instead_of_keeping_the_first_output(tmp_path):
+	claude = 'MODEL_EDITOR=m\nclaude_run() { cat > /dev/null < "$2"; echo engine >> "${STUB_LOG}"; return 80; }\n'
+	got = _run_round(tmp_path, "true", engine="claude", prelude=claude)
+	assert got.calls == ["validate", "fulfil", "engine"] and "AI_ENGINE_CAPACITY_WAIT role=PLAN outcome=deferred" in got.stdout
+	assert (got.runtime / "github_env").read_text(encoding="utf-8") == "SKIP_PLAN=true\nCLAUDE_CAPACITY_WAIT=true\n"
+	assert not (got.runtime / "evidence_broker_hash.txt").exists() and "rerun_failed" not in got.stdout
+
+
+def test_diffstat_filters_both_sides_of_a_rename_and_marks_omitted_lines(tmp_path, monkeypatch):
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "PERSIST_", "GH_", "GIT_"))}
+	env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
+		"GIT_COMMITTER_EMAIL": "t@example.com", "GIT_CONFIG_NOSYSTEM": "1", "HOME": str(tmp_path)})
+	monkeypatch.setenv("HOME", str(tmp_path))
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_run(repo, "init", "-q", "-b", "main", env=env)
+	(repo / "deploy").mkdir()
+	(repo / "deploy" / ".env.prod").write_text("SECRET=1\n", encoding="utf-8")
+	_run(repo, "add", "-A", env=env)
+	_run(repo, "commit", "-q", "-m", "one", env=env)
+	_run(repo, "mv", "deploy/.env.prod", "deploy/.env.example", env=env)
+	for n in range(3):
+		(repo / f"f{n}.py").write_text("x\n", encoding="utf-8")
+	_run(repo, "add", "-A", env=env)
+	_run(repo, "commit", "-q", "-m", "rename", env=env)
+	head = _run(repo, "rev-parse", "HEAD", env=env).strip()
+	_run(repo, "update-ref", eb.HISTORY_REF, head, env=env)
+	text, _ = eb.fulfil([{"line": 1, "kind": "git_diffstat", "arg": head}], "o/r", repo, "main", 32768)
+	stat = _answer(text, "git_diffstat", head)
+	assert not any(".env" in line or "=>" in line for line in stat)
+	assert sum("(filtered path)" in line for line in stat) == 2
+	monkeypatch.setattr(eb, "DIFFSTAT_MAX", 2)
+	text, _ = eb.fulfil([{"line": 1, "kind": "git_diffstat", "arg": head}], "o/r", repo, "main", 32768)
+	assert _answer(text, "git_diffstat", head)[-1].endswith("more lines omitted)")

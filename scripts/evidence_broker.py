@@ -111,6 +111,7 @@ DEFAULT_MAX_BYTES = 32768
 MIN_MAX_BYTES = 1024
 MAX_MAX_BYTES = 65536
 ANSWER_MAX_BYTES = 4096
+LOG_REDACT_WINDOW = 65536
 LINE_MAX_CHARS = 1000
 # PERSIST_EVIDENCE_BROKER_MAX_ROUNDS: fixed at 1 in this phase, never read from env.
 MAX_ROUNDS = 1
@@ -547,11 +548,13 @@ class Broker:
 			return ["(not in default-branch history)"]
 		if ancestor != "yes":
 			return None
-		proc = _git(self.root, ["-c", "core.quotePath=true", "show", "--numstat", "--no-color", "--format=%H %as %s", sha])
+		# --no-renames: rename notation (`dir/{old => new}`) would get past the path filter.
+		proc = _git(self.root, ["-c", "core.quotePath=true", "show", "--numstat", "--no-renames", "--no-color", "--format=%H %as %s", sha])
 		if proc is None or proc.returncode != 0:
 			return None
 		out: list[str] = []
-		for line in proc.stdout.splitlines()[:DIFFSTAT_MAX + 1]:
+		all_lines = proc.stdout.splitlines()
+		for line in all_lines[:DIFFSTAT_MAX + 1]:
 			if not line.strip():
 				continue
 			parts = line.split("\t")
@@ -562,6 +565,8 @@ class Broker:
 				out.append(f"+{parts[0]} -{parts[1]} {name}")
 			else:
 				out.append(line)
+		if len(all_lines) > DIFFSTAT_MAX + 1:
+			out.append(f"({len(all_lines) - DIFFSTAT_MAX - 1} more lines omitted)")
 		return out
 
 	def _run_steps(self, fields: dict) -> list[str] | None:
@@ -584,9 +589,17 @@ class Broker:
 		raw = self.gh([f"repos/{self.repo}/actions/jobs/{fields['job']}/logs"])
 		if raw is None:
 			return None
-		text = raw[-ANSWER_MAX_BYTES:].decode("utf-8", "replace")
-		lines = text.split("\n")
-		if len(raw) > ANSWER_MAX_BYTES and len(lines) > 1:
+		# Redact a wider window before cutting to 4 KiB, so a credential that
+		# crosses the cut is masked while its prefix is still present.
+		window = raw[-LOG_REDACT_WINDOW:]
+		lines = window.decode("utf-8", "replace").split("\n")
+		if len(raw) > LOG_REDACT_WINDOW and len(lines) > 1:
+			lines = lines[1:]
+		redact = self.redactor()
+		text = redact("\n".join(lines)) if redact is not None else "\n".join(lines)
+		data = text.encode("utf-8")
+		lines = data[-ANSWER_MAX_BYTES:].decode("utf-8", "replace").split("\n")
+		if len(data) > ANSWER_MAX_BYTES and len(lines) > 1:
 			lines = lines[1:]
 		return lines
 
