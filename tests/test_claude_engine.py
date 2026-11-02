@@ -487,6 +487,24 @@ def test_choose_orders_by_least_used_with_alphabetical_ties() -> None:
 	assert verdict["utilization"] == 0.4
 
 
+def test_choose_ranks_a_missing_five_hour_reading_by_seven_day() -> None:
+	# Many accounts no longer report a 5-hour window: a missing reading means
+	# no 5-hour limit, so the account ranks by its 7-day use instead of last.
+	probes = [
+		ce.parse_probe(_probe_text(0.0, 0.90), "FUNTOKEN2"),
+		ce.parse_probe(_probe_text(0.2, 0.93), "SVET"),
+		ce.parse_probe(_probe_text(None, 0.62), "PERSONAL2"),
+		ce.parse_probe(_probe_text(None, 0.60), "PERSONAL1"),
+		ce.parse_probe(_probe_text(0.1, None), "TEAM1"),
+		ce.parse_probe(_probe_text(None, 0.96), "SVET2"),
+	]
+	verdict = ce.choose_account(probes, 0.95)
+	assert verdict["order"] == ["PERSONAL1", "PERSONAL2", "FUNTOKEN2", "SVET", "TEAM1"]
+	assert verdict["account"] == "PERSONAL1"
+	assert verdict["utilization"] == 0.60
+	assert verdict["gated"] == ["SVET2"]
+
+
 def test_choose_gates_accounts_at_or_over_the_gate() -> None:
 	probes = [
 		ce.parse_probe(_probe_text(0.95, 0.1), "A"),
@@ -543,24 +561,30 @@ def test_pool_health_names_gated_accounts_with_both_windows_and_reset_times() ->
 		ce.parse_probe(_probe_text(None, None, status="rejected", ok=False), "D"),
 		{"account": "E", "error": "probe_failed"},
 	]
-	report = ce.pool_health(probes, 0.9)
+	report = ce.pool_health(probes, 0.9, now=0)
 	assert report["alert"] is True
 	assert report["gated"] == ["A", "B", "D"] and report["usable"] == ["C"] and report["probe_failed"] == ["E"]
 	assert report["text"].splitlines() == [
 		"Claude pool: 3 of 5 account(s) at or above the 90% usage gate; 1 usable.",
-		"A: 5h 90% (resets 1970-01-01 00:16 UTC), 7d 10%",
-		"B: 5h 20%, 7d 95% (resets 1970-01-01 00:33 UTC)",
+		"A: 5h 90% (resets in 0.3h, 1970-01-01 00:16 UTC), 7d 10% (resets in 0.6h)",
+		"B: 5h 20% (resets in 0.3h), 7d 95% (resets in 0.6h, 1970-01-01 00:33 UTC)",
+		"C: 5h 30% (resets in 0.3h), 7d 20% (resets in 0.6h)",
 		"D: usage limit reached (resets unknown)",
 		"Probe failed (not counted): E",
 	]
+	assert (report["next_usable_at"], report["next_usable_in"]) == ("1970-01-01 00:16 UTC", "in 0.3h")
+	# Once the reset time has passed the note says so instead of a negative count.
+	assert "A: 5h 90% (resets now, 1970-01-01 00:16 UTC), 7d 10% (resets now)" in ce.pool_health(probes, 0.9, now=5000)["text"]
 
 
 def test_pool_health_alerts_on_a_rejected_token() -> None:
 	probes = [ce.parse_probe(_probe_text(0.1, 0.1), "A"), ce.parse_probe(_probe_text(0.1, 0.1, ok=False).replace('"OK"', '"API Error: 401 OAuth access token is invalid"'), "B")]
-	report = ce.pool_health(probes, 0.9)
+	report = ce.pool_health(probes, 0.9, now=0)
 	assert report["auth_failed"] == ["B"] and report["gated"] == [] and report["alert"] is True
+	assert (report["next_usable_at"], report["next_usable_in"]) == ("", "")
 	assert report["text"].splitlines() == [
 		"Claude pool: 0 of 2 account(s) at or above the 90% usage gate, 1 with a rejected token; 1 usable.",
+		"A: 5h 10% (resets in 0.3h), 7d 10% (resets in 0.6h)",
 		"B: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_B",
 	]
 
@@ -684,3 +708,9 @@ def test_an_unusable_payload_means_no_labels(tmp_path: Path, content: str) -> No
 	event.write_text(content, encoding="utf-8")
 	assert ce.work_item_labels({"GITHUB_EVENT_PATH": str(event)}) == []
 	assert ce.work_item_labels({"GITHUB_EVENT_PATH": str(tmp_path / "absent.json")}) == []
+
+
+def test_format_reset_in_reads_now_for_a_reset_under_three_minutes_away() -> None:
+	assert ce._format_reset_in(60, 0) == "now"
+	assert ce._format_reset_in(180, 0) == "in 0.1h"
+	assert ce._format_reset_in(None, 0) is None

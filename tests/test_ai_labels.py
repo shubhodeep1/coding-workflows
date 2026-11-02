@@ -270,6 +270,27 @@ def test_contract_labels_match_helper_color_and_description_catalogs():
 	assert helper_descs == {name: metadata["description"] for name, metadata in contract_labels.items()}
 
 
+GITHUB_LABEL_DESCRIPTION_MAX_CHARS = 100
+
+
+def test_label_descriptions_fit_github_description_limit():
+	# GitHub rejects label descriptions over 100 characters, so the label sync
+	# (scripts/ai_labels.py) and ensure_label_exists (scripts/label_helpers.sh)
+	# could never create a label whose description is longer.
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	_helper_colors, helper_descs = _extract_helper_catalog()
+	overlong_descriptions = {
+		f"{source}:{name}": len(description_text)
+		for source, catalog in (
+			("contract", {name: metadata["description"] for name, metadata in contract["labels"].items()}),
+			("label_helpers.sh", helper_descs),
+		)
+		for name, description_text in catalog.items()
+		if len(description_text) > GITHUB_LABEL_DESCRIPTION_MAX_CHARS
+	}
+	assert overlong_descriptions == {}
+
+
 def test_additive_labels_are_present_and_non_phase():
 	contract = ai_labels.load_label_contract(CONTRACT_PATH)
 	for label in ADDITIVE_LABELS:

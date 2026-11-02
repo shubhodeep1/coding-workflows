@@ -121,6 +121,14 @@ REVIEW_AUTOFIX_RUN_SUMMARY_LINE = re.compile(
 )
 ROOT_FAILURE_CLASS_RE = re.compile(r"[a-z0-9_]{1,64}")
 ROOT_FAILURE_CLASS_CONCLUSIONS = frozenset({"failure", "cancelled"})
+# Leading GitHub Actions log timestamp, stripped only from the parent/child
+# telemetry dedup key (never from emitted lines). In review run 36237495547
+# the parent-job and step copies of one usage event differed by microseconds
+# in this prefix, so the exact-match key missed them: 96 vs 82 OpenRouter calls
+# and 10,157,867 duplicated tokens. Anchored: mid-line timestamps stay intact.
+_STRUCTURED_COST_TELEMETRY_KEY_TIMESTAMP_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+"
+)
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -652,7 +660,9 @@ def list_runs_for_repo(
         "status_code": 200,
         "etag": etag,
         "not_modified": False,
+        "duplicate_runs_skipped": 0,
     }
+    seen_run_keys: set[tuple[int, int]] = set()
 
     for page in range(1, max_pages + 1):
         request_headers: dict[str, str] | None = None
@@ -685,6 +695,17 @@ def list_runs_for_repo(
             family = normalize_workflow_family(run.get("name"), run.get("path"))
             if family is None:
                 continue
+            # Offset pagination drift: a run created between page requests
+            # shifts an earlier item onto the next page, so the same
+            # (id, attempt) can come back twice. Expected, not an error; keep
+            # the first copy. Runs without a positive id pass through as before.
+            listed_run_id = _to_int(run.get("id"), 0)
+            if listed_run_id > 0:
+                run_key = _cache_run_key(listed_run_id, _to_int(run.get("run_attempt"), 1))
+                if run_key in seen_run_keys:
+                    response_meta["duplicate_runs_skipped"] += 1
+                    continue
+                seen_run_keys.add(run_key)
             run_copy = dict(run)
             run_copy["_workflow_family"] = family
             runs.append(run_copy)
@@ -1523,6 +1544,10 @@ def _foreign_mcp_telemetry_line(line: str, run_key: str | None) -> bool:
     return run_match is not None and run_match.group(1) != run_key
 
 
+def _strip_structured_cost_telemetry_key_timestamp(line_text: str) -> str:
+    return _STRUCTURED_COST_TELEMETRY_KEY_TIMESTAMP_RE.sub("", line_text, count=1)
+
+
 def _structured_cost_telemetry_line_key(line: str, run_key: str | None = None) -> str | None:
     if not isinstance(line, str):
         return None
@@ -1535,7 +1560,8 @@ def _structured_cost_telemetry_line_key(line: str, run_key: str | None = None) -
         validated_mcp_telemetry_event(line_text) is not None
         or any(pattern.search(line_text) for pattern in STRUCTURED_COST_TELEMETRY_PATTERNS)
     ):
-        return line_text
+        # Classify on the original text; normalize only the returned key.
+        return _strip_structured_cost_telemetry_key_timestamp(line_text)
     return None
 
 

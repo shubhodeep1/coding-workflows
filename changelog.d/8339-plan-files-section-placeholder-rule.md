@@ -1,6 +1,0 @@
-<!-- changelog: fixed -->
-- **The planner is told to keep prose and placeholder paths out of a plan's `## Files likely to change` section (#8339).** A plan for #8339 put a paragraph under its file list that mentioned "a bare `scripts/<helper>` string". The plan approval gate in `scripts/files_touched_scope_guard.py` scans every protected token in that section, reads `scripts/<helper>` as the directory `scripts/`, and holds the plan with `path_not_granted`. A directory can never be an exact grant, so the plan waited for a maintainer's `/approved`.
-
-  The plan prompt (`prompts/_templates/mode-plan.txt`, its rendered copy `prompts/mode-plan.txt`, and the inline fallback in `scripts/run_plan_codex.sh`) now says the section holds only the path bullets, with no prose paragraphs and no placeholder path such as `scripts/<helper>`. The gate itself is unchanged: it still fails closed on any directory, glob or placeholder it finds in the section, because a placeholder there can stand for a new protected file the plan did not name.
-
-  What this means for operators: fewer plans should stop at `ai:awaiting-approval` because of explanatory text in the file list. A plan that still has such a token is held as before, and replying `/approved` after reading it continues the run.

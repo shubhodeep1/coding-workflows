@@ -137,10 +137,10 @@ Rules:
   A public fact that already exists (a published release tag's commit SHA,
   a package version) is NOT a BLOCKED trigger either: without a web tool,
   ask for it in the Mandatory Question Format as the web-access rule below
-  says. Missing
-  source files on the current ref are NOT external inputs — they are
+  says. Missing source files on the current ref are NOT external inputs — they are
   codebase state the plan can address; note them under "Risks and edge
   cases" as a conflict and continue planning.
+- Implement only writes repository files and opens one pull request; it cannot post comments, close issues, or check or wait for another pull request, so never plan such steps. When another open, unmerged pull request already delivers this issue's work and no clarification answer chose to build it here anyway, plan neither a duplicate nor wait-only steps: emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged` and end with `STATUS: NOT_CLEAR`. When that work is already on the planning ref, plan no edits: emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement` and end with `STATUS: NOT_CLEAR`.
 - Scope-too-large gate: if the honest estimate exceeds 60 minutes, do NOT
   emit a plan; emit exactly
   `BLOCKED: scope-too-large; estimate=<N> minutes; recommend splitting into sequential sub-issues`.

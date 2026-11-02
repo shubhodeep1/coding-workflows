@@ -720,10 +720,17 @@ def parse_probe(text: str, account: str, exit_code: int = 0) -> dict[str, Any]:
 
 
 def _max_utilization(probe: dict[str, Any]) -> float | None:
-	values = [probe.get("five_hour"), probe.get("seven_day")]
-	if any(value is None for value in values):
+	"""Rank key for ``choose_account``: ``max(five_hour, seven_day)``.
+
+	A missing ``five_hour`` reading means the account has no 5-hour limit
+	(many accounts no longer report one), so it ranks by ``seven_day`` alone.
+	A missing ``seven_day`` reading is unknown and returns ``None``.
+	"""
+	seven_day = probe.get("seven_day")
+	if seven_day is None:
 		return None
-	return max(values)
+	five_hour = probe.get("five_hour")
+	return seven_day if five_hour is None else max(five_hour, seven_day)
 
 
 def _known_peak(probe: dict[str, Any]) -> float | None:
@@ -747,8 +754,9 @@ def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 	"""Order the accounts for one job: the least used under ``gate`` first.
 
 	Rank: the lowest ``max(five_hour, seven_day)`` strictly below ``gate``,
-	ties to the alphabetically first name; then accounts whose probe succeeded
-	without a full reading. A window at or over the gate, or a ``rejected``
+	ties to the alphabetically first name, where a missing ``five_hour``
+	reading counts as no 5-hour limit (ranked by ``seven_day`` alone); then
+	accounts whose probe succeeded without a ``seven_day`` reading. A window at or over the gate, or a ``rejected``
 	status, gates the account; a probe error skips it. ``order`` lists every
 	usable account in that rank, so ``claude_run`` can move to the next one on
 	``usage_limit`` or ``auth_failed``. Verdicts when nothing is usable:
@@ -811,17 +819,46 @@ def _format_reset(value: Any) -> str:
 	return datetime.datetime.fromtimestamp(seconds, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _window_summary(probe: dict[str, Any], name: str, label: str, gate: float) -> str | None:
+def _format_reset_in(value: Any, now: float) -> str | None:
+	"""Hours from ``now`` to the epoch-seconds ``value``: ``in 1.3h``, ``now``
+	once the time has passed or is under 0.05h away, ``None`` when the time
+	is unknown."""
+	seconds = _int_or_none(value)
+	if seconds is None:
+		return None
+	shown = round((seconds - now) / 3600, 1)
+	return f"in {shown:.1f}h" if shown > 0 else "now"
+
+
+def _reset_note(value: Any, now: float) -> str:
+	"""``resets in 0.8h, 2026-11-01 01:00 UTC``; ``resets unknown`` without a time."""
+	reset_in = _format_reset_in(value, now)
+	return f"resets {reset_in}, {_format_reset(value)}" if reset_in else "resets unknown"
+
+
+def _now_seconds(now: float | None) -> float:
+	return datetime.datetime.now(datetime.timezone.utc).timestamp() if now is None else float(now)
+
+
+def _window_summary(probe: dict[str, Any], name: str, label: str, gate: float, now: float | None = None) -> str | None:
+	"""``5h 13% (resets in 1.3h)`` below the gate; at or above it the note also
+	names the UTC reset time, or ``resets unknown`` when the probe had none."""
 	utilization = probe.get(name)
 	if utilization is None:
 		return None
+	now = _now_seconds(now)
+	reset = probe.get(f"{name}_resets_at")
 	text = f"{label} {round(float(utilization) * 100)}%"
 	if float(utilization) >= gate:
-		text += f" (resets {_format_reset(probe.get(f'{name}_resets_at'))})"
+		text += f" ({_reset_note(reset, now)})"
+	else:
+		reset_in = _format_reset_in(reset, now)
+		if reset_in:
+			text += f" (resets {reset_in})"
 	return text
 
 
-def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
+def pool_health(probes: list[dict[str, Any]], gate: float, now: float | None = None) -> dict[str, Any]:
 	"""One operator-facing reading of the pool for the hourly near-cap alert (#6951).
 
 	Input: the probe records ``parse_probe`` produced for every account in the
@@ -830,11 +867,17 @@ def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 	``gate``, or a ``rejected`` status) or its token was rejected
 	(``auth_failed``), since both shrink the pool until an operator acts;
 	``gated``, ``auth_failed``, ``probe_failed`` and ``usable`` list account
-	names; ``text`` is the message body, one line per affected account with
-	each window's utilization and the reset time of every window at or above
-	the gate. ``text`` is empty when ``alert`` is false. Never raises on a
-	malformed record: a record without a name is reported as ``?``.
+	names; ``text`` is the message body, one line per probed account (usable
+	ones too) with each window's utilization and hours until it resets, plus
+	the UTC reset time of every window at or above the gate.
+	``next_usable_at`` is the earliest UTC time a gated account is usable
+	again and ``next_usable_in`` the hours until then (``in 0.8h``, or
+	``now`` once that time has passed), both empty without one. ``now`` (epoch seconds, default the current time) is
+	the reference for the hours. ``text`` is empty when ``alert`` is false.
+	Never raises on a malformed record: a record without a name is reported
+	as ``?``.
 	"""
+	now = _now_seconds(now)
 	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
 	gated: list[str] = []
 	auth_failed: list[str] = []
@@ -855,11 +898,12 @@ def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 		rejected = probe.get("status") == "rejected"
 		if not rejected and (known is None or known < gate):
 			usable.append(name)
+			lines.append(f"{name}: {_usage_percent(probe, 'five_hour', '5h', gate, now)}, {_usage_percent(probe, 'seven_day', '7d', gate, now)}")
 			continue
 		gated.append(name)
-		parts = [part for part in (_window_summary(probe, "five_hour", "5h", gate), _window_summary(probe, "seven_day", "7d", gate)) if part]
+		parts = [part for part in (_window_summary(probe, "five_hour", "5h", gate, now), _window_summary(probe, "seven_day", "7d", gate, now)) if part]
 		if rejected and (known is None or known < gate):
-			parts.insert(0, f"usage limit reached (resets {_format_reset(probe.get('resets_at'))})")
+			parts.insert(0, f"usage limit reached ({_reset_note(probe.get('resets_at'), now)})")
 		lines.append(f"{name}: {', '.join(parts) if parts else 'at the gate'}")
 	alert = bool(gated or auth_failed)
 	# Earliest time a gated account is usable again (issue #7370): the
@@ -868,7 +912,9 @@ def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 		value for value in (_usable_at(probe, gate) for probe in ordered if str(probe.get("account") or "?") in gated)
 		if _int_or_none(value) is not None
 	]
-	next_usable_at = _format_reset(min(_int_or_none(value) for value in usable_times)) if usable_times else ""
+	earliest_usable = min(_int_or_none(value) for value in usable_times) if usable_times else None
+	next_usable_at = _format_reset(earliest_usable) if usable_times else ""
+	next_usable_in = (_format_reset_in(earliest_usable, now) or "") if usable_times else ""
 	text = ""
 	if alert:
 		total = len(ordered)
@@ -887,28 +933,31 @@ def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 		"probe_failed": failed,
 		"usable": usable,
 		"next_usable_at": next_usable_at,
+		"next_usable_in": next_usable_in,
 		"text": text,
 	}
 
 
-def _usage_percent(probe: dict[str, Any], name: str, label: str, gate: float) -> str:
-	"""``5h 12%`` for one window; ``5h ?`` when the probe had no reading."""
-	return _window_summary(probe, name, label, gate) or f"{label} ?"
+def _usage_percent(probe: dict[str, Any], name: str, label: str, gate: float, now: float | None = None) -> str:
+	"""``5h 12% (resets in 1.3h)`` for one window; ``5h ?`` when the probe had no reading."""
+	return _window_summary(probe, name, label, gate, now) or f"{label} ?"
 
 
-def pool_usage_report(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
+def pool_usage_report(probes: list[dict[str, Any]], gate: float, now: float | None = None) -> dict[str, Any]:
 	"""The once-a-day Claude pool usage message: every account, in one message.
 
 	Input: the probe records ``parse_probe`` produced (the ``probes`` output of
 	``.github/actions/claude-pool-token``). Output: ``accounts``, ``usable``,
 	``gated``, ``auth_failed`` and ``probe_failed`` counts, and ``text``, a
 	headline plus one line per account, sorted by name: both windows'
-	utilization, the reset time of each window at or above ``gate``, a
-	``rejected`` status, a rejected token, or a failed probe. Unlike
+	utilization and hours until each resets (from ``now``, epoch seconds,
+	default the current time), the UTC reset time of each window at or above
+	``gate``, a ``rejected`` status, a rejected token, or a failed probe. Unlike
 	``pool_health`` it lists every account, below the gate too, and ``text`` is
 	never empty. Never raises on a malformed record: a record without a name is
 	reported as ``?``.
 	"""
+	now = _now_seconds(now)
 	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
 	counts = {"usable": 0, "gated": 0, "auth_failed": 0, "probe_failed": 0}
 	lines: list[str] = []
@@ -923,13 +972,13 @@ def pool_usage_report(probes: list[dict[str, Any]], gate: float) -> dict[str, An
 			counts["probe_failed"] += 1
 			lines.append(f"{name}: probe failed ({error})")
 			continue
-		parts = [_usage_percent(probe, "five_hour", "5h", gate), _usage_percent(probe, "seven_day", "7d", gate)]
+		parts = [_usage_percent(probe, "five_hour", "5h", gate, now), _usage_percent(probe, "seven_day", "7d", gate, now)]
 		known = _known_peak(probe)
 		rejected = probe.get("status") == "rejected"
 		if rejected or (known is not None and known >= gate):
 			counts["gated"] += 1
 			if rejected and (known is None or known < gate):
-				parts.append(f"usage limit reached (resets {_format_reset(probe.get('resets_at'))})")
+				parts.append(f"usage limit reached ({_reset_note(probe.get('resets_at'), now)})")
 		else:
 			counts["usable"] += 1
 		lines.append(f"{name}: {', '.join(parts)}")

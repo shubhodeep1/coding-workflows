@@ -7828,8 +7828,14 @@ def test_review_blocked_judge_merges_are_bound_to_judged_head_sha() -> None:
 			'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" '
 			f'{merge_mode} --match-head-commit "${{RB_JUDGED_HEAD_SHA}}"'
 		)
-		assert judge_text.count(expected_call) == 2, (
+		# The transient-retry helper (#8524) repeats each call once before the
+		# case block; it must stay head-bound too.
+		helper_end = judge_text.index("# END rb-judge merge error capture (#7659)")
+		assert judge_text[helper_end:].count(expected_call) == 2, (
 			f"both review-blocked judge merge actions must bind {merge_mode} to RB_JUDGED_HEAD_SHA"
+		)
+		assert judge_text[:helper_end].count(expected_call) == 1, (
+			f"the transient merge retry must bind {merge_mode} to RB_JUDGED_HEAD_SHA"
 		)
 	judge_merge_region = judge_text[judge_text.index("  merge)\n") : judge_text.index("  merge_with_followup)\n")]
 	judge_merge_commands = [line for line in judge_merge_region.splitlines() if 'gh pr merge "${PR_NUMBER}"' in line]

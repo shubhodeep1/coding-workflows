@@ -23,6 +23,12 @@ are listed in :data:`REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS`; their wrapper
 resolves only the SHA-verified ``.codex-head-gate-src`` sparse checkout and
 requires ``HEAD_GATE_HELPER_VERIFIED=true``.
 
+Steps in the ``deterministic-skip-merge`` job also run without support
+staging. Their scripts are listed in
+:data:`REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS`; their wrapper resolves only
+the ``.codex-freshness-src`` sparse checkout and requires its HEAD to equal
+``REVIEW_SUPPORT_SHA`` (#8333).
+
 ``.github/workflows/test-and-mark-stable.yml`` uses the same approach for its
 largest ``e2e-smoke-test`` step bodies (#7991): ``scripts/stable_e2e_step_*.sh``
 are read from a ``github.sha``-pinned sparse checkout, copied to
@@ -75,6 +81,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Evaluate review gate": ("review_autofix_step_evaluate_gate.sh", "error"),
 	"Pre-push affected-test gate": ("review_autofix_step_prepush_test_gate.sh", "error"),
 	"Integration post-sync test repair": ("review_autofix_step_prepush_test_gate.sh", "error"),
+	"Single-issue security pass (deterministic skip)": ("review_autofix_step_deterministic_skip_security_pass.sh", "error"),
 }
 
 # Gate-job step scripts -> the verified checkout directory their wrapper reads.
@@ -85,6 +92,14 @@ REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS: dict[str, str] = {
 	"review_autofix_step_evaluate_gate.sh": ".codex-head-gate-src",
 }
 
+# deterministic-skip-merge step scripts -> the verified checkout directory
+# their wrapper reads (#8333). That job runs no support staging, so these are
+# loaded only from the SHA-pinned .codex-freshness-src sparse checkout, never
+# from SUPPORT_SCRIPTS_DIR or the PR-head checkout.
+REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS: dict[str, str] = {
+	"review_autofix_step_deterministic_skip_security_pass.sh": ".codex-freshness-src",
+}
+
 # test-and-mark-stable.yml step name -> script under scripts/. A missing or
 # unverified script always fails the step.
 TEST_AND_MARK_STABLE_STEP_SCRIPTS: dict[str, str] = {
@@ -93,7 +108,7 @@ TEST_AND_MARK_STABLE_STEP_SCRIPTS: dict[str, str] = {
 }
 
 _WRAPPER_START_RE = re.compile(
-	r'^(?P<indent> *)REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts)/(?P<script>review_autofix_step_[a-z0-9_]+\.sh)"$'
+	r'^(?P<indent> *)REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-freshness-src/scripts)/(?P<script>review_autofix_step_[a-z0-9_]+\.sh)"$'
 )
 _WRAPPER_END = 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'
 _STABLE_E2E_WRAPPER_START_RE = re.compile(

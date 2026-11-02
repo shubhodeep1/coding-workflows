@@ -73,10 +73,20 @@
 # API budget (CLAUDE.md §15): in `pr` mode, one linked-issue read and one
 # paginated PR-files lookup (the status job cannot share its issue snapshot);
 # in `project` mode, one final-PR-files lookup when that PR is recorded;
+# in both modes, one open-pull-request listing for the model context
+# (activation_open_prs_json);
 # when code gaps exist, one source-key search before creating the fix issue;
 # one comment, at most one fix-issue create, and the operator-step writer's calls.
 # The tracked-symlink listing (activation_tracked_symlinks_json) is local git
 # only and makes no GitHub API call.
+#
+# Code gaps an open pull request already fixes (tele-funtoken-msg-scoring
+# #4992): the model sees the open pull requests and may tag a code gap with
+# `open_pr`. A tag naming a pull request outside that list is dropped. Tagged
+# gaps stay in the verdict comment, marked as in progress in that pull
+# request, but go into no fix issue, so the pipeline never plans a duplicate
+# of work that is already under review. When every code gap is tagged, no fix
+# issue is searched for or opened.
 # POSTs are single-attempt: retrying after a lost response can duplicate writes.
 # Log: ACTIVATION_VERIFY mode= item= verdict= code_gaps= operator_gaps= outcome= reason=
 set -uo pipefail
@@ -106,11 +116,20 @@ _activation_tg_send()
 }
 
 # Validates and normalises the model's verdict; prints the clean JSON or nothing.
+# $2 (optional) is the context file: a code gap's `open_pr` is kept only when
+# it names a pull request in its `open_pull_requests` list, else it is null.
 activation_normalise_verdict()
 {
-	python3 - "$1" <<'PY'
+	python3 - "$1" "${2:-}" <<'PY'
 import json, os, re, sys
 raw = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+open_pr_numbers = set()
+if len(sys.argv) > 2 and sys.argv[2]:
+	try:
+		context = json.load(open(sys.argv[2], encoding="utf-8"))
+		open_pr_numbers = {item["number"] for item in context.get("open_pull_requests", []) if isinstance(item, dict) and type(item.get("number")) is int}
+	except (OSError, ValueError, AttributeError, TypeError):
+		open_pr_numbers = set()
 match = None
 for candidate in re.finditer(r"\{", raw):
 	try:
@@ -141,6 +160,7 @@ for gap in match["gaps"]:
 		"evidence": clean(gap.get("evidence"), 600),
 		"fix": clean(gap.get("fix"), 1500),
 		"dormant_until": clean(gap.get("dormant_until"), 200),
+		"open_pr": gap.get("open_pr") if gap["kind"] == "code" and type(gap.get("open_pr")) is int and gap.get("open_pr") in open_pr_numbers else None,
 	})
 print(json.dumps({
 	"verdict": match["verdict"],
@@ -242,6 +262,39 @@ PY
 	printf '%s\n' "${activation_symlinks_out}"
 }
 
+# Lists the repository's open pull requests for the model, so a code gap one
+# of them already fixes is not filed again as an activation-fix issue.
+# One REST call: the 50 most recently updated open pull requests (trusted
+# same-repository ones are kept), with titles
+# and head refs cut to 200 characters and bodies to 1500 (untrusted text).
+# Prints {"open_pull_requests": [{number, title, head, draft, body}]}; on any
+# failure prints an empty list and one ::warning:: line, so every code gap
+# goes to the fix issue as before (fail open).
+activation_open_prs_json()
+{
+	local activation_open_prs_response activation_open_prs_out="" activation_open_prs_reason="lookup_failed"
+	if activation_open_prs_response="$(gh_retry gh api "repos/${REPOSITORY}/pulls?state=open&sort=updated&direction=desc&per_page=50" 2>/dev/null)"; then
+		# The call succeeded: an empty result below means the response did not parse.
+		activation_open_prs_reason="parse_failed"
+		# Only same-repository heads from trusted authors (the trust rule used
+		# for the linked issue and fix-issue lookup), so an outside or fork PR's
+		# text cannot steer a gap out of the fix issue.
+		activation_open_prs_out="$(printf '%s' "${activation_open_prs_response}" | jq -c --arg repo "${REPOSITORY}" '
+			if type == "array" then
+				{open_pull_requests: [.[] | select(type == "object" and (.number | type) == "number")
+					| select((.head.repo.full_name // "") == $repo)
+					| select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+					| {number, title: ((.title // "") | tostring | .[0:200]), head: ((.head.ref // "") | tostring | .[0:200]),
+						draft: (.draft == true), body: ((.body // "") | tostring | .[0:1500])}]}
+			else empty end' 2>/dev/null)"
+	fi
+	if [ -z "${activation_open_prs_out}" ]; then
+		echo "::warning::ACTIVATION_VERIFY open_pull_requests unavailable reason=${activation_open_prs_reason}" >&2
+		activation_open_prs_out='{"open_pull_requests": []}'
+	fi
+	printf '%s\n' "${activation_open_prs_out}"
+}
+
 # Prints the fixed label of the updater branch family when PR_HEAD_REF names
 # one and the PR's head repository is REPOSITORY itself (a fork cannot claim
 # the skip); prints nothing and returns 1 otherwise. Never prints the ref.
@@ -316,7 +369,8 @@ PY
 activation_main()
 {
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file activation_model_rc=0
-	local activation_symlinks_context activation_context_tmp
+	local activation_symlinks_context activation_context_tmp activation_open_prs_context
+	local activation_issue_gaps activation_in_flight_prs
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_existing_fix activation_fix_lookup_ok
 	local activation_engine_labels="" activation_sync_label=""
@@ -457,6 +511,17 @@ activation_main()
 	else
 		rm -f "${activation_context_tmp}"
 	fi
+	# Fail open the same way: without the list no gap can be tagged `open_pr`.
+	# The list goes through a file: 50 bodies can exceed the per-argument limit
+	# of --argjson.
+	activation_open_prs_context="${RUNTIME_DIR}/activation_open_prs.json"
+	activation_open_prs_json > "${activation_open_prs_context}"
+	if jq --slurpfile extra "${activation_open_prs_context}" '. + $extra[0]' "${context_file}" > "${activation_context_tmp}" 2>/dev/null; then
+		mv -f "${activation_context_tmp}" "${context_file}"
+	else
+		rm -f "${activation_context_tmp}"
+		echo "::warning::ACTIVATION_VERIFY open_pull_requests unavailable reason=context_merge_failed" >&2
+	fi
 
 	prompt_file="${RUNTIME_DIR}/activation_prompt.txt"
 	output_file="${RUNTIME_DIR}/activation_output.txt"
@@ -514,7 +579,7 @@ activation_main()
 				--skip-git-repo-check --model "${model}" --sandbox read-only < "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/activation_codex.err") || true
 		fi
 	fi
-	if ! activation_normalise_verdict "${output_file}" > "${verdict_file}" 2>/dev/null || [ ! -s "${verdict_file}" ]; then
+	if ! activation_normalise_verdict "${output_file}" "${context_file}" > "${verdict_file}" 2>/dev/null || [ ! -s "${verdict_file}" ]; then
 		activation_log "mode=${mode} item=${item} outcome=skip reason=invalid_verdict"
 		return 0
 	fi
@@ -522,8 +587,16 @@ activation_main()
 	code_gaps="$(jq '[.gaps[] | select(.kind == "code")] | length' "${verdict_file}")"
 	operator_gaps="$(jq '[.gaps[] | select(.kind == "operator")] | length' "${verdict_file}")"
 
+	# Code gaps tagged `open_pr` are left to that open pull request: they are
+	# reported in the verdict comment but go into no fix issue.
+	activation_issue_gaps="$(jq '[.gaps[] | select(.kind == "code" and .open_pr == null)] | length' "${verdict_file}")"
+	activation_in_flight_prs="$(jq -r '[.gaps[] | select(.kind == "code" and .open_pr != null) | .open_pr] | unique | map(tostring) | join(",")' "${verdict_file}")"
+	if [ -n "${activation_in_flight_prs}" ]; then
+		activation_log "mode=${mode} item=${item} op=in_flight_gaps count=$((code_gaps - activation_issue_gaps)) prs=${activation_in_flight_prs} outcome=left_to_open_prs"
+	fi
+
 	activation_fix_lookup_ok="true"
-	if [ "${code_gaps}" -gt 0 ]; then
+	if [ "${activation_issue_gaps}" -gt 0 ]; then
 		# Neither the linked-issue read nor the PR-files call can detect a fix issue
 		# from an earlier run whose verdict comment failed.
 		if ! activation_existing_fix="$(gh_retry gh api "search/issues?q=repo%3A${REPOSITORY}%20in%3Abody%20%22ai%3Aactivation-fix%3Av1%20source%3D${key}%22&per_page=100" 2>/dev/null)" \
@@ -540,12 +613,12 @@ activation_main()
 				"<!-- ai:activation-fix:v1 source=" + $key + " -->\n"
 				+ "## Activation gaps\n\nActivation verification of " + $label
 				+ " found these gaps that code in this repository can close. Close each one with the smallest change; do not change unrelated behaviour.\n\n"
-				+ ([.gaps[] | select(.kind == "code") | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
+				+ ([.gaps[] | select(.kind == "code" and .open_pr == null) | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
 			' "${verdict_file}")"
 			if ! gh api "repos/${REPOSITORY}/issues" -f title="Activation gaps after ${item_label}" -f body="${fix_body}" >/dev/null 2>&1; then
 				echo "::warning::Could not open the activation-fix issue for ${key}."
 				activation_log "mode=${mode} item=${item} outcome=skip reason=fix_issue_failed"
-				_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${code_gaps} code gap(s), but the fix issue could not be opened; nothing will implement them until verification is re-run." "WARNING"
+				_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${activation_issue_gaps} code gap(s), but the fix issue could not be opened; nothing will implement them until verification is re-run." "WARNING"
 				return 0
 			fi
 		fi
@@ -579,7 +652,7 @@ activation_main()
 	comment_body="$(jq -r --arg key "${key}" --argjson lookup_ok "${activation_fix_lookup_ok}" '
 		"## Activation: " + .verdict + "\n\nSummary: " + .summary + "\n\n"
 		+ (if .trigger != "" then "Trigger: " + .trigger + "\n\n" else "" end)
-		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title] | join("\n")) + "\n\n" else "" end)
+		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title + (if .open_pr != null then " (fix in progress in open PR #" + (.open_pr | tostring) + ")" else "" end)] | join("\n")) + "\n\n" else "" end)
 		+ (if $lookup_ok then "<!-- ai:activation:v1 verdict=" + .verdict + " source=" + $key + " -->" else "Code-gap follow-up is pending: the GitHub fix-issue lookup failed. The activation verdict is not finalized; retry verification.\n\n<!-- ai:activation:v1 partial=true source=" + $key + " -->" end)
 	' "${verdict_file}")"
 	if ! gh api "repos/${REPOSITORY}/issues/${target_issue}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
