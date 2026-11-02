@@ -50,7 +50,9 @@ Log lines (stderr, tokens only):
 API budget (section 14): `arm` makes at most 1 identity read (cached by
 attempt_journal.resolve_login), 1 issue read (only with
 WORKFLOW_HEAL_VERIFY_ENABLED=true), 1 paginated comments read and at most 4
-writes (label with one retry, comment, journal). `check` makes up to LIST_MAX_PAGES (5)
+writes (label with one retry, comment, journal). `check` makes at most 1
+identity read (cached; none with --trusted-login, which the poller passes from
+PERSIST_JOURNAL_LOGIN_CACHE when set) and up to LIST_MAX_PAGES (5)
 list reads of 100 issues per tick (oldest-updated first; past 500 issues the
 rest wait for a later tick and `partial reason=page_cap` is logged) plus, per candidate (at most MAX_PER_TICK), 1 comments read, 1
 workflow-runs read (unless the poller's per-tick runs cache, which keeps only

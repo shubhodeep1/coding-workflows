@@ -19559,7 +19559,7 @@ run_persist_postmerge_verify() {
   fi
   : > "${ppv_out}"
   PYTHONDONTWRITEBYTECODE=1 python3 -B "${ppv_helper}" check --repo "${GITHUB_REPOSITORY:-}" \
-    --runs-file "${ppv_runs}" --out "${ppv_out}" || true
+    --runs-file "${ppv_runs}" --trusted-login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" --out "${ppv_out}" || true
   while IFS= read -r ppv_issue; do
     [[ "${ppv_issue}" =~ ^[1-9][0-9]*$ ]] || continue
     if ! phase_cap_can_dispatch "ai:planning" retrigger_plan "${ppv_issue}"; then
