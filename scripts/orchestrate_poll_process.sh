@@ -8105,9 +8105,10 @@ PY
 # as one contiguous run in the default-branch file.  A single line is not
 # enough: `}` or `} catch {` match almost any file.  `unknown` when the
 # audited blob cannot be read, the line is out of range, or the window holds
-# under 12 non-blank characters.  A moved block still reads `present`; an
-# edited one reads `absent`, which only changes the advisory's wording (the
-# issue is filed either way), so the check errs towards `absent`.
+# under 12 non-blank characters.  Blank lines are dropped and whitespace is
+# trimmed on both sides, so a moved, re-indented or blank-line-reformatted
+# block still reads `present`; only a content edit reads `absent`, which only
+# changes the advisory's wording (the issue is filed either way).
 # Local git only (the caller fetches the refs once): no GitHub API calls.
 # Fail-open: any error prints `unknown`.  Returns 0 always.
 security_pass_advisory_cited_code_status() {

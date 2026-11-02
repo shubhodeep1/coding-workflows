@@ -7,7 +7,7 @@ The orchestrator files accepted security-pass findings as `ai:security` follow-u
 | --- | --- |
 | Lines compared | cited line ± 2, whitespace-trimmed, blank lines dropped |
 | Minimum window text | 12 non-blank characters (below that: `unknown`) |
-| Extra GitHub API calls | 0 (two local `git fetch` calls per filing tick) |
+| Extra GitHub API calls | 0 (up to three local `git fetch` calls per filing tick: default branch, integration branch, final PR head) |
 | New log line | `SECURITY_PASS_ADVISORY_CITED_CODE ... status=present\|absent\|unknown` |
 
 What this means for consumer repos: advisories whose cited code was removed before the merge now arrive with a plan the pipeline can carry out (find out whether the vulnerable behaviour still exists, fix it if so, add a regression test), instead of blocking at planning. Findings are still filed every time. `present` and `unknown` keep the old wording.
