@@ -32185,14 +32185,17 @@ ${PR_DIFF}
 	  if [ "${wave_judge_rc:-0}" -eq 77 ]; then
 	    echo "::warning::Wave judge isolation unavailable for #${TRACKING_NUM}; deferring without changing wave state." >&2
 	    [ "${wave_isolation_skipped:-false}" = true ] || tg_notify "Wave judge isolation unavailable for #${TRACKING_NUM}; retrying next poll." "DEBUG"
-	    _persist_orch_wave_check_unjudge judge_isolation_unavailable
+	    # An escalated isolation latch ran no judge: keep the judged marker so
+	    # the wave check holds as judged_recently instead of repeating its reads.
+	    [ "${wave_isolation_skipped:-false}" = true ] || _persist_orch_wave_check_unjudge judge_isolation_unavailable
 	    continue
 	  fi
 	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
 	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
 	    _judge_output_failure_alert "Orchestrator Judge failed for #${TRACKING_NUM}."
 	    unblock_handover_judge_output "llm_failed"
-	    _persist_orch_wave_check_unjudge judge_failed
+	    # No attempt ran (prompt over the stdin cap): the same failure repeats, so keep the marker.
+	    [ "${max_attempts:-0}" -le 0 ] || _persist_orch_wave_check_unjudge judge_failed
 	    continue
 	  fi
 	  _clear_judge_isolation_state WAVE_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true

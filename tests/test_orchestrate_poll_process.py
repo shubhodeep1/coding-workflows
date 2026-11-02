@@ -30434,6 +30434,9 @@ def test_persist_orch_wave_check_judge_no_verdict_drops_the_judged_marker():
 		assert script.count(call) == 1, reason
 		after = script[script.index(call) + len(call):].lstrip(" \t")
 		assert after.startswith("continue\n"), reason
+	# No judge ran: an escalated isolation latch, or no attempt (prompt over the cap).
+	assert '[ "${wave_isolation_skipped:-false}" = true ] || _persist_orch_wave_check_unjudge judge_isolation_unavailable\n' in script
+	assert '[ "${max_attempts:-0}" -le 0 ] || _persist_orch_wave_check_unjudge judge_failed\n' in script
 	helper = _extract_bash_function(script, "_persist_orch_wave_check_unjudge() {")
 	for block, expect_removed in (("x", True), ("", False)):
 		with tempfile.TemporaryDirectory() as tmp:
