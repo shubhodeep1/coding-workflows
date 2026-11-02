@@ -20,8 +20,6 @@ import time
 import unittest
 from pathlib import Path
 
-import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
@@ -30580,64 +30578,68 @@ def test_persist_orch_redecompose_replaces_the_state_and_posts_one_comment():
 		assert len(py) == 2 and "revise-input" in py[0] and "revise-validate" in py[1]
 
 
-@pytest.mark.parametrize(
-	("kwargs", "log"),
-	[
-		({"judge_rc": 77, "model": ""}, "outcome=skipped reason=isolation_unavailable"),
-		({"judge_rc": 1, "model": ""}, "outcome=skipped reason=llm_failed rc=1"),
-		({"model": "no json"}, "outcome=invalid reason=unparseable"),
-		({"model": _PRD_GOOD.replace('"implementation_minutes_estimate": 20', '"implementation_minutes_estimate": 61')}, "outcome=invalid reason=estimate"),
-		({"model": _PRD_GOOD.replace('"p4"', '"p1"')}, "outcome=invalid reason=id_collision"),
-	],
+# CI runs this module through main(), which calls every test as func(), so
+# these cases loop inside argument-free tests instead of using
+# pytest.mark.parametrize (see test_custom_runner_tests_need_no_pytest_arguments).
+_PRD_FAILURE_CASES = (
+	({"judge_rc": 77, "model": ""}, "outcome=skipped reason=isolation_unavailable"),
+	({"judge_rc": 1, "model": ""}, "outcome=skipped reason=llm_failed rc=1"),
+	({"model": "no json"}, "outcome=invalid reason=unparseable"),
+	({"model": _PRD_GOOD.replace('"implementation_minutes_estimate": 20', '"implementation_minutes_estimate": 61')}, "outcome=invalid reason=estimate"),
+	({"model": _PRD_GOOD.replace('"p4"', '"p1"')}, "outcome=invalid reason=id_collision"),
 )
-def test_persist_orch_redecompose_failure_leaves_the_state_unchanged(kwargs, log):
-	with tempfile.TemporaryDirectory() as tmp:
-		state = _prd_state()
-		proc, _py, posted, _seen, after = _prd_run(Path(tmp), state, **kwargs)
-		assert proc.returncode == 0, proc.stderr
-		assert after == state and posted == ""
-		assert f"PERSIST redecompose {log}" in proc.stderr
-		assert "TOTAL=3" in proc.stdout
 
 
-@pytest.mark.parametrize(
-	("enabled", "judge_json"),
-	[
-		("false", None), ("TRUE ", None), ("1", None),
-		("true", json.dumps({"status": "in_progress"})),
-		("true", json.dumps({"status": "in_progress", "revise_remaining": "true"})),
-		("true", "not json"),
-	],
+def test_persist_orch_redecompose_failure_leaves_the_state_unchanged():
+	for kwargs, log in _PRD_FAILURE_CASES:
+		with tempfile.TemporaryDirectory() as tmp:
+			state = _prd_state()
+			proc, _py, posted, _seen, after = _prd_run(Path(tmp), state, **kwargs)
+			assert proc.returncode == 0, (kwargs, proc.stderr)
+			assert after == state and posted == "", kwargs
+			assert f"PERSIST redecompose {log}" in proc.stderr, (log, proc.stderr)
+			assert "TOTAL=3" in proc.stdout, (kwargs, proc.stdout)
+
+
+_PRD_OFF_OR_NOT_REQUESTED_CASES = (
+	("false", None), ("TRUE ", None), ("1", None),
+	("true", json.dumps({"status": "in_progress"})),
+	("true", json.dumps({"status": "in_progress", "revise_remaining": "true"})),
+	("true", "not json"),
 )
-def test_persist_orch_redecompose_off_or_not_requested_starts_nothing(enabled, judge_json):
-	with tempfile.TemporaryDirectory() as tmp:
-		state = _prd_state()
-		proc, py, posted, seen, after = _prd_run(Path(tmp), state, enabled=enabled, judge_json=judge_json)
-		assert proc.returncode == 0, proc.stderr
-		assert py == [] and posted == "" and seen == "" and after == state
-		assert "PERSIST redecompose" not in proc.stderr
 
 
-@pytest.mark.parametrize(
-	("enabled", "state_extra", "env", "shown"),
-	[
-		("true", {}, "", True),
-		("false", {}, "", False),
-		("true", {"redecompose_count": 2}, "", False),
-		("true", {"redecompose_count": 2}, "PERSIST_ORCH_MAX_REDECOMPOSE=3\n", True),
-		("true", {"redecompose_count": 2}, "PERSIST_ORCH_MAX_REDECOMPOSE=abc\n", False),
-		("true", {}, "CURRENT_WAVE=3\n", False),
-	],
+def test_persist_orch_redecompose_off_or_not_requested_starts_nothing():
+	for enabled, judge_json in _PRD_OFF_OR_NOT_REQUESTED_CASES:
+		with tempfile.TemporaryDirectory() as tmp:
+			state = _prd_state()
+			proc, py, posted, seen, after = _prd_run(Path(tmp), state, enabled=enabled, judge_json=judge_json)
+			assert proc.returncode == 0, ((enabled, judge_json), proc.stderr)
+			assert py == [] and posted == "" and seen == "" and after == state, (enabled, judge_json)
+			assert "PERSIST redecompose" not in proc.stderr, ((enabled, judge_json), proc.stderr)
+
+
+_PRD_REVISE_OPTION_BLOCK_CASES = (
+	("true", {}, "", True),
+	("false", {}, "", False),
+	("true", {"redecompose_count": 2}, "", False),
+	("true", {"redecompose_count": 2}, "PERSIST_ORCH_MAX_REDECOMPOSE=3\n", True),
+	("true", {"redecompose_count": 2}, "PERSIST_ORCH_MAX_REDECOMPOSE=abc\n", False),
+	("true", {}, "CURRENT_WAVE=3\n", False),
 )
-def test_persist_orch_revise_option_block_is_shown_only_when_a_revise_can_run(enabled, state_extra, env, shown):
-	with tempfile.TemporaryDirectory() as tmp:
-		call = env + "printf 'BEGIN'; persist_orch_revise_option_block; printf 'END'\n"
-		proc, py, _posted, _seen, _after = _prd_run(Path(tmp), _prd_state(**state_extra), enabled=enabled, call=call)
-		assert proc.returncode == 0, proc.stderr
-		fragment = (REPO_ROOT / "prompts" / "mode-judge-revise-option.txt").read_text(encoding="utf-8")
-		assert proc.stdout == ("BEGIN\n" + fragment + "END" if shown else "BEGINEND")
-		# Never starts Python, so the judge prompt is byte-identical with the switch off.
-		assert py == []
+
+
+def test_persist_orch_revise_option_block_is_shown_only_when_a_revise_can_run():
+	fragment = (REPO_ROOT / "prompts" / "mode-judge-revise-option.txt").read_text(encoding="utf-8")
+	for enabled, state_extra, env, shown in _PRD_REVISE_OPTION_BLOCK_CASES:
+		case = (enabled, state_extra, env, shown)
+		with tempfile.TemporaryDirectory() as tmp:
+			call = env + "printf 'BEGIN'; persist_orch_revise_option_block; printf 'END'\n"
+			proc, py, _posted, _seen, _after = _prd_run(Path(tmp), _prd_state(**state_extra), enabled=enabled, call=call)
+			assert proc.returncode == 0, (case, proc.stderr)
+			assert proc.stdout == ("BEGIN\n" + fragment + "END" if shown else "BEGINEND"), (case, proc.stdout)
+			# Never starts Python, so the judge prompt is byte-identical with the switch off.
+			assert py == [], case
 
 
 if __name__ == "__main__":
