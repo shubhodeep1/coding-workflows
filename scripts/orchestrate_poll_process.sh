@@ -8153,7 +8153,8 @@ from pathlib import Path
 def stripped(path: str) -> list[str]:
 	# Split on "\n" only, as git numbers lines; splitlines() also breaks on
 	# form feed, \x85, U+2028 and others, which would shift the cited window.
-	lines = Path(path).read_text(encoding="utf-8", errors="replace").split("\n")
+	# read_bytes() avoids read_text()'s newline translation of a lone "\r".
+	lines = Path(path).read_bytes().decode("utf-8", errors="replace").split("\n")
 	if lines and lines[-1] == "":
 		lines.pop()
 	return [line.strip() for line in lines]
