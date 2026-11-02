@@ -6887,7 +6887,7 @@ def test_security_pass_deferred_advisory_followup_retries_on_completed_tick() ->
 	assert latest_state["security_pass_waived_findings"][0]["issue"] == created[0]["number"]
 	assert "followup_pending" not in latest_state["security_pass_waived_findings"][0]
 	combined_log = result["stdout"] + result["stderr"]
-	assert f"SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192 final_pr=300 default_branch=main filed=1 pending=1" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192 final_pr=300 default_branch=main filed=1 pending=1" in combined_log
 
 
 def test_security_pass_advisory_followup_reconciles_remote_marker_before_create() -> None:
@@ -10964,7 +10964,6 @@ def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
 			"baseRefName": "main",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "@sandbox_head",
 			"mergeable": True,
 			"mergeable_state": "clean",
 			"body": "ordinary PR body",
@@ -14424,8 +14423,8 @@ def test_standalone_conflict_sweep_sees_named_pending_dispatch():
 	result = _run_poller(
 		state=state, enable_validation="false", max_validate_cycles="3",
 		prs=[{"number": 411, "state": "open", "baseRefName": "main",
-		      "headRefName": "claude/issue-10", "headSha": "0000000000000000000000000000000000000411",
-		      "mergeable": False, "mergeable_state": "dirty"}],
+			"headRefName": "claude/issue-10", "headSha": "0000000000000000000000000000000000000411",
+			"mergeable": False, "mergeable_state": "dirty"}],
 		update_branch_fail_for_prs=[411],
 		active_autofix_runs=[{
 			"workflow": "internal-review.yml", "workflowName": "Internal: AI Review & Autofix",
@@ -14829,8 +14828,8 @@ def test_standalone_retrigger_review_sees_pr_named_pending_run():
 		issue_comments={501: [standalone_state_comment]}, issue_linked_prs={501: 416},
 		mock_gh_issue_list_label_filter=True,
 		prs=[{"number": 416, "body": "Closes #501", "state": "open", "baseRefName": "main",
-		      "headRefName": "claude/issue-501", "headRefFromApi": "claude/issue-501",
-		      "headSha": "a" * 40, "mergeable": True, "mergeable_state": "clean"}],
+			"headRefName": "claude/issue-501", "headRefFromApi": "claude/issue-501",
+			"headSha": "a" * 40, "mergeable": True, "mergeable_state": "clean"}],
 		actions_runs_workflow_runs=[{
 			"id": 26088864017, "name": "Internal: AI Review & Autofix",
 			"path": ".github/workflows/internal-review.yml@main", "event": "workflow_dispatch",
@@ -16162,7 +16161,7 @@ def test_validation_harness_config_defaults_and_invalid_values():
 		"VALIDATION_HARNESS_ROUTE_LOGIN",
 	):
 		assert f"::warning::VALIDATION_HARNESS_HOLD config={name} outcome=default reason=invalid_value" in invalid.stdout
-	assert "secret" not in "\n".join(l for l in invalid.stdout.splitlines() if l.startswith("::warning::"))
+	assert "secret" not in "\n".join(text_line for text_line in invalid.stdout.splitlines() if text_line.startswith("::warning::"))
 
 
 def test_validation_harness_local_fp_ignores_digits_and_case():
@@ -20721,9 +20720,9 @@ def test_retrigger_review_redispatches_on_tied_head_branch_failure():
 		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 77}, prs=prs,
 		active_autofix_runs=[
 			{"workflow": "ai-review.yml", "branch": "claude/retrigger-review-tied-failure",
-			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T01:00:00Z"},
+				"status": "completed", "conclusion": "success", "createdAt": "2026-09-28T01:00:00Z"},
 			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-tied-failure",
-			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+				"status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
 		],
 		mock_git_push_success=True,
 	)
@@ -21546,11 +21545,11 @@ def test_retrigger_review_redispatches_pr_named_failure_tied_with_head_branch_su
 		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 93}, prs=prs,
 		active_autofix_runs=[
 			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-pr-named-tied",
-			 "event": "pull_request", "status": "completed", "conclusion": "success",
-			 "createdAt": "2026-09-28T01:00:00Z"},
+				"event": "pull_request", "status": "completed", "conclusion": "success",
+				"createdAt": "2026-09-28T01:00:00Z"},
 			{"workflow": "internal-review.yml", "branch": "main", "event": "workflow_dispatch",
-			 "displayTitle": "Internal: AI Review & Autofix [pr:93]",
-			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+				"displayTitle": "Internal: AI Review & Autofix [pr:93]",
+				"status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
 		],
 		mock_git_push_success=True,
 	)
@@ -25679,21 +25678,21 @@ def _extract_refresh_function_body(poller_body: str) -> str:
 
 def test_extract_refresh_function_body_keeps_operator_attached_command_groups():
 	sample = """_refresh_integration_resolver_tooling() {
-	  echo start
-	  test -n \"${x:-}\" && {
-	    echo inner
-	  }
-	  echo after  # note | {
+		echo start
+		test -n \"${x:-}\" && {
+			echo inner
+		}
+		echo after  # note | {
 	}
 	after() {
-	  :
+		:
 	}"""
 	expected = """_refresh_integration_resolver_tooling() {
-	  echo start
-	  test -n \"${x:-}\" && {
-	    echo inner
-	  }
-	  echo after  # note | {
+		echo start
+		test -n \"${x:-}\" && {
+			echo inner
+		}
+		echo after  # note | {
 	}"""
 	assert _extract_refresh_function_body(sample) == expected
 
@@ -25976,7 +25975,7 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+				"origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		assert actual == "# sub-issue v1\n", (
@@ -26134,7 +26133,7 @@ def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches(
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+				"origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		# After the 3-way merge, the integration branch's file must
@@ -26273,7 +26272,7 @@ def test_resolver_tooling_refresh_3way_merge_falls_back_to_skip_on_conflict():
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+				"origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		# On conflict the function must SKIP — integration-branch content
@@ -26397,7 +26396,7 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+				"origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		assert actual == "# main v2 with toolchain fix\n", (
@@ -26411,7 +26410,7 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		)
 		added_actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/targeted_file_context.py"],
+				"origin/orchestrator/project-99:scripts/targeted_file_context.py"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		assert added_actual == "# main-only helper\n", (
@@ -28061,9 +28060,9 @@ def test_needs_human_digest_terminal_paths_call_the_helper():
 		hold_start = lines.index(header)
 		hold_end = lines.index("}", hold_start)
 		assert any(
-			l.strip() == 'set_tracking_phase_label "ai:validation-failed"' for l in lines[hold_start:hold_end]
+			text_line.strip() == 'set_tracking_phase_label "ai:validation-failed"' for text_line in lines[hold_start:hold_end]
 		), header
-		assert not any("needs_human_park_project" in l for l in lines[hold_start:hold_end]), header
+		assert not any("needs_human_park_project" in text_line for text_line in lines[hold_start:hold_end]), header
 		exempt.append((hold_start, hold_end))
 	for idx, line in enumerate(lines):
 		if any(start <= idx < end for start, end in exempt):
@@ -30486,14 +30485,14 @@ _PRD_GOOD = "```json\n" + json.dumps({"pending_issue_defs": {
 
 
 def _prd_run(tmp_path: Path, state: dict, enabled: str = "true", judge_json: str | None = None, model: str = _PRD_GOOD,
-		judge_rc: int = 0, call: str = "persist_orch_redecompose < /dev/null || true\necho \"TOTAL=${TOTAL_WAVES}\"\n"):
+		judge_rc: int = 0, render_rc: int = 0, call: str = "persist_orch_redecompose < /dev/null || true\necho \"TOTAL=${TOTAL_WAVES}\"\n"):
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(script, "persist_orch_revise_option_block() {")
 	helper += _extract_bash_function(script, "persist_orch_redecompose() {")
 	(tmp_path / "scripts").mkdir(exist_ok=True)
 	for name in ("persist_orchestrator.py", "attempt_journal.py", "orchestrate_lib.py"):
 		shutil.copy(REPO_ROOT / "scripts" / name, tmp_path / "scripts" / name)
-	(tmp_path / "scripts" / "render_prompt.sh").write_text('#!/bin/bash\ncat "$1"\n', encoding="utf-8")
+	(tmp_path / "scripts" / "render_prompt.sh").write_text(f'#!/bin/bash\ncat "$1"\nexit {render_rc}\n', encoding="utf-8")
 	(tmp_path / "prompts").mkdir(exist_ok=True)
 	for name in ("mode-judge-revise-option.txt", "mode-orchestrate-revise.txt"):
 		shutil.copy(REPO_ROOT / "prompts" / name, tmp_path / "prompts" / name)
@@ -30578,30 +30577,34 @@ def test_persist_orch_redecompose_replaces_the_state_and_posts_one_comment():
 		assert len(py) == 2 and "revise-input" in py[0] and "revise-validate" in py[1]
 
 
-# CI runs this module through main(), which calls every test as func(), so
-# these cases loop inside argument-free tests instead of using
-# pytest.mark.parametrize (see test_custom_runner_tests_need_no_pytest_arguments).
+# Case tables loop inside argument-free tests: the module's own runner calls
+# every test with no arguments, so it cannot use pytest.mark.parametrize (see
+# test_custom_runner_tests_need_no_pytest_arguments).
 _PRD_FAILURE_CASES = (
-	({"judge_rc": 77, "model": ""}, "outcome=skipped reason=isolation_unavailable"),
-	({"judge_rc": 1, "model": ""}, "outcome=skipped reason=llm_failed rc=1"),
-	({"model": "no json"}, "outcome=invalid reason=unparseable"),
-	({"model": _PRD_GOOD.replace('"implementation_minutes_estimate": 20', '"implementation_minutes_estimate": 61')}, "outcome=invalid reason=estimate"),
-	({"model": _PRD_GOOD.replace('"p4"', '"p1"')}, "outcome=invalid reason=id_collision"),
+	("isolation", {"judge_rc": 77, "model": ""}, "outcome=skipped reason=isolation_unavailable"),
+	("llm_failed", {"judge_rc": 1, "model": ""}, "outcome=skipped reason=llm_failed rc=1"),
+	("unparseable", {"model": "no json"}, "outcome=invalid reason=unparseable"),
+	("estimate", {"model": _PRD_GOOD.replace('"implementation_minutes_estimate": 20', '"implementation_minutes_estimate": 61')}, "outcome=invalid reason=estimate"),
+	("id_collision", {"model": _PRD_GOOD.replace('"p4"', '"p1"')}, "outcome=invalid reason=id_collision"),
+	("render_failed", {"render_rc": 3}, "outcome=error reason=prompt_render_failed rc=3"),
 )
 
 
 def test_persist_orch_redecompose_failure_leaves_the_state_unchanged():
-	for kwargs, log in _PRD_FAILURE_CASES:
+	for case_id, kwargs, log in _PRD_FAILURE_CASES:
 		with tempfile.TemporaryDirectory() as tmp:
 			state = _prd_state()
-			proc, _py, posted, _seen, after = _prd_run(Path(tmp), state, **kwargs)
-			assert proc.returncode == 0, (kwargs, proc.stderr)
-			assert after == state and posted == "", kwargs
-			assert f"PERSIST redecompose {log}" in proc.stderr, (log, proc.stderr)
-			assert "TOTAL=3" in proc.stdout, (kwargs, proc.stdout)
+			proc, _py, posted, seen, after = _prd_run(Path(tmp), state, **kwargs)
+			assert proc.returncode == 0, (case_id, proc.stderr)
+			assert after == state and posted == "", case_id
+			assert f"PERSIST redecompose {log}" in proc.stderr, (case_id, proc.stderr)
+			assert "TOTAL=3" in proc.stdout, case_id
+			if case_id == "render_failed":
+				# No model call on a prompt without the revise task text.
+				assert seen == "", case_id
 
 
-_PRD_OFF_OR_NOT_REQUESTED_CASES = (
+_PRD_NOT_REQUESTED_CASES = (
 	("false", None), ("TRUE ", None), ("1", None),
 	("true", json.dumps({"status": "in_progress"})),
 	("true", json.dumps({"status": "in_progress", "revise_remaining": "true"})),
@@ -30610,16 +30613,17 @@ _PRD_OFF_OR_NOT_REQUESTED_CASES = (
 
 
 def test_persist_orch_redecompose_off_or_not_requested_starts_nothing():
-	for enabled, judge_json in _PRD_OFF_OR_NOT_REQUESTED_CASES:
+	for enabled, judge_json in _PRD_NOT_REQUESTED_CASES:
+		case_id = (enabled, judge_json)
 		with tempfile.TemporaryDirectory() as tmp:
 			state = _prd_state()
 			proc, py, posted, seen, after = _prd_run(Path(tmp), state, enabled=enabled, judge_json=judge_json)
-			assert proc.returncode == 0, ((enabled, judge_json), proc.stderr)
-			assert py == [] and posted == "" and seen == "" and after == state, (enabled, judge_json)
-			assert "PERSIST redecompose" not in proc.stderr, ((enabled, judge_json), proc.stderr)
+			assert proc.returncode == 0, (case_id, proc.stderr)
+			assert py == [] and posted == "" and seen == "" and after == state, case_id
+			assert "PERSIST redecompose" not in proc.stderr, case_id
 
 
-_PRD_REVISE_OPTION_BLOCK_CASES = (
+_PRD_OPTION_BLOCK_CASES = (
 	("true", {}, "", True),
 	("false", {}, "", False),
 	("true", {"redecompose_count": 2}, "", False),
@@ -30631,15 +30635,15 @@ _PRD_REVISE_OPTION_BLOCK_CASES = (
 
 def test_persist_orch_revise_option_block_is_shown_only_when_a_revise_can_run():
 	fragment = (REPO_ROOT / "prompts" / "mode-judge-revise-option.txt").read_text(encoding="utf-8")
-	for enabled, state_extra, env, shown in _PRD_REVISE_OPTION_BLOCK_CASES:
-		case = (enabled, state_extra, env, shown)
+	for enabled, state_extra, env, shown in _PRD_OPTION_BLOCK_CASES:
+		case_id = (enabled, state_extra, env)
 		with tempfile.TemporaryDirectory() as tmp:
 			call = env + "printf 'BEGIN'; persist_orch_revise_option_block; printf 'END'\n"
 			proc, py, _posted, _seen, _after = _prd_run(Path(tmp), _prd_state(**state_extra), enabled=enabled, call=call)
-			assert proc.returncode == 0, (case, proc.stderr)
-			assert proc.stdout == ("BEGIN\n" + fragment + "END" if shown else "BEGINEND"), (case, proc.stdout)
+			assert proc.returncode == 0, (case_id, proc.stderr)
+			assert proc.stdout == ("BEGIN\n" + fragment + "END" if shown else "BEGINEND"), case_id
 			# Never starts Python, so the judge prompt is byte-identical with the switch off.
-			assert py == [], case
+			assert py == [], case_id
 
 
 if __name__ == "__main__":

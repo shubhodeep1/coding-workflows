@@ -20387,7 +20387,7 @@ persist_orch_revise_option_block() {
 # budget (section 14): one comment per successful revise. Any failure leaves
 # STATE_FILE untouched and the wave advances on the old defs. Always returns 0.
 persist_orch_redecompose() {
-  local prd_base prd_reason prd_details="" prd_tail prd_prompt prd_out prd_state prd_comment prd_rc=0 prd_total
+  local prd_base prd_reason prd_details="" prd_tail prd_prompt prd_out prd_state prd_comment prd_rc=0 prd_total prd_render_rc=0
   [ "${PERSIST_ORCH_REDECOMPOSE_ENABLED:-false}" = "true" ] || return 0
   printf '%s' "${JUDGE_JSON:-}" | jq -e 'type == "object" and .revise_remaining == true' >/dev/null 2>&1 || return 0
   if [ ! -f scripts/persist_orchestrator.py ] || [ ! -f prompts/mode-orchestrate-revise.txt ]; then
@@ -20437,12 +20437,15 @@ persist_orch_redecompose() {
       fi
       echo "=== REVISE TASK ==="
       echo
-      bash scripts/render_prompt.sh prompts/mode-orchestrate-revise.txt
+      bash scripts/render_prompt.sh prompts/mode-orchestrate-revise.txt || prd_render_rc=$?
       echo
       cat "${prd_tail}"
     } > "${prd_prompt}" 2>/dev/null; then
       sanitize_codex_prompt_file "${prd_prompt}" || true
-      if ! _judge_isolation_should_run WAVE_JUDGE "${STATE_FILE}" "${TRACKING_NUM:-}" "${TRACKING_LABELS:-}"; then
+      if [ "${prd_render_rc}" -ne 0 ]; then
+        # A prompt without the revise task text would waste the model call.
+        echo "PERSIST redecompose outcome=error reason=prompt_render_failed rc=${prd_render_rc}" >&2
+      elif ! _judge_isolation_should_run WAVE_JUDGE "${STATE_FILE}" "${TRACKING_NUM:-}" "${TRACKING_LABELS:-}"; then
         echo "PERSIST redecompose outcome=skipped reason=isolation_unavailable" >&2
       else
         poller_claude_judge WAVE_JUDGE "${prd_prompt}" "${prd_out}" "${RUNTIME_DIR:-${prd_base}}/revise_log.txt" < /dev/null || prd_rc=$?
