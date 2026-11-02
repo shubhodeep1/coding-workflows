@@ -15094,8 +15094,9 @@ close_plan_split_source_if_needed() {
 #     or .plan_split_source.outcome is set (reason=plan_split_pending);
 #   - no ai:integration-backpressure label is left (reason=backpressure_label).
 # Runs once: the outcome is kept in .tracking_auto_close in the state file,
-# so a reopened issue is not closed again (unless saving that state failed
-# twice after the close, which logs state_persist=failed and a ::warning::). Reads only comments_json,
+# so a reopened issue is not closed again (unless, after the close, writing
+# STATE_FILE failed once or posting the state comment failed twice, which
+# logs state_persist=failed and a ::warning::). Reads only comments_json,
 # labels_json and STATE_FILE (no API read). Writes at most one comment
 # (ending <!-- ai:tracking-auto-close:v1 issue=<N> -->), one PATCH and one
 # state comment per project. A failed PATCH (reason=close_failed) is retried

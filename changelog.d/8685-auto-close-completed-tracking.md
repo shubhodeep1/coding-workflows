@@ -9,7 +9,7 @@ Every successful project ended with "Issue kept open for manual review." and not
 | New kill switch | `ORCHESTRATOR_CLOSE_COMPLETED_TRACKING` (default `true`; repository variable, forwarded by `orchestrate_poll.yml`) |
 | Existing kill switch for the triage change | `CHECK_TRIAGE_RESOLVED_GATE_ENABLED` |
 
-What this means for operators: consumer repositories get this on by default on the next `@stable` sync, and any already-open finished projects close on the first poller tick after that. Reopen an auto-closed tracking issue to keep it open for good, or set `ORCHESTRATOR_CLOSE_COMPLETED_TRACKING=false` to keep every finished project open. Failed and validation-failed projects stay open as before.
+What this means for operators: consumer repositories get this on by default on the next `@stable` sync, and any already-open finished projects close on the first poller tick after that. Reopen an auto-closed tracking issue to keep it open for good (unless the poller logged `state_persist=failed` when it closed it), or set `ORCHESTRATOR_CLOSE_COMPLETED_TRACKING=false` to keep every finished project open. Failed and validation-failed projects stay open as before.
 
 ### For contributors
 
