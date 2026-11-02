@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA. One reusable workflow and its helper scripts, such as clarify, plan, implement, review_autofix, orchestrate or validate. Please name which one in the answer. (RECOMMENDED)\nB. Prompt templates under `prompts/` for one or more pipeline phases\nC. Documentation (`README.md`, `docs/`, or an `agents.d/` fragment)\nD. The test suite or CI, for speed, flakiness or coverage\nE. Something else. Please give the file path or component name.\nQ2: What problem should the change fix?\nChoices:\nA. A specific bug or failure. Please give a run ID, log excerpt or steps to reproduce. (RECOMMENDED)\nB. Performance or cost, such as runtime, token use or GitHub API calls\nC. Reliability or recovery, such as stalls, retries or self-heal\nD. Readability or maintainability, with behaviour unchanged\nE. New functionality. Please describe the feature.\nQ3: How will we know the change is done?\nChoices:\nA. A specific observable outcome, such as a test that passes, a measurable metric or a log line that no longer appears. Please describe it in the answer. (RECOMMENDED)\nB. The behaviour described in Q2 no longer reproduces\nC. No fixed criteria: the planning phase proposes them for you to approve\nQ4: How much is the change allowed to touch?\nChoices:\nA. The smallest change confined to the component chosen in Q1, with contract tests updated as needed (RECOMMENDED)\nB. Several related workflows or scripts may change to keep behaviour consistent across them\nC. Wide refactoring is allowed\n**Note:** choosing C together with Q2:D (behaviour unchanged) still needs a clear boundary, otherwise planning will come back with more questions.",
+  "fingerprint": "6a84e16514937f7b9271884c09bf5a88a1a368ec23a16d08b8e1eed3a203eca1",
+  "lineage": {
+    "issue_number": 8639,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41367374747",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41367374747",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261102003228_6756e90afc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8639,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41367374747"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #8639 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-02T00:32:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
