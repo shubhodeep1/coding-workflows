@@ -454,3 +454,22 @@ def test_append_records_acceptance_only_with_the_flag(fake_gh, tmp_path):
 	by_run = {e["run_id"]: e["acceptance"] for e in entries}
 	assert by_run["301"] == {"state": "invalid", "unmet": ["no_test_or_check"]}
 	assert by_run["302"] == {"state": "none", "unmet": []}
+
+
+def test_evidence_hash_file_fills_the_evidence_hash_field(fake_gh, tmp_path):
+	# Issue #8427 (P11): plan.yml passes scripts/evidence_broker.py's --hash-out.
+	state, env = fake_gh
+	good = tmp_path / "good.txt"
+	good.write_text("ab" * 32 + "\n", encoding="utf-8")
+	bad = tmp_path / "bad.txt"
+	bad.write_text("not-a-hash\n", encoding="utf-8")
+	assert aj.evidence_hash_field(str(good)) == "ab" * 32
+	assert aj.evidence_hash_field(str(bad)) == ""
+	assert aj.evidence_hash_field(str(tmp_path / "missing.txt")) == "" and aj.evidence_hash_field(None) == ""
+	for run_id, extra in (("401", ["--evidence-hash-file", str(good)]), ("402", ["--evidence-hash-file", str(bad)]), ("403", [])):
+		env["GITHUB_RUN_ID"] = run_id
+		proc = _cli(env, "append", "--repo", "o/r", "--issue", "5", "--stage", "plan", "--outcome", "ok", *extra)
+		assert proc.returncode == 0 and "outcome=ok" in proc.stderr, proc.stderr
+	_, entries = aj.parse(json.loads((state / "comments.json").read_text(encoding="utf-8")), LOGIN)
+	by_run = {e["run_id"]: e["evidence_hash"] for e in entries}
+	assert by_run == {"401": "ab" * 32, "402": "", "403": ""}
