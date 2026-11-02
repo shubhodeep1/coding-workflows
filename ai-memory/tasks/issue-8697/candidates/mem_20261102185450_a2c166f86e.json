@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: issue canary-b-redo (Refs #8693)\n\n**Planning ref:** this plan was made against `orchestrator/project-8693` at `d6cc3670d532300d88a75dd52b37793d7ecb9e1d`. The integration branch matches.\n\n**Current state:** on the planning ref, `tests/e2e_smoke_canary_b.txt` has two lines, each ending with a newline:\n```\nstatus: ok\ndecompose-run: 40427433026\n```\nThe second line is still the old value, so the fix is not on the branch yet.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for one exact change to one existing file. Following the \u00a76 priority order (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the plan changes only the second line of that file. No helpers, workflows or tests are touched, as the issue's `files_touched` list requires. The \"Boil the Lake\" check does not apply because the shortcut and the complete fix are the same change.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a data-file edit only.\n\n## Data structures affected\n- `tests/e2e_smoke_canary_b.txt`: line 2 changes from `decompose-run: 40427433026` to `decompose-run: 41501570285`. The final file is exactly `status: ok\\ndecompose-run: 41501570285\\n`.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 rather than append\n- Chosen: rewrite the whole file to the exact two lines, keeping the trailing newline.\n- Alternatives considered: appending a third line; editing the file with `sed -i`.\n- Why: the acceptance criteria forbid extra lines. A whole-file write gives exactly the required bytes, while `sed` can exit successfully without changing anything if the pattern misses.\n\n## Security considerations\n- No trust boundary, endpoint, secret or money-handling code is involved.\n- External input is limited to the run ID `41501570285`, which comes from the issue body and is taken as given.\n- The PR body and commit message must not use a closing keyword such as `Fixes` against tracking issue #8693; use `Refs #8693`.\n\n## Potential risks or edge cases\n- A missing trailing newline, or a CRLF line ending, would break the exact-bytes match. Check with `cat -A`.\n- A sibling canary-a fix-up is running in parallel. It touches a different file, so a merge conflict is not expected.\n\n## Testing considerations\n- Check that `cat -A tests/e2e_smoke_canary_b.txt` prints exactly `status: ok$` and `decompose-run: 41501570285$`.\n- Check that `git diff --stat` shows only this one file, with one line removed and one added.\n\n## Pre-execution self-check\n- The only changed path matches the issue's `files_touched` list.\n- The integration branch matches the planning ref.\n- The change is not already on the ref, and no open PR is known to deliver it.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "6a8d0722573273778b8e33d170b0c3e34c6505272b2fd33a0d60282edfa22b1b",
+  "lineage": {
+    "issue_number": 8697,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41504265169",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41504265169",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8697"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261102185450_a2c166f86e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8697,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41504265169"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8697",
+  "timestamps": {
+    "created_at": "2026-11-02T18:54:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
