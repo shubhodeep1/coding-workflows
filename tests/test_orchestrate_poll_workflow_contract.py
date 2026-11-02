@@ -289,6 +289,40 @@ def test_persist_orch_wave_check_env_defaults_are_declared() -> None:
 	assert 'if [ "${PERSIST_ORCH_WAVE_CHECK_ENABLED:-false}" != "true" ]; then' in poller
 
 
+def test_persist_orch_redecompose_env_defaults_and_optional_prompts_are_declared() -> None:
+	"""Refs #8427 P10: the re-decompose switch and cap default in the workflow
+	env, the helper and the poller; its prompts are staged optionally."""
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	for line in (
+		"PERSIST_ORCH_REDECOMPOSE_ENABLED: ${{ vars.PERSIST_ORCH_REDECOMPOSE_ENABLED || 'false' }}",
+		"PERSIST_ORCH_MAX_REDECOMPOSE: ${{ vars.PERSIST_ORCH_MAX_REDECOMPOSE || '2' }}",
+	):
+		assert wf.count(line) == 1, line
+	env = yaml.safe_load(wf)["env"]
+	assert env["PERSIST_ORCH_REDECOMPOSE_ENABLED"] == "${{ vars.PERSIST_ORCH_REDECOMPOSE_ENABLED || 'false' }}"
+	assert env["PERSIST_ORCH_MAX_REDECOMPOSE"] == "${{ vars.PERSIST_ORCH_MAX_REDECOMPOSE || '2' }}"
+	helper = (REPO_ROOT / "scripts" / "persist_orchestrator.py").read_text(encoding="utf-8")
+	assert 'os.environ.get("PERSIST_ORCH_REDECOMPOSE_ENABLED", "false") == "true"' in helper
+	assert "REDECOMPOSE_MAX_DEFAULT = 2" in helper
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert '[ "${PERSIST_ORCH_REDECOMPOSE_ENABLED:-false}" = "true" ] || return 0' in poller
+	assert 'porb_max="${PERSIST_ORCH_MAX_REDECOMPOSE:-2}"' in poller
+	start = wf.index("for revise_asset in ")
+	loop = wf[start:wf.index("          done\n", start)]
+	for asset in ("prompts/mode-judge-revise-option.txt", "prompts/_templates/mode-judge-revise-option.txt",
+			"prompts/mode-orchestrate-revise.txt", "prompts/_templates/mode-orchestrate-revise.txt"):
+		assert asset in loop.split("\n", 1)[0], asset
+		assert (REPO_ROOT / asset).is_file(), asset
+	assert '.codex-workflow-src-main/${revise_asset}' in loop
+	assert '[ -f "${asset_src}" ] || continue' in loop and "::error::" not in loop and "exit 1" not in loop
+	# persist_orchestrator.py and orchestrate_lib.py are already staged.
+	staged = wf[wf.index("for f in gh_helpers.sh "):]
+	staged = staged[: staged.index("; do")]
+	assert " persist_orchestrator.py " in staged and " orchestrate_lib.py " in staged
+	assert (REPO_ROOT / "prompts" / "mode-judge-revise-option.txt").read_bytes() == (REPO_ROOT / "prompts" / "_templates" / "mode-judge-revise-option.txt").read_bytes()
+	assert (REPO_ROOT / "prompts" / "mode-orchestrate-revise.txt").read_bytes() == (REPO_ROOT / "prompts" / "_templates" / "mode-orchestrate-revise.txt").read_bytes()
+
+
 WIDENED_GATE = (
 	"(steps.find_tracking.outputs.has_work == 'true' || "
 	"steps.find_tracking.outputs.standalone_recovery == 'true')"
@@ -653,6 +687,7 @@ def main() -> int:
 	test_persist_budget_env_defaults_are_declared()
 	test_persist_orch_failure_grouping_env_defaults_are_declared()
 	test_persist_orch_wave_check_env_defaults_are_declared()
+	test_persist_orch_redecompose_env_defaults_and_optional_prompts_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
 	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
