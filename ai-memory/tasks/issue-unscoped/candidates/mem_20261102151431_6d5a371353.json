@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The first line is exactly `status: ok`, with nothing before or after it on that line.\"\n  expected_change_site: tests/e2e_smoke_canary_b.txt line 1\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer states line 1 is untouched by the diff and already contains `status: ok`, so the requirement is met. The reviewer rated it NIT.\n- requirement: \"The second line is exactly `decompose-run: 41445772297`.\"\n  expected_change_site: tests/e2e_smoke_canary_b.txt line 2\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer states \"None\": the diff correctly replaces line 2. The reviewer rated it NIT.\n- requirement: \"End the file with a trailing newline.\"\n  expected_change_site: tests/e2e_smoke_canary_b.txt\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer states \"None\": the file on disk has the trailing newline. The reviewer rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: tests/e2e_smoke_canary_b.txt line 1\n  Requirement: \"The first line is exactly `status: ok`, with nothing before or after it on that line.\"\n  Expected change site: tests/e2e_smoke_canary_b.txt line 1\n  Evidence of absence: The diff modifies line 2 but leaves line 1 untouched. The file already contains `status: ok` on line 1, which satisfies the intent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: tests/e2e_smoke_canary_b.txt line 2\n  Requirement: \"The second line is exactly `decompose-run: 41445772297`.\"\n  Expected change site: tests/e2e_smoke_canary_b.txt line 2\n  Evidence of absence: None. The diff hunk correctly replaces `decompose-run: 40427433026` with `decompose-run: 41445772297` on line 2.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: tests/e2e_smoke_canary_b.txt\n  Requirement: \"End the file with a trailing newline.\"\n  Expected change site: tests/e2e_smoke_canary_b.txt\n  Evidence of absence: None. The file on disk has the required trailing newline.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2ccd7afba8e967435df8105fd0bd5e50abce88456a45835069cbbf5bfe93a698",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8684,
+    "run_id": "41467534643",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41467534643",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102151431_6d5a371353",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8684,
+    "run_id": "41467534643"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-02T15:14:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
