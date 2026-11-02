@@ -8104,8 +8104,10 @@ PY
 # audited head, trims whitespace, drops blank lines, and looks for that block
 # as one contiguous run in the default-branch file.  A single line is not
 # enough: `}` or `} catch {` match almost any file.  `unknown` when the
-# audited blob cannot be read, the line is out of range, or the window holds
-# under 12 non-blank characters.  Blank lines are dropped and whitespace is
+# audited head is not a hex commit id, the audited blob cannot be read, the
+# line is out of range, the window holds under 12 non-blank characters, or the
+# file is missing on the default branch and `origin/<default_branch>` does not
+# resolve to a commit.  Blank lines are dropped and whitespace is
 # trimmed on both sides, so a moved, re-indented or blank-line-reformatted
 # block still reads `present`; only a content edit reads `absent`, which only
 # changes the advisory's wording (the issue is filed either way).
@@ -8118,6 +8120,7 @@ security_pass_advisory_cited_code_status() {
 	local cited_line="$4"
 	local cited_tmp_dir cited_status
 	if [ -z "${audited_head_sha}" ] || [ -z "${default_branch}" ] || [ -z "${cited_file}" ] \
+		|| ! [[ "${audited_head_sha}" =~ ^[0-9a-fA-F]{7,64}$ ]] \
 		|| ! [[ "${cited_line}" =~ ^[0-9]+$ ]]; then
 		echo "unknown"
 		return 0
