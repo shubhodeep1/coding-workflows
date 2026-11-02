@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (reviewer concluded not a gap): tests/e2e_smoke_canary.txt | confidence=5\n  Requirement: \"Update its content so it is exactly these three lines (status: ok / run_id: 40876853022 / updated-by: ai-pipeline), trailing newline, only modify tests/e2e_smoke_canary.txt.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: Not a gap \u2014 the PR diff replaces the file content with exactly the three required lines (verified on disk, 3 lines, trailing newline) and pr_changed_files.txt lists only this file. All constraints (overwrite, no extra content, no new directories, no other files touched) are satisfied.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cecbe7f6b0af057ac4dc068e056794e65f05cb3bdd232b1bcb048e19be133647",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41424759615",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41424759615",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102100823_e70e32a79d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41424759615"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-02T10:08:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
