@@ -15215,6 +15215,7 @@ close_completed_tracking_issue_if_ready() {
   local state_persist="ok"
   if ! { jq --arg at "${now_utc}" --arg verdict "${verdict}" '.tracking_auto_close = {outcome: "closed", at: $at, verdict: $verdict}' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+    rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
     state_persist="failed"
   elif ! post_state_comment && ! post_state_comment; then
     # One retry: without a saved outcome a reopened issue could be closed again.
