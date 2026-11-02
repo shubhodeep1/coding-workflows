@@ -931,7 +931,23 @@ else
         ai:closed)
           gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
           ;;
+        ai:clarification)
+          gh label create "${label_name}" --repo "${repo}" --color "f9d0c4" --description "AI clarification required before planning" 2>/dev/null || true
+          ;;
+        ai:orchestrator-managed)
+          gh label create "${label_name}" --repo "${repo}" --color "bfdadc" --description "Issue is managed by the AI orchestrator" 2>/dev/null || true
+          ;;
+        ai:workflow-heal)
+          gh label create "${label_name}" --repo "${repo}" --color "d876e3" --description "Issue auto-filed from an escalated workflow failure by workflow failure heal" 2>/dev/null || true
+          ;;
         *)
+          # Assumption: the analysis doc (CONSIST-001) suggested refusing
+          # unknown labels. We keep creating them with generic metadata,
+          # because skipping creation could make a later `--add-label` /
+          # `--label` call fail and break the judge flow.
+          # test_review_rb_judge_fallback_label_metadata_matches_label_contract
+          # keeps this arm unreachable from current literal call sites.
+          echo "::warning::ensure_label_exists fallback: label '${label_name}' has no contract metadata in the inline fallback; creating it with generic metadata." >&2
           gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
           ;;
       esac
