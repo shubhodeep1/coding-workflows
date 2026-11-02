@@ -5306,6 +5306,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/internal-orchestrate.yml
 .github/workflows/internal-plan.yml
 .github/workflows/internal-review.yml
+.github/workflows/internal-sync-ai-labels.yml
 .github/workflows/internal-validate.yml
 .github/workflows/internal-workflow-failure-heal.yml
 .github/workflows/issue_pr_status.yml

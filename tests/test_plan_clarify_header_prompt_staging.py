@@ -55,8 +55,10 @@ PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 HEADER_PROMPT = REPO_ROOT / "prompts" / "header.txt"
 
 # The bare-path render invocation that requires prompts/header.txt on disk.
+# clarify.yml runs the support bundle copy, "${SUPPORT_SCRIPTS_DIR:-scripts}/
+# render_prompt.sh" (stuck-states plan P2a); the prompt path stays bare.
 HEADER_RENDER_RE = re.compile(
-	r"\bbash\s+scripts/render_prompt\.sh\s+prompts/header\.txt\b"
+	r"\bbash\s+(?:scripts/|\"\$\{SUPPORT_SCRIPTS_DIR:-scripts\}/)render_prompt\.sh\"?\s+prompts/header\.txt\b"
 )
 
 

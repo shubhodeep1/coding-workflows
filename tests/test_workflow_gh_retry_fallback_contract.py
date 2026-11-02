@@ -19,6 +19,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPREHENSIVE_RELEASE_GH_API_HELPER = REPO_ROOT / "scripts" / "comprehensive_test_and_release_gh_api.sh"
 DISPATCH_WATCH_HELPER = REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"
 SOURCE_LINE = 'source scripts/gh_helpers.sh 2>/dev/null || true'
+# clarify.yml sources the verified support bundle copy (stuck-states plan P2a);
+# the `:-scripts` default keeps the kill-switch path identical to SOURCE_LINE.
+SUPPORT_SOURCE_LINE = 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true'
+SOURCE_LINES = (SOURCE_LINE, SUPPORT_SOURCE_LINE)
 FALLBACK_LINE = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
 SAFE_GH_JQ_LINE = 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {'
 TARGET_STEPS = (
@@ -122,7 +126,7 @@ def _step_lines(relative_path: str, step_name: str) -> list[str]:
 def test_targeted_optional_source_blocks_define_local_gh_retry_fallback() -> None:
 	for relative_path, step_name in TARGET_STEPS:
 		lines = _step_lines(relative_path, step_name)
-		source_idx = next((i for i, line in enumerate(lines) if SOURCE_LINE in line), -1)
+		source_idx = next((i for i, line in enumerate(lines) if any(source_line in line for source_line in SOURCE_LINES)), -1)
 		fallback_idx = next((i for i, line in enumerate(lines) if FALLBACK_LINE in line), -1)
 		call_idx = next(
 			(
@@ -156,7 +160,7 @@ def test_safe_fetch_steps_define_canonical_safe_gh_jq_fallback() -> None:
 	for relative_path, step_name in SAFE_FETCH_STEPS:
 		block = _step_block(_workflow_text(relative_path), step_name)
 
-		assert SOURCE_LINE in block
+		assert any(source_line in block for source_line in SOURCE_LINES)
 		assert FALLBACK_LINE in block
 		assert SAFE_GH_JQ_LINE in block
 		assert 'if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then' in block

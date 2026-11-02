@@ -196,6 +196,17 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
 - **Owner:** @shubhodeep1
 
+### `scripts/stage_support_for_phase.sh`
+
+- **Introduced in:** ai/issue-8292 (2026-10-29)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'stage_support_for_phase\.sh' .github/workflows` returns no live caller matches.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_support_script_single_source.py` passes after its fixtures are removed with the helper.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
+- **Owner:** @shubhodeep1
+
 ### `scripts/review_collect_pr_metadata.sh`
 
 - **Introduced in:** ai/issue-3203 (2026-06-07)

@@ -1841,6 +1841,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_isolated_run.py
 
       # Moved here unchanged from tests-hooks-and-orchestrator (15m01s of its 20
       # minutes, run 40264887710, budget-watch issue #8179). Step timings were not
@@ -1911,6 +1912,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_stale_queued.py
+
+      - name: Review autofix sweep zombie reaper tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_zombie_reaper.py
 
       # Moved from tests-release-and-log-analysis, which took 15m14s of its 20
       # minutes on main (run 40750326439, budget-watch issue #8278). The pick is
@@ -2185,6 +2191,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine_utility_roles.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_support_script_single_source.py
 
       - name: Single-issue security pass tests (port P1)
         run: |

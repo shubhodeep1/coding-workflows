@@ -4082,6 +4082,202 @@ def main() -> int:
 	return 1 if failed > 0 else 0
 
 
+
+# ---------------------------------------------------------------
+# Stuck-states P3b: failure-signature breaker evaluator
+# ---------------------------------------------------------------
+_FFB_LOGIN = "github-actions[bot]"
+_FP_A = "0123456789ab"
+_FP_B = "ba9876543210"
+
+
+def _ffb_marker(phase: str, fp: str, run: int) -> str:
+	return f"Plan failed.\n<!-- AI_FAILURE_FINGERPRINT_V1 phase={phase} fp={fp} run={run} -->"
+
+
+def _ffb_comment(cid: int, body: str, login: str = _FFB_LOGIN) -> dict:
+	return {"id": cid, "body": body, "created_at": f"2026-10-29T08:{cid:02d}:00Z", "user": {"login": login}}
+
+
+def test_ffb_two_identical_trusted_markers_trip_with_plan_label():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_A, 102))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "trip"
+	assert result["label"] == "ai:plan-failed"
+	assert result["phase"] == "plan"
+	assert result["fp"] == _FP_A
+	assert result["runs"] == ["101", "102"]
+	assert result["tail_comment_id"] == 2
+	assert [m["run"] for m in result["recent"]] == ["101", "102"]
+
+
+def test_ffb_trips_across_phase_flip_with_unrelated_comments_between():
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, "/answer auto"),
+		_ffb_comment(3, "Some human note", login="octocat"),
+		_ffb_comment(4, "## Clarification questions"),
+		_ffb_comment(5, _ffb_marker("plan", _FP_A, 102)),
+	]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["decision"] == "trip"
+
+
+def test_ffb_different_fingerprints_do_not_trip():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_B, 102))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+
+
+def test_ffb_untrusted_login_markers_are_ignored():
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101), login="mallory"),
+		_ffb_comment(2, _ffb_marker("plan", _FP_A, 102), login="mallory"),
+	]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result == {"decision": "none", "streak": 0, "recent": []}
+
+
+def test_ffb_malformed_marker_is_skipped():
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, "<!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp=XYZ run=102 -->"),
+		_ffb_comment(3, "<!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp=0123456789ab run=0 -->"),
+	]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+
+
+def test_ffb_comment_with_two_markers_is_skipped():
+	two = _ffb_marker("plan", _FP_A, 101) + "\n" + _ffb_marker("plan", _FP_A, 102)
+	comments = [_ffb_comment(1, two), _ffb_comment(2, _ffb_marker("plan", _FP_A, 103))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert [m["run"] for m in result["recent"]] == ["103"]
+
+
+def test_ffb_duplicate_run_id_counts_once():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_A, 101))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+
+
+def test_ffb_trusted_breaker_comment_is_consumption_point():
+	breaker = f"<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=plan fp={_FP_A} runs=101,102 -->\n## stopped"
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, _ffb_marker("plan", _FP_A, 102)),
+		_ffb_comment(3, breaker),
+		_ffb_comment(4, _ffb_marker("plan", _FP_A, 103)),
+	]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+	comments.append(_ffb_comment(5, _ffb_marker("plan", _FP_A, 104)))
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "trip"
+	assert result["runs"] == ["103", "104"]
+
+
+def test_ffb_forged_breaker_comment_is_ignored():
+	breaker = f"<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=plan fp={_FP_A} runs=1,2 -->"
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, breaker, login="mallory"),
+		_ffb_comment(3, _ffb_marker("plan", _FP_A, 102)),
+	]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["decision"] == "trip"
+
+
+def test_ffb_incomplete_window_with_streak_at_start_needs_full_history():
+	comments = [_ffb_comment(1, "noise"), _ffb_comment(2, _ffb_marker("clarify", _FP_A, 101))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, False)
+	assert result["decision"] == "needs_full_history"
+	# Complete history: a lone marker is simply no trip.
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["decision"] == "none"
+	# A different older fingerprint inside the window bounds the streak.
+	older = _ffb_comment(3, _ffb_marker("clarify", _FP_B, 99))
+	older["created_at"] = "2026-10-29T07:00:00Z"
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker([older, *comments], _FFB_LOGIN, 2, False)["decision"] == "none"
+
+
+def test_ffb_repeat_max_three():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_A, 102))]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 3, True)["decision"] == "none"
+	comments.append(_ffb_comment(3, _ffb_marker("plan", _FP_A, 103)))
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 3, True)
+	assert result["decision"] == "trip"
+	assert result["runs"] == ["101", "102", "103"]
+
+
+def test_ffb_empty_login_is_identity_unavailable():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101))]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, "", 2, True) == {"decision": "identity_unavailable"}
+
+
+def test_ffb_repeat_max_below_two_is_rejected():
+	try:
+		orchestrate_lib.evaluate_failure_fingerprint_breaker([], _FFB_LOGIN, 1, True)
+	except ValueError:
+		return
+	raise AssertionError("repeat_max=1 must be rejected")
+
+
+def test_ffb_phase_label_mapping():
+	assert orchestrate_lib.failure_fingerprint_label_for_phase("plan") == "ai:plan-failed"
+	assert orchestrate_lib.failure_fingerprint_label_for_phase("clarify") == "ai:clarify-failed"
+	assert orchestrate_lib.failure_fingerprint_label_for_phase("implement") == "ai:needs-human"
+	comments = [_ffb_comment(1, _ffb_marker("review-autofix", _FP_A, 1)), _ffb_comment(2, _ffb_marker("review-autofix", _FP_A, 2))]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["label"] == "ai:needs-human"
+
+
+def test_ffb_recent_is_capped_at_five():
+	comments = [_ffb_comment(i, _ffb_marker("plan", _FP_A if i % 2 else _FP_B, 100 + i)) for i in range(1, 9)]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert len(result["recent"]) == 5
+	assert result["recent"][-1]["run"] == "108"
+
+
+def _ffb_run_cli(argv: list[str]) -> tuple[int, dict]:
+	import contextlib
+	import io
+	buffer = io.StringIO()
+	with contextlib.redirect_stdout(buffer):
+		rc = orchestrate_lib.main(["failure-fingerprint-breaker", *argv])
+	return rc, json.loads(buffer.getvalue().strip())
+
+
+def test_ffb_cli_valid_and_invalid_input():
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		comments_file = tmp_path / "comments.json"
+		comments_file.write_text(json.dumps([
+			_ffb_comment(1, _ffb_marker("clarify", _FP_A, 101)),
+			_ffb_comment(2, _ffb_marker("clarify", _FP_A, 102)),
+		]), encoding="utf-8")
+		rc, payload = _ffb_run_cli([
+			"--comments-file", str(comments_file),
+			"--trusted-login", _FFB_LOGIN, "--repeat-max", "2", "--comments-complete", "true",
+		])
+		assert rc == 0
+		assert payload["decision"] == "trip"
+		assert payload["label"] == "ai:clarify-failed"
+
+		bad_file = tmp_path / "bad.json"
+		bad_file.write_text("{not json", encoding="utf-8")
+		for argv in (
+			["--comments-file", str(bad_file), "--trusted-login", _FFB_LOGIN],
+			["--comments-file", str(tmp_path / "missing.json"), "--trusted-login", _FFB_LOGIN],
+			["--comments-file", str(comments_file), "--trusted-login", _FFB_LOGIN, "--repeat-max", "1"],
+			["--comments-file", str(comments_file), "--trusted-login", _FFB_LOGIN, "--comments-complete", "maybe"],
+		):
+			rc, payload = _ffb_run_cli(argv)
+			assert rc == 0
+			assert payload == {"decision": "unavailable"}
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
 

@@ -42,6 +42,11 @@ INTERNAL_WRAPPERS = [
 	"internal-validate.yml",
 	"internal-workflow-failure-heal.yml",
 ]
+# internal-*.yml callers of a local reusable workflow (./.github/workflows/...),
+# which run the YAML and scripts of the same commit instead of promote-candidate.
+INTERNAL_LOCAL_CALLERS = {
+	"internal-sync-ai-labels.yml": ["./.github/workflows/sync_ai_labels.yml"],
+}
 
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -341,7 +346,11 @@ _USES_RE = re.compile(r"^\s*uses:\s*(\S+)", re.MULTILINE)
 
 def test_internal_wrappers_use_promote_candidate_and_nothing_else_does() -> None:
 	internal = sorted(p.name for p in WORKFLOWS_DIR.glob("internal-*.yml"))
-	assert internal == sorted(INTERNAL_WRAPPERS)
+	assert internal == sorted(INTERNAL_WRAPPERS + list(INTERNAL_LOCAL_CALLERS))
+	for name, expected_uses in INTERNAL_LOCAL_CALLERS.items():
+		uses = _USES_RE.findall((WORKFLOWS_DIR / name).read_text(encoding="utf-8"))
+		assert uses == expected_uses, (name, uses)
+		assert not any(u.startswith("shubhodeep1/coding-workflows/") for u in uses), name
 	for name in INTERNAL_WRAPPERS:
 		uses = [u for u in _USES_RE.findall((WORKFLOWS_DIR / name).read_text(encoding="utf-8")) if u.startswith("shubhodeep1/coding-workflows/")]
 		assert uses, name
