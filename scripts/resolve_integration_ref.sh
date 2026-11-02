@@ -142,6 +142,27 @@ ci_triage_routing_enabled() {
 	esac
 }
 
+# --- CI-triage prose-marker skip (CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED) -----
+# On by default (#8671): unset, empty or `true` (any case) keeps it on;
+# `false` turns it off; any other value turns it off with a ::warning::.
+# When on, an issue with no `ai:check-triage` label whose body only mentions
+# check-failure-triage markers in prose (its first line is not a marker) is
+# treated as an ordinary issue instead of being refused as label_missing.
+# Issues filed by scripts/check_failure_triage.sh always open with the fp=
+# header, so a label-stripped real triage issue is still refused. Off
+# restores the label_missing refusal. The skip itself logs nothing.
+ci_triage_prose_marker_skip_enabled() {
+	local raw="${CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED:-true}"
+	case "${raw,,}" in
+		true) return 0 ;;
+		false) return 1 ;;
+		*)
+			echo "::warning::CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED has an unrecognised value; the CI-triage prose-marker skip is off. Use true or false." >&2
+			return 1
+			;;
+	esac
+}
+
 get_issue_json() {
 	local issue_num="$1"
 	# Same rate-limit-aware read as get_issue_body(); the caller maps any
@@ -169,7 +190,9 @@ ci_triage_refuse() {
 	echo "::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=refused reason=${reason}" >&2
 }
 
-# Reads the issue JSON on stdin; argv[1] is REPO. Prints one line:
+# Reads the issue JSON on stdin; argv[1] is REPO and the optional argv[2] is
+# "1" when the prose-marker skip is on (missing or "0" keeps it off). Prints
+# one line:
 # `skip` (not a triage issue), `refuse <reason> <pr|none>` or
 # `verify <pr> <ref>`. Mirrors the header check in check_failure_triage.sh.
 CI_TRIAGE_PARSE_PY='
@@ -178,6 +201,7 @@ import re
 import sys
 
 repo = sys.argv[1]
+prose_marker_skip = len(sys.argv) > 2 and sys.argv[2] == "1"
 try:
 	data = json.load(sys.stdin)
 except Exception:
@@ -212,6 +236,16 @@ if not has_label and re.search(r"<!--\s*check-failure-triage:(?!pr=)", body) is 
 # tracking line it is still refused as label_missing (fail closed).
 tracking_line = re.compile(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", re.MULTILINE)
 if not has_label and "ai:orchestrator-managed" in names and tracking_line.search(body):
+	print("skip")
+	sys.exit(0)
+# An issue written by a person that only mentions check-failure-triage
+# markers in prose (#8671) is not a triage issue. Issues filed by
+# scripts/check_failure_triage.sh always open with the fp= header, and a
+# label-stripped real triage issue keeps that header, so it still falls
+# through to refuse("label_missing"). Leading whitespace and a BOM are
+# dropped first, which can only make more bodies count as triage issues.
+first_line = body.lstrip().lstrip("\ufeff").lstrip().split("\n", 1)[0]
+if prose_marker_skip and not has_label and re.match(r"<!--\s*check-failure-triage:", first_line) is None:
 	print("skip")
 	sys.exit(0)
 pr_markers = re.findall(r"check-failure-triage:pr=([^\s>]*)", body)
@@ -301,8 +335,13 @@ sys.exit(0 if isinstance(data, dict) and data.get("ref") == "refs/heads/" + sys.
 # where `set -e` does not apply.
 resolve_ci_triage_branch() {
 	local issue_json="$1"
-	local parsed verdict pr ref reason pr_json encoded_ref ref_json ref_err ref_err_file
-	if ! parsed="$(printf '%s' "${issue_json}" | python3 -I -c "${CI_TRIAGE_PARSE_PY}" "${REPO}")"; then
+	local parsed verdict pr ref reason pr_json encoded_ref ref_json ref_err ref_err_file prose_marker_skip
+	# Evaluated once per resolve, so an unrecognised value warns only once.
+	prose_marker_skip=0
+	if ci_triage_prose_marker_skip_enabled; then
+		prose_marker_skip=1
+	fi
+	if ! parsed="$(printf '%s' "${issue_json}" | python3 -I -c "${CI_TRIAGE_PARSE_PY}" "${REPO}" "${prose_marker_skip}")"; then
 		ci_triage_refuse "issue_parse_failed" "none"
 		return "${CI_TRIAGE_REFUSED_RC}"
 	fi
@@ -455,7 +494,7 @@ run_case() {
 	local bin_dir="$2"
 	local out_file err_file actual_stdout actual_rc
 
-	local routing_flag
+	local routing_flag prose_marker_flag
 	out_file="$(mktemp)"
 	err_file="$(mktemp)"
 	# Always set the routing flag explicitly so an outer value cannot leak
@@ -466,6 +505,15 @@ import json, pathlib, sys
 fixture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 env = fixture.get("env") if isinstance(fixture.get("env"), dict) else {}
 value = env.get("CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED", "false")
+print("__unset__" if value is None else str(value))
+' "${fixture_file}")"
+	# The prose-marker skip flag: a missing key or JSON null unsets it, so
+	# fixtures run with the resolver's default and an outer value cannot leak.
+	prose_marker_flag="$(python3 -c '
+import json, pathlib, sys
+fixture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+env = fixture.get("env") if isinstance(fixture.get("env"), dict) else {}
+value = env.get("CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED")
 print("__unset__" if value is None else str(value))
 ' "${fixture_file}")"
 	(
@@ -479,6 +527,11 @@ print("__unset__" if value is None else str(value))
 			unset CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED
 		else
 			export CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${routing_flag}"
+		fi
+		if [ "${prose_marker_flag}" = "__unset__" ]; then
+			unset CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED
+		else
+			export CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED="${prose_marker_flag}"
 		fi
 		if resolve_ref >"${out_file}" 2>"${err_file}"; then
 			echo 0 >"${out_file}.rc"
