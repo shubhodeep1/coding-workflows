@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The issue's step 3 asked whether `plan.yml` re-plans on `/answer` while the issue carries `ai:awaiting-approval`. It does not. The \"Validate planning phase label\" step (`.github/workflows/plan.yml` L932\u2013952) goes on only for `ai:planning`, `ai:clarification` or `ai:blocked`. Any other label set logs `reason=missing_expected_phase_label outcome=skip`. So a bare `/answer` from the poller would be a no-op, and the issue's own step 3 says the label must move first. A does that with one label edit, made only on the eligible re-plan path and at most once per issue. It keeps recovery in the poller. B leaves two phase labels on the issue. C breaks the \"poller only\" non-goal. D drops the main goal.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo (A, with these binding details)\n  inputs:\n    - `.github/workflows/plan.yml` L898\u2013953: the `/answer` body check and the phase-label gate. `ai:planning` alone is accepted with no further label write.\n    - `.github/workflows/plan.yml` L1056\u20131085: \"Skip stale /answer comments\". The new comment will be the latest `/answer`, so it passes.\n    - `.github/workflows/plan.yml` L2756\u20132758: after planning, `ai:planning` is swapped for `ai:awaiting-approval`. A re-held plan goes back to today's hold state with no new code.\n    - `scripts/orchestrate_poll_process.sh` `_plan_auto_approval_gate` (L18341\u201318477) and its hold path (L18473\u201318476).\n    - `scripts/orchestrate_poll_process.sh` `retrigger_plan` arm (L18634\u201318650): the comment POST to copy and `phase_cap_note_dispatch \"ai:planning\"`.\n  steps:\n    - Re-plan branch placement: in `_plan_auto_approval_gate`, put the new branch after the `heal_counterfactual_hold` early return and before the existing `AI_PHASE_GATE_V1 ... outcome=defer` / `STALL_SKIP` / `_plan_auto_approval_hold_notify` lines.\n    - Entry condition: enter the branch only when `gate_reason == path_not_granted` and `gate_result` has `.replannable == true`. Use a strict `jq -e '.replannable == true'`; a missing field or a parse error counts as false.\n    - Marker check: look in `comments_json` for the marker `<!-- ai:automation-path-replan:v1 issue=<N> -->`. Count it only in a comment written by `gate_login`, `[bot]`, OWNER, MEMBER or COLLABORATOR, using the same trust filter as `_plan_auto_approval_hold_notify`. If the marker is found, fall through to today's hold path unchanged.\n    - Label edit: make exactly one `gh_retry gh issue edit <N> --repo \"${GITHUB_REPOSITORY}\" --add-label 'ai:planning' --remove-label 'ai:awaiting-approval'`. Do not call `ensure_label_exists`; the issue already passed through `ai:planning`. Put a \u00a714 audit comment above the call. It should say that `comments_json`, `details_map_json` and the `retrigger_plan` POST were checked, and that no existing call can change labels.\n    - If the label edit fails: log `AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_label_failed issue=<N>`. Then fall through to today's hold path (defer log, `STALL_SKIP`, hold notice). Do not post `/answer`.\n    - If the label edit succeeds: post one comment through the same `gh_retry gh api .../issues/<N>/comments` call shape as `retrigger_plan`. The body starts with `/answer`, gives a short reason (the plan was held only by directory or glob tokens; one automatic re-plan; a second hold goes to a maintainer) and ends with the marker.\n    - When the POST succeeds: call `phase_cap_note_dispatch \"ai:planning\"` and log `AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan issue=<N>`. Return 1 with no hold notice.\n    - When the POST fails: log `outcome=replan_comment_failed` and return 1 with no hold notice. The issue now sits in `ai:planning` with no new `/answer`, which the existing `retrigger_plan` stall arm handles. Its retries are bounded by the existing recovery counter.\n    - Identifier check: grep the new log outcome values (`replan`, `replan_label_failed`, `replan_comment_failed`) and the marker string for uniqueness first (\u00a76/\u00a710). Leave all existing log keys and reasons as they are.\n    - Poller tests in `tests/test_orchestrate_poll_process.py`:\n      - eligible with no marker: exactly one label edit, then one `/answer` POST carrying the marker, and no hold comment;\n      - eligible with a trusted marker: no edit, no `/answer`, hold notice posted;\n      - eligible but the label edit fails: no `/answer`, hold notice posted;\n      - eligible but the POST fails: no hold notice;\n      - ineligible: no label edit, and the same calls as today.\n    - Guard tests and other files: as in the issue's Tests section, unchanged.\n  replaces_acceptance_criterion: The constraint \"no new gh API call\" is relaxed to: \"no new gh API call on any ineligible or already-replanned path; exactly one label edit, at most once per issue, on the eligible re-plan path\". The marker check and the `/answer` POST still reuse `comments_json` and the `retrigger_plan` POST.\n  equivalence_argument: The constraint exists to protect the shared rate limit. The extra edit runs only when `replannable == true`, which needs a trusted gate result, and only before the per-issue marker exists. It therefore adds at most one call per issue over its lifetime, and every other tick makes exactly today's calls. Without the edit, `plan.yml` provably skips (L948\u2013951), so the goal could not be met any other way.\n  reversibility: Reverting the PR restores today's behaviour (a hold notice every time). A human can also block the re-plan for one issue by posting the marker comment by hand.\n\nSources: none needed beyond the repository. I checked this against `.github/workflows/plan.yml` (L898\u20131085, L2756\u20132758) and `scripts/orchestrate_poll_process.sh` (`_plan_auto_approval_gate` L18341\u201318477, `_plan_auto_approval_hold_notify` L18486\u201318550, `retrigger_plan` L18634\u201318650).",
+  "fingerprint": "db8d2bff5b54ba3156ec41a4af726ffbfbb524627e91f66c8a07b03fe1745f00",
+  "lineage": {
+    "issue_number": 8660,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41395067286",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41395067286",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8660"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261102054322_ebf1edfdd9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8660,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41395067286"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8660",
+  "timestamps": {
+    "created_at": "2026-11-02T05:43:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
