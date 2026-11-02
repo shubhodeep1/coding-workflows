@@ -1,0 +1,101 @@
+{
+  "deferred": [],
+  "running": [],
+  "schema_version": "state_snapshot.v1",
+  "tick_at": "2026-11-02T03:20:02Z",
+  "totals": {
+    "deferred": 0,
+    "running": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0
+    },
+    "tracking_issues": 4
+  },
+  "tracking_issues": [
+    {
+      "current_wave": 2,
+      "integration_ahead_by": "67",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 1,
+        "merged": 2,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8291,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Unattended pipeline: remove stuck states (plan P2a-P13 remainder)",
+      "total_waves": 20,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 10,
+      "integration_ahead_by": "46",
+      "issue_counts": {
+        "closed": 0,
+        "done": 1,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8427,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Keep unattended work going until the change is delivered and verified (persistent-unattended-workflows plan P1-P11)",
+      "total_waves": 11,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 0,
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8434,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Give the workflow-failure heal evidence, reproduction and trend awareness (plan P1-P7)",
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "1",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 1,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8649,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-28-3.md",
+      "total_waves": 2,
+      "wave_complete": false
+    }
+  ]
+}
