@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:953 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The catch-all `*)` fallback arm emits a `::warning::` while the specific arms (ai:ready-to-merge, ai:closed, ai:clarification, ai:orchestrator-managed, ai:workflow-heal) do not, which the reviewer called a telemetry inconsistency.\n  WHY: The reviewer itself says this is not a runtime correctness failure and that the current implementation is correct (source severity NIT).\n- tests/test_ai_label_precreation_contract.py:265-273 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The pre-push test gate reported a failure in `tests/test_ai_label_precreation_contract.py`, and the reviewer could not trace it to the new `re.finditer` loop, so the cause is unresolved.\n  WHY: The gate failure is an executed fact that must be reconciled before merge (source severity MAJOR). The reviewer's static trace found no false positives.\n- tests/test_ai_label_precreation_contract.py:265-273 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The chained-call detector scans every line with no comment exclusion, so a future comment containing `&& ensure_label_exists ...`, or a reformatted `ensure_label_exists () {` definition, would be flagged as a call site.\n  WHY: This would raise a false contract violation in CI (source severity NIT; hardening suggestion: skip lines starting with `#`).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:953 | severity=NIT | confidence=4\n  PROBLEM: The catch-all `*)` fallback arm emits `echo \"::warning::...\" >&2`, while the specific arms (ai:ready-to-merge, ai:closed, ai:clarification, ai:orchestrator-managed, ai:workflow-heal) do not, which the reviewer called a telemetry inconsistency.\n  WHY: The reviewer states this is not a runtime correctness failure and the current implementation is correct.\n- TASK_GAP (satisfied) | severity=NIT | confidence=5\n  Requirement: Implement contract-exact label metadata for `ensure_label_exists` fallback in `scripts/review_rb_judge.sh` (CONSIST-001).\n  Expected change site: `scripts/review_rb_judge.sh` and `tests/test_ai_label_precreation_contract.py`.\n  Evidence of absence: The implementation correctly adds arms for `ai:clarification`, `ai:orchestrator-managed` and `ai:workflow-heal`. The requirement is satisfied.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ai_label_precreation_contract.py:265-273 | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push test gate reports 1 failure in this file after the change to the `re.finditer` loop. The failure message is not surfaced, and the reviewer's static trace finds no false positives.\n  WHY: The gate result is an executed fact, and the cause could be an extra non-literal regex match or a changed downstream `arms`/`literals` shape. It must be reconciled before this lands.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ai_label_precreation_contract.py:265-273 | severity=NIT | confidence=3\n  PROBLEM: The chained-call detector scans every line of `scripts/review_rb_judge.sh` with no comment exclusion, so a comment containing `&& ensure_label_exists ...`, or a definition reformatted as `ensure_label_exists () {`, would be flagged as a call site.\n  WHY: One added explanatory comment would make the contract test fail with a false violation and block merges.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6c730c78669d68a783b31829048c6871bfb5ec55e5c9b401aa2524b2414aead7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8654,
+    "run_id": "41393467079",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41393467079",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102055112_a45c0e9916",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8654,
+    "run_id": "41393467079"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-02T05:51:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
