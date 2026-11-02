@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- N/A (external check-run `copilot-pull-request-reviewer`, run 41382495817) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The external reviewer tool fails with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") on its own instruction-size limit.\n  WHY: The tool exits 1 during prompt construction, independent of this diff, and no hunk in this PR touches the instruction files. Reviewers rated it NIT, mapped here to low. gemini-3_1-flash-lite described it in prose with no severity or confidence.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- N/A (external check-run `copilot-pull-request-reviewer`, run 41382495817) | severity=NIT | confidence=5\n  PROBLEM: The external reviewer tool fails on its own instruction-size limit (log line \"Prompt too big after adding system message\", errorCode `custom_instructions_too_large`).\n  WHY: The tool exits 1 during prompt construction, independent of this diff.\n- HARDENING_SUGGESTIONS: `.github/workflows/orchestrate_clarify_respond.yml` line 173, `printf '%s\\n' \"${CLARIFY_RESPOND_COMMENT_BODY}\" | head -n1` under `pipefail`. `head -n1` can close the pipe early, which would only matter for a comment body above about 64 KiB. It fails closed, and the same pattern exists at line 190. No fix for this PR. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- N/A (external check-run `copilot-pull-request-reviewer`)\n  PROBLEM: The check-run reports `custom_instructions_too_large` (HTTP 422).\n  WHY: It is an external CI infrastructure issue, not caused by or fixable within this PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- N/A (external check-run `copilot-pull-request-reviewer`, head febdb71a, run 41382495817) | severity=NIT | confidence=5\n  PROBLEM: The check-run fails with `custom_instructions_too_large` (HTTP 422) while building its prompt, before reviewing any file.\n  WHY: The PR does not edit agents.md or CLAUDE.md, so no hunk can fix it. It is an external tool instruction-size limitation.\n- Hardening note: the first-line reader at orchestrate_clarify_respond.yml:173 mirrors the existing one at line 190, fails closed under `set -euo pipefail`, and is left as a repo-wide follow-up. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5754e62b22ff9646821e38a15173df842d8b25b89f5d070be92a6ed0f51d204b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8656,
+    "run_id": "41386136075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41386136075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102045653_8895b3d1f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8656,
+    "run_id": "41386136075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T04:56:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
