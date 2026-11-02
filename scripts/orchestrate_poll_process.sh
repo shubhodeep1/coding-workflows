@@ -7925,6 +7925,11 @@ create_security_pass_advisory_followup() {
   # the body tells the pipeline the cited code is already on the default
   # branch; empty on the legacy judge-time filing path.
   local merged_pr="${6:-}"
+	# Optional: present|absent|unknown from
+	# security_pass_advisory_cited_code_status.  `absent` means the cited code
+	# did not survive to the default branch, so the body must not claim it did
+	# (fun-token-multi-chain#710).  Empty or anything else keeps the legacy text.
+	local cited_code_status="${7:-}"
   local finding_id existing_issue body_file title issue_url issue_number advisory_marker remote_followups_json
   SECURITY_PASS_ADVISORY_ISSUE_NUMBER=""
   finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id // ""' 2>/dev/null || true)"
@@ -7964,7 +7969,7 @@ create_security_pass_advisory_followup() {
   fi
   body_file="${RUNTIME_DIR}/security_pass_advisory_${TRACKING_NUM}_$(printf '%s' "${finding_id}" | tr -c 'A-Za-z0-9._-' '_').md"
   printf '%s\n' "${finding_json}" > "${body_file}.finding.json"
-  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" <<'PY'
+  if ! title="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}.finding.json" "${body_file}" "${TRACKING_NUM}" "${integration_branch}" "${head_sha}" "${justification}" "${source}" "${merged_pr}" "${cited_code_status}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -7980,6 +7985,7 @@ head_sha = sys.argv[5]
 justification = sys.argv[6]
 source = sys.argv[7]
 merged_pr = sys.argv[8] if len(sys.argv) > 8 else ""
+cited_code_status = sys.argv[9] if len(sys.argv) > 9 else ""
 
 
 def prose(value: object) -> str:
@@ -8009,7 +8015,17 @@ if source == "line_ownership":
 		"Its cited line predates the project (it was written before the integration base), so it does not gate the project. "
 		"The project completes without this fix; address it through the normal issue pipeline."
 	)
-if merged_pr.isdigit():
+if merged_pr.isdigit() and cited_code_status == "absent":
+	# The audited lines are not on the default branch: the code was removed or
+	# rewritten between the audit and the final merge (fun-token-multi-chain#710,
+	# where #667 reverted the cited coinflip code before PR #596 merged).
+	lines.extend(
+		[
+			f"The integration branch has since merged into the default branch via PR #{merged_pr}, but the cited lines are not on the default branch: the code at `{prose(location)}` was removed or rewritten after the audit at `{head_sha}`. Do not recreate the removed code. Plan and implement this issue against the default branch: find whether the vulnerable behaviour described below still exists in the current code and fix it if it does; in either case add a regression test for the invariant the recommendation protects, and record in the PR body whether the path was found absent or was fixed.",
+			"",
+		]
+	)
+elif merged_pr.isdigit():
 	lines.extend(
 		[
 			f"The integration branch has since merged into the default branch via PR #{merged_pr}, so the cited location refers to code that is already on the default branch. Plan and implement this issue against the default branch.",
@@ -8075,6 +8091,98 @@ PY
   return 0
 }
 
+# security_pass_advisory_cited_code_status <audited_head_sha> <default_branch> <file> <line>
+#
+# Print whether the code a security-pass finding cites at <audited_head_sha>
+# survived to `origin/<default_branch>`: `present`, `absent` or `unknown`.
+# Code can be removed between the audit and the final merge; then the
+# deferred advisory must not claim the cited location is on the default branch
+# (fun-token-multi-chain#710 cited coinflip code that #667 had reverted, and
+# planning blocked with "nothing to implement").
+#
+# The check takes the cited line and up to two lines either side at the
+# audited head, trims whitespace, drops blank lines, and looks for that block
+# as one contiguous run in the default-branch file.  A single line is not
+# enough: `}` or `} catch {` match almost any file.  `unknown` when the
+# audited head is not a hex commit id, the audited blob cannot be read, the
+# line is out of range, the window holds under 12 non-blank characters, or the
+# file is missing on the default branch and `origin/<default_branch>` does not
+# resolve to a commit.  Blank lines are dropped and whitespace is
+# trimmed on both sides, so a moved, re-indented or blank-line-reformatted
+# block still reads `present`; only a content edit reads `absent`, which only
+# changes the advisory's wording (the issue is filed either way).
+# Local git only (the caller fetches the refs once): no GitHub API calls.
+# Fail-open: any error prints `unknown`.  Returns 0 always.
+security_pass_advisory_cited_code_status() {
+	local audited_head_sha="$1"
+	local default_branch="$2"
+	local cited_file="$3"
+	local cited_line="$4"
+	local cited_tmp_dir cited_status
+	if [ -z "${audited_head_sha}" ] || [ -z "${default_branch}" ] || [ -z "${cited_file}" ] \
+		|| ! [[ "${audited_head_sha}" =~ ^[0-9a-fA-F]{7,64}$ ]] \
+		|| ! [[ "${cited_line}" =~ ^[0-9]+$ ]]; then
+		echo "unknown"
+		return 0
+	fi
+	if ! cited_tmp_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/security-pass-cited-code.XXXXXX" 2>/dev/null)"; then
+		echo "unknown"
+		return 0
+	fi
+	if ! git show "${audited_head_sha}:${cited_file}" > "${cited_tmp_dir}/audited" 2>/dev/null; then
+		rm -rf "${cited_tmp_dir}"
+		echo "unknown"
+		return 0
+	fi
+	if ! git show "origin/${default_branch}:${cited_file}" > "${cited_tmp_dir}/current" 2>/dev/null; then
+		# The audited blob exists but the file is gone from the default branch,
+		# unless the default-branch ref itself does not resolve (then unknown).
+		rm -rf "${cited_tmp_dir}"
+		if git rev-parse --verify --quiet "origin/${default_branch}^{commit}" >/dev/null 2>&1; then
+			echo "absent"
+		else
+			echo "unknown"
+		fi
+		return 0
+	fi
+	cited_status="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${cited_tmp_dir}/audited" "${cited_tmp_dir}/current" "${cited_line}" <<'PY' 2>/dev/null || echo "unknown"
+import sys
+from pathlib import Path
+
+
+def stripped(path: str) -> list[str]:
+	# Split on "\n" only, as git numbers lines; splitlines() also breaks on
+	# form feed, \x85, U+2028 and others, which would shift the cited window.
+	# read_bytes() avoids read_text()'s newline translation of a lone "\r".
+	lines = Path(path).read_bytes().decode("utf-8", errors="replace").split("\n")
+	if lines and lines[-1] == "":
+		lines.pop()
+	return [line.strip() for line in lines]
+
+
+audited = stripped(sys.argv[1])
+current = [line for line in stripped(sys.argv[2]) if line]
+line_no = int(sys.argv[3])
+if line_no < 1 or line_no > len(audited):
+	print("unknown")
+	raise SystemExit(0)
+window = [line for line in audited[max(0, line_no - 3):line_no + 2] if line]
+if sum(len(line) for line in window) < 12:
+	print("unknown")
+	raise SystemExit(0)
+size = len(window)
+found = any(current[start:start + size] == window for start in range(len(current) - size + 1))
+print("present" if found else "absent")
+PY
+)"
+	rm -rf "${cited_tmp_dir}"
+	case "${cited_status}" in
+		present|absent) echo "${cited_status}" ;;
+		*) echo "unknown" ;;
+	esac
+	return 0
+}
+
 # security_pass_file_deferred_advisory_followups <integration_branch> <default_branch> <final_pr>
 #
 # File the `ai:security` advisory follow-ups that the exhaustion judge or
@@ -8103,6 +8211,19 @@ security_pass_file_deferred_advisory_followups() {
   if [ "${pending_count}" -eq 0 ]; then
     return 0
   fi
+	# One fetch per ref (local git, no API calls) so the cited-code check sees
+	# the merged default branch and the audited head.  Fail-open: a failed
+	# fetch makes the check print `unknown`, which keeps the legacy wording.
+	local row_cited_status cited_default_fetch_ok=true
+	git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || cited_default_fetch_ok=false
+	if [ -n "${integration_branch}" ]; then
+		git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 || true
+	fi
+	# The final merge deletes the integration branch; the PR head ref keeps
+	# the audited commit reachable on later ticks.
+	if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+		git fetch --no-tags origin "+refs/pull/${final_pr}/head:refs/orchestrator/security-pass/advisory-pr-${final_pr}-head" >/dev/null 2>&1 || true
+	fi
   while IFS= read -r row_json; do
     [ -n "${row_json}" ] || continue
     row_finding="$(printf '%s' "${row_json}" | jq -c '.finding')"
@@ -8112,7 +8233,13 @@ security_pass_file_deferred_advisory_followups() {
     if [ -z "${row_head_sha}" ]; then
       row_head_sha="$(jq -r '.security_pass_head_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
     fi
-    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}"
+	row_cited_status="$(security_pass_advisory_cited_code_status "${row_head_sha}" "${default_branch}" \
+		"$(printf '%s' "${row_finding}" | jq -r '.file // ""')" \
+		"$(printf '%s' "${row_finding}" | jq -r '.line // ""')")"
+	# A failed default-branch fetch cannot prove the code is gone.
+	[ "${cited_default_fetch_ok}" = "true" ] || row_cited_status="unknown"
+	echo "SECURITY_PASS_ADVISORY_CITED_CODE tracking_issue=${TRACKING_NUM} finding=$(printf '%s' "${row_json}" | jq -r '.finding_id' | tr -d '\r\n') default_branch=${default_branch} status=${row_cited_status}"
+    create_security_pass_advisory_followup "${row_finding}" "${integration_branch}" "${row_head_sha}" "${row_justification}" "${row_source}" "${final_pr}" "${row_cited_status}"
     if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
       filed_count=$((filed_count + 1))
       filed_lines="${filed_lines}"$'\n'"- \`$(printf '%s' "${row_json}" | jq -r '.finding_id')\` → #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
@@ -18336,6 +18463,12 @@ _heal_counterfactual_hold_notify()
 # which is written to the issue body before the approval. Every
 # error holds. A hold leaves the issue in its phase for a human /approved and
 # does not increment the recovery count; the implement-time guard still runs.
+# Issue #8339: a path_not_granted hold that the guard marks replannable (only
+# directory or glob tokens denied, the rest would be granted) gets one
+# automatic re-plan per issue from ai:awaiting-approval: the label moves to
+# ai:planning and an /answer comment carrying the
+# ai:automation-path-replan:v1 marker is posted. Once that marker is on the
+# issue, a later hold gets the ordinary hold notice for a human.
 # Args: <issue_num> <details_map_json> <comments_json> <phase>
 # Returns 0 to approve, 1 to hold (after logging).
 _plan_auto_approval_gate()
@@ -18356,6 +18489,14 @@ _plan_auto_approval_gate()
   local gate_display_paths="[]"
   local gate_grant_body_file=""
   local gate_fresh_file=""
+  local gate_replannable="false"
+  local gate_replan_marker=""
+  local gate_replan_seen="true"
+  local gate_replan_body=""
+  local gate_replan_jq=""
+  local gate_replan_since=""
+  local gate_replan_recent=""
+  local gate_replan_landed="false"
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -18417,6 +18558,10 @@ _plan_auto_approval_gate()
           --issue-number "${issue_num}" 2>/dev/null || true)"
         gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
         gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+        # Issue #8339: strict check; a missing field or bad JSON is false.
+        if printf '%s' "${gate_result}" | jq -e '.replannable == true' >/dev/null 2>&1; then
+          gate_replannable="true"
+        fi
         # Q108: write the proposed exact grant before approving. The body the
         # guard extended comes from this tick's batched snapshot, so it is
         # re-read first (one REST read; no batched call carries a live body)
@@ -18469,6 +18614,84 @@ _plan_auto_approval_gate()
     echo "STALL_SKIP issue=${issue_num} reason=heal_counterfactual_hold phase=${phase} action=none"
     _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
     return 1
+  fi
+  if [ "${gate_reason}" = "path_not_granted" ] && [ "${gate_replannable}" = "true" ] \
+    && [ "${phase}" = "ai:awaiting-approval" ]; then
+    # Issue #8339: one automatic re-plan per issue. The marker counts only in
+    # a trusted comment (same filter as _plan_auto_approval_hold_notify); a
+    # jq failure counts as "seen", so the hold notice below runs as before.
+    gate_replan_marker="<!-- ai:automation-path-replan:v1 issue=${issue_num} -->"
+    gate_replan_jq='
+      [ .[]?
+        | select(type == "object")
+        | select(((.user.login // "") == $login and $login != "")
+            or ((.user.login // "") | test("\\[bot\\]$"))
+            or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+        | (.body // "")
+        | select(contains($marker))
+      ] | length > 0'
+    gate_replan_seen="$(printf '%s' "${comments_json:-[]}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" || gate_replan_seen="true"
+    [ "${gate_replan_seen}" = "false" ] || gate_replan_seen="true"
+    if [ "${gate_replan_seen}" = "false" ] \
+      && ! phase_cap_can_dispatch "ai:planning" "automation_path_replan" "${issue_num}"; then
+      # The callers checked only the ai:implementing cap; a re-plan starts a
+      # plan run, so it waits for the ai:planning cap. No marker is posted,
+      # so a later tick retries the re-plan.
+      echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=automation_path_replan"
+      return 1
+    fi
+    if [ "${gate_replan_seen}" = "false" ]; then
+      # §14 audit: comments_json, details_map_json and the retrigger_plan
+      # comment POST were checked; none of them can change labels, and
+      # plan.yml skips an /answer unless the issue carries ai:planning
+      # (AD-1). This edit runs only on the eligible path and at most once
+      # per issue, because the marker comment below ends eligibility.
+      if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --add-label 'ai:planning' --remove-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+        echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_label_failed issue=${issue_num}"
+      else
+        gate_replan_body="/answer
+
+_Orchestrator stall recovery: the plan's \"Files likely to change\" section listed a directory or glob token (for example from placeholder text), and such a token can never be granted exactly. Re-planning once. The earlier clarification answers still apply. List only exact file paths in that section, with no placeholder text. If the new plan is held again, it goes to a maintainer._
+
+${gate_replan_marker}"
+        gate_replan_since="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="${gate_replan_body}" >/dev/null 2>&1; then
+          gate_replan_landed="true"
+        else
+          # gh_retry makes one attempt for this POST, so a failure can be a
+          # lost response for a comment GitHub accepted. §14 audit:
+          # comments_json predates the POST, so one read of the recent
+          # comments runs here, only on this failure branch, with one
+          # attempt. A failed read keeps the rollback below.
+          if gate_replan_recent="$(GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100${gate_replan_since:+&since=${gate_replan_since}}" 2>/dev/null)" \
+            && [ "$(printf '%s' "${gate_replan_recent}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" = "true" ]; then
+            gate_replan_landed="true"
+            echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_confirmed issue=${issue_num}"
+          fi
+        fi
+        if [ "${gate_replan_landed}" = "true" ]; then
+          phase_cap_note_dispatch "ai:planning"
+          echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan issue=${issue_num}"
+          tg_notify_issue "${issue_num}" "Stall recovery: plan held only by directory or glob tokens; re-planning once." "DEBUG" || true
+        else
+          # Put the issue back in ai:awaiting-approval so the next tick retries
+          # the whole re-plan with its marker; without the marker a plain
+          # retrigger_plan /answer could allow a second automatic re-plan.
+          # If the rollback fails too, the retrigger_plan arm recovers it.
+          # Residual case: if the POST landed but both its response and the
+          # confirmation read were lost, the marker is already on the issue,
+          # so the next tick posts the hold notice for a maintainer instead
+          # of re-planning (never a second re-plan, never a stuck issue).
+          echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_failed issue=${issue_num}"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 \
+            || echo "::warning::Could not restore ai:awaiting-approval on issue #${issue_num} after a failed re-plan comment; it is left in ai:planning and the re-plan marker could not be confirmed (it may have landed)."
+        fi
+        return 1
+      fi
+    fi
   fi
   echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason:-plan_gate_error} outcome=defer issue=${issue_num} paths=${gate_paths:-none}"
   echo "STALL_SKIP issue=${issue_num} reason=automation_path_plan_hold phase=${phase} action=none"
