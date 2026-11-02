@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Merged implementation changes frequently add a small entry under changelog.d alongside tests for the affected component. When planning a behavior change, check the repository\u2019s changelog-fragment convention and add focused tests rather than relying only on broad CI coverage.",
+  "fingerprint": "4ccae630eb10cc9afb0d845b42aa34e24a21f4e20a63651baadc4d474efa59f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41371238583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41371238583",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8611",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8630",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8631",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8633",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8635",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8616",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8632",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8634",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8636",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8637"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261102011741_1ea3a47be4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Behavior changes commonly include a focused changelog.d fragment and regression tests.",
+  "timestamps": {
+    "created_at": "2026-11-02T01:17:41Z",
+    "promoted_at": "2026-11-02T01:18:14Z",
+    "superseded_at": null
+  }
+}
