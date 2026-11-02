@@ -487,6 +487,24 @@ def test_choose_orders_by_least_used_with_alphabetical_ties() -> None:
 	assert verdict["utilization"] == 0.4
 
 
+def test_choose_ranks_a_missing_five_hour_reading_by_seven_day() -> None:
+	# Many accounts no longer report a 5-hour window: a missing reading means
+	# no 5-hour limit, so the account ranks by its 7-day use instead of last.
+	probes = [
+		ce.parse_probe(_probe_text(0.0, 0.90), "FUNTOKEN2"),
+		ce.parse_probe(_probe_text(0.2, 0.93), "SVET"),
+		ce.parse_probe(_probe_text(None, 0.62), "PERSONAL2"),
+		ce.parse_probe(_probe_text(None, 0.60), "PERSONAL1"),
+		ce.parse_probe(_probe_text(0.1, None), "TEAM1"),
+		ce.parse_probe(_probe_text(None, 0.96), "SVET2"),
+	]
+	verdict = ce.choose_account(probes, 0.95)
+	assert verdict["order"] == ["PERSONAL1", "PERSONAL2", "FUNTOKEN2", "SVET", "TEAM1"]
+	assert verdict["account"] == "PERSONAL1"
+	assert verdict["utilization"] == 0.60
+	assert verdict["gated"] == ["SVET2"]
+
+
 def test_choose_gates_accounts_at_or_over_the_gate() -> None:
 	probes = [
 		ce.parse_probe(_probe_text(0.95, 0.1), "A"),
