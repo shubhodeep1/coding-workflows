@@ -28,14 +28,31 @@ jobs:
     # Static checks: shell-block guards, YAML lint, drift check, actionlint,
     # Python syntax and ruff, schema/prompt checks, and ShellCheck. About
     # 2 minutes measured (1.4-1.9 in #4707's CI runs); 15 leaves room for a
-    # cold runner. Since #7250 and #7334 it also runs test steps moved from
-    # tests-heal-plan-and-validation, so that figure no longer covers the
-    # whole job: re-measure it before moving more steps here. budget-watch
-    # warns at 75% of the timeout (11m15s for this job).
+    # cold runner. From #7250 and #7334 until #8394 it also ran test steps
+    # moved from tests-heal-plan-and-validation, so that figure did not cover
+    # the whole job then (see below). budget-watch warns at 75% of the
+    # timeout (11m15s for this job).
     # It took 15m18s of its 15 minutes on main (run 38562929820, budget-watch
     # issue #7382), so "Regression tests wired by the CI wiring guard
     # (part 1)" was moved out to tests-release-and-log-analysis, and from there
     # on to tests-heal-plan-and-validation in #7406.
+    # It then took 11m17s of its 15 minutes on main (run 40954844196,
+    # budget-watch issue #8394), so its three test steps moved out to
+    # tests-hooks-and-orchestrator, orchestrate-poll (3) and
+    # tests-promote-stall-and-review (the last one moved on to
+    # tests-release-and-log-analysis in #8466). Its remaining test steps are the small
+    # contract tests for its own guards (shell-block, CI job split, CI test
+    # wiring, agents.d fragments) and the "Prompt tier budget" check
+    # (tests/prompt_size_budget.py); the test steps moved in by #7250 and
+    # #7334 are gone, so re-measure the job before moving steps here again.
+    # orchestrate-poll (3) then took 19m30s of its 20 minutes (run
+    # 41071474282, budget-watch issue #8472), so its "Validation self-test
+    # unit tests" step moved back in here. That step ran here in run
+    # 40954844196 together with two other test steps, and the job took
+    # 11m17s, so this job with only that step stays under that figure and
+    # under its 15-minute timeout; it may still pass budget-watch's 11m15s
+    # warning line. The first pick for that step, tests-promote-stall-and-review,
+    # was cancelled at its 20-minute timeout on the PR head run 41097621008.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -448,21 +465,32 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
 
-      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
-      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
-      # measured about 2 minutes. Step names and bodies are unchanged.
-      # "Regression tests wired by the CI wiring guard (part 1)", moved here
-      # with it, moved on to tests-release-and-log-analysis in #7382 and is in
-      # tests-heal-plan-and-validation since #7406.
-      - name: Implement post-Codex recovery unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
-
       # Moved from tests-heal-plan-and-validation, which measured 15m04s of
       # its 20 minutes on main (run 38481381592, issue #7334). Per-step
       # timings for that run were not available when these steps were
       # chosen. Step names and bodies are unchanged.
+      # Moved on from static-checks, which took 11m17s of its 15 minutes on
+      # main (run 40954844196, budget-watch issue #8394). The pick is an
+      # estimate from test and subprocess counts (the largest of the three
+      # moved steps), not measured. Pinned to group 3: its only other pinned
+      # steps were then two single-module steps (#8396 later added the
+      # orchestrate-poll single-file module step), its last budget-watch issue was
+      # #8072, and since then it lost the unblock step (#8072, #8091, #8118)
+      # and its slice shrank from 1/4 to 1/5 (#8113). Name and body unchanged.
+      # Moved again, from orchestrate-poll (3), back to static-checks:
+      # orchestrate-poll (3) took 19m30s of its 20 minutes on main (run
+      # 41071474282, budget-watch issue #8472) after it gained this step and
+      # the single-file module step together. This step is the slower of the
+      # two: on the PR head run 41097621008, tests-promote-stall-and-review
+      # was cancelled at its 20-minute timeout while this step was still in
+      # tests/test_security_audit_workflow_contract.py, almost six minutes
+      # after the module before it finished, with eleven modules left to run.
+      # Every 20-minute job sits near budget-watch's 15-minute line (#8278,
+      # #8279, #8281, #8395, #8466), so none has that much room. This job is
+      # the only one with a measured bound: it took 11m17s with this step and
+      # two other test steps (run 40954844196), so with this step alone it
+      # stays under that and under its 15-minute timeout. Name and body
+      # unchanged; it has no matrix guard because this job has no matrix.
       - name: Validation self-test unit tests
         run: |
           set -euo pipefail
@@ -487,22 +515,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_resolver_union.py
-
-      - name: Validation bootstrap and family direct-run tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
   tests-hooks-and-orchestrator:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -637,13 +649,6 @@ jobs:
           # The fake docker lives in a temp dir, so TMPDIR must allow executables.
           TMPDIR="${RUNNER_TEMP}" PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
 
-      - name: Single-issue security pass tests (port P1)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_single_issue_security_pass.py \
-            tests/test_review_security_hold_sweep.py
-
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
         env:
           # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
@@ -662,21 +667,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_prepush_test_gate.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_prepush_test_gate.py
 
-      - name: Claude engine selection and claude_run tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine_utility_roles.py
-
       - name: Claude engine decision tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine.py
-
-      - name: Review sandbox Claude role tests (Phase 5c)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_claude_roles.py
 
       - name: Claude account-pool review-panel slot tests
         run: |
@@ -732,11 +726,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_install_claude_action.py
-
-      - name: Session automation retirement guard and retired labels/files tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_no_session_automation.py tests/test_ai_labels_retired.py tests/test_update_workflows_retired_files.py tests/test_release_manifest.py tests/test_release_manifest_workflow_contract.py tests/test_verify_release_manifest.py tests/test_update_workflows_manifest_verify.py tests/test_update_workflows_pr_delivery.py tests/test_update_workflows_template_gate.py
 
       - name: Security-pass skip rule tests
         run: |
@@ -861,6 +850,7 @@ jobs:
               tests/test_gh_helpers_parse_reset_header.py \
               tests/test_gh_retry_stdout_isolation.py \
               tests/test_gh_retry_permanent_auth_failures.py \
+              tests/test_gh_retry_final_stderr_redaction.py \
               tests/test_gh_api_retry.py \
               tests/test_gh_api_retry_py.py \
               tests/test_gh_pr_comments_argv_limit.py > /tmp/merge_train_rest.log 2>&1
@@ -923,6 +913,48 @@ jobs:
           python3 -m coverage erase
           PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
           python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
+
+      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
+      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
+      # measured about 2 minutes. Step names and bodies are unchanged.
+      # "Regression tests wired by the CI wiring guard (part 1)", moved here
+      # with it, moved on to tests-release-and-log-analysis in #7382 and is in
+      # tests-heal-plan-and-validation since #7406.
+      # Moved on from static-checks, which took 11m17s of its 15 minutes on
+      # main (run 40954844196, budget-watch issue #8394). The pick is an
+      # estimate from test and subprocess counts, not measured; the run's step
+      # timings were not readable. Name and body unchanged.
+      - name: Implement post-Codex recovery unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
+
+      # Two moves, oldest first. History: this step first left
+      # tests-promote-stall-and-review, which took 15m18s of its 20 minutes on
+      # main (run 39039638823, budget-watch issue #7576); it and one sibling
+      # step were picked as that job's most expensive steps by test and
+      # subprocess counts (estimated, not measured; step timings were not
+      # readable) and moved to tests-heal-plan-and-validation. The sibling is
+      # not part of the later move; only this step is here.
+      #
+      # Current move: from tests-heal-plan-and-validation, which took 15m10s of
+      # its 20 minutes on main (run 40954844196, budget-watch issue #8395).
+      # Chosen as that job's largest step not split into parallel processes,
+      # by test and subprocess count (an estimate, not measured). It needs only
+      # checkout, Python 3.12 and the shared pip install, which this job
+      # already has. Name and body unchanged.
+      - name: Review autofix review-pipeline plumbing contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_sandbox_excluded_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
 
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1101,7 +1133,7 @@ jobs:
       - name: Tracking issue comment cap tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py tests/test_tg_helpers_cleanup.py
 
       - name: Daily consumer health check tests
         run: |
@@ -1114,6 +1146,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py tests/test_validation_streaming_output.py
           # Scheduled validation (issue #7553): wrapper schedule, deterministic mode and failure sink.
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_scheduled_mode.py tests/test_validate_scheduled_sink.py
+          # Validate job cleanup steps when authorization or runtime setup fails.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_presetup_cleanup_contract.py
 
       # Moved from tests-release-and-log-analysis, which took 15m33s of its
       # 20 minutes on main (run 38663329196, budget-watch issue #7406). Step
@@ -1183,6 +1217,7 @@ jobs:
             tests/test_verify_integration_fingerprints_partial_removal.py
             tests/test_verify_integration_fingerprints_post_capture_reintroduction.py
             tests/test_workflow_retro_fanout.py
+            tests/test_retro_comment_patch_reconfirm.py
             tests/test_workflow_support_ref_follows_pin.py
           )
           rm -f /tmp/wiring_part1_collect.log /tmp/wiring_part1_modules.txt /tmp/wiring_part1_tests.txt \
@@ -1263,25 +1298,6 @@ jobs:
             echo "::error::wiring guard part 1 shards failed: ${wg1_failed[*]}"
             exit 1
           fi
-
-      # Moved from tests-promote-stall-and-review, which took 15m18s of its
-      # 20 minutes on main (run 39039638823, budget-watch issue #7576). Step
-      # timings were not readable when this was planned; these two were chosen
-      # as that job's most expensive steps by test and subprocess counts
-      # (estimated, not measured). Both need only checkout, Python 3.12 and the
-      # shared pip install, which this job already has. Names and bodies
-      # unchanged.
-      - name: Review autofix review-pipeline plumbing contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
 
       - name: Implement leftover issue-branch replacement tests
         run: |
@@ -1681,6 +1697,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_security_pass.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_head_binding.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_enable_auto_merge_cdpath.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_draft_skip.py
 
       # Moved from orchestrate-poll (2), which took 19m28s of its 20 minutes on
@@ -1774,21 +1791,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_judge_interim_round_trip.py
-
-      - name: Review/judge/conflict strict-render contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
-
-      - name: Review synthesize-smoke contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
 
       - name: Validate driver synthesised filter contract test
         run: |
@@ -2172,6 +2174,35 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
 
+      # Moved from tests-hooks-and-orchestrator, which took 15m27s of its 20
+      # minutes (run 40752698170, budget-watch issue #8281); picked by estimated
+      # cost because the run's step timings could not be read. This job also
+      # took four steps from tests-heal-plan-and-validation (#8279, below), so
+      # its headroom is an estimate too; budget-watch reports it if it nears
+      # its timeout.
+      - name: Claude engine selection and claude_run tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine_utility_roles.py
+
+      - name: Single-issue security pass tests (port P1)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_single_issue_security_pass.py \
+            tests/test_review_security_hold_sweep.py
+
+      - name: Review sandbox Claude role tests (Phase 5c)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_claude_roles.py
+
+      - name: Session automation retirement guard and retired labels/files tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_no_session_automation.py tests/test_ai_labels_retired.py tests/test_update_workflows_retired_files.py tests/test_release_manifest.py tests/test_release_manifest_workflow_contract.py tests/test_verify_release_manifest.py tests/test_update_workflows_manifest_verify.py tests/test_update_workflows_pr_delivery.py tests/test_update_workflows_template_gate.py
+
       - name: Workflow log collector coverage gate
         run: |
           set -euo pipefail
@@ -2238,6 +2269,57 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_files_touched_scope_guard.py
 
+      # Moved again from tests-promote-stall-and-review, which took 15m33s of
+      # its 20 minutes on main (run 41042353484, budget-watch issue #8466).
+      # Picked by test and subprocess counts because the run's step timings
+      # could not be read (an estimate, not a measurement). Needs no Node or
+      # prepared .claude/ live copies. Name and body unchanged.
+      # Moved from static-checks, which took 11m17s of its 15 minutes on main
+      # (run 40954844196, budget-watch issue #8394), first to
+      # tests-promote-stall-and-review. That pick was an estimate from test
+      # and subprocess counts, not measured. Name and body unchanged.
+      - name: Validation bootstrap and family direct-run tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_tracking_issue_list_limit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
+
+      # Moved from tests-promote-stall-and-review, which took 15m33s of its 20
+      # minutes on main (run 41042353484, budget-watch issue #8466). Picked by
+      # test and subprocess counts because the run's step timings could not be
+      # read (an estimate, not a measurement). Needs no Node or prepared
+      # .claude/ live copies. Name and body unchanged.
+      - name: Review/judge/conflict strict-render contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
+
+      # Moved from tests-promote-stall-and-review, which took 15m33s of its 20
+      # minutes on main (run 41042353484, budget-watch issue #8466). Picked by
+      # test and subprocess counts because the run's step timings could not be
+      # read (an estimate, not a measurement). Needs no Node or prepared
+      # .claude/ live copies. Name and body unchanged.
+      - name: Review synthesize-smoke contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
+
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
     # (about 20 minutes on 4 local shards). Each matrix group runs one
@@ -2247,6 +2329,8 @@ jobs:
     # 20 minutes (run 40165437476, budget-watch issue #8113). Group 4 runs
     # its slice and, since #8118, the unblock judge step; every other
     # group-pinned step keeps its group.
+    # Since #8472, group 3 pins the single-file module step, the Claude
+    # engine judges and the validation harness sandbox steps.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -2576,7 +2660,9 @@ jobs:
             tests/test_static_context_symlink_guard.py \
             tests/test_summarize_unselected_runs.py \
             tests/test_test_and_mark_stable_phase7_unconflict.py \
+            tests/test_test_and_mark_stable_phase7_timeout_status.py \
             tests/test_test_and_mark_stable_live_log_cooldown.py \
+            tests/test_test_and_mark_stable_orchestrate_child_count.py \
             tests/test_validate_lint_bounded_tail_capture.py \
             tests/test_validate_lint_external_tool_dependencies.py \
             tests/test_validate_lint_import_audit_safety.py \
@@ -2755,13 +2841,134 @@ jobs:
       # step (#8072), so it had the most headroom. Commands and order
       # unchanged; they run once per CI run. The unblock step left group 1
       # for group 0 in #8091.
+      # Moved again, from group 1 to group 3: orchestrate-poll (1) took 20m12s
+      # of its 20 minutes on main (run 40954844196, budget-watch issue #8396).
+      # This was group 1's only pinned step besides its slice. Step timings
+      # were not readable when this was planned, so the choice is an estimate
+      # from recorded group totals: group 3 has not been named by budget-watch
+      # since #8072, after which its unblock step left and its slice shrank to
+      # a fifth (#8113). Group 3 also took "Validation self-test unit tests"
+      # from static-checks in #8394; with this step it pinned four steps.
+      # Name and body unchanged; still once per CI run.
+      # Budget-watch issue #8472 (group 3 took 19m30s of its 20 minutes, run
+      # 41071474282) kept this step in group 3 and moved "Validation self-test
+      # unit tests", the slower of the two steps group 3 gained, to
+      # static-checks; group 3 then runs this step, its slice and the two
+      # steps below.
+      # Overlapped in place (workflow-optimization recommendation Speed 1 /
+      # Reliability 1 / Cost 1, 2026-09-28): the ledger module took 139s
+      # locally because test_invalid_emit_timeout_literals_keep_the_default_bound
+      # waits for the 120s default LEDGER_EMIT_TIMEOUT_SECONDS bound, and the
+      # three modules ran one after another. They now run concurrently and
+      # fail closed, following the unblock step pattern above: each writes its
+      # own log and rc file, every process is reaped before any is judged, and
+      # a missing or non-numeric rc counts as a failure. CI_SUBTEST_START/END
+      # lines time each module and CI_SUBTEST_HEARTBEAT lines (about every
+      # 30s, from a loop an EXIT trap kills) name the ones still running. The
+      # saving (about the two shorter modules, up to about 2 minutes) is an
+      # estimate pending a timed CI run, not a measurement. Concurrency check:
+      # the modules share no fixed /tmp, RUNNER_TEMP or repo-root write path
+      # (each uses its own temp dirs; the ledger module points RUNNER_TEMP and
+      # LEDGER_SUBSTATES_SEEN_FILE at temp paths), so all three run
+      # concurrently rather than as a two-module chain. Rollback: restore the
+      # sequential three-line body if a timed run shows interference.
       - name: Orchestrate poll single-file module tests
-        if: strategy.job-index == 1
+        if: strategy.job-index == 3
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
+          sf_modules=(tests/test_orchestrate_poll_noop_suspicious_recovery.py tests/test_state_snapshot.py tests/test_run_substate_ledger.py)
+          rm -f /tmp/single_file_step_*.log /tmp/single_file_step_*.rc \
+            /tmp/single_file_step_*.start_ms /tmp/single_file_step_*.end_ms
+          sf_now_ms() { date +%s%3N; }
+          sf_step_start_ms="$(sf_now_ms || true)"
+          case "${sf_step_start_ms}" in
+            ''|*[!0-9]*)
+              sf_step_start_ms=0
+              echo "::warning::CI_SUBTEST clock unavailable; heartbeat elapsed_ms values will read 0" ;;
+          esac
+          sf_pids=()
+          for sf_i in "${!sf_modules[@]}"; do
+            sf_module="${sf_modules[${sf_i}]}"
+            echo "CI_SUBTEST_START subtest=${sf_module}"
+            sf_now_ms > "/tmp/single_file_step_${sf_i}.start_ms" || true
+            (
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 "${sf_module}" > "/tmp/single_file_step_${sf_i}.log" 2>&1
+              sf_rc="$?"
+              sf_now_ms > "/tmp/single_file_step_${sf_i}.end_ms"
+              # Written last: the heartbeat treats a module with an rc file as finished.
+              echo "${sf_rc}" > "/tmp/single_file_step_${sf_i}.rc"
+            ) &
+            sf_pids+=("$!")
+          done
+          # Heartbeat while modules run. sleep gets its own /dev/null fds so an
+          # orphaned sleep cannot hold the step's output pipe open.
+          (
+            while sleep 30 </dev/null >/dev/null 2>&1; do
+              sf_running=()
+              for sf_i in "${!sf_modules[@]}"; do
+                [ -e "/tmp/single_file_step_${sf_i}.rc" ] || sf_running+=("${sf_modules[${sf_i}]}")
+              done
+              [ "${#sf_running[@]}" -gt 0 ] || break
+              sf_beat_ms="$(sf_now_ms || true)"
+              sf_beat_elapsed_ms=0
+              case "${sf_beat_ms}" in
+                ''|*[!0-9]*) ;;
+                *) [ "${sf_step_start_ms}" = "0" ] || sf_beat_elapsed_ms="$((10#${sf_beat_ms} - 10#${sf_step_start_ms}))" ;;
+              esac
+              sf_running_csv="$(IFS=,; echo "${sf_running[*]}")"
+              echo "CI_SUBTEST_HEARTBEAT running=${sf_running_csv} elapsed_ms=${sf_beat_elapsed_ms}"
+            done
+          ) &
+          sf_heartbeat_pid="$!"
+          # The trap never calls exit, so the step keeps its own exit status.
+          trap 'kill "${sf_heartbeat_pid}" 2>/dev/null || true; wait "${sf_heartbeat_pid}" 2>/dev/null || true' EXIT
+          # Reap every process before judging any, so none is left orphaned.
+          for sf_pid in "${sf_pids[@]}"; do
+            wait "${sf_pid}" || true
+          done
+          sf_failed=()
+          sf_failed_ids=()
+          for sf_i in "${!sf_modules[@]}"; do
+            sf_module="${sf_modules[${sf_i}]}"
+            sf_stem="/tmp/single_file_step_${sf_i}"
+            # A missing or non-numeric exit code counts as a failure.
+            sf_rc="$(cat "${sf_stem}.rc" 2>/dev/null || echo 1)"
+            case "${sf_rc}" in
+              ''|*[!0-9]*) sf_rc=1 ;;
+            esac
+            # Timing is telemetry only: a missing or non-numeric start time gives 0;
+            # a missing or non-numeric end time is replaced by the current clock.
+            sf_start_ms="$(cat "${sf_stem}.start_ms" 2>/dev/null || true)"
+            sf_end_ms="$(cat "${sf_stem}.end_ms" 2>/dev/null || true)"
+            case "${sf_end_ms}" in
+              ''|*[!0-9]*) sf_end_ms="$(sf_now_ms || true)" ;;
+            esac
+            sf_elapsed_ms=0
+            case "${sf_start_ms}:${sf_end_ms}" in
+              :*|*:|*[!0-9:]*) ;;
+              *) sf_elapsed_ms="$((10#${sf_end_ms} - 10#${sf_start_ms}))" ;;
+            esac
+            echo "CI_SUBTEST_END subtest=${sf_module} elapsed_ms=${sf_elapsed_ms} rc=${sf_rc}"
+            echo "::group::single-file module ${sf_module}"
+            # "| " prefix: PR-controlled test output cannot act as a workflow command.
+            { cat "${sf_stem}.log" 2>/dev/null || true; } | sed 's/^/| /'
+            echo "::endgroup::"
+            if [ "${sf_rc}" != "0" ]; then
+              sf_failed+=("${sf_module}")
+              sf_failed_ids+=("${sf_i}")
+            fi
+          done
+          # Repeat failing modules' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for sf_j in "${!sf_failed[@]}"; do
+            echo "--- single-file module ${sf_failed[${sf_j}]} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/single_file_step_${sf_failed_ids[${sf_j}]}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#sf_failed[@]}" -gt 0 ]; then
+            echo "::error::single-file module tests failed: ${sf_failed[*]}"
+            exit 1
+          fi
 
       # Moved from tests-release-and-log-analysis, which took 17m51s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7689). Earlier

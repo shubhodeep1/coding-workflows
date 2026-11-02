@@ -12,6 +12,7 @@ import os
 import re
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -77,11 +78,23 @@ def test_sends_one_debug_note_naming_every_account_at_the_gate(env: dict) -> Non
 	assert "CLAUDE_POOL_HEALTH accounts=3 gated=2 auth_failed=0 probe_failed=0 alert=sent" in result.stdout
 	text = _sent_text(env)
 	assert text.startswith("🔍 DEBUG: Claude pool: 2 of 3 account(s) at or above the 90% usage gate; 1 usable.\n")
-	assert "ALPHA: 5h 95% (resets 1970-01-01 00:16 UTC), 7d 10%" in text
+	# Every probed account is listed; the 1970 reset times read "resets now".
+	assert "ALPHA: 5h 95% (resets now, 1970-01-01 00:16 UTC), 7d 10% (resets now)" in text
+	assert "BETA: 5h 20% (resets now), 7d 10% (resets now)" in text
 	assert "GAMMA: usage limit reached (resets unknown)" in text
-	assert "BETA:" not in text
 	assert text.endswith("Probed by https://github.com/shubhodeep1/coding-workflows/actions/runs/123456")
 	assert "bot-secret-value" not in result.stdout + result.stderr
+
+
+def test_waiting_items_line_gives_hours_until_the_earliest_reset(env: dict) -> None:
+	soon = int(time.time()) + 2 * 3600 + 60
+	probe = {**_probe("ALPHA", 0.95, 0.1), "five_hour_resets_at": soon, "seven_day_resets_at": soon + 3600}
+	items = {"count": 1, "opened_at": "2026-11-01T00:00:00Z", "items": [{"kind": "issue", "item": "7", "run": "none"}]}
+	result = _run(env, [probe], ALERT_MSG_LEVEL="DEBUG", CLAUDE_CAPACITY_WAIT_ITEMS=json.dumps(items))
+	assert result.returncode == 0, result.stderr
+	text = _sent_text(env)
+	assert re.search(r"Claude pool exhausted: 1 item\(s\) waiting since 2026-11-01T00:00:00Z; earliest reset \d{4}-\d\d-\d\d \d\d:\d\d UTC \(in 2\.0h\)\.", text)
+	assert "ALPHA: 5h 95% (resets in 2.0h, " in text and "7d 10% (resets in 3.0h)" in text
 
 
 def test_a_filtered_or_undelivered_warning_is_not_logged_as_sent(env: dict) -> None:

@@ -127,6 +127,10 @@ jobs:
       # Re-issue lineage (Q147): a report whose heal issue the unblock judge
       # re-issued is recorded on the open re-issue. 'false' turns it off.
       HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
+      # Linked-run scope paths (#8360): for a release or promotion workflow_run
+      # report, the workflows and scripts its linked runs used join the frozen
+      # heal scope. 'false' turns that off and restores the previous scope.
+      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED: ${{ vars.WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED || 'true' }}
       # Non-retryable review/autofix failures (#6756): 'false' skips the PR
       # diagnosis; host-only stops then keep #6745's skip, others are healed.
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
@@ -398,6 +402,8 @@ jobs:
       HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK || '1' }}
       HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS || '3' }}
       HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
+      # Linked-run scope paths (#8360); kept in step with the intake job's env.
+      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED: ${{ vars.WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED || 'true' }}
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
       # Synced-file security findings (project #7604); kept in step with the
       # intake job's env (test_heal_scope_recovery_scan_workflow_wiring).

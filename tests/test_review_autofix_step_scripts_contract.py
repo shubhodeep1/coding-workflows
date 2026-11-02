@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_autofix_step_scripts import (  # noqa: E402
 	REPO_ROOT,
 	REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS,
+	REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_WORKFLOW_PATH,
 	expanded_review_autofix_text,
@@ -61,6 +62,24 @@ def test_moved_steps_run_only_the_resolving_wrapper() -> None:
 			assert "SUPPORT_SCRIPTS_DIR" not in run and ".codex-workflow-src" not in run, (
 				f"{step_name}: gate-job steps run before support staging and must read only the verified head-gate checkout"
 			)
+			assert "${{" not in run, f"{step_name}: wrapper must not carry GitHub expressions"
+			continue
+		if script_name in REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS:
+			checkout_dir = REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS[script_name]
+			skip_run_lines = run.rstrip("\n").split("\n")
+			assert skip_run_lines[0] == f'REVIEW_AUTOFIX_STEP_SCRIPT="${{GITHUB_WORKSPACE}}/{checkout_dir}/scripts/{script_name}"', step_name
+			verify_line = skip_run_lines[1]
+			for check in (
+				'[ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" != "success" ]',
+				'! [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]',
+				f'[ "$(git -C "${{GITHUB_WORKSPACE}}/{checkout_dir}" rev-parse HEAD 2>/dev/null)" != "${{REVIEW_SUPPORT_SHA}}" ]',
+				'[ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]',
+			):
+				assert check in verify_line, f"{step_name}: wrapper must verify {check}"
+			assert skip_run_lines[2].startswith("  echo \"::error::") and skip_run_lines[3] == "  exit 1", step_name
+			assert skip_run_lines[-2:] == ["fi", 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'], step_name
+			assert len(skip_run_lines) == 6, f"{step_name}: skip-job wrapper must have no other resolution path"
+			assert "SUPPORT_SCRIPTS_DIR" not in run and ".codex-workflow-src" not in run, step_name
 			assert "${{" not in run, f"{step_name}: wrapper must not carry GitHub expressions"
 			continue
 		expected_lines = [
@@ -120,7 +139,7 @@ def test_every_wrapper_is_registered_and_expands() -> None:
 	raw = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
 	wrapped = set(
 		re.findall(
-			r'REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts)/([a-z0-9_]+\.sh)"',
+			r'REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-freshness-src/scripts)/([a-z0-9_]+\.sh)"',
 			raw,
 		)
 	)
@@ -157,6 +176,27 @@ def test_gate_job_step_scripts_come_only_from_verified_head_gate_checkout() -> N
 		assert step_name in by_name, f"{step_name} must run in the gate job"
 		assert "HEAD_GATE_HELPER_VERIFIED" in by_name[step_name]["run"]
 		assert names.index("Verify head-gate helper identity") < names.index(step_name)
+
+
+def test_skip_merge_job_step_scripts_come_only_from_verified_freshness_checkout() -> None:
+	assert REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS, "skip-merge step registry must not be empty"
+	workflow = yaml.safe_load(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["deterministic-skip-merge"]["steps"]
+	names = [step.get("name") for step in steps]
+	by_name = {step.get("name"): step for step in steps}
+	checkout = by_name["Checkout merge-base freshness helper"]
+	assert checkout["with"]["ref"] == "${{ needs.gate.outputs.review_support_sha }}"
+	assert checkout["with"]["path"] == ".codex-freshness-src"
+	sparse = checkout["with"]["sparse-checkout"].split()
+	for step_name, (script_name, _severity) in REVIEW_AUTOFIX_STEP_SCRIPTS.items():
+		if script_name not in REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS:
+			continue
+		assert REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS[script_name] == ".codex-freshness-src"
+		assert f"scripts/{script_name}" in sparse, f"{script_name} must be in the freshness sparse checkout"
+		assert step_name in by_name, f"{step_name} must run in the deterministic-skip-merge job"
+		assert by_name[step_name]["env"]["FRESHNESS_HELPER_CHECKOUT_OUTCOME"] == "${{ steps.checkout_freshness_helper.outcome }}"
+		assert by_name[step_name]["env"]["REVIEW_SUPPORT_SHA"] == "${{ needs.gate.outputs.review_support_sha }}"
+		assert names.index("Checkout merge-base freshness helper") < names.index(step_name)
 
 
 def main() -> int:

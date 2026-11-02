@@ -931,7 +931,23 @@ else
         ai:closed)
           gh label create "${label_name}" --repo "${repo}" --color "6a737d" --description "Linked PR closed without merge" 2>/dev/null || true
           ;;
+        ai:clarification)
+          gh label create "${label_name}" --repo "${repo}" --color "f9d0c4" --description "AI clarification required before planning" 2>/dev/null || true
+          ;;
+        ai:orchestrator-managed)
+          gh label create "${label_name}" --repo "${repo}" --color "bfdadc" --description "Issue is managed by the AI orchestrator" 2>/dev/null || true
+          ;;
+        ai:workflow-heal)
+          gh label create "${label_name}" --repo "${repo}" --color "d876e3" --description "Issue auto-filed from an escalated workflow failure by workflow failure heal" 2>/dev/null || true
+          ;;
         *)
+          # Assumption: the analysis doc (CONSIST-001) suggested refusing
+          # unknown labels. We keep creating them with generic metadata,
+          # because skipping creation could make a later `--add-label` /
+          # `--label` call fail and break the judge flow.
+          # test_review_rb_judge_fallback_label_metadata_matches_label_contract
+          # keeps this arm unreachable from current literal call sites.
+          echo "::warning::ensure_label_exists fallback: label '${label_name}' has no contract metadata in the inline fallback; creating it with generic metadata." >&2
           gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
           ;;
       esac
@@ -2260,6 +2276,77 @@ rb_judge_merge_err_close() {
   RB_MERGE_ERROR_TEXT=""
   return 0
 }
+
+# Returns 0 when the last merge attempt's stderr (the direct attempt, which
+# runs last on every path) shows a GitHub server-side error: HTTP 5xx, the
+# GraphQL "Something went wrong while executing your query" error, or a
+# dropped connection. Permission, draft, conflict, 4xx and moved-head errors
+# do not match. With no captured stderr (mktemp failed) nothing matches.
+rb_judge_merge_err_is_transient() {
+  local _rb_transient_file="${RB_MERGE_ERR_DIRECT_FILE:-/dev/null}"
+  [ -n "${RB_MERGE_ERR_DIR:-}" ] || return 1
+  [ -f "${_rb_transient_file}" ] && [ ! -L "${_rb_transient_file}" ] || return 1
+  # Process substitution, not a pipe: under pipefail an early `grep -q`
+  # exit could turn head's SIGPIPE into a missed match.
+  LC_ALL=C grep -qiE 'HTTP 5[0-9][0-9]|Something went wrong while executing your query|50[234] (Bad Gateway|Service Unavailable|Gateway Time-?out)|connection reset by peer|i/o timeout|TLS handshake timeout|unexpected EOF' \
+    < <(head -c 65536 -- "${_rb_transient_file}" 2>/dev/null)
+}
+
+# Called only after the site's own `gh pr merge` attempts all failed
+# (`<attempts> || rb_judge_merge_retry_transient <auto|direct> <path>`).
+# Non-transient failures return 1 at once with no extra API call, so the
+# site's failure branch runs exactly as before. On a transient failure it
+# waits (10s, 20s, 40s), reads the PR once over REST, and:
+#   - returns 0 when the PR is merged, or (auto mode) auto-merge is enabled
+#     on the judged head: the failed call may have landed server-side;
+#   - returns 1 when the PR is closed or its head moved off the judged head;
+#   - otherwise repeats the same head-bound attempts (unreadable PR state
+#     also repeats them: --match-head-commit still binds the head).
+# At most 3 retries. Each prints one RB_JUDGE_MERGE_RETRY line. The retried
+# attempts overwrite the stderr files, so a final failure reports the last
+# error through rb_judge_merge_err_report as before.
+rb_judge_merge_retry_transient() {
+  local _rb_retry_mode="${1:-direct}" _rb_retry_path="${2:-unknown}"
+  local _rb_retry_attempt=0 _rb_retry_delay="" _rb_retry_pr=""
+  local _rb_retry_state="" _rb_retry_merged="" _rb_retry_auto="" _rb_retry_head=""
+  for _rb_retry_delay in 10 20 40; do
+    rb_judge_merge_err_is_transient || return 1
+    _rb_retry_attempt=$((_rb_retry_attempt + 1))
+    echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 delay_s=${_rb_retry_delay} reason=transient"
+    sleep "${_rb_retry_delay}"
+    _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
+    IFS=$'\t' read -r _rb_retry_state _rb_retry_merged _rb_retry_auto _rb_retry_head <<< "${_rb_retry_pr}" || true
+    # gh api prints an HTTP error's response body to stdout (--jq is skipped),
+    # so a failed read or a state other than open/closed counts as unreadable.
+    case "${_rb_retry_state}" in
+      open|closed) ;;
+      *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head="" ;;
+    esac
+    # Head first: a PR merged at a head other than the judged one is not the
+    # judge's merge, so it stays a failure (head_moved).
+    if [ -n "${_rb_retry_head}" ] && [ "${_rb_retry_head}" != "${RB_JUDGED_HEAD_SHA:-}" ]; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=head_moved"
+      return 1
+    fi
+    if [ "${_rb_retry_merged}" = "true" ]; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=already_merged"
+      return 0
+    fi
+    if [ -n "${_rb_retry_state}" ] && [ "${_rb_retry_state}" != "open" ]; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=not_open"
+      return 1
+    fi
+    if [ "${_rb_retry_mode}" = "auto" ] && [ "${_rb_retry_auto}" = "true" ] && [ "${_rb_retry_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=auto_merge_enabled"
+      return 0
+    fi
+    if [ "${_rb_retry_mode}" = "auto" ]; then
+      gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" && return 0
+    fi
+    gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" && return 0
+  done
+  return 1
+}
 # END rb-judge merge error capture (#7659)
 
 case "${RB_ACTION}" in
@@ -2327,6 +2414,9 @@ case "${RB_ACTION}" in
         # reaching the `|| true` fallthrough. Rate-limit alerts still
         # fire through every other gh_retry-wrapped call in this
         # script.
+        # GitHub server errors (5xx, GraphQL "Something went wrong") get a
+        # bounded, head-bound retry from rb_judge_merge_retry_transient
+        # instead; other failures still fall through at once.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
         if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
@@ -2356,7 +2446,8 @@ case "${RB_ACTION}" in
           rb_judge_merge_err_open
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
-            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" \
+            || rb_judge_merge_retry_transient auto merge; then
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
@@ -2448,7 +2539,8 @@ case "${RB_ACTION}" in
           rb_judge_merge_err_open
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
-            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" \
+            || rb_judge_merge_retry_transient auto terminal; then
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
@@ -2984,7 +3076,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             #
             # NOTE: gh pr merge is intentionally NOT wrapped with
             # gh_retry — see the `merge)` branch for the rationale
-            # (best-effort, non-transient failure backoff cost).
+            # (best-effort, non-transient failure backoff cost). Server
+            # errors are retried by rb_judge_merge_retry_transient.
             #
             # `--match-head-commit "${RB_JUDGED_HEAD_SHA}"` binds the merge
             # to the checked-out head the judge evaluated. If a concurrent
@@ -2997,7 +3090,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             rb_judge_merge_err_open
             _match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")
             review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" "${_match_head_arg[@]}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" "${_match_head_arg[@]}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" \
+              || rb_judge_merge_retry_transient direct sync; then
               rb_judge_merge_err_close
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"

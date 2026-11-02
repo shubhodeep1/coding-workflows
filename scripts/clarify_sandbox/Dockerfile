@@ -3,7 +3,9 @@
 # checks edited YAML in this image; without it every workflow edit failed (#6982).
 FROM node:22.16.0-bookworm-slim
 ARG CODEX_VERSION=v0.114.0
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-yaml ca-certificates git \
+# jq: the heal route's pre-push gate runs in this image, and shell-script tests
+# call jq.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-yaml ca-certificates git jq \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
     "@openai/codex-linux-x64@npm:@openai/codex@${CODEX_VERSION#v}-linux-x64" \

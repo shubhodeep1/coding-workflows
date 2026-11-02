@@ -11,10 +11,12 @@ test file and the subject it covers. The diagnosis still cannot add a path.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -66,7 +68,7 @@ def test_scope_subjects_map_test_files_to_existing_subjects_only() -> None:
 		"tests/test_review_merge_train.py", ".github/workflows/review-merge-train.yml", "tests/test_hidden.py", ".claude/hooks/hidden.py"}
 	out = heal.heal_scope_test_subjects(
 		["tests/test_orchestrate_poll_process.py", "tests/test_pr_checks_lib_required_filter.py", "tests/test_review_merge_train.py",
-		 "tests/test_missing.py", "tests/test_hidden.py", "scripts/not_a_test.py", "../tests/test_x.py"],
+		"tests/test_missing.py", "tests/test_hidden.py", "scripts/not_a_test.py", "../tests/test_x.py"],
 		exists=lambda path: path in existing)
 	assert out == ["tests/test_orchestrate_poll_process.py", "scripts/orchestrate_poll_process.sh",
 		"tests/test_pr_checks_lib_required_filter.py", "tests/test_review_merge_train.py", ".github/workflows/review-merge-train.yml", "tests/test_hidden.py"]
@@ -208,8 +210,12 @@ def test_intake_freezes_failing_tests_before_the_diagnosis() -> None:
 	assert "failing_tests: (.failing_tests // {names: [], files: []})" in text
 
 
-def _run_scope_freeze(log_dir: Path, runtime_dir: Path) -> subprocess.CompletedProcess:
-	"""Run the intake's real freeze block (helper through the chmod) in bash."""
+def _run_scope_freeze(log_dir: Path, runtime_dir: Path, *, linked_env: bool = True) -> subprocess.CompletedProcess:
+	"""Run the intake's real freeze block (helper through the chmod) in bash.
+
+	linked_env=False leaves out the variables the linked-run helpers (#8360)
+	read, to prove the block still runs when they are unset (#8377).
+	"""
 	if shutil.which("jq") is None:
 		pytest.skip("jq is required to run the intake's scope-freeze block")
 	text = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
@@ -227,6 +233,8 @@ def _run_scope_freeze(log_dir: Path, runtime_dir: Path) -> subprocess.CompletedP
 		"CRASH_OWNERSHIP": "none",
 		"SOURCE_REPO": SELF_REPO,
 	}
+	if linked_env:
+		env.update({"MAX_LINKED_RUNS": "0", "SOURCE_KIND": "", "SELF_REPO": SELF_REPO, "SCOPE_LINKED_WORKFLOWS_ENABLED": "true"})
 	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=True)
 
 
@@ -260,6 +268,23 @@ def test_scope_freeze_collects_runs_and_paths_from_verified_records() -> None:
 		assert frozen["runs"] == [f"{SELF_REPO}:12", f"{SELF_REPO}:7"]
 		assert frozen["self_workflows"] == ["scripts/a.sh", "scripts/b.sh"]
 		assert frozen["consumer_workflows"] == [".github/workflows/ci.yml"]
+		assert "WORKFLOW_HEAL scope_linked outcome=skipped paths=0 runs=0" in result.stderr
+
+
+def test_scope_freeze_survives_unset_linked_run_variables() -> None:
+	# #8377: the linked-run helpers sit inside the freeze block; a bare ${VAR}
+	# under set -u killed the shell even inside the `|| log` guard.
+	with tempfile.TemporaryDirectory() as tmpdir:
+		log_dir, runtime_dir = Path(tmpdir, "logs"), Path(tmpdir, "runtime")
+		log_dir.mkdir()
+		runtime_dir.mkdir()
+		result = _run_scope_freeze(log_dir, runtime_dir, linked_env=False)
+		assert result.returncode == 0
+		assert "unbound variable" not in result.stderr
+		assert "WORKFLOW_HEAL scope_linked outcome=skipped paths=0 runs=0" in result.stderr
+		assert "scope_inputs_freeze_failed" not in result.stderr
+		frozen = json.loads((runtime_dir / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+		assert frozen["self_workflows"] == []
 
 
 def test_prompt_tells_the_healer_how_to_pick_a_side() -> None:
@@ -426,3 +451,584 @@ def test_real_size_guard_failure_output_resolves_to_its_subjects() -> None:
 		assert "test_every_workflow_file_is_below_size_guard" in found["names"]
 		marker = _render_guard(root, sha, tmpdir, found["names"])
 		assert ",.github/workflows/review_autofix.yml,scripts/stage_workflow_support.sh,docs/INVENTORY.md,scripts/review_autofix_step_*.sh,tests/**," in marker
+
+
+# ---------------------------------------------------------------------------
+# Issue #8360: workflows and scripts a release run's linked runs used
+# ---------------------------------------------------------------------------
+# Heals #8287, #8241 and #8327 diagnosed a defect in a workflow that a release
+# gate step only dispatched or polled, then sat at heal_scope_plan_out_of_scope
+# because the frozen scope held only the failing release workflow. For a
+# release or promotion `workflow_run` report of this repository, each
+# same-repository linked run (#8248) now adds its own workflow file, the
+# reusable workflows that file calls (one hop) and the scripts its failed or
+# longest step runs, all read from the scope-commit tree. Workflow fixtures are
+# written as JSON, which is valid YAML, so yaml.safe_load parses them as it
+# parses the block style. The intake tests reuse the shared intake harness.
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+class _LwIntakeHarness:
+	"""Imports test_workflow_failure_heal on first use.
+
+	That module imports PyYAML at import time; importing it lazily keeps this
+	file collectable where PyYAML is not installed, so only the intake tests
+	that use the harness depend on it.
+	"""
+
+	def __getattr__(self, name: str):
+		import test_workflow_failure_heal as harness_module
+
+		return getattr(harness_module, name)
+
+
+base = _LwIntakeHarness()
+
+# Same value as test_workflow_failure_heal.CONSUMER_REPO (a foreign repository).
+LW_CONSUMER_REPO = "shubhodeep1/example-consumer"
+
+try:
+	import yaml as _lw_real_yaml  # noqa: F401
+	LW_HAVE_YAML = True
+except ImportError:  # CI installs PyYAML; offline fallback below
+	LW_HAVE_YAML = False
+
+# Offline stand-in for PyYAML: every workflow fixture here is JSON (valid
+# YAML), so json.loads parses it the way yaml.safe_load does. Used only when
+# PyYAML is missing; CI runs the real parser.
+LW_YAML_STUB_SOURCE = (
+	"import json\n\n\n"
+	"class YAMLError(Exception):\n\tpass\n\n\n"
+	"def safe_load(text):\n\treturn json.loads(text)\n"
+)
+
+
+@pytest.fixture
+def _lw_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+	if LW_HAVE_YAML:
+		return
+	stub = types.ModuleType("yaml")
+	exec(LW_YAML_STUB_SOURCE, stub.__dict__)  # noqa: S102 - fixed source above
+	monkeypatch.setitem(sys.modules, "yaml", stub)
+LW_INTAKE_SCRIPT = REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh"
+LW_INTAKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "workflow-failure-heal-intake.yml"
+
+LW_CANCEL_RUN_ID = 40814653574
+LW_MEMORY_RUN_ID = 40752760153
+
+
+def _lw_workflow(jobs: dict) -> str:
+	return json.dumps({"name": "fixture", "on": {"workflow_call": {}}, "jobs": jobs}, indent=1) + "\n"
+
+
+# Shapes of the real workflows the replays name (job ids, uses: lines and the
+# step names are copied from the repository's files).
+LW_INTERNAL_CANCEL = _lw_workflow({
+	"cancel": {"uses": f"{SELF_REPO}/.github/workflows/cancel_on_pr_close.yml@promote-candidate", "secrets": "inherit"},
+	"heal-pr-reconcile": {"runs-on": "ubuntu-latest", "steps": [{"name": "Reconcile heal PRs", "run": "bash scripts/workflow_failure_heal_pr_reconcile.sh"}]},
+})
+LW_CANCEL_ON_PR_CLOSE = _lw_workflow({
+	"cancel": {"runs-on": "ubuntu-latest", "steps": [
+		{"name": "Checkout", "uses": "actions/checkout@v5"},
+		{"name": "Cancel queued runs for the closed PR", "run": "set -euo pipefail\nbash scripts/cancel_on_pr_close.sh \"${PR_NUMBER}\"\n"},
+	]},
+})
+LW_INTERNAL_MEMORY = _lw_workflow({
+	"memory": {"uses": f"{SELF_REPO}/.github/workflows/memory_maintenance.yml@promote-candidate", "secrets": "inherit"},
+})
+LW_MEMORY_MAINTENANCE = _lw_workflow({
+	"maintain": {"runs-on": "ubuntu-latest", "steps": [
+		{"name": "Resolve workflow support ref", "run": "echo ref"},
+		{"name": "Checkout repository", "uses": "actions/checkout@v5"},
+		{"name": "Extract repository learnings (fail-open)", "run": "python3 scripts/memory_maintenance_extract_learnings.py \\\n  --repo \"${GITHUB_REPOSITORY}\"\n"},
+		{"name": "Run memory compaction", "run": "python3 scripts/ai_memory_compact.py"},
+	]},
+})
+LW_RELEASE_WORKFLOW = _lw_workflow({"e2e": {"runs-on": "ubuntu-latest", "steps": [{"name": "Wait", "run": "bash scripts/stable_e2e_step_wait_review.sh"}]}})
+
+LW_TREE = {
+	".github/workflows/test-and-mark-stable.yml": LW_RELEASE_WORKFLOW,
+	".github/workflows/internal-cancel-on-pr-close.yml": LW_INTERNAL_CANCEL,
+	".github/workflows/cancel_on_pr_close.yml": LW_CANCEL_ON_PR_CLOSE,
+	".github/workflows/internal-memory-maintenance.yml": LW_INTERNAL_MEMORY,
+	".github/workflows/memory_maintenance.yml": LW_MEMORY_MAINTENANCE,
+	"scripts/cancel_on_pr_close.sh": "#!/bin/bash\n",
+	"scripts/memory_maintenance_extract_learnings.py": "print('x')\n",
+	"scripts/ai_memory_compact.py": "print('y')\n",
+	"scripts/workflow_failure_heal_pr_reconcile.sh": "#!/bin/bash\n",
+}
+
+
+def _lw_fakes(tree: dict[str, str] | None = None):
+	files = dict(LW_TREE if tree is None else tree)
+	return (lambda path: path in files), (lambda path: files.get(path))
+
+
+def _lw_run(run_id: int, path: str, *, repo: str = SELF_REPO, head_repo: str | None = SELF_REPO, **extra) -> dict:
+	run = {"id": run_id, "repository": {"full_name": repo}, "path": path, "name": "linked", "status": "completed",
+		"conclusion": "failure", "created_at": "2026-10-28T10:00:00Z", "updated_at": "2026-10-28T10:40:00Z",
+		"html_url": f"https://github.com/{repo}/actions/runs/{run_id}"}
+	if head_repo is not None:
+		run["head_repository"] = {"full_name": head_repo}
+	run.update(extra)
+	return run
+
+
+def _lw_step(name: str, conclusion: str, start: str = "2026-10-28T10:01:00Z", end: str = "2026-10-28T10:02:00Z") -> dict:
+	return {"name": name, "status": "completed", "conclusion": conclusion, "started_at": start, "completed_at": end}
+
+
+def _lw_jobs(*steps: dict, job_name: str = "cancel / cancel") -> dict:
+	return {"total_count": 1, "jobs": [{"id": 7700, "name": job_name, "status": "completed", "conclusion": "failure", "steps": list(steps)}]}
+
+
+def _lw_paths(run: dict, jobs: dict, tree: dict[str, str] | None = None) -> dict:
+	exists, read_file = _lw_fakes(tree)
+	return heal.heal_scope_linked_workflow_paths(run, jobs, repo=SELF_REPO, exists=exists, read_file=read_file)
+
+
+def _lw_reasons(result: dict) -> list[str]:
+	return [entry["reason"] for entry in result["skipped"]]
+
+
+# --- heal_scope_linked_workflow_paths ---------------------------------------
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+
+def test_internal_wrapper_resolves_to_itself_plus_the_called_workflow_and_its_step_script() -> None:
+	jobs = _lw_jobs(_lw_step("Checkout", "success"), _lw_step("Cancel queued runs for the closed PR", "failure"))
+	result = _lw_paths(_lw_run(LW_CANCEL_RUN_ID, ".github/workflows/internal-cancel-on-pr-close.yml@refs/heads/promote-candidate"), jobs)
+	assert result == {"paths": [
+		".github/workflows/internal-cancel-on-pr-close.yml",
+		".github/workflows/cancel_on_pr_close.yml",
+		"scripts/cancel_on_pr_close.sh",
+	], "skipped": []}
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+
+def test_local_uses_form_is_accepted_and_the_repo_compares_case_insensitively() -> None:
+	tree = dict(LW_TREE)
+	tree[".github/workflows/wrapper.yml"] = _lw_workflow({"a": {"uses": "./.github/workflows/cancel_on_pr_close.yml"}})
+	result = _lw_paths(_lw_run(1, ".github/workflows/wrapper.yml", repo=SELF_REPO.upper()), _lw_jobs(_lw_step("x", "success")), tree)
+	assert result["paths"][:2] == [".github/workflows/wrapper.yml", ".github/workflows/cancel_on_pr_close.yml"]
+	tree[".github/workflows/wrapper.yml"] = _lw_workflow({"a": {"uses": f"{SELF_REPO.upper()}/.github/workflows/cancel_on_pr_close.yml@main"}})
+	assert ".github/workflows/cancel_on_pr_close.yml" in _lw_paths(_lw_run(1, ".github/workflows/wrapper.yml"), _lw_jobs(), tree)["paths"]
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+
+def test_failed_step_names_the_extraction_script() -> None:
+	jobs = _lw_jobs(_lw_step("Resolve workflow support ref", "success"), _lw_step("Extract repository learnings (fail-open)", "failure", end="2026-10-28T10:01:30Z"),
+		_lw_step("Run memory compaction", "success", end="2026-10-28T10:30:00Z"), job_name="memory / maintain")
+	result = _lw_paths(_lw_run(LW_MEMORY_RUN_ID, ".github/workflows/internal-memory-maintenance.yml"), jobs)
+	assert result["paths"] == [
+		".github/workflows/internal-memory-maintenance.yml",
+		".github/workflows/memory_maintenance.yml",
+		"scripts/memory_maintenance_extract_learnings.py",
+	]
+	assert "scripts/ai_memory_compact.py" not in result["paths"]
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+
+def test_without_a_failed_step_the_longest_step_is_used() -> None:
+	jobs = _lw_jobs(
+		_lw_step("Extract repository learnings (fail-open)", "success", end="2026-10-28T10:01:30Z"),
+		_lw_step("Run memory compaction", "cancelled", start="2026-10-28T10:02:00Z", end="2026-10-28T10:35:00Z"),
+		_lw_step("Skipped", "skipped", start="2026-10-28T09:00:00Z", end="2026-10-28T12:00:00Z"),
+	)
+	result = _lw_paths(_lw_run(LW_MEMORY_RUN_ID, ".github/workflows/internal-memory-maintenance.yml"), jobs)
+	assert result["paths"][-1] == "scripts/ai_memory_compact.py"
+	assert "scripts/memory_maintenance_extract_learnings.py" not in result["paths"]
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+@pytest.mark.parametrize(
+	("run", "reason"),
+	[
+		(_lw_run(5, ".github/workflows/internal-cancel-on-pr-close.yml", repo="someone/else"), "other_repository"),
+		(_lw_run(5, ".github/workflows/internal-cancel-on-pr-close.yml", head_repo="forker/coding-workflows"), "fork_head"),
+		(_lw_run(5, ".github/workflows/nested/x.yml"), "path_malformed"),
+		(_lw_run(5, ".github/workflows/../x.yml"), "path_malformed"),
+		(_lw_run(5, ".github/workflows/x.txt"), "path_malformed"),
+		(_lw_run(5, ".github/ai/x.yml"), "path_malformed"),
+		(_lw_run(5, None), "path_malformed"),
+		(_lw_run(5, ".github/workflows/missing.yml"), "file_missing"),
+		({"id": "5", "repository": {"full_name": SELF_REPO}}, "run_malformed"),
+		({"id": 5, "repository": {}}, "run_malformed"),
+		("not a run", "run_malformed"),
+	],
+)
+def test_identity_and_path_rejections_add_nothing(run, reason: str) -> None:
+	result = _lw_paths(run, _lw_jobs(_lw_step("x", "failure")))
+	assert result["paths"] == []
+	assert _lw_reasons(result) == [reason]
+
+
+def test_unsafe_own_path_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(heal, "_safe_heal_path", lambda path: False)
+	result = _lw_paths(_lw_run(5, ".github/workflows/internal-cancel-on-pr-close.yml"), _lw_jobs())
+	assert result == {"paths": [], "skipped": [{"run_id": "5", "reason": "path_unsafe"}]}
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+
+def test_foreign_uses_missing_callee_missing_script_and_unmatched_step() -> None:
+	tree = dict(LW_TREE)
+	tree[".github/workflows/wrapper.yml"] = _lw_workflow({
+		"action": {"uses": "actions/checkout@v5"},
+		"other": {"uses": "someone/else/.github/workflows/x.yml@main"},
+		"traversal": {"uses": "./.github/workflows/..yml"},
+		"gone": {"uses": "./.github/workflows/gone.yml"},
+		"run": {"runs-on": "ubuntu-latest", "steps": [{"name": "Gate", "run": "bash scripts/missing.sh && bash scripts/cancel_on_pr_close.sh"}]},
+	})
+	result = _lw_paths(_lw_run(9, ".github/workflows/wrapper.yml"), _lw_jobs(_lw_step("Gate", "timed_out")), tree)
+	assert result["paths"] == [".github/workflows/wrapper.yml", "scripts/cancel_on_pr_close.sh"]
+	assert _lw_reasons(result) == ["uses_foreign", "uses_foreign", "uses_foreign", "file_missing", "script_missing"]
+	unmatched = _lw_paths(_lw_run(9, ".github/workflows/wrapper.yml"), _lw_jobs(_lw_step("Run bash scripts/cancel_on_pr_close.sh", "failure")), tree)
+	assert "step_unmatched" in _lw_reasons(unmatched) and "scripts/cancel_on_pr_close.sh" not in unmatched["paths"]
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+
+def test_only_one_hop_is_followed() -> None:
+	tree = dict(LW_TREE)
+	tree[".github/workflows/wrapper.yml"] = _lw_workflow({"a": {"uses": "./.github/workflows/middle.yml"}})
+	tree[".github/workflows/middle.yml"] = _lw_workflow({"b": {"uses": "./.github/workflows/cancel_on_pr_close.yml"}})
+	result = _lw_paths(_lw_run(9, ".github/workflows/wrapper.yml"), _lw_jobs(_lw_step("x", "failure")), tree)
+	assert result["paths"] == [".github/workflows/wrapper.yml", ".github/workflows/middle.yml"]
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+
+def test_unreadable_or_oversized_yaml_keeps_only_the_own_workflow() -> None:
+	for text in ("{not: [valid", "just a string\n", None, "#" * (heal.HEAL_SCOPE_LINKED_YAML_MAX_BYTES + 1)):
+		tree = {".github/workflows/w.yml": text}
+
+		def exists(path, tree=tree):
+			return path in tree
+		result = heal.heal_scope_linked_workflow_paths(_lw_run(9, ".github/workflows/w.yml"), _lw_jobs(), repo=SELF_REPO, exists=exists, read_file=tree.get)
+		assert result == {"paths": [".github/workflows/w.yml"], "skipped": [{"run_id": "9", "reason": "yaml_unreadable"}]}
+
+
+def test_yaml_unavailable_adds_only_the_own_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setitem(sys.modules, "yaml", None)
+	result = _lw_paths(_lw_run(LW_CANCEL_RUN_ID, ".github/workflows/internal-cancel-on-pr-close.yml"), _lw_jobs(_lw_step("Cancel queued runs for the closed PR", "failure")))
+	assert result == {"paths": [".github/workflows/internal-cancel-on-pr-close.yml"], "skipped": [{"run_id": str(LW_CANCEL_RUN_ID), "reason": "yaml_unavailable"}]}
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+
+def test_scripts_per_step_are_capped() -> None:
+	tree = dict(LW_TREE)
+	body = " ".join(f"bash scripts/s{index}.sh;" for index in range(24))
+	tree[".github/workflows/w.yml"] = _lw_workflow({"j": {"runs-on": "ubuntu-latest", "steps": [{"name": "Many", "run": body}]}})
+	tree.update({f"scripts/s{index}.sh": "x" for index in range(24)})
+	result = _lw_paths(_lw_run(9, ".github/workflows/w.yml"), _lw_jobs(_lw_step("Many", "failure")), tree)
+	# The per-step cap counts existing scripts of this step only, not the run's own workflow.
+	assert result["paths"][1:] == [f"scripts/s{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP)]
+	assert _lw_reasons(result) == ["cap_reached"]
+	tree.pop("scripts/s0.sh")
+	result = _lw_paths(_lw_run(9, ".github/workflows/w.yml"), _lw_jobs(_lw_step("Many", "failure")), tree)
+	assert result["paths"][1:] == [f"scripts/s{index}.sh" for index in range(1, heal.HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP + 1)]
+	assert _lw_reasons(result) == ["script_missing", "cap_reached"]
+
+
+@pytest.mark.usefixtures("_lw_yaml")
+
+def test_merged_runs_dedupe_keep_order_and_cap(tmp_path: Path) -> None:
+	tree = dict(LW_TREE)
+	pairs = []
+	for index in range(8):
+		name = f".github/workflows/w{index}.yml"
+		tree[name] = _lw_workflow({"j": {"runs-on": "ubuntu-latest", "steps": [{"name": "Gate", "run": f"bash scripts/g{index}.sh"}]}})
+		tree[f"scripts/g{index}.sh"] = "x"
+		run_file, jobs_file = tmp_path / f"run-{index}.json", tmp_path / f"run-{index}-jobs.json"
+		run_file.write_text(json.dumps(_lw_run(100 + index, name)))
+		jobs_file.write_text(json.dumps(_lw_jobs(_lw_step("Gate", "failure"))))
+		pairs.append((str(run_file), str(jobs_file)))
+	pairs.insert(1, pairs[0])  # the same run twice adds nothing new
+	exists, read_file = _lw_fakes(tree)
+	result = heal.heal_scope_linked_paths_for_runs(pairs, repo=SELF_REPO, exists=exists, read_file=read_file)
+	assert result["paths"] == [path for index in range(6) for path in (f".github/workflows/w{index}.yml", f"scripts/g{index}.sh")]
+	assert len(result["paths"]) == heal.HEAL_SCOPE_LINKED_PATHS_MAX
+	assert _lw_reasons(result).count("cap_reached") == 4
+	assert result["outcome"] == "added" and result["runs"] == 9
+	broken = heal.heal_scope_linked_paths_for_runs([(str(tmp_path / "absent.json"), "")], repo=SELF_REPO, exists=exists, read_file=read_file)
+	assert broken == {"outcome": "none", "paths": [], "skipped": [{"run_id": "?", "reason": "cache_unreadable"}], "runs": 1}
+
+
+def _lw_freeze_filter() -> str:
+	"""The intake's scope-freeze jq program, as shipped."""
+	text = LW_INTAKE_SCRIPT.read_text(encoding="utf-8")
+	start = text.index("'($self_workflows + $engine_paths) as $base") + 1
+	end = text.index("}' > \"${SCOPE_INPUTS_FROZEN}\"", start) + 1
+	return text[start:end]
+
+
+@pytest.mark.parametrize(("crash", "engine_paths"), [("", []), ("scripts/crash.sh", []), ("", ["scripts/ai_engine.sh", "scripts/claude_engine.py"])])
+def test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker(crash: str, engine_paths: list[str]) -> None:
+	# #6907/#6916: the source workflow, engine and crash paths sit ahead of the
+	# subject reserve too, so the freeze trims the linked paths to the room left.
+	if shutil.which("jq") is None:
+		pytest.skip("jq is required to run the intake's scope-freeze filter")
+	assert heal.HEAL_SCOPE_LINKED_PATHS_MAX + heal.HEAL_SCOPE_SUBJECT_RESERVE == 20
+	source = ".github/workflows/test-and-mark-stable.yml"
+	linked = [f"scripts/linked{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_PATHS_MAX)]
+	subjects = [f"scripts/subject{index}.sh" for index in range(heal.HEAL_SCOPE_SUBJECT_RESERVE)]
+	args = {"failing_tests": {"names": [], "files": []}, "engine_runs": [], "engine_paths": engine_paths, "linked_paths": linked,
+		"runs": [f"{SELF_REPO}:500"], "self_workflows": [source], "consumer_workflows": [], "changed": []}
+	cmd = ["jq", "-n", "--arg", "crash", crash]
+	for key, value in args.items():
+		cmd += ["--argjson", key, json.dumps(value)]
+	frozen = json.loads(subprocess.run([*cmd, _lw_freeze_filter()], capture_output=True, text=True, check=True).stdout)
+	assert frozen["self_workflows"][:1 + len(engine_paths)] == [source, *engine_paths]
+	assert len(frozen["self_workflows"]) + (1 if crash else 0) == heal.HEAL_SCOPE_LINKED_PATHS_MAX
+	marker = heal.render_heal_scope_marker(crash_file=crash or None, workflow_paths=frozen["self_workflows"],
+		changed_files=[], exists=lambda path: True, runs=frozen["runs"], test_subjects=subjects)
+	assert marker
+	for path in subjects:
+		assert path in marker
+	# Without linked paths the freeze output is unchanged.
+	empty = dict(args, linked_paths=[])
+	cmd = ["jq", "-n", "--arg", "crash", crash]
+	for key, value in empty.items():
+		cmd += ["--argjson", key, json.dumps(value)]
+	frozen_empty = json.loads(subprocess.run([*cmd, _lw_freeze_filter()], capture_output=True, text=True, check=True).stdout)
+	assert frozen_empty["self_workflows"] == [source, *engine_paths]
+
+
+# --- heal_scope_linked_workflows_gate --------------------------------------
+
+
+def _lw_gate(**overrides) -> str:
+	kwargs = {"enabled": "true", "source_kind": "workflow_run", "source_repo": SELF_REPO, "self_repo": SELF_REPO,
+		"source_workflow_paths": [".github/workflows/test-and-mark-stable.yml"]}
+	kwargs.update(overrides)
+	return heal.heal_scope_linked_workflows_gate(**kwargs)
+
+
+@pytest.mark.parametrize("workflow_file", heal.RELEASE_WORKFLOW_FILES)
+def test_gate_accepts_every_release_workflow(workflow_file: str) -> None:
+	assert _lw_gate(source_workflow_paths=[f".github/workflows/{workflow_file}@refs/heads/main"]) == "eligible"
+
+
+def test_gate_rejects_other_sources_and_honours_the_flag() -> None:
+	assert _lw_gate(source_workflow_paths=[".github/workflows/ci.yml"]) == "ineligible"
+	assert _lw_gate(source_workflow_paths=[]) == "ineligible"
+	assert _lw_gate(source_kind="autofix_failure") == "ineligible"
+	assert _lw_gate(source_repo=LW_CONSUMER_REPO) == "ineligible"
+	assert _lw_gate(source_repo=SELF_REPO.upper()) == "eligible"
+	assert _lw_gate(enabled="false") == "disabled"
+	assert _lw_gate(enabled=" False ") == "disabled"
+	assert _lw_gate(enabled="") == "eligible"
+	assert _lw_gate(enabled=None) == "eligible"
+
+
+# --- CLI --------------------------------------------------------------------
+
+
+def _lw_git(cwd: Path, *args: str) -> str:
+	return subprocess.run(["git", *args], cwd=cwd, check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+
+
+def _lw_origin(root: Path, tree: dict[str, str] | None = None) -> tuple[Path, str]:
+	origin = root / "origin"
+	origin.mkdir(parents=True)
+	_lw_git(origin, "init", "-q", "-b", "main")
+	_lw_git(origin, "config", "user.name", "test")
+	_lw_git(origin, "config", "user.email", "test@example.invalid")
+	for path, text in (LW_TREE if tree is None else tree).items():
+		target = origin / path
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text(text, encoding="utf-8")
+	_lw_git(origin, "add", "-A")
+	_lw_git(origin, "commit", "-qm", "scope tree")
+	return origin, _lw_git(origin, "rev-parse", "HEAD")
+
+
+def _lw_cli(checkout: Path, ref: str, pairs: list[tuple[Path, Path]], *extra: str) -> subprocess.CompletedProcess[str]:
+	cmd = [sys.executable, str(HEAL_PY), "heal-scope", "linked-workflow-paths", "--checkout", str(checkout), "--ref", ref,
+		"--repo", SELF_REPO, "--self-repo", SELF_REPO, "--source-kind", "workflow_run", "--source-repo", SELF_REPO,
+		"--source-workflow-paths", ".github/workflows/test-and-mark-stable.yml", *extra]
+	for run_file, jobs_file in pairs:
+		cmd += ["--run-json", str(run_file), "--jobs-json", str(jobs_file)]
+	env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+	if not LW_HAVE_YAML:
+		stub_dir = checkout.parent / "lw-yaml-stub"
+		stub_dir.mkdir(exist_ok=True)
+		(stub_dir / "yaml.py").write_text(LW_YAML_STUB_SOURCE, encoding="utf-8")
+		env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(stub_dir), env.get("PYTHONPATH", "")]))
+	return subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
+
+def test_cli_reads_the_scope_commit_and_fails_open(tmp_path: Path) -> None:
+	origin, sha = _lw_origin(tmp_path)
+	run_file, jobs_file = tmp_path / "run.json", tmp_path / "jobs.json"
+	run_file.write_text(json.dumps(_lw_run(LW_CANCEL_RUN_ID, ".github/workflows/internal-cancel-on-pr-close.yml")))
+	jobs_file.write_text(json.dumps(_lw_jobs(_lw_step("Cancel queued runs for the closed PR", "failure"))))
+	result = _lw_cli(origin, sha, [(run_file, jobs_file)])
+	assert result.returncode == 0, result.stderr
+	out = json.loads(result.stdout)
+	assert out["outcome"] == "added" and out["runs"] == 1
+	assert out["paths"] == [".github/workflows/internal-cancel-on-pr-close.yml", ".github/workflows/cancel_on_pr_close.yml", "scripts/cancel_on_pr_close.sh"]
+	corrupt = tmp_path / "corrupt.json"
+	corrupt.write_text("{not json")
+	result = _lw_cli(origin, sha, [(corrupt, jobs_file)])
+	assert result.returncode == 0
+	assert json.loads(result.stdout) == {"outcome": "none", "paths": [], "skipped": [{"run_id": "?", "reason": "cache_unreadable"}], "runs": 1}
+	# Disabled, an ineligible source or a non-SHA ref read nothing.
+	assert json.loads(_lw_cli(origin, sha, [(run_file, jobs_file)], "--enabled", "false").stdout) == {"outcome": "disabled", "paths": [], "skipped": [], "runs": 0}
+	assert json.loads(_lw_cli(origin, "main", [(run_file, jobs_file)]).stdout)["outcome"] == "skipped"
+
+
+# --- Intake -----------------------------------------------------------------
+
+
+def _lw_release_payload(sha: str, name: str = "Test & Mark Stable Release") -> dict:
+	return heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": name, "conclusion": "failure", "head_sha": sha, "head_branch": "main",
+			"html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": name},
+	)
+
+
+def _lw_release_state(sha: str, linked_id: int, linked_path: str, linked_steps: list[dict], *, source_path: str = ".github/workflows/test-and-mark-stable.yml", **source_extra) -> dict:
+	parent_log = (
+		"2026-10-28T10:00:00.000Z ##[group]Run e2e\n"
+		f"2026-10-28T10:00:01.000Z Watching run https://github.com/{SELF_REPO}/actions/runs/{linked_id}\n"
+		f"2026-10-28T10:00:02.000Z ::error::Linked run failed (watched runs: https://github.com/{SELF_REPO}/actions/runs/{linked_id})\n"
+		"2026-10-28T10:00:03.000Z ##[error]Process completed with exit code 1.\n"
+	)
+	source = {"id": 500, "repository": {"full_name": SELF_REPO}, "head_sha": sha, "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500",
+		"status": "completed", "conclusion": "failure", "path": source_path, "pull_requests": [], **source_extra}
+	return base._intake_state(
+		run_details={"500": source, str(linked_id): _lw_run(linked_id, linked_path)},
+		jobs={
+			"500": [{"id": 9001, "name": "e2e-smoke-test", "workflow_name": "Test & Mark Stable Release", "conclusion": "failure",
+				"steps": [{"name": "Wait for the linked run", "conclusion": "failure"}]}],
+			str(linked_id): [{"id": 7700, "name": "linked", "status": "completed", "conclusion": "failure", "steps": linked_steps}],
+		},
+		job_logs={"9001": parent_log, "7700": "2026-10-28T10:01:10.0000000Z boom\n"},
+	)
+
+
+def _lw_git_setup(origin: Path):
+	def setup(tmp: Path, work: Path) -> None:
+		_lw_git(work, "init", "-q", "-b", "main")
+		_lw_git(work, "remote", "add", "origin", str(origin))
+		_lw_git(work, "fetch", "-q", "origin")
+	return setup
+
+
+def _lw_scope_line(state: dict) -> str:
+	body = state.get("composed_issue", {}).get("body", "")
+	return next((line for line in body.splitlines() if "ai:workflow-heal-scope:v1" in line), "")
+
+
+def _lw_intake(sha: str, origin: Path | None, state: dict, runtime: Path, *, name: str = "Test & Mark Stable Release", **env: str):
+	extra = {"RUNTIME_DIR": str(runtime), **env}
+	return base._run_intake(_lw_release_payload(sha, name), state, diagnosis=base.DIAG_WORKFLOW_DEFECT, extra_env=extra,
+		setup_git=_lw_git_setup(origin) if origin is not None else None)
+
+
+def test_intake_replays_cancel_on_pr_close_run_40814653574(tmp_path: Path) -> None:
+	origin, sha = _lw_origin(tmp_path / "src")
+	state = _lw_release_state(sha, LW_CANCEL_RUN_ID, ".github/workflows/internal-cancel-on-pr-close.yml", [_lw_step("Cancel queued runs for the closed PR", "failure")])
+	result, after, _prompt = _lw_intake(sha, origin, state, tmp_path / "runtime")
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL scope_linked outcome=added paths=3 runs=1" in result.stdout
+	frozen = json.loads((tmp_path / "runtime" / "scope_inputs_frozen.json").read_text())
+	assert frozen["self_workflows"] == [".github/workflows/test-and-mark-stable.yml", ".github/workflows/internal-cancel-on-pr-close.yml",
+		".github/workflows/cancel_on_pr_close.yml", "scripts/cancel_on_pr_close.sh"]
+	marker = _lw_scope_line(after)
+	assert ".github/workflows/cancel_on_pr_close.yml" in marker and ".github/workflows/test-and-mark-stable.yml" in marker
+	assert len(base._linked_calls(after, str(LW_CANCEL_RUN_ID), "7700")) == 3
+
+
+def test_intake_replays_memory_maintenance_run_40752760153(tmp_path: Path) -> None:
+	origin, sha = _lw_origin(tmp_path / "src")
+	steps = [_lw_step("Resolve workflow support ref", "success"), _lw_step("Extract repository learnings (fail-open)", "failure")]
+	state = _lw_release_state(sha, LW_MEMORY_RUN_ID, ".github/workflows/internal-memory-maintenance.yml", steps)
+	result, after, _prompt = _lw_intake(sha, origin, state, tmp_path / "runtime")
+	assert result.returncode == 0, result.stderr + result.stdout
+	marker = _lw_scope_line(after)
+	assert ".github/workflows/memory_maintenance.yml" in marker
+	assert "scripts/memory_maintenance_extract_learnings.py" in marker
+
+
+def test_intake_flag_off_matches_the_previous_scope_byte_for_byte(tmp_path: Path) -> None:
+	origin, sha = _lw_origin(tmp_path / "src")
+	state = _lw_release_state(sha, LW_CANCEL_RUN_ID, ".github/workflows/internal-cancel-on-pr-close.yml", [_lw_step("Cancel queued runs for the closed PR", "failure")])
+	runs = {}
+	for label, env in (("off", {"WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED": "false"}), ("none", {"WORKFLOW_HEAL_MAX_LINKED_RUNS": "0"}), ("on", {})):
+		runtime = tmp_path / f"runtime-{label}"
+		result, after, _prompt = _lw_intake(sha, origin, state, runtime, **env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		runs[label] = (result, after, (runtime / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+	assert "WORKFLOW_HEAL scope_linked outcome=disabled paths=0 runs=1" in runs["off"][0].stdout
+	assert runs["off"][2] == runs["none"][2]
+	assert _lw_scope_line(runs["off"][1]) == _lw_scope_line(runs["none"][1])
+	assert _lw_scope_line(runs["on"][1]) != _lw_scope_line(runs["off"][1])
+	# The fingerprint never sees linked data.
+	fps = {heal.parse_heal_markers(after["composed_issue"]["body"])["fp"] for _result, after, _frozen in runs.values()}
+	assert len(fps) == 1
+	# API budget: one run, one jobs and one job-log read per linked run, flag on or off.
+	assert len(base._linked_calls(runs["on"][1], str(LW_CANCEL_RUN_ID), "7700")) == 3
+	assert len(base._linked_calls(runs["off"][1], str(LW_CANCEL_RUN_ID), "7700")) == 3
+
+
+def test_intake_non_release_sources_get_no_linked_paths(tmp_path: Path) -> None:
+	# A consumer report: the existing #8248 guard plus the skipped outcome.
+	result, _after, _prompt = base._run_intake(base._consumer_payload(), base._linked_state(base.LINKED_PARENT_LOG), diagnosis=base.DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL scope_linked outcome=skipped paths=0 runs=1" in result.stdout
+	# A self-repo workflow_run whose verified run is CI on main, not a release workflow.
+	origin, sha = _lw_origin(tmp_path / "src", {**LW_TREE, ".github/workflows/ci.yml": LW_RELEASE_WORKFLOW})
+	state = _lw_release_state(sha, LW_CANCEL_RUN_ID, ".github/workflows/internal-cancel-on-pr-close.yml", [_lw_step("Cancel queued runs for the closed PR", "failure")],
+		source_path=".github/workflows/ci.yml", event="push", head_branch="main")
+	result, _after, _prompt = _lw_intake(sha, origin, state, tmp_path / "runtime", name="CI", WORKFLOW_HEAL_DEFAULT_BRANCH="main")
+	assert result.returncode == 0, result.stderr + result.stdout
+	if (tmp_path / "runtime" / "scope_inputs_frozen.json").exists():
+		frozen = json.loads((tmp_path / "runtime" / "scope_inputs_frozen.json").read_text())
+		assert "cancel_on_pr_close" not in json.dumps(frozen)
+	assert "scope_linked outcome=added" not in result.stdout
+	assert all("outcome=skipped paths=0" in line for line in result.stdout.splitlines() if "WORKFLOW_HEAL scope_linked " in line)
+
+
+def test_intake_unresolvable_head_sha_adds_nothing_and_still_composes(tmp_path: Path) -> None:
+	sha = "b" * 40
+	state = _lw_release_state(sha, LW_CANCEL_RUN_ID, ".github/workflows/internal-cancel-on-pr-close.yml", [_lw_step("Cancel queued runs for the closed PR", "failure")])
+	result, after, _prompt = _lw_intake(sha, None, state, tmp_path / "runtime")
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL scope_linked outcome=skipped paths=0 runs=1" in result.stdout
+	frozen = json.loads((tmp_path / "runtime" / "scope_inputs_frozen.json").read_text())
+	assert frozen["self_workflows"] == [".github/workflows/test-and-mark-stable.yml"]
+	assert after.get("composed_issue", {}).get("body")
+
+
+# --- Wiring -----------------------------------------------------------------
+
+
+def test_intake_layout_fetches_before_the_freeze_and_renders_after() -> None:
+	text = LW_INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'SCOPE_LINKED_WORKFLOWS_ENABLED="${WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED:-true}"' in text
+	freeze = text.index('jq -n --arg crash "${PAYLOAD_CRASH_FILE}"')
+	assert text.index('_heal_fetch_linked_runs || log "warn linked_runs_failed"') < text.index("\n_heal_scope_linked_paths ||") < freeze
+	assert freeze < text.index('_heal_collect_linked_runs || log "warn linked_runs_failed"')
+	assert '--argjson linked_paths "${LINKED_SCOPE_PATHS_JSON:-[]}"' in text
+	assert "self_workflows: ($base + (($linked_paths - $base)[:$linked_room]))" in text
+	# The run and jobs REST reads happen only in the fetch half.
+	collect = text[text.index("_heal_collect_linked_runs()\n"):text.index('_heal_collect_linked_runs || log "warn linked_runs_failed"')]
+	assert "gh_api_json_to_file" not in collect and "fetched_ids.txt" in collect
+	fetch = text[text.index("_heal_fetch_linked_runs()\n"):text.index('_heal_fetch_linked_runs || log "warn linked_runs_failed"')]
+	assert fetch.count("gh_api_json_to_file") == 2 and "/logs" not in fetch
+
+
+def test_workflow_sets_the_flag_with_a_true_default() -> None:
+	text = LW_INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	line = "      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED: ${{ vars.WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED || 'true' }}\n"
+	assert text.count(line) == 2  # intake and recovery-scan jobs

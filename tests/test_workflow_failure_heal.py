@@ -1053,6 +1053,194 @@ def test_error_signature_uses_executed_errors_not_the_echoed_script() -> None:
 	assert heal.error_signature(heal.filter_log(other)) != signature
 
 
+# btc_sweeper#248 shapes (Refs #8602): the runner echoed the step script
+# without ANSI colour, so `echo "::error::..."` source lines looked like output,
+# and the runtime lines (`##[warning]`, a failed `CLAUDE_POOL run`,
+# `AI_ENGINE_FALLBACK`, `exited with code`) fell outside the tail.
+BTC_SWEEPER_WARNING_LINE = "2026-10-31T09:12:01.1000000Z ##[warning]Claude pool account TEAM1 at capacity; trying next account"
+BTC_SWEEPER_ERROR_LINE = "2026-10-31T09:40:12.2000000Z ##[error]Process completed with exit code 1."
+BTC_SWEEPER_POOL_CRASHED_LINE = (
+	"2026-10-31T09:12:02.1000000Z CLAUDE_POOL run role=implement account=TEAM1 outcome=crashed reason=relay_unavailable exit_code=1"
+)
+BTC_SWEEPER_POOL_REFUSED_LINE = (
+	"2026-10-31T09:12:03.1000000Z CLAUDE_POOL run role=implement account=TEAM2 outcome=refused reason=capacity exit_code=1"
+)
+BTC_SWEEPER_POOL_UNAVAILABLE_LINE = (
+	"2026-10-31T09:12:04.1000000Z CLAUDE_POOL run role=implement account=TEAM3 outcome=unavailable reason=no_token exit_code=1"
+)
+BTC_SWEEPER_POOL_SUCCESS_LINE = (
+	"2026-10-31T09:12:05.1000000Z CLAUDE_POOL run role=plan account=TEAM1 outcome=success reason=ok exit_code=0"
+)
+BTC_SWEEPER_FALLBACK_LINE = "2026-10-31T09:12:06.1000000Z AI_ENGINE_FALLBACK role=IMPLEMENT reason=capacity"
+BTC_SWEEPER_EXITED_LINE = "2026-10-31T09:12:07.1000000Z claude exited with code 1"
+BTC_SWEEPER_UNSTYLED_STEP_LOG = (
+	"2026-10-31T09:10:00.0000000Z ##[group]Run set -euo pipefail\n"
+	"2026-10-31T09:10:00.0000100Z set -euo pipefail\n"
+	"2026-10-31T09:10:00.0000200Z if [ \"${rc}\" -ne 0 ]; then\n"
+	"2026-10-31T09:10:00.0000300Z   echo \"::error::implement attempt failed for issue ${ISSUE_NUMBER}\"\n"
+	"2026-10-31T09:10:00.0000400Z   echo \"retry budget exhausted\"\n"
+	"2026-10-31T09:10:00.0000500Z fi\n"
+	"2026-10-31T09:10:00.0000600Z shell: /usr/bin/bash -e {0}\n"
+	"2026-10-31T09:10:00.0000700Z env:\n"
+	"2026-10-31T09:10:00.0000800Z   ISSUE_NUMBER: 248\n"
+	"2026-10-31T09:10:00.0000900Z ##[endgroup]\n"
+	"2026-10-31T09:10:01.0000000Z retry budget exhausted\n"
+	f"{BTC_SWEEPER_ERROR_LINE}\n"
+)
+
+
+def test_filter_log_keeps_runtime_lines_outside_tail() -> None:
+	lines = [f"line {i}" for i in range(1000)]
+	early = {
+		10: BTC_SWEEPER_WARNING_LINE,
+		11: BTC_SWEEPER_ERROR_LINE,
+		12: BTC_SWEEPER_POOL_CRASHED_LINE,
+		13: BTC_SWEEPER_POOL_REFUSED_LINE,
+		14: BTC_SWEEPER_POOL_UNAVAILABLE_LINE,
+		15: BTC_SWEEPER_FALLBACK_LINE,
+		16: BTC_SWEEPER_EXITED_LINE,
+		17: BTC_SWEEPER_POOL_SUCCESS_LINE,
+	}
+	for index, text in early.items():
+		lines[index] = text
+	filtered = heal.filter_log("\n".join(lines), max_lines=50, max_bytes=100_000)
+	for kept_line in (
+		BTC_SWEEPER_WARNING_LINE,
+		BTC_SWEEPER_ERROR_LINE,
+		BTC_SWEEPER_POOL_CRASHED_LINE,
+		BTC_SWEEPER_POOL_REFUSED_LINE,
+		BTC_SWEEPER_POOL_UNAVAILABLE_LINE,
+		BTC_SWEEPER_FALLBACK_LINE,
+		BTC_SWEEPER_EXITED_LINE,
+	):
+		assert kept_line in filtered
+	# A successful pool run and plain filler before the tail are not kept.
+	assert "outcome=success" not in filtered
+	assert "line 20\n" not in filtered and "line 500" not in filtered
+	assert "line 999" in filtered
+	# Only the stable fallback line is kept, not the report bookkeeping.
+	report = ["filler"] * 100
+	report[0] = "AI_ENGINE_FALLBACK_REPORT role=IMPLEMENT entries=2"
+	assert "AI_ENGINE_FALLBACK_REPORT" not in heal.filter_log("\n".join(report), max_lines=10)
+
+
+def test_drop_step_script_lines_drops_unstyled_echoed_script() -> None:
+	dropped = heal._drop_step_script_lines(BTC_SWEEPER_UNSTYLED_STEP_LOG)
+	assert "set -euo pipefail\n" not in dropped.split("##[group]Run set -euo pipefail", 1)[1]
+	assert "implement attempt failed" not in dropped
+	assert "if [ " not in dropped and "0000500Z fi" not in dropped
+	# Header line, `shell:` / `env:` block and all output after the close stay.
+	assert "##[group]Run set -euo pipefail" in dropped
+	assert "2026-10-31T09:10:00.0000600Z shell: /usr/bin/bash -e {0}" in dropped
+	assert "2026-10-31T09:10:00.0000800Z   ISSUE_NUMBER: 248" in dropped
+	assert "2026-10-31T09:10:00.0000900Z ##[endgroup]" in dropped
+	# Output with the same text as a script line is kept; the script copy is not.
+	assert dropped.count("retry budget exhausted") == 1
+	assert "2026-10-31T09:10:01.0000000Z retry budget exhausted" in dropped
+	assert BTC_SWEEPER_ERROR_LINE in dropped
+	filtered = heal.filter_log(BTC_SWEEPER_UNSTYLED_STEP_LOG)
+	assert "ISSUE_NUMBER: [redacted]" in filtered
+	assert "ISSUE_NUMBER: 248" not in filtered
+	assert "implement attempt failed" not in filtered
+	assert "##[error]Process completed with exit code 1." in filtered
+
+
+def test_drop_step_script_lines_drops_mixed_cyan_and_unstyled_script() -> None:
+	log = (
+		"2026-10-31T09:10:00Z ##[group]Run ./sweep.sh\n"
+		"2026-10-31T09:10:00Z \x1b[36;1m./sweep.sh --cyan-line\x1b[0m\n"
+		"2026-10-31T09:10:00Z ./sweep.sh --plain-line\n"
+		"2026-10-31T09:10:00Z shell: /usr/bin/bash -e {0}\n"
+		"2026-10-31T09:10:00Z ##[endgroup]\n"
+		"2026-10-31T09:10:01Z sweep output\n"
+	)
+	dropped = heal._drop_step_script_lines(log)
+	assert "--cyan-line" not in dropped
+	assert "--plain-line" not in dropped
+	assert "shell: /usr/bin/bash -e {0}" in dropped
+	assert "sweep output" in dropped
+
+
+def test_drop_step_script_lines_keeps_uses_step_header() -> None:
+	log = (
+		"2026-10-31T09:10:00Z ##[group]Run actions/checkout@v4\n"
+		"2026-10-31T09:10:00Z with:\n"
+		"2026-10-31T09:10:00Z   repository: x\n"
+		"2026-10-31T09:10:00Z ##[endgroup]\n"
+		"2026-10-31T09:10:01Z checkout output\n"
+	)
+	assert heal._drop_step_script_lines(log) == log
+	# A header with no sections closes at once and is unchanged.
+	bare = "2026-10-31T09:10:00Z ##[group]Run true\n2026-10-31T09:10:00Z ##[endgroup]\n2026-10-31T09:10:01Z out\n"
+	assert heal._drop_step_script_lines(bare) == bare
+	# A group closed before any section key is a user-defined `Run ...` group,
+	# not an echoed script: its output lines are kept.
+	user_group = (
+		"2026-10-31T09:10:00Z ##[group]Run tests\n"
+		"2026-10-31T09:10:00Z FAILED test_x\n"
+		"2026-10-31T09:10:00Z ##[endgroup]\n"
+		"2026-10-31T09:10:01Z after group\n"
+	)
+	assert heal._drop_step_script_lines(user_group) == user_group
+
+
+def test_drop_step_script_lines_keeps_unconfirmed_header_lines() -> None:
+	# A header that never reaches a section key or a close keeps its lines.
+	unterminated = (
+		"2026-10-31T09:10:00Z ##[group]Run codex\n"
+		"2026-10-31T09:10:01Z ::error::step output from a cut log\n"
+	)
+	assert heal._drop_step_script_lines(unterminated) == unterminated
+	# A second header that opens before the first is confirmed flushes the
+	# first header's lines (fail open); the second header's script is dropped.
+	reopened = (
+		"2026-10-31T09:10:00Z ##[group]Run first\n"
+		"2026-10-31T09:10:00Z first-header-line\n"
+		"2026-10-31T09:10:01Z ##[group]Run second\n"
+		"2026-10-31T09:10:01Z second-script-line\n"
+		"2026-10-31T09:10:01Z shell: /usr/bin/bash -e {0}\n"
+		"2026-10-31T09:10:01Z ##[endgroup]\n"
+		"2026-10-31T09:10:02Z second output\n"
+	)
+	dropped = heal._drop_step_script_lines(reopened)
+	assert "first-header-line" in dropped
+	assert "second-script-line" not in dropped
+	assert "second output" in dropped
+	# Text without a Run header comes back byte-for-byte.
+	plain = "line one\n##[endgroup]\nshell: x\n\x1b[36;1mcyan\x1b[0m\n"
+	assert heal._drop_step_script_lines(plain) == plain
+
+
+def test_drop_step_script_lines_never_removes_env_block_context() -> None:
+	# A timestamp-shaped `##[endgroup]` / `##[group]Run` env value followed by
+	# an unstamped continuation is a value line for _strip_step_env_values; the
+	# drop pass must not treat it as a header boundary and remove lines that
+	# bound the env block, or filter_log would keep part of the value.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"2026-01-01T00:00:00Z ##[endgroup]\n"
+		"leaked-after-close\n"
+		"2026-01-01T00:00:00Z ##[group]Run fake\n"
+		"  TOKEN3: leaked-after-open\n"
+		"2026-09-24T00:00:01Z   NEXT: leaked-entry\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z step output kept\n"
+	)
+	assert heal._drop_step_script_lines(log) == log
+	filtered = heal.filter_log(log)
+	for secret in ("leaked-after-close", "leaked-after-open", "TOKEN3", "fake", "leaked-entry", "2026-01-01"):
+		assert secret not in filtered
+	assert "step output kept" in filtered
+
+
+def test_error_signature_ignores_unstyled_echoed_script() -> None:
+	signature = heal.error_signature(heal.filter_log(BTC_SWEEPER_UNSTYLED_STEP_LOG))
+	assert "implement attempt failed" not in signature
+	assert signature == "##[error]process completed with exit code <n>."
+
+
 def _heal_issue(number: int, *, state: str, fp: str, gen: int = 1, root: str | None = None, created: datetime | None = None) -> dict:
 	created = created or datetime(2026, 9, 1, tzinfo=timezone.utc)
 	return {
@@ -2873,6 +3061,23 @@ def test_intake_scope_comes_from_support_ref_not_diagnosis_files_touched() -> No
 	assert "scripts/evil.py" not in body
 
 
+def test_intake_issue_create_failure_logs_github_reason_and_sizes() -> None:
+	# Run 41071146143 logged only `issue_create_failed`: the create's stderr went
+	# to /dev/null. The failure line now carries gh's reason and the sizes.
+	payload = _self_repo_autofix_payload() | {"script_ref": "stable", "crash_file": "scripts/safe.py", "changed_files": ["scripts/safe.py"]}
+	state = _self_repo_autofix_state(["stable", "main", "ai/issue-4173"]) | {"issue_create_fail": True}
+	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_prepare_scope_support, scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 1, result.stdout
+	assert len(state_after["issues_created"]) == 1  # one attempt only: the create is not idempotent
+	line = next(entry for entry in result.stdout.splitlines() if "error issue_create_failed" in entry)
+	match = re.search(r" detail=(.*) title_bytes=([0-9]+) body_bytes=([0-9]+)$", line)
+	assert match, line
+	assert "HTTP 500" in match.group(1)
+	assert "::" not in match.group(1)
+	assert int(match.group(2)) == len(state_after["issues_created"][0]["title"].encode("utf-8"))
+	assert int(match.group(3)) == len(state_after["issues_created"][0]["body"].encode("utf-8"))
+
+
 def test_intake_scope_guard_off_files_no_issue() -> None:
 	# #6871: with HEAL_INTAKE_SCOPE_GUARD_ENABLED switched off (any value other
 	# than unset, empty or "true"; _stage sets "false"), the intake composes the
@@ -3423,6 +3628,7 @@ def test_count_identical_failures_flags_non_retryable_reasons() -> None:
 		"conflict_resolver_sandbox_path_host_only",
 		"conflict_resolver_sandbox_path_unsupported",
 		"conflict_resolver_sandbox_support_missing",
+		"review_editor_sandbox_path_excluded",
 	}
 	for reason in sorted(heal.NON_RETRYABLE_FAILURE_REASONS):
 		assert heal._FAILURE_REASON_RE.match(reason)
@@ -6664,6 +6870,115 @@ def test_intake_fingerprints_engine_fallback_without_logs() -> None:
 	assert '"${SOURCE_KIND}" == "engine_fallback"' not in text
 
 
+# --- engine_fallback: Claude pool step reason evidence line (issue #8406) ----------
+
+_ENGINE_POOL_NOW = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+_ENGINE_POOL_RECORDS = ["v1\t1700000000\tPLAN\tno_credential\tnon_capacity\trefused\tcapacity"]
+_ENGINE_POOL_EVIDENCE_TODAY = (
+	"AI engine fallback records (v1 epoch role reason class action policy):\n"
+	"v1 1700000000 PLAN no_credential non_capacity refused capacity"
+)
+
+
+def _engine_pool_payload(**kwargs) -> dict:
+	return heal.build_engine_fallback_payload(
+		repo="owner/consumer", role="PLAN", reason="no_credential", workflow_name="AI Plan",
+		run_id="42", wrapper_sha=None, reporter_run_url=None, records=list(_ENGINE_POOL_RECORDS),
+		now=_ENGINE_POOL_NOW, **kwargs,
+	)
+
+
+def _engine_pool_lines(evidence: str) -> list[str]:
+	return [line for line in evidence.split("\n") if line.startswith(heal.ENGINE_POOL_REASON_EVIDENCE_PREFIX)]
+
+
+def test_engine_fallback_pool_reason_token_present() -> None:
+	payload = _engine_pool_payload(pool_reason="pool_dir_invalid")
+	assert payload["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY + "\nClaude pool step reason: pool_dir_invalid"
+	normalized = heal.validate_payload(payload)
+	assert _engine_pool_lines(normalized["failure_evidence"]) == ["Claude pool step reason: pool_dir_invalid"]
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+
+
+@pytest.mark.parametrize("token", ["Bad", "a b", "x" * 61, "", "@x", "all-gated", "pool`x`", "a\nb", "selected\n", "-x"])
+def test_engine_fallback_pool_reason_token_invalid_is_unavailable(token: str) -> None:
+	payload = _engine_pool_payload(pool_reason=token)
+	assert _engine_pool_lines(payload["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(heal.validate_payload(payload)["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+
+
+def test_engine_fallback_pool_reason_omitted_is_byte_identical() -> None:
+	omitted = _engine_pool_payload()
+	explicit_none = _engine_pool_payload(pool_reason=None)
+	assert json.dumps(omitted, sort_keys=True) == json.dumps(explicit_none, sort_keys=True)
+	assert omitted["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+	assert _engine_pool_lines(omitted["failure_evidence"]) == []
+	normalized = heal.validate_payload(omitted)
+	assert normalized["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+
+
+def test_engine_fallback_pool_reason_keeps_the_fingerprint_and_title() -> None:
+	plain = heal.validate_payload(_engine_pool_payload())
+	with_reason = heal.validate_payload(_engine_pool_payload(pool_reason="selected"))
+	for key in ("engine_role", "engine_reason", "issue_title", "failure_reason", "failure_fingerprint"):
+		assert plain[key] == with_reason[key], key
+	assert with_reason["engine_reason"] == "no_credential"
+	assert heal.engine_fallback_fingerprint(plain["engine_role"], plain["engine_reason"]) == \
+		heal.engine_fallback_fingerprint(with_reason["engine_role"], with_reason["engine_reason"]) == \
+		heal.fingerprint("ai-engine-fallback", "PLAN", "no_credential")
+
+
+def test_engine_fallback_validator_drops_invalid_and_duplicate_pool_lines() -> None:
+	forged = _engine_pool_payload()
+	forged["failure_evidence"] = "\n".join([
+		_ENGINE_POOL_EVIDENCE_TODAY,
+		"Claude pool step reason: @someone",
+		"Claude pool step reason: first_valid",
+		"Claude pool step reason: second_valid",
+		"Claude pool step reason: ",
+	])
+	normalized = heal.validate_payload(forged)
+	assert normalized["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY + "\nClaude pool step reason: first_valid"
+	# Idempotent: validating the normalized payload again changes nothing.
+	assert heal.validate_payload(normalized) == normalized
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+
+
+def test_engine_fallback_pool_reason_cli(tmp_path: Path) -> None:
+	records = tmp_path / "records.tsv"
+	records.write_text("\n".join(_ENGINE_POOL_RECORDS) + "\n", encoding="utf-8")
+	script = str(REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	base = [sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
+		"--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)]
+
+	def build(*extra: str) -> dict:
+		return json.loads(subprocess.run([*base, *extra], capture_output=True, text=True, env=env, check=True).stdout)
+
+	omitted = build()
+	expected = _engine_pool_payload()
+	omitted.pop("reported_at")
+	expected.pop("reported_at")
+	assert omitted == expected
+	assert omitted["failure_evidence"] == _ENGINE_POOL_EVIDENCE_TODAY
+	assert _engine_pool_lines(build("--pool-reason", "")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(build("--pool-reason", "Not Valid")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+	assert _engine_pool_lines(build("--pool-reason", "selected")["failure_evidence"]) == ["Claude pool step reason: selected"]
+	assert _engine_pool_lines(build("--pool-reason=-x")["failure_evidence"]) == ["Claude pool step reason: unavailable"]
+
+
+def test_engine_fallback_reporter_passes_the_pool_reason_only_with_a_source() -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
+	build = text[text.index("build-engine-fallback-payload --repo"):text.index("wrap-dispatch --payload-json")]
+	assert '${report_pool_reason_args[@]+"${report_pool_reason_args[@]}"}' in build
+	assert 'report_pool_reason_args=("--pool-reason=${report_pool_reason_token}")' in text
+	assert 'if [ "${report_pool_reason_source}" != "none" ]; then' in text
+	# The record format and the fingerprint inputs stay role + reason.
+	assert '--role "${role}" --reason "${reason}"' in build
+
+
 # --- engine_fallback reporting run: heal scope instead of scope_unavailable_no_runs ---
 
 ENGINE_RUN_ID = "39565576987"
@@ -7125,6 +7440,55 @@ def test_non_retryable_route_decisions() -> None:
 	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B, intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/777")
 	assert "`.claude/hooks/pr_merge_status_guard.py`" in body and "manual merge" in body.lower()
 	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={HOST_ONLY_REASON} -->")
+
+
+SANDBOX_EXCLUDED_REASON = "review_editor_sandbox_path_excluded"
+
+
+def _sandbox_excluded_summary_comment(*, head: str = SHA_A, run: str = "801", support: str | None = None, author: str = CAP_AUTHOR) -> dict:
+	"""An editor-summary comment that ends with the #8321 sandbox-excluded marker."""
+	fp = heal.autofix_failure_fingerprint(failure_reason=SANDBOX_EXCLUDED_REASON, evidence_text="")["fp"]
+	marker = heal.render_failure_marker(head, SANDBOX_EXCLUDED_REASON, fp, True, run, support)
+	assert marker
+	body = (
+		"AI autofix editor summary\n\nChanges made:\n- none\n\nChange status:\n- not-edited\n\n"
+		"Ignored suggestions (with short reason):\n- .claude/docs/s25-x.md test failure \u2014 sandbox-excluded path\n\n"
+		"Files changed / commit status:\n- none\n\n" + marker
+	)
+	return {"id": int(run), "author_login": author, "body": body}
+
+
+def test_sandbox_excluded_editor_summary_trips_the_cap_on_its_first_marker() -> None:
+	"""#8321: one editor summary declining a fix as sandbox-excluded stops the head."""
+	one = [_sandbox_excluded_summary_comment()]
+	result = heal.count_identical_failures(one, head_sha=SHA_A, author_login=CAP_AUTHOR)
+	assert result["count"] == 1 and result["reason"] == SANDBOX_EXCLUDED_REASON and result["non_retryable"] is True
+	# A new head resets the count; an untrusted author never trips it.
+	assert heal.count_identical_failures(one, head_sha=SHA_B, author_login=CAP_AUTHOR)["count"] == 0
+	forged = [_sandbox_excluded_summary_comment(author="attacker")]
+	assert heal.count_identical_failures(forged, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
+	# A newer verified support SHA re-arms the stop once (#6911).
+	supported = [_sandbox_excluded_summary_comment(support=SUPPORT_S1)]
+	rearmed = heal.count_identical_failures(supported, head_sha=SHA_A, author_login=CAP_AUTHOR, current_support_sha=SUPPORT_S2)
+	assert rearmed["non_retryable"] is True and rearmed["rearm"] is True
+	same = heal.count_identical_failures(supported, head_sha=SHA_A, author_login=CAP_AUTHOR, current_support_sha=SUPPORT_S1)
+	assert same["rearm"] is False
+
+
+def test_non_retryable_route_explains_sandbox_excluded_editor_stop() -> None:
+	"""#8321: the diagnosis names the editor sandbox, not a conflict merge."""
+	payload = heal.validate_payload(_autofix_payload(failure_reason=SANDBOX_EXCLUDED_REASON))
+	decision = heal.non_retryable_route(payload, comments=[], trusted_login=NR_LOGIN)
+	assert decision["route"] is True and decision["reason"] == SANDBOX_EXCLUDED_REASON
+	assert decision["suffix"] == SANDBOX_EXCLUDED_REASON and decision["paths"] == []
+	cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap"))
+	capped = heal.non_retryable_route(cap, comments=[_sandbox_excluded_summary_comment(head=SHA_B, author=NR_LOGIN)], trusted_login=NR_LOGIN)
+	assert capped["route"] is True and capped["reason"] == SANDBOX_EXCLUDED_REASON
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B)
+	assert heal._NON_RETRYABLE_EXPLANATIONS[SANDBOX_EXCLUDED_REASON] in body
+	assert "review editor sandbox does not admit" in body
+	assert "conflicted path(s) could not be read" not in body
+	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={SANDBOX_EXCLUDED_REASON} -->")
 
 
 def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:

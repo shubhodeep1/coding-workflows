@@ -1448,8 +1448,15 @@ jobs:
           # Only create Wave 1 issues now. Later-wave issues are created by the
           # poller when their dependencies are met (deferred creation). This
           # ensures clarify.yml fires on issues.opened at the right time.
+          # Issue #8314: the same Python call also records why each later-wave
+          # issue was deferred (model dependency edge or auto-serialize edge,
+          # with the shared files_touched path or hot file) in
+          # WAVE1_DEFERRALS_FILE. That part fails open and never changes the
+          # Wave 1 selection; stdout stays limited to the Wave 1 IDs.
+          WAVE1_DEFERRALS_FILE="${RUNTIME_DIR}/wave1_deferrals.json"
+          rm -f "${WAVE1_DEFERRALS_FILE}"
           WAVE1_IDS="$(python3 -c "
-          import json, sys
+          import json, os, sys
           sys.path.insert(0, 'scripts')
           from orchestrate_lib import validate_decomposition, compute_waves
 
@@ -1457,9 +1464,52 @@ jobs:
               data = json.load(f)
 
           validate_decomposition(data)
+          # The partition-guard write-back already holds the edges, so the call
+          # below resets partition_serializations; keep the written-back trail.
+          prior_ser = data.get('partition_serializations')
+          prior_ser = list(prior_ser) if isinstance(prior_ser, list) else []
           waves = compute_waves(data)
           for issue in waves[0]:
               print(issue['id'])
+
+          try:
+              ser_by_edge = {}
+              for rec in prior_ser + list(data.get('partition_serializations') or []):
+                  if isinstance(rec, dict):
+                      ser_by_edge.setdefault((rec.get('winner'), rec.get('loser')), rec)
+              # The library keeps one record per edge (hot_file before pair), so
+              # also name every files_touched path the two issues share.
+              touched = {i.get('id'): [p for p in (i.get('files_touched') or []) if isinstance(p, str)] for i in data.get('issues') or [] if isinstance(i, dict)}
+              # Paths the pre-push gate added to both issues never cause an edge
+              # (validate_wave_file_partition drops them, #8244); leave them out.
+              from orchestrate_lib import trusted_prepush_augmented_paths
+              aug = trusted_prepush_augmented_paths(data)
+              deferrals = {}
+              for wave_idx, wave in enumerate(waves):
+                  if wave_idx == 0:
+                      continue
+                  for issue in wave:
+                      iid = issue['id']
+                      reasons = []
+                      for edge in data.get('dependency_edges') or []:
+                          if edge.get('to') != iid:
+                              continue
+                          rec = ser_by_edge.get((edge.get('from'), iid))
+                          if rec is None:
+                              reasons.append({'from': edge.get('from'), 'source': 'model'})
+                          else:
+                              files = list(rec.get('files') or [])
+                              aug_both = aug.get(edge.get('from'), set()) & aug.get(iid, set())
+                              files += [p for p in touched.get(edge.get('from'), []) if p in touched.get(iid, []) and p not in files and p not in aug_both]
+                              reasons.append({'from': edge.get('from'), 'source': 'auto_serialize', 'overlap_type': rec.get('overlap_type'), 'files': files})
+                      if not reasons:
+                          reasons = [{'source': 'unknown'}]
+                      deferrals[iid] = 'wave=%d deferral_reasons=%s' % (wave_idx + 1, json.dumps(reasons, ensure_ascii=True, separators=(',', ':')))
+              with open(os.path.join(os.environ['RUNTIME_DIR'], 'wave1_deferrals.json'), 'w') as out:
+                  json.dump(deferrals, out)
+          except Exception as exc:
+              detail = str(exc).replace(chr(13), ' ').replace(chr(10), ' ')[:200]
+              print('::warning::Wave 1 deferral diagnostics unavailable: %s' % detail, file=sys.stderr)
           ")"
 
           echo "Wave 1 issue IDs: ${WAVE1_IDS}"
@@ -1473,7 +1523,14 @@ jobs:
 
             # Skip issues not in Wave 1
             if ! echo "${WAVE1_IDS}" | grep -qxF "${LOCAL_ID}"; then
-              echo "  Deferring ${LOCAL_ID} (not in Wave 1)"
+              # One greppable line per deferred issue (issue #8314); the
+              # "Deferring <id> (not in Wave 1)" prefix stays unchanged.
+              _wave1_defer_detail="$(jq -r --arg id "${LOCAL_ID}" '.[$id] // empty' "${WAVE1_DEFERRALS_FILE}" 2>"${RUNTIME_DIR}/wave1_deferrals_jq.err")" || {
+                _wave1_defer_detail=""
+                # Keep jq's own error text (one line, 200 chars, '::' broken up).
+                [ ! -s "${WAVE1_DEFERRALS_FILE}" ] || echo "::warning::Wave 1 deferral detail for ${LOCAL_ID} could not be read from wave1_deferrals.json: $(tr -d '\r\n' < "${RUNTIME_DIR}/wave1_deferrals_jq.err" 2>/dev/null | cut -c1-200 | sed 's/::/: :/g')"
+              }
+              echo "  Deferring ${LOCAL_ID} (not in Wave 1): ${_wave1_defer_detail:-deferral_reasons=unavailable}"
               continue
             fi
 
@@ -1507,13 +1564,21 @@ jobs:
             if [ -n "${PROJECT_ENGINE_LABEL:-}" ]; then
               child_create_args+=(--label "${PROJECT_ENGINE_LABEL}")
             fi
+            _wave1_create_rc=0
             ISSUE_URL="$(gh_retry gh issue create \
               --repo "${{ github.repository }}" \
               --title "${TITLE}" \
               --body "${FULL_BODY}" \
-              "${child_create_args[@]}")"
+              "${child_create_args[@]}")" || _wave1_create_rc=$?
 
-            ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
+            # Issue #8314: a create that fails or returns no issue URL is
+            # reported here, not 90s later by the stable gate's child count.
+            ISSUE_NUM="$(printf '%s\n' "${ISSUE_URL}" | grep -oE '/issues/[0-9]+$' | tail -n1 | grep -oE '[0-9]+$' || true)"
+            if [ "${_wave1_create_rc}" -ne 0 ] || ! [[ "${ISSUE_NUM}" =~ ^[1-9][0-9]*$ ]]; then
+              _wave1_create_out_summary="$(printf '%s' "${ISSUE_URL}" | tr -d '\r\n' | cut -c1-200)"
+              echo "::error::Wave 1 child issue creation for local id ${LOCAL_ID} returned no issue number (gh_retry exit=${_wave1_create_rc}, output='${_wave1_create_out_summary:-<empty>}'); refusing to continue with a missing child (tracking issue #${TRACKING_ISSUE_NUMBER})."
+              exit 1
+            fi
             ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"
             echo "  Created #${ISSUE_NUM}: ${TITLE} (${LOCAL_ID})"
           done

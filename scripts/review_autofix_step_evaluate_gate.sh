@@ -798,6 +798,9 @@ fi
 # See header env-block comment for full semantics.
 DETERMINISTIC_SKIP="false"
 DET_SKIP_REASON=""
+# Set when an eligible PR takes the skip with AUTOFIX_SKIP_RUNS_SECURITY_PASS
+# on; the skip job then runs the single-issue security pass (#8333).
+DET_SKIP_SECURITY_PASS_REQUIRED="false"
 if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
   FORCE_REVIEW="false"
   if [ "${pr_base_retargeted}" = "true" ]; then
@@ -824,8 +827,9 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1
     [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || return 1
     # Same suppressors as the doc-only / small-diff skip: the skip
-    # job runs no conflict resolver and no single-issue security
-    # pass, and the updated head has no audit of its own.
+    # job runs no conflict resolver, and it runs the single-issue
+    # security pass only with AUTOFIX_SKIP_RUNS_SECURITY_PASS=true
+    # (#8333); the updated head has no audit of its own.
     if [ "${pr_mergeable}" = "false" ] || [ "${pr_mergeable_state}" = "dirty" ]; then
       echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=merge_conflict pr=${PR_NUMBER} mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown} candidate=freshness_sync"
       return 1
@@ -835,8 +839,18 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
       && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
       && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
       && [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]; then
-      echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync"
-      return 1
+      # #8333: with AUTOFIX_SKIP_RUNS_SECURITY_PASS=true the skip job
+      # runs the pass itself; anything else keeps today's suppression.
+      if [ "${AUTOFIX_SKIP_RUNS_SECURITY_PASS:-false}" != "true" ]; then
+        echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=freshness_sync"
+        return 1
+      fi
+      # An exhausted pass goes to codex-agent's review-blocked judge.
+      if [[ ",${pr_labels}," == *,ai:security-pass-failed,* ]]; then
+        echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=security_pass_failed pr=${PR_NUMBER} candidate=freshness_sync"
+        return 1
+      fi
+      DET_SKIP_SECURITY_PASS_REQUIRED="true"
     fi
     gate_fetch_marker_comments
     [ "${gate_marker_fetch_state}" = "ok" ] || return 1
@@ -1191,17 +1205,28 @@ PY
       fi
     fi
 
-    # The sibling skip job enables auto-merge without running the
-    # single-issue pass. Keep eligible default-branch PRs on the
-    # codex-agent path, including tiny and documentation-only diffs.
+    # Eligible default-branch PRs need the single-issue pass before
+    # auto-merge, including tiny and documentation-only diffs. With
+    # AUTOFIX_SKIP_RUNS_SECURITY_PASS=true (#8333) the sibling skip job
+    # runs the pass and merges only on hold=false; a PR labelled
+    # ai:security-pass-failed stays on codex-agent for the review-blocked
+    # judge. Otherwise the skip job does not run the pass, so the PR is
+    # kept on the codex-agent path as before.
     SECURITY_PASS_SKIP_SUPPRESSED="false"
     if [ "${candidate_skip}" = "true" ] && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
       && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
       && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
       && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
       && [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]; then
-      SECURITY_PASS_SKIP_SUPPRESSED="true"
-      echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
+      if [ "${AUTOFIX_SKIP_RUNS_SECURITY_PASS:-false}" != "true" ]; then
+        SECURITY_PASS_SKIP_SUPPRESSED="true"
+        echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=single_issue_security_pass pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
+      elif [[ ",${pr_labels}," == *,ai:security-pass-failed,* ]]; then
+        SECURITY_PASS_SKIP_SUPPRESSED="true"
+        echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=security_pass_failed pr=${PR_NUMBER} candidate=${candidate_skip_reason}"
+      else
+        DET_SKIP_SECURITY_PASS_REQUIRED="true"
+      fi
     fi
 
     # CI already failed on this head after a freshness update
@@ -1370,3 +1395,21 @@ echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${
 echo "fingerprint_cap_non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}" >> "${GITHUB_OUTPUT}"
 echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
 echo "force_rb_judge_conflict_skip=${FORCE_RB_JUDGE_CONFLICT_SKIP}" >> "${GITHUB_OUTPUT}"
+# Skip-path security pass (#8333). Written only with the switch on, so a
+# run with AUTOFIX_SKIP_RUNS_SECURITY_PASS unset or false keeps today's
+# outputs. The PR payload is the subset of /pulls/{n} the pass reads, built
+# from the PR read above (no extra API call).
+if [ "${AUTOFIX_SKIP_RUNS_SECURITY_PASS:-false}" = "true" ]; then
+  DET_SKIP_SECURITY_PASS="false"
+  DET_SKIP_SECURITY_PASS_PR_JSON=""
+  if [ "${DETERMINISTIC_SKIP}" = "true" ] && [ "${DET_SKIP_SECURITY_PASS_REQUIRED}" = "true" ]; then
+    DET_SKIP_SECURITY_PASS="true"
+    DET_SKIP_SECURITY_PASS_PR_JSON="$(jq -cn \
+      --arg state "${pr_state}" --arg base "${pr_base_ref}" --arg head_ref "${pr_head_ref}" \
+      --arg head_sha "${pr_head_sha_gate}" --arg head_repo "${pr_head_repo}" --arg labels "${pr_labels}" \
+      '{state: $state, base: {ref: $base}, head: {ref: $head_ref, sha: $head_sha, repo: {full_name: $head_repo}}, labels: ($labels | split(",") | map(select(length > 0) | {name: .}))}')"
+    echo "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS pr=${PR_NUMBER} candidate=${DET_SKIP_REASON} route=skip_job"
+  fi
+  echo "det_skip_security_pass=${DET_SKIP_SECURITY_PASS}" >> "${GITHUB_OUTPUT}"
+  printf 'det_skip_security_pass_pr_json=%s\n' "${DET_SKIP_SECURITY_PASS_PR_JSON}" >> "${GITHUB_OUTPUT}"
+fi

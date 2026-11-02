@@ -235,7 +235,7 @@
     },
     "ai:scheduled-validation-failed": {
       "color": "b60205",
-      "description": "Weekly scheduled validation of the default branch is failing (automation); closes when a later scheduled run passes"
+      "description": "Weekly scheduled validation of the default branch is failing; closes when a later run passes"
     },
     "ai:unblock-closed": {
       "color": "5c5c5c",
