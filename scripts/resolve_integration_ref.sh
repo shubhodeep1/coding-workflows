@@ -243,10 +243,10 @@ if not has_label and "ai:orchestrator-managed" in names and tracking_line.search
 # scripts/check_failure_triage.sh always open with the fp= header, and a
 # label-stripped real triage issue keeps that header, so it still falls
 # through to refuse("label_missing"). Leading whitespace, a BOM and
-# zero-width characters (U+200B, U+2060) are dropped first, which can only
-# make more bodies count as triage issues. An ai:orchestrator-managed child
+# invisible format characters (U+200B, U+200C, U+200D, U+2060, U+180E) are
+# dropped first, which can only make more bodies count as triage issues. An ai:orchestrator-managed child
 # without a tracking line keeps the fail-closed label_missing refusal above.
-first_line = body.lstrip().lstrip("\ufeff\u200b\u2060").lstrip().split("\n", 1)[0]
+first_line = body.lstrip().lstrip("\ufeff\u200b\u200c\u200d\u2060\u180e").lstrip().split("\n", 1)[0]
 if prose_marker_skip and not has_label and "ai:orchestrator-managed" not in names and re.match(r"<!--\s*check-failure-triage:", first_line) is None:
 	print("skip")
 	sys.exit(0)
