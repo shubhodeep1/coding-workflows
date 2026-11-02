@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8650,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8650\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8651\",\"pr_number\":8651,\"branch\":\"ai/issue-8650\",\"run_id\":\"41375916126\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41375916126\",\"changed_files\":[\"changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md\",\"scripts/review_rb_judge.sh\",\"tests/test_ai_label_precreation_contract.py\"]}",
+  "fingerprint": "36ab97939b95c0ad7e977f065a71e5bb96301318e5a6575bf9265a6265f472c4",
+  "lineage": {
+    "issue_number": 8650,
+    "parent_ids": [],
+    "pr_number": 8651,
+    "run_id": "41375916126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41375916126",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8651"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261102022607_e52f71a090",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8650,
+    "level": "run",
+    "pr_number": 8651,
+    "run_id": "41375916126"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8650: https://github.com/shubhodeep1/coding-workflows/pull/8651",
+  "timestamps": {
+    "created_at": "2026-11-02T02:26:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
