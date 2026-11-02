@@ -1,0 +1,31 @@
+{
+  "discovered_at": "2026-11-02T10:18:21Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=AGENTS.md:1-1; cited_path=AGENTS.md, CLAUDE.md; files_touched=.github/workflows/*.yml (ci, clarify, implement, issue_pr_status, orchestrate, orchestrate_poll, plan, review_autofix, unblock_judge), agents.d/8427-*.md, agents.d/8428-*.md, changelog.d/8427-*.md, changelog.d/8428-*.md, prompts/*, scripts/*, tests/*, workflow-templates/.claude/hooks/prepush_affected_tests.py.",
+  "phase": "review_autofix",
+  "pr_number": 8430,
+  "record_id": "lesson_20261102101821_e4bd7d3773",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md, CLAUDE.md",
+    "AGENTS.md",
+    ".github/workflows/*.yml (ci",
+    "clarify",
+    "implement",
+    "issue_pr_status",
+    "orchestrate",
+    "orchestrate_poll",
+    "plan",
+    "review_autofix",
+    "unblock_judge)",
+    "agents.d/8427-*.md",
+    "agents.d/8428-*.md",
+    "changelog.d/8427-*.md",
+    "changelog.d/8428-*.md",
+    "prompts/*",
+    "scripts/*",
+    "tests/*",
+    "workflow-templates/.claude/hooks/prepush_affected_tests.py"
+  ]
+}
