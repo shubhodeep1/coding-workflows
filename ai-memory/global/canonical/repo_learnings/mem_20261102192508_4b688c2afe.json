@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "When changing orchestration or persistence behavior, check the relevant scripts and workflow definitions together rather than treating them as independent. Several merged changes also add workflow-contract tests, including tests for handling untrusted input.",
+  "fingerprint": "93f78371c9d5d2edd30b3177002cd6d123c938dd739776cf9d9232e385391427",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41508860670",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41508860670",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8660",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8662",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8664",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8669",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8674",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8665",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8666",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8667",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8672",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8675"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261102192508_4b688c2afe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Orchestrator changes often span shell/Python helpers, workflow YAML, and contract tests.",
+  "timestamps": {
+    "created_at": "2026-11-02T19:25:08Z",
+    "promoted_at": "2026-11-02T19:25:51Z",
+    "superseded_at": null
+  }
+}
