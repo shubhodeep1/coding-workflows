@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- AGENTS.md, CLAUDE.md (repo root):repo root | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The combined custom-instruction files (AGENTS.md/agents.md and CLAUDE.md) exceed the copilot-pull-request-reviewer prompt-size limit, so the check fails with custom_instructions_too_large (422) and exit code 1 before any review is produced.\n  WHY: The failure is not caused by this PR's JSON-only change and would hit any PR in the repository. Severity disagreement: sonnet-5_5 and luna rated it NIT, while gemini and glm rated it MAJOR. The highest, MAJOR, is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- AGENTS.md and CLAUDE.md at the repository root (Copilot reviewer check run 41377917276, job 125062140581) | severity=NIT | confidence=5\n  PROBLEM: The Copilot reviewer check fails because the repository's custom-instruction files are too large for its prompt limit (custom_instructions_too_large, 422).\n  WHY: The check exits with code 1 before any review model call. It is not caused by this PR, which only edits the status JSON, and no change inside the PR's diff scope can fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- AGENTS.md, CLAUDE.md:Repo root | severity=MAJOR | confidence=5\n  PROBLEM: The custom instruction files AGENTS.md and CLAUDE.md combined exceed the prompt-size limit for the copilot-pull-request-reviewer.\n  WHY: The reviewer fails with custom_instructions_too_large (422) during prompt construction, leaving the check failed for every PR in the repository.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CLAUDE.md and agents.md:Copilot reviewer check run 41377917276, job 125062140581 | severity=NIT | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check failed with custom_instructions_too_large (422) while building its prompt from the repository's custom instructions.\n  WHY: The check exits with code 1 before producing a review. The current PR check run reports the failure, but the status JSON change did not cause it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md, CLAUDE.md (repo root):custom-instruction payload consumed by the copilot-pull-request-reviewer check on head SHA 0a361a2 (job 125062140581) | severity=MAJOR | confidence=5\n  PROBLEM: The failed CI check-run cannot be mapped to any diff hunk. The combined AGENTS.md + CLAUDE.md custom instructions exceed the Copilot reviewer prompt-size limit, so the check fails before any review model call.\n  WHY: Every PR in this repository fails the copilot-pull-request-reviewer check with the same 422 error. The PR description says the default branch requires status checks, so the failing check blocks merge regardless of diff content.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0cca255edf1d0bd2ab646b12ccd3622d5bfe29212e5b2a993c6f24f4e23fe5cf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8652,
+    "run_id": "41377906541",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41377906541",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102030344_dc090f4360",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8652,
+    "run_id": "41377906541"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T03:03:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
