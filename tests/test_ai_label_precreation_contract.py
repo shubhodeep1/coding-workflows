@@ -199,7 +199,141 @@ def test_review_autofix_label_metadata_matches_label_contract() -> None:
 	assert not problems, "\n".join(problems)
 
 
+REVIEW_RB_JUDGE_PATH = REPO_ROOT / "scripts/review_rb_judge.sh"
+REVIEW_RB_JUDGE_REQUIRED_FALLBACK_LABELS = (
+	"ai:ready-to-merge",
+	"ai:closed",
+	"ai:clarification",
+	"ai:orchestrator-managed",
+	"ai:workflow-heal",
+)
+_RB_FALLBACK_DEF_RE = re.compile(r"^\s*ensure_label_exists\(\)\s*\{\s*$")
+_RB_FALLBACK_ESAC_RE = re.compile(r"^\s*esac\s*$")
+_RB_DEFAULT_ARM_RE = re.compile(r"^\s*\*\)\s*$")
+
+
+def _all_label_contract_metadata() -> dict[str, tuple[str, str]]:
+	contract = json.loads(LABEL_CONTRACT_PATH.read_text(encoding="utf-8"))
+	return {
+		str(name): (str(entry["color"]), str(entry["description"]))
+		for name, entry in contract["labels"].items()
+	}
+
+
+def _review_rb_judge_fallback_arms(text: str) -> dict[str, list[str]]:
+	"""Return the inline fallback `ensure_label_exists` case arms keyed by label ('*' for default)."""
+	lines = text.splitlines()
+	def_indexes = [index for index, line in enumerate(lines) if _RB_FALLBACK_DEF_RE.match(line)]
+	assert len(def_indexes) == 1, (
+		"scripts/review_rb_judge.sh: expected exactly one inline `ensure_label_exists() {` fallback "
+		f"definition, found {len(def_indexes)}; extraction is broken"
+	)
+	arms: dict[str, list[str]] = {}
+	current: str | None = None
+	saw_esac = False
+	for line in lines[def_indexes[0] + 1:]:
+		if _RB_FALLBACK_ESAC_RE.match(line):
+			saw_esac = True
+			break
+		arm = _CASE_ARM_RE.match(line)
+		if arm:
+			current = arm.group(1)
+			assert current not in arms, f"scripts/review_rb_judge.sh: duplicate fallback arm '{current}'"
+			arms[current] = []
+			continue
+		if _RB_DEFAULT_ARM_RE.match(line):
+			current = "*"
+			arms[current] = []
+			continue
+		if current is None:
+			continue
+		if line.strip() == ";;":
+			current = None
+			continue
+		arms[current].append(line)
+	assert saw_esac, "scripts/review_rb_judge.sh: inline fallback `case` has no closing `esac`; extraction is broken"
+	return arms
+
+
+def test_review_rb_judge_fallback_label_metadata_matches_label_contract() -> None:
+	text = REVIEW_RB_JUDGE_PATH.read_text(encoding="utf-8")
+	contract = _all_label_contract_metadata()
+	arms = _review_rb_judge_fallback_arms(text)
+	literals = sorted(set(_ENSURE_LITERAL_RE.findall(text)))
+	problems: list[str] = []
+
+	missing_known = [label for label in REVIEW_RB_JUDGE_REQUIRED_FALLBACK_LABELS if label not in literals]
+	if missing_known:
+		problems.append(
+			"scripts/review_rb_judge.sh: literal `ensure_label_exists \"ai:...\"` extraction did not find "
+			f"{missing_known}; extraction is broken"
+		)
+
+	for label in literals:
+		if label not in contract:
+			problems.append(
+				f"scripts/review_rb_judge.sh: label '{label}' is ensured but has no entry in "
+				".github/ai/label_contract.v1.json"
+			)
+		if label not in arms:
+			problems.append(
+				f"scripts/review_rb_judge.sh: label '{label}' is ensured but the inline fallback "
+				"`ensure_label_exists` has no explicit arm for it (it would get generic metadata)"
+			)
+
+	for label, body in arms.items():
+		if label == "*":
+			continue
+		body_text = "\n".join(body)
+		if "gh_retry" in body_text:
+			problems.append(f"scripts/review_rb_judge.sh: fallback arm '{label}' must not use gh_retry (see NOTE)")
+		matches = [(line, _FORM_B_RE.search(line)) for line in body]
+		matches = [(line, match) for line, match in matches if match]
+		if len(matches) != 1:
+			problems.append(
+				f"scripts/review_rb_judge.sh: fallback arm '{label}' must contain exactly one "
+				f"`--color ... --description ...` creation, found {len(matches)}"
+			)
+			continue
+		line, match = matches[0]
+		if 'gh label create "${label_name}"' not in line or not line.rstrip().endswith("2>/dev/null || true"):
+			problems.append(
+				f"scripts/review_rb_judge.sh: fallback arm '{label}' must keep the "
+				f"`gh label create \"${{label_name}}\" ... 2>/dev/null || true` shape: {line.strip()!r}"
+			)
+		if label not in contract:
+			problems.append(
+				f"scripts/review_rb_judge.sh: fallback arm '{label}' has no entry in .github/ai/label_contract.v1.json"
+			)
+			continue
+		expected_color, expected_description = contract[label]
+		actual = (match.group(1), match.group(2))
+		if actual != (expected_color, expected_description):
+			problems.append(
+				f"scripts/review_rb_judge.sh: fallback label '{label}' metadata diverges from "
+				f".github/ai/label_contract.v1.json: color '{actual[0]}' vs contract '{expected_color}'; "
+				f"description '{actual[1]}' vs contract '{expected_description}'"
+			)
+
+	default_body = arms.get("*")
+	if default_body is None:
+		problems.append("scripts/review_rb_judge.sh: inline fallback `ensure_label_exists` has no `*)` arm")
+	else:
+		default_text = "\n".join(default_body)
+		if "::warning::" not in default_text:
+			problems.append("scripts/review_rb_judge.sh: fallback `*)` arm must emit a `::warning::` for unknown labels")
+		generic = [match for match in (_FORM_B_RE.search(line) for line in default_body) if match]
+		if not any((match.group(1), match.group(2)) == GENERIC_LABEL_FALLBACK for match in generic):
+			problems.append(
+				"scripts/review_rb_judge.sh: fallback `*)` arm must still create unknown labels with "
+				f"generic metadata {GENERIC_LABEL_FALLBACK}"
+			)
+
+	assert not problems, "\n".join(problems)
+
+
 if __name__ == "__main__":
 	test_ai_label_precreation_contract()
 	test_review_autofix_label_metadata_matches_label_contract()
+	test_review_rb_judge_fallback_label_metadata_matches_label_contract()
 	print("PASS")
