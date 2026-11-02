@@ -239,6 +239,14 @@ REVISE_COMMENT_TITLES_MAX = 20
 REVISE_ITEM_KEYS = frozenset({"title", "body", "priority", "files_touched", "implementation_minutes_estimate"})
 REVISE_STORED_KEYS = ("title", "body", "priority", "files_touched")
 REVISE_MARKERS = ("orchestrator metadata", "<!--")
+# Lines the poller's first-match metadata readers act on (scripts/orchestrate_lib.py
+# INTEGRATION_BRANCH_LINE_RE / TARGET_BRANCH_LINE_RE / TRACKING_ISSUE_LINE_RE): the
+# stored body comes before the real metadata block, so a forged line would win.
+_REVISE_METADATA_LINE_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*)?(?:integration branch|target branch|tracking issue|local id|managed by)\s*:",
+	re.IGNORECASE | re.MULTILINE,
+)
+_REVISE_ISSUE_REF_RE = re.compile(r"#\d")
 REVISE_COMMENT_HEADING = "## Remaining waves re-decomposed"
 _REVISE_ID_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 _REVISE_OBJ_START_RE = re.compile(r'\{\s*"pending_issue_defs"\s*:')
@@ -1117,7 +1125,16 @@ def render_revise_input(state: dict, current_wave: int, details: Any, login: str
 	journals, _ = _revise_block("JOURNALS", "\n".join(journal_lines) or "(no journal entries)", 3 * 1024)
 	reason_text = " ".join(_CONTROL_RE.sub(" ", reason or "").split())[:REVISE_REASON_MAX]
 	judge_reason, _ = _revise_block("JUDGE REASON", reason_text or "(no reason given)", 2 * 1024)
-	payload = json.dumps({"pending_issue_defs": pending, "frozen_ids": sorted(_frozen_ids(state, ids))}, indent=1, sort_keys=True, ensure_ascii=False)
+	# Edges among the revisable items, so the model can keep their ordering.
+	old_edges = state.get("dependency_edges") if isinstance(state.get("dependency_edges"), list) else []
+	pending_edges = [
+		{"from": e["from"], "to": e["to"]} for e in old_edges
+		if isinstance(e, dict) and e.get("from") in ids and e.get("to") in ids
+	]
+	payload = json.dumps(
+		{"pending_issue_defs": pending, "pending_dependency_edges": pending_edges, "frozen_ids": sorted(_frozen_ids(state, ids))},
+		indent=1, sort_keys=True, ensure_ascii=False,
+	)
 	rest = len((spec + since + journals + judge_reason).encode("utf-8"))
 	defs_block, truncated = _revise_block("PENDING ISSUE DEFS", payload, REVISE_INPUT_MAX_BYTES - rest)
 	if truncated:
@@ -1204,7 +1221,10 @@ def validate_revise_output(obj: Any, state: dict, ids: list[str]) -> tuple[str, 
 	if not isinstance(obj, dict):
 		return "unparseable", {}, []
 	defs = obj.get("pending_issue_defs")
-	edges = obj.get("dependency_edges", [])
+	if "dependency_edges" not in obj:
+		# Required: revise_apply drops every old edge touching a revised id.
+		return "schema", {}, []
+	edges = obj.get("dependency_edges")
 	if not isinstance(defs, dict) or not 1 <= len(defs) <= REVISE_MAX_ITEMS:
 		return "schema", {}, []
 	if not isinstance(edges, list) or len(edges) > REVISE_MAX_EDGES:
@@ -1214,6 +1234,10 @@ def validate_revise_output(obj: Any, state: dict, ids: list[str]) -> tuple[str, 
 			return "schema", {}, []
 		if not set(item) <= REVISE_ITEM_KEYS:
 			return "schema", {}, []
+		for key in ("title", "body"):
+			# The input scrub joins "#N" / "@user" with U+2060; never store it.
+			if isinstance(item.get(key), str):
+				item[key] = item[key].replace("\u2060", "")
 		if not _is_bounded_str(item.get("title"), REVISE_TITLE_MAX) or not _is_bounded_str(item.get("body"), REVISE_BODY_MAX):
 			return "schema", {}, []
 		priority = item.get("priority")
@@ -1237,7 +1261,8 @@ def validate_revise_output(obj: Any, state: dict, ids: list[str]) -> tuple[str, 
 		return "edge_scope", {}, []
 	for item in defs.values():
 		text = (item["title"] + "\n" + item["body"]).lower()
-		if any(marker in text for marker in REVISE_MARKERS):
+		if any(marker in text for marker in REVISE_MARKERS) or _REVISE_METADATA_LINE_RE.search(text) \
+				or _REVISE_ISSUE_REF_RE.search(text):
 			return "marker_forgery", {}, []
 	return "", defs, edges
 

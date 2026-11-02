@@ -12,7 +12,8 @@ Inputs, after this task text, are fenced `=== BEGIN UNTRUSTED <NAME> ===` /
 
 - PROJECT SPEC: the project as it was first decomposed.
 - PENDING ISSUE DEFS: the issues you may keep, rewrite, split, merge or drop
-  (`pending_issue_defs`), and `frozen_ids`, which you must never reuse.
+  (`pending_issue_defs`), the ordering edges between them
+  (`pending_dependency_edges`), and `frozen_ids`, which you must never reuse.
 - SINCE DECOMPOSED: what has merged so far, with the files it touched.
 - JOURNALS: the newest pipeline step and outcome of each current item.
 - JUDGE REASON: why the judge asked for this revise.
@@ -50,11 +51,16 @@ Rules:
 - `files_touched` is strongly recommended. Items that could run in parallel
   should not touch the same files; overlapping items are run one after the
   other.
-- `dependency_edges` may only connect ids in your `pending_issue_defs`
-  (`from` must finish before `to`) and must not form a cycle. Ordering after
-  the frozen issues is already guaranteed.
+- `dependency_edges` is required (use `[]` when no item depends on another).
+  It may only connect ids in your `pending_issue_defs` (`from` must finish
+  before `to`) and must not form a cycle. Restate every edge from
+  `pending_dependency_edges` that still applies to the items you keep; edges
+  you leave out are dropped. Ordering after the frozen issues is already
+  guaranteed.
 - Bodies and titles must not contain `#N` issue references, HTML comments
-  (`<!--`), or an "Orchestrator metadata" section; the orchestrator adds its
-  own metadata when it creates the issue.
+  (`<!--`), an "Orchestrator metadata" section, or metadata lines such as
+  "Integration branch:", "Target branch:", "Tracking issue:", "Local ID:" or
+  "Managed by:"; the orchestrator adds its own metadata when it creates the
+  issue. Output that breaks this rule is discarded.
 - Keep every item a small, independently mergeable change. Do not pull in
   work that has already merged.
