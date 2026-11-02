@@ -660,7 +660,9 @@ def list_runs_for_repo(
         "status_code": 200,
         "etag": etag,
         "not_modified": False,
+        "duplicate_runs_skipped": 0,
     }
+    seen_run_keys: set[tuple[int, int]] = set()
 
     for page in range(1, max_pages + 1):
         request_headers: dict[str, str] | None = None
@@ -693,6 +695,17 @@ def list_runs_for_repo(
             family = normalize_workflow_family(run.get("name"), run.get("path"))
             if family is None:
                 continue
+            # Offset pagination drift: a run created between page requests
+            # shifts an earlier item onto the next page, so the same
+            # (id, attempt) can come back twice. Expected, not an error; keep
+            # the first copy. Runs without a positive id pass through as before.
+            listed_run_id = _to_int(run.get("id"), 0)
+            if listed_run_id > 0:
+                run_key = _cache_run_key(listed_run_id, _to_int(run.get("run_attempt"), 1))
+                if run_key in seen_run_keys:
+                    response_meta["duplicate_runs_skipped"] += 1
+                    continue
+                seen_run_keys.add(run_key)
             run_copy = dict(run)
             run_copy["_workflow_family"] = family
             runs.append(run_copy)
