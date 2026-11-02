@@ -1109,12 +1109,13 @@ def test_revise_validate_partition_failure_writes_nothing(tmp_path, monkeypatch,
 	assert "PERSIST redecompose outcome=invalid reason=partition" in capsys.readouterr().err
 
 
-def test_revise_validate_strips_word_joiners(tmp_path, monkeypatch):
-	defs = {"p5": _rv_item("Five @\u2060x", ["f.py"], body="Ping @\u2060x.")}
+def test_revise_validate_keeps_neutralised_mentions(tmp_path, monkeypatch):
+	# Only "#"+U+2060 is undone (and then rejected); "@"+U+2060 stays inert.
+	defs = {"p5": _rv_item("Five @\u2060x", ["f.py"], body="Ping @\u2060owner.")}
 	new, _ = _rv_validate(tmp_path, monkeypatch, _rv_state(), _rv_output(defs))
 	assert new is not None
-	assert new["pending_issue_defs"]["p5"]["title"] == "Five @x"
-	assert new["pending_issue_defs"]["p5"]["body"] == "Ping @x."
+	assert new["pending_issue_defs"]["p5"]["title"] == "Five @\u2060x"
+	assert new["pending_issue_defs"]["p5"]["body"] == "Ping @\u2060owner."
 
 
 def test_revise_validate_refuses_when_a_later_wave_item_was_created(tmp_path, monkeypatch, capsys):

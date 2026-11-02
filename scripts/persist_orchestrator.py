@@ -1235,9 +1235,11 @@ def validate_revise_output(obj: Any, state: dict, ids: list[str]) -> tuple[str, 
 		if not set(item) <= REVISE_ITEM_KEYS:
 			return "schema", {}, []
 		for key in ("title", "body"):
-			# The input scrub joins "#N" / "@user" with U+2060; never store it.
+			# The input scrub joins "#N" / "@user" with U+2060. Undo only the "#"
+			# half, so a copied "#N" is caught by the marker check below; an
+			# "@" mention the scrub neutralised stays neutralised.
 			if isinstance(item.get(key), str):
-				item[key] = item[key].replace("\u2060", "")
+				item[key] = item[key].replace("#\u2060", "#")
 		if not _is_bounded_str(item.get("title"), REVISE_TITLE_MAX) or not _is_bounded_str(item.get("body"), REVISE_BODY_MAX):
 			return "schema", {}, []
 		priority = item.get("priority")
