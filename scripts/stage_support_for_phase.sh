@@ -2,12 +2,18 @@
 # stage_support_for_phase.sh — stage one phase's support scripts from the
 # verified workflow support checkout into the out-of-tree runtime bundle.
 #
-# Usage: stage_support_for_phase.sh <phase> [--host-python-dir DIR]
-#   phase              only `clarify` today; plan, clarify_respond and
-#                      implement are added by the later P2a/P2b issues
+# Usage: stage_support_for_phase.sh <phase> [--host-python-dir DIR | --list]
+#   phase              `clarify` or `plan`; clarify_respond and implement are
+#                      added by the later P2a/P2b issues
 #                      (docs/plans/remove-unattended-pipeline-stuck-states-plan.md)
 #   --host-python-dir  absolute directory that also receives the phase's host
 #                      Python helpers (clarify: CLARIFY_HOST_PYTHON_DIR)
+#   --list             read-only: print the phase's required, optional and data
+#                      file names (one per line, relative to scripts/) and exit
+#                      0 without checking the environment or writing anything.
+#                      A workflow uses it as a capability probe (an older
+#                      helper that cannot stage the phase exits 2) and as the
+#                      name list for the consumer scripts/.gitignore.
 #
 # The phase's workflow used to copy a hand-kept list of scripts into the
 # issue checkout's scripts/, so every helper missing from the list ran from
@@ -32,13 +38,14 @@
 #   SCRIPT_REF, RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_ENV
 #                         required, as for stage_workflow_support.sh
 #
-# Exit status: 0 staged; 1 verification or staging failure; 2 usage error.
+# Exit status: 0 staged (or listed); 1 verification or staging failure;
+# 2 usage error.
 
 set -euo pipefail
 
 stage_support_usage()
 {
-	echo "Usage: stage_support_for_phase.sh <clarify> [--host-python-dir DIR]" >&2
+	echo "Usage: stage_support_for_phase.sh <clarify|plan> [--host-python-dir DIR | --list]" >&2
 	exit 2
 }
 
@@ -51,8 +58,13 @@ stage_support_fail()
 stage_support_phase="${1:-}"
 [ "$#" -gt 0 ] && shift
 stage_support_host_python_dir=""
+stage_support_list_only="false"
 while [ "$#" -gt 0 ]; do
 	case "$1" in
+		--list)
+			stage_support_list_only="true"
+			shift
+			;;
 		--host-python-dir)
 			[ "$#" -ge 2 ] || stage_support_usage
 			stage_support_host_python_dir="$2"
@@ -94,10 +106,38 @@ case "${stage_support_phase}" in
 		# writer and catalog from this directory instead of the checkout.
 		stage_support_export_isolation_dir="true"
 		;;
+	plan)
+		stage_support_required_scripts=(
+			gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py partial_delivery.py
+			assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh
+			memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py
+			openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh
+			build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh
+			codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py
+			clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py
+			workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh
+			clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh
+		)
+		# gh_helpers.sh sources emit_event.sh from its own directory first.
+		stage_support_optional_scripts=(emit_event.sh)
+		# clarify_isolated_run.sh (called by run_plan_codex.sh for PLAN) reads
+		# the Claude settings template and the sandbox Dockerfile from its own
+		# directory or CLARIFY_ISOLATION_SUPPORT_DIR.
+		stage_support_data_files=(claude_settings.json.tmpl clarify_sandbox/Dockerfile)
+		stage_support_host_python_scripts=()
+		stage_support_export_isolation_dir="true"
+		;;
 	*)
 		stage_support_usage
 		;;
 esac
+
+if [ "${stage_support_list_only}" = "true" ]; then
+	# Read-only listing: no environment checks, no verification, no writes.
+	[ -z "${stage_support_host_python_dir}" ] || stage_support_usage
+	printf '%s\n' "${stage_support_required_scripts[@]}" "${stage_support_optional_scripts[@]}" "${stage_support_data_files[@]}"
+	exit 0
+fi
 
 if [ -n "${stage_support_host_python_dir}" ] && [[ "${stage_support_host_python_dir}" != /* ]]; then
 	stage_support_usage

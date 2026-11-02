@@ -58,7 +58,9 @@ HEADER_PROMPT = REPO_ROOT / "prompts" / "header.txt"
 # clarify.yml runs the support bundle copy, "${SUPPORT_SCRIPTS_DIR:-scripts}/
 # render_prompt.sh" (stuck-states plan P2a); the prompt path stays bare.
 HEADER_RENDER_RE = re.compile(
-	r"\bbash\s+(?:scripts/|\"\$\{SUPPORT_SCRIPTS_DIR:-scripts\}/)render_prompt\.sh\"?\s+prompts/header\.txt\b"
+	# run_plan_codex.sh resolves its sibling render_prompt.sh from its own
+	# directory (RUN_PLAN_CODEX_SUPPORT_DIR, stuck-states plan P2a).
+	r"\bbash\s+(?:scripts/|\"\$\{SUPPORT_SCRIPTS_DIR:-scripts\}/|\"\$\{RUN_PLAN_CODEX_SUPPORT_DIR\}/)render_prompt\.sh\"?\s+prompts/header\.txt\b"
 )
 
 

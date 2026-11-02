@@ -748,7 +748,10 @@ def test_callers_stage_the_helper() -> None:
 	smoke = (WORKFLOWS / "claude-engine-smoke.yml").read_text(encoding="utf-8")
 	assert "bash scripts/clarify_isolated_run.sh" in smoke
 	plan = (REPO_ROOT / "scripts" / "run_plan_codex.sh").read_text(encoding="utf-8")
-	assert "bash scripts/clarify_isolated_run.sh" in plan
+	# run_plan_codex.sh resolves the helper from its own directory: the support
+	# bundle in unified mode, the checkout's scripts/ under the kill switch
+	# (stuck-states plan P2a).
+	assert 'bash "${RUN_PLAN_CODEX_SUPPORT_DIR}/clarify_isolated_run.sh"' in plan
 	triage_script = (REPO_ROOT / "scripts" / "check_failure_triage.sh").read_text(encoding="utf-8")
 	assert 'ISOLATED_HELPER="${TRUSTED_SUPPORT_DIR}/scripts/clarify_isolated_run.sh"' in triage_script
 
