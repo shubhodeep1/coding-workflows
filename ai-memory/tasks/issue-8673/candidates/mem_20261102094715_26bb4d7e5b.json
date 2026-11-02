@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8673,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8673\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8676\",\"pr_number\":8676,\"branch\":\"ai/issue-8673\",\"run_id\":\"41417665279\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41417665279\",\"changed_files\":[\"README.md\",\"changelog.d/8673-ci-triage-prose-marker-skip.md\",\"scripts/resolve_integration_ref.sh\",\"tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_body_with_label_refuses_marker_invalid.json\",\"tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_header_first_line_without_label_refuses.json\",\"tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_mid_body_without_label_skips.json\",\"tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_skip_flag_false_refuses.json\",\"tests/fixtures/integration_ref_resolver_ci_triage/prose_marker_skip_flag_unrecognised_refuses.json\",\"tests/test_resolve_integration_ref_ci_triage.py\"]}",
+  "fingerprint": "972ee213a9c715f38212fd98c4d53c2ea80a08fe3013fb3a2bcb5017ffdd89e5",
+  "lineage": {
+    "issue_number": 8673,
+    "parent_ids": [],
+    "pr_number": 8676,
+    "run_id": "41417665279",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41417665279",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8676"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261102094715_26bb4d7e5b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8673,
+    "level": "run",
+    "pr_number": 8676,
+    "run_id": "41417665279"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8673: https://github.com/shubhodeep1/coding-workflows/pull/8676",
+  "timestamps": {
+    "created_at": "2026-11-02T09:47:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
