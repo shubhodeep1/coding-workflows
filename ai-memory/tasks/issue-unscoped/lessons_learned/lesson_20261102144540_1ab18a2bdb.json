@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-02T14:45:40Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=AGENTS.md:1-1; cited_path=AGENTS.md, CLAUDE.md; files_touched=.github/workflows/*, agents.d/8427-*.md, changelog.d/8427-*.md, scripts/*, prompts/*, tests/*, workflow-templates/.claude/hooks/prepush_affected_tests.py.",
+  "phase": "review_autofix",
+  "pr_number": 8430,
+  "record_id": "lesson_20261102144540_1ab18a2bdb",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md, CLAUDE.md",
+    "AGENTS.md",
+    ".github/workflows/*",
+    "agents.d/8427-*.md",
+    "changelog.d/8427-*.md",
+    "scripts/*",
+    "prompts/*",
+    "tests/*",
+    "workflow-templates/.claude/hooks/prepush_affected_tests.py"
+  ]
+}
