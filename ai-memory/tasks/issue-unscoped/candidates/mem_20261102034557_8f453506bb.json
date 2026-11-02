@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/copilot-pull-request-reviewer:N/A | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check-run fails with a 422 custom_instructions_too_large error because the repository's custom instructions exceed the reviewer's prompt limit.\n  WHY: The failure is pre-existing and repository-wide, and this data-only PR neither causes nor fixes it. Both reviewers rated it NIT. The reviewers cite different locations: gemini cites a workflow path, and glm cites a third-party check-run with no repo file.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/copilot-pull-request-reviewer:N/A | severity=NIT | confidence=4\n  PROBLEM: Pre-existing infrastructure CI failure.\n  WHY: The copilot-pull-request-reviewer check-run failed with a 422 custom_instructions_too_large error. This is a repository-wide infrastructure issue caused by the size of the repository's custom instructions, unrelated to the changes in this data-only PR.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (third-party check-run `copilot-pull-request-reviewer`, no repo file):head SHA 0a361a214721574ec6266aa00b66cf085b59130d check-run failure | severity=NIT | confidence=4\n  PROBLEM: The check-run fails because the repository's AGENTS.md/CLAUDE.md custom instructions exceed the Copilot reviewer's 110000-token prompt limit, before it evaluates any diff.\n  WHY: Not caused by this PR. The failure is repository-wide and pre-existing, and this data-only JSON update neither introduces nor worsens it, and cannot fix it. Prior review rounds explicitly accepted it as an out-of-scope residual.\n- TASK_GAP (no gap found):\n  Requirement: \"Updates `analysis/validation-selftest-status.json` only\" (PR description; nightly self-test status from run 41377238502).\n  Expected change site: analysis/validation-selftest-status.json\n  Evidence of absence: No gap. The single hunk updates exactly that file's `consecutive_green_runs` (170\u2192171) and `generated_at` (2026-11-01T02:27:38Z \u2192 2026-11-02T02:28:01Z). The on-disk head file matches and is valid JSON with `overall_status` \"pass\". Deliverable fully present.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3709542e7d9d6d2b065beffae9ada69eaa24723f954dfba27ac9b656967452c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8652,
+    "run_id": "41382042897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41382042897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102034557_8f453506bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8652,
+    "run_id": "41382042897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T03:45:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
