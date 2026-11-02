@@ -200,6 +200,7 @@ def test_orchestrate_clarify_respond_gate_steps_emit_stable_telemetry() -> None:
 
 	metadata_block = _step_block(ORCH_CLARIFY_RESPOND_WF, "Check orchestrator metadata")
 	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_metadata reason=not_orchestrator_managed outcome=skip issue=${ISSUE_NUMBER}" in metadata_block
+	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_questions reason=not_clarify_questions outcome=skip issue=${ISSUE_NUMBER}" in metadata_block
 
 	parse_block = _step_block(ORCH_CLARIFY_RESPOND_WF, "Parse and post answer")
 	assert "bash scripts/orchestrate_parse_and_post_answer.sh" in parse_block
