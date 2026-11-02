@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Changes to GitHub Actions workflows commonly pair YAML edits with focused contract tests, while the invoked shell or Python code has its own behavioral tests. When modifying a workflow, verify both its wiring and the underlying script behavior; include untrusted-input contract coverage where relevant.",
+  "fingerprint": "c38cdadbeaac137e9afc241a6db7732603251ae27712c4d381c01d65cff391a6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41371238583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41371238583",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8611",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8630",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8631",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8633",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8635",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8616",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8632",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8634",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8636",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8637"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261102011636_12bb6463d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow changes should be tested at both the script-logic and workflow-contract layers.",
+  "timestamps": {
+    "created_at": "2026-11-02T01:16:36Z",
+    "promoted_at": "2026-11-02T01:17:09Z",
+    "superseded_at": null
+  }
+}
