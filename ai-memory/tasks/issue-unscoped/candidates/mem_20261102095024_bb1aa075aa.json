@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8106-8144 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `security_pass_advisory_cited_code_status` header comment (8106-8108) lists three `unknown` triggers, but the branch added at 8134-8144 adds a fourth: the default-branch file is missing and `origin/<default_branch>^{commit}` does not resolve.\n  WHY: Documentation drift only. The behavior is correct and fail-open, and the inline comment covers it, but the header contract is incomplete. All four reviewers rated it NIT.\n- scripts/orchestrate_poll_process.sh:8116-8120 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `audited_head_sha` and `cited_file` are read from STATE_FILE and passed unvalidated to `git show`.\n  WHY: A value starting with `--` could be parsed as a git option and alter the security check. Rated MAJOR by this reviewer. anthropic_claude-sonnet-5_5 judged the same surface low risk because the value lands in `git show \"<sha>:<path>\"` and can only yield `unknown`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:8106-8108 (header comment) vs 8134-8144 | severity=NIT | confidence=4\n  PROBLEM: The header comment omits the fourth `unknown` trigger.\n  WHY: Cosmetic only. The behavior is correct and fail-open.\n- HARDENING_SUGGESTIONS: (1) scripts/orchestrate_poll_process.sh, `SECURITY_PASS_ADVISORY_CITED_CODE` log line (~8232): spaces or `=` in `finding_id` can still inject `key=value` tokens. Fix: also run the ID through `tr -c 'A-Za-z0-9._-' '_'`. (2) scripts/orchestrate_poll_process.sh, first guard in `security_pass_advisory_cited_code_status`: `audited_head_sha` is not validated as hex. Fix: add `|| ! [[ \"${audited_head_sha}\" =~ ^[0-9a-fA-F]{7,64}$ ]]`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:8116, 8120 | severity=MAJOR | confidence=4\n  PROBLEM: Unvalidated `audited_head_sha` and `cited_file` are passed as arguments to `git show`.\n  WHY: Both come from persisted STATE_FILE. If tampered with, they could inject flags such as a leading `--` and alter the command's behavior.\n- scripts/orchestrate_poll_process.sh:8106-8108 | severity=NIT | confidence=4\n  PROBLEM: The function header comment is incomplete.\n  WHY: It does not document the new `unknown` trigger added at 8138-8142.\n- HARDENING_SUGGESTIONS: scripts/orchestrate_poll_process.sh:8231: structured log line `finding_id` token injection. Fix: replace whitespace with underscores. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:8106-8108 vs 8138-8142 | severity=NIT | confidence=4\n  PROBLEM: The header lists three `unknown` triggers, and the fourth added in the `git show` failure branch is not documented there.\n  WHY: Documentation drift only. The behavior is correct and fail-open, and the inline comment at 8135-8136 explains it.\n- HARDENING_SUGGESTIONS: None. `tr -d '\\r\\n'` is sufficient for a newline-separated log format. The earlier suggestions are pre-existing concerns, not regressions. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTIONS: scripts/orchestrate_poll_process.sh:8232: the log field strips CR/LF from `finding_id`, but spaces and tabs can still split `key=value` fields. Fix: encode the value or restrict it to a safe token alphabet. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:8106-8108 vs 8138-8142 | severity=NIT | confidence=5\n  PROBLEM: The header comment is incomplete. It omits the fourth `unknown` trigger, an unresolvable default-branch ref.\n  WHY: There is no runtime failure. A stale header may mislead readers into assuming `absent` covers every default-branch `git show` failure.\n- HARDENING_SUGGESTIONS: (1) scripts/orchestrate_poll_process.sh:8120-8121, 8129: `audited_head_sha` is checked only for non-emptiness, so a leading `--` would be parsed as a git option. Fix: add the hex regex guard. HARDENING_RISK_SCORE: 2. (2) scripts/orchestrate_poll_process.sh:8232: spaces and tabs in `finding_id` are not stripped from the log line. Fix: append `-d ' \\t'` to the `tr`, or restrict the ID to a safe token alphabet. HARDENING_RISK_SCORE: 1.\n- Verified: the new unresolvable-ref branch (8134-8144) is fail-open and consistent with the caller-side force at 8230-8231. It is covered by tests/test_orchestrate_poll_process.py:7031. CI note: the only failed check-run is `copilot-pull-request-reviewer` (`custom_instructions_too_large`), a third-party infrastructure failure unrelated to this diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8cf35e14b596d9c3d7028772611ab32284f6ca374447080d7a749d2a61e655e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8670,
+    "run_id": "41419006167",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41419006167",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102095024_bb1aa075aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8670,
+    "run_id": "41419006167"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T09:50:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
