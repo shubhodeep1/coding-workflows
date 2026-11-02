@@ -18560,7 +18560,7 @@ ${gate_replan_marker}"
           echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_failed issue=${issue_num}"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
             --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 \
-            || echo "::warning::Could not restore ai:awaiting-approval on issue #${issue_num} after a failed re-plan comment; it is left in ai:planning with no re-plan marker."
+            || echo "::warning::Could not restore ai:awaiting-approval on issue #${issue_num} after a failed re-plan comment; it is left in ai:planning and the re-plan marker could not be confirmed (it may have landed)."
         fi
         return 1
       fi
