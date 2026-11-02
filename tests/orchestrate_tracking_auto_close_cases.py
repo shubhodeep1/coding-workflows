@@ -157,6 +157,7 @@ def test_dormant_verdict_points_at_the_operator_step_issue() -> None:
 	[body] = _posts(calls)
 	assert "**DORMANT**" in body
 	assert f"https://github.com/{REPO}/issues?q=is%3Aissue+is%3Aopen+label%3Aai%3Aoperator-step" in body
+	assert "\n\nThe remaining operator steps" in body and "operator-step\n\nThe release callback" in body
 	assert body.endswith(f"<!-- ai:tracking-auto-close:v1 issue={TRACKING} -->")
 	assert state["tracking_auto_close"]["verdict"] == "DORMANT"
 
@@ -252,8 +253,9 @@ def test_untrusted_close_marker_does_not_suppress_the_comment() -> None:
 
 
 def test_state_save_failure_after_close_warns() -> None:
-	out, calls, _, _ = _run(env={"FAKE_STATE_POST_FAIL": "true"})
+	out, calls, _, state_posts = _run(env={"FAKE_STATE_POST_FAIL": "true"})
 	assert "outcome=closed verdict=LIVE state_persist=failed" in out, out
+	assert state_posts == 2  # one retry before giving up
 	assert "::warning::TRACKING_AUTO_CLOSE tracking_issue=900 closed, but its state was not saved" in out, out
 	assert len(_patches(calls)) == 1
 	out, _, _, _ = _run()

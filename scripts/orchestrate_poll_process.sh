@@ -15094,7 +15094,8 @@ close_plan_split_source_if_needed() {
 #     or .plan_split_source.outcome is set (reason=plan_split_pending);
 #   - no ai:integration-backpressure label is left (reason=backpressure_label).
 # Runs once: the outcome is kept in .tracking_auto_close in the state file,
-# so a reopened issue is never closed again. Reads only comments_json,
+# so a reopened issue is not closed again (unless saving that state failed
+# twice after the close, which logs state_persist=failed and a ::warning::). Reads only comments_json,
 # labels_json and STATE_FILE (no API read). Writes at most one comment
 # (ending <!-- ai:tracking-auto-close:v1 issue=<N> -->), one PATCH and one
 # state comment per project. A failed PATCH (reason=close_failed) is retried
@@ -15186,6 +15187,8 @@ close_completed_tracking_issue_if_ready() {
     fi
     if [ "${verdict}" = "DORMANT" ]; then
       operator_text="The remaining operator steps are tracked in this repository's open \`ai:operator-step\` issue: https://github.com/${GITHUB_REPOSITORY}/issues?q=is%3Aissue+is%3Aopen+label%3Aai%3Aoperator-step"
+      # Blank lines around it so Markdown renders it as its own paragraph.
+      operator_text=$'\n'"${operator_text}"$'\n'
     fi
     body="$(printf '%s\n' \
       "## ✅ Project complete: tracking issue closed" \
@@ -15212,7 +15215,8 @@ close_completed_tracking_issue_if_ready() {
   if ! { jq --arg at "${now_utc}" --arg verdict "${verdict}" '.tracking_auto_close = {outcome: "closed", at: $at, verdict: $verdict}' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
     state_persist="failed"
-  elif ! post_state_comment; then
+  elif ! post_state_comment && ! post_state_comment; then
+    # One retry: without a saved outcome a reopened issue could be closed again.
     state_persist="failed"
   fi
   if [ "${state_persist}" = "failed" ]; then
