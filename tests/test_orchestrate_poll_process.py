@@ -6887,7 +6887,7 @@ def test_security_pass_deferred_advisory_followup_retries_on_completed_tick() ->
 	assert latest_state["security_pass_waived_findings"][0]["issue"] == created[0]["number"]
 	assert "followup_pending" not in latest_state["security_pass_waived_findings"][0]
 	combined_log = result["stdout"] + result["stderr"]
-	assert f"SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192 final_pr=300 default_branch=main filed=1 pending=1" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUPS_FILED tracking_issue=192 final_pr=300 default_branch=main filed=1 pending=1" in combined_log
 
 
 def test_security_pass_advisory_followup_reconciles_remote_marker_before_create() -> None:
@@ -10964,7 +10964,6 @@ def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
 			"baseRefName": "main",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
-			"headSha": "@sandbox_head",
 			"mergeable": True,
 			"mergeable_state": "clean",
 			"body": "ordinary PR body",
@@ -14424,8 +14423,8 @@ def test_standalone_conflict_sweep_sees_named_pending_dispatch():
 	result = _run_poller(
 		state=state, enable_validation="false", max_validate_cycles="3",
 		prs=[{"number": 411, "state": "open", "baseRefName": "main",
-		      "headRefName": "claude/issue-10", "headSha": "0000000000000000000000000000000000000411",
-		      "mergeable": False, "mergeable_state": "dirty"}],
+			"headRefName": "claude/issue-10", "headSha": "0000000000000000000000000000000000000411",
+			"mergeable": False, "mergeable_state": "dirty"}],
 		update_branch_fail_for_prs=[411],
 		active_autofix_runs=[{
 			"workflow": "internal-review.yml", "workflowName": "Internal: AI Review & Autofix",
@@ -14829,8 +14828,8 @@ def test_standalone_retrigger_review_sees_pr_named_pending_run():
 		issue_comments={501: [standalone_state_comment]}, issue_linked_prs={501: 416},
 		mock_gh_issue_list_label_filter=True,
 		prs=[{"number": 416, "body": "Closes #501", "state": "open", "baseRefName": "main",
-		      "headRefName": "claude/issue-501", "headRefFromApi": "claude/issue-501",
-		      "headSha": "a" * 40, "mergeable": True, "mergeable_state": "clean"}],
+			"headRefName": "claude/issue-501", "headRefFromApi": "claude/issue-501",
+			"headSha": "a" * 40, "mergeable": True, "mergeable_state": "clean"}],
 		actions_runs_workflow_runs=[{
 			"id": 26088864017, "name": "Internal: AI Review & Autofix",
 			"path": ".github/workflows/internal-review.yml@main", "event": "workflow_dispatch",
@@ -16162,7 +16161,7 @@ def test_validation_harness_config_defaults_and_invalid_values():
 		"VALIDATION_HARNESS_ROUTE_LOGIN",
 	):
 		assert f"::warning::VALIDATION_HARNESS_HOLD config={name} outcome=default reason=invalid_value" in invalid.stdout
-	assert "secret" not in "\n".join(l for l in invalid.stdout.splitlines() if l.startswith("::warning::"))
+	assert "secret" not in "\n".join(text_line for text_line in invalid.stdout.splitlines() if text_line.startswith("::warning::"))
 
 
 def test_validation_harness_local_fp_ignores_digits_and_case():
@@ -20721,9 +20720,9 @@ def test_retrigger_review_redispatches_on_tied_head_branch_failure():
 		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 77}, prs=prs,
 		active_autofix_runs=[
 			{"workflow": "ai-review.yml", "branch": "claude/retrigger-review-tied-failure",
-			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T01:00:00Z"},
+				"status": "completed", "conclusion": "success", "createdAt": "2026-09-28T01:00:00Z"},
 			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-tied-failure",
-			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+				"status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
 		],
 		mock_git_push_success=True,
 	)
@@ -21546,11 +21545,11 @@ def test_retrigger_review_redispatches_pr_named_failure_tied_with_head_branch_su
 		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 93}, prs=prs,
 		active_autofix_runs=[
 			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-pr-named-tied",
-			 "event": "pull_request", "status": "completed", "conclusion": "success",
-			 "createdAt": "2026-09-28T01:00:00Z"},
+				"event": "pull_request", "status": "completed", "conclusion": "success",
+				"createdAt": "2026-09-28T01:00:00Z"},
 			{"workflow": "internal-review.yml", "branch": "main", "event": "workflow_dispatch",
-			 "displayTitle": "Internal: AI Review & Autofix [pr:93]",
-			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+				"displayTitle": "Internal: AI Review & Autofix [pr:93]",
+				"status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
 		],
 		mock_git_push_success=True,
 	)
@@ -25679,21 +25678,21 @@ def _extract_refresh_function_body(poller_body: str) -> str:
 
 def test_extract_refresh_function_body_keeps_operator_attached_command_groups():
 	sample = """_refresh_integration_resolver_tooling() {
-	  echo start
-	  test -n \"${x:-}\" && {
-	    echo inner
-	  }
-	  echo after  # note | {
+		echo start
+		test -n \"${x:-}\" && {
+			echo inner
+		}
+		echo after  # note | {
 	}
 	after() {
-	  :
+		:
 	}"""
 	expected = """_refresh_integration_resolver_tooling() {
-	  echo start
-	  test -n \"${x:-}\" && {
-	    echo inner
-	  }
-	  echo after  # note | {
+		echo start
+		test -n \"${x:-}\" && {
+			echo inner
+		}
+		echo after  # note | {
 	}"""
 	assert _extract_refresh_function_body(sample) == expected
 
@@ -25976,7 +25975,7 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+				"origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		assert actual == "# sub-issue v1\n", (
@@ -26134,7 +26133,7 @@ def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches(
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+				"origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		# After the 3-way merge, the integration branch's file must
@@ -26273,7 +26272,7 @@ def test_resolver_tooling_refresh_3way_merge_falls_back_to_skip_on_conflict():
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+				"origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		# On conflict the function must SKIP — integration-branch content
@@ -26397,7 +26396,7 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		)
 		actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+				"origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		assert actual == "# main v2 with toolchain fix\n", (
@@ -26411,7 +26410,7 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		)
 		added_actual = subprocess.run(
 			["git", "-C", str(work), "show",
-			 "origin/orchestrator/project-99:scripts/targeted_file_context.py"],
+				"origin/orchestrator/project-99:scripts/targeted_file_context.py"],
 			capture_output=True, text=True, check=True, env=git_env,
 		).stdout
 		assert added_actual == "# main-only helper\n", (
@@ -28061,9 +28060,9 @@ def test_needs_human_digest_terminal_paths_call_the_helper():
 		hold_start = lines.index(header)
 		hold_end = lines.index("}", hold_start)
 		assert any(
-			l.strip() == 'set_tracking_phase_label "ai:validation-failed"' for l in lines[hold_start:hold_end]
+			text_line.strip() == 'set_tracking_phase_label "ai:validation-failed"' for text_line in lines[hold_start:hold_end]
 		), header
-		assert not any("needs_human_park_project" in l for l in lines[hold_start:hold_end]), header
+		assert not any("needs_human_park_project" in text_line for text_line in lines[hold_start:hold_end]), header
 		exempt.append((hold_start, hold_end))
 	for idx, line in enumerate(lines):
 		if any(start <= idx < end for start, end in exempt):
