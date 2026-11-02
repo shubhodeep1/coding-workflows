@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-02T06:22:56Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=AGENTS.md:1-1; cited_path=AGENTS.md, CLAUDE.md (external copilot-pull-request-reviewer check, `custom_instructions_too_large`); files_touched=analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-09-28-3.md, changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md, scripts/review_rb_judge.sh, tests/test_ai_label_precreation_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8654,
+  "record_id": "lesson_20261102062256_ef4cefad54",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "AGENTS.md, CLAUDE.md (external copilot-pull-request-reviewer check, `custom_instructions_too_large`)",
+    "AGENTS.md",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-09-28-3.md",
+    "changelog.d/wfopt-2026-09-28-3-rb-judge-label-fallback.md",
+    "scripts/review_rb_judge.sh",
+    "tests/test_ai_label_precreation_contract.py"
+  ]
+}
