@@ -5,13 +5,27 @@
   "entry_id": "processed_command_8660_6570149692_approved",
   "issue_number": 8660,
   "metadata": {
+    "branch": "ai/issue-8660",
+    "changed_files": [
+      "agents.d/8339-auto-replan-placeholder-hold.md",
+      "changelog.d/8339-auto-replan-placeholder-hold.md",
+      "scripts/files_touched_scope_guard.py",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_files_touched_scope_guard.py",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 8660,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8660",
+    "pr_number": 8666,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8666",
+    "run_attempt": "1",
+    "run_id": "41396533927",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41396533927"
   },
   "run_attempt": 1,
   "run_id": "41396533927",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-02T05:57:51Z",
+  "status": "completed",
+  "timestamp": "2026-11-02T07:07:32Z",
   "workflow": "implement"
 }
