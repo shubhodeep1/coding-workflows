@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8660,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8660\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8666\",\"pr_number\":8666,\"branch\":\"ai/issue-8660\",\"run_id\":\"41396533927\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41396533927\",\"changed_files\":[\"agents.d/8339-auto-replan-placeholder-hold.md\",\"changelog.d/8339-auto-replan-placeholder-hold.md\",\"scripts/files_touched_scope_guard.py\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_files_touched_scope_guard.py\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "714cd9892cc9e69ff7a56c3c334f5a0b3626bc2cdf3091583744fa48d2a0faf9",
+  "lineage": {
+    "issue_number": 8660,
+    "parent_ids": [],
+    "pr_number": 8666,
+    "run_id": "41396533927",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41396533927",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8666"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261102070645_074cb0a1b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8660,
+    "level": "run",
+    "pr_number": 8666,
+    "run_id": "41396533927"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8660: https://github.com/shubhodeep1/coding-workflows/pull/8666",
+  "timestamps": {
+    "created_at": "2026-11-02T07:06:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
