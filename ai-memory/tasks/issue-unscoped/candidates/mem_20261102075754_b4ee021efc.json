@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"This change must also be ported to `main`; otherwise the next `main \u2192 stable` promotion silently reverts it.\"\n  expected_change_site: The corresponding implementation, tests, and documentation on the `main` branch\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR diff changes only agents.d/8661-security-pass-advisory-cited-code-check.md, changelog.d/8661-security-pass-advisory-cited-code-check.md, scripts/orchestrate_poll_process.sh, and tests/test_orchestrate_poll_process.py, with no port to `main`; the PR targets only `stable`. Severity was stated as MAJOR by both reviewers. Three other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) treated the item as a deferred out-of-branch follow-up and did not report it as a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nNote: the reviewer reported no TASK_GAP entries. It chose not to carry forward the pass-1 \"port to `main`\" item, treating it as a separate PR on another branch and a deferred follow-up. It rated that item SEVERITY: NIT, ISSUE_CONFIDENCE: 1, as informational only: the `main` port must be tracked outside this PR so the next `main \u2192 stable` promotion does not revert it. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"This change must also be ported to main; otherwise the next main \u2192 stable promotion will silently revert it.\"\n  Expected change site: The corresponding implementation on the main branch, including its matching tests and documentation.\n  Evidence of absence: The current PR only targets stable. No PR exists to port these changes to main, and the PR diff changes only agents.d/8661-security-pass-advisory-cited-code-check.md, changelog.d/8661-security-pass-advisory-cited-code-check.md, scripts/orchestrate_poll_process.sh, and tests/test_orchestrate_poll_process.py.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nNote: the reviewer found no task gaps. It treated the \"port to `main`\" requirement as an explicit deferral from the prior autofix run and out of scope for this PR. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"This change must also be ported to `main`; otherwise the next `main \u2192 stable` promotion silently reverts it.\"\n  Expected change site: The corresponding implementation, tests, and documentation on the `main` branch.\n  Evidence of absence: The PR diff changes `agents.d/8661-security-pass-advisory-cited-code-check.md`, `changelog.d/8661-security-pass-advisory-cited-code-check.md`, `scripts/orchestrate_poll_process.sh`, and `tests/test_orchestrate_poll_process.py`; it contains no port to `main`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNote: the reviewer found no task gaps. It skipped the \"port to `main`\" requirement as an accepted residual that the prior editor run explicitly deferred (TASK_GAP_DEFERRED), because no diff hunk in this PR can implement it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e12f7c5ace97ceab8dadd3d1f2a961613e9a8cf2827331d119693b5a9c9a26b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8661,
+    "run_id": "41407119780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41407119780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102075754_b4ee021efc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8661,
+    "run_id": "41407119780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T07:57:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
