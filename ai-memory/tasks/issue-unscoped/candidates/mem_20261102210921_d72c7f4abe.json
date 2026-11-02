@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:3909-3928 | severity=low | confidence=3\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The added agents.md text adds to custom instruction files that the copilot-pull-request-reviewer rejects as too large (`custom_instructions_too_large`), so that check fails. Luna cited lines 3912-3924 and GLM cited lines 3909-3928.\n  WHY: Both reviewers rated it NIT (mapped to low). GLM says the failure already existed before this PR and cannot be fixed within a merge-only PR. Luna's confidence was 2 and GLM's was 3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:3912-3924 | severity=low (source: NIT) | confidence=2\n  PROBLEM: The added repository instructions contribute to a custom-instruction payload that the Copilot reviewer rejects as too large.\n  WHY: On this PR head, `copilot-pull-request-reviewer` exited with `custom_instructions_too_large` before producing a review, leaving that check failed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:3909-3928 | severity=low (source: NIT) | confidence=3\n  PROBLEM: The `copilot-pull-request-reviewer` check on head 7fdc34c1 fails with `custom_instructions_too_large` (422). The repo instruction files AGENTS.md and CLAUDE.md exceed the Copilot action's prompt limit, and this PR adds 16 more lines to agents.md.\n  WHY: The Copilot review check cannot run against this head. The failure is pre-existing and cannot be fixed inside this merge-only PR, so it is recorded for separate repo-level follow-up.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "715d3d60f94fb9a0d08b0ca0487d4cc674ad302df7d75f2efb1f2ece24b3c70f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8704,
+    "run_id": "41519497700",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41519497700",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261102210921_d72c7f4abe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8704,
+    "run_id": "41519497700"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-02T21:09:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
