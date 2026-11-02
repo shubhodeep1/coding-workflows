@@ -506,6 +506,9 @@ class Broker:
 		if lines is None:
 			self.partial = True
 			return ["(unavailable)"]
+		# run_log_tail is already redacted over the wider window in _run_log_tail
+		# (the pass that masks a credential crossing the 4 KiB cut); this second
+		# pass is deliberate defence in depth, so keep both.
 		if kind in REDACTED_KINDS:
 			redact = self.redactor()
 			lines = redact("\n".join(lines)).split("\n")
