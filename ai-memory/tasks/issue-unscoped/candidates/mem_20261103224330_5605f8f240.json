@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1530-1564, 2287-2312 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI suite regression indicated by failing test gate (`test_agents_fragment_contract.py`, `test_files_touched_scope_guard.py`, `test_gh_api_write_guard.py`, `test_pr_watch_guard.py`, `test_workflow_checkout_integration_ref_audit.py`).\n  WHY: The step moves in ci.yml allegedly violate the repository's contract and sharding assumptions enforced by these tests; the source rated it BLOCKER (mapped to critical). anthropic_claude-sonnet-5_5 did not report this as a finding. It said it could not tie these failures to the diff and treated them as unconfirmed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\n  expected_change_site: .github/workflows/ci.yml, selection and placement of steps moved from tests-promote-stall-and-review\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: Workflow comments at lines 1535-1542 and 2292-2296, and test comments at lines 2360-2364, state that run timings were not read and the selections are estimates, and the diff has no timing-based comparison showing these are the slowest steps or that the target jobs have the most headroom. Severity: MAJOR. anthropic_claude-sonnet-5_5 considered this gap and did not report it.\n- requirement: Update the contract test and add a changelog entry (CLAUDE.md \u00a730 requires adding an agents.d/ fragment for structural changes).\n  expected_change_site: agents.d/ directory\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR moves steps between jobs in .github/workflows/ci.yml but adds no agents.d/ fragment documenting the change, and test_agents_fragment_contract.py is failing. Severity: BLOCKER. anthropic_claude-sonnet-5_5 considered this and rejected it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1530-1564, 2287-2312 | severity=BLOCKER | confidence=5\n  PROBLEM: CI suite regression indicated by failing test gate\n  WHY: The move of test steps in ci.yml has caused multiple test failures (`test_agents_fragment_contract.py`, `test_files_touched_scope_guard.py`, `test_gh_api_write_guard.py`, `test_pr_watch_guard.py`, `test_workflow_checkout_integration_ref_audit.py`), showing the contract and sharding assumptions have been violated.\n- TASK_GAP\n  Requirement: Update the contract test and add a changelog entry (CLAUDE.md \u00a730 requires adding an agents.d/ fragment for structural changes).\n  Expected change site: agents.d/ directory\n  Evidence of absence: The PR modifies workflow architecture by moving steps between jobs in .github/workflows/ci.yml but lacks an agents.d/ fragment documenting this change. test_agents_fragment_contract.py is failing as a result.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\n  Expected change site: .github/workflows/ci.yml, selection and placement of steps moved from tests-promote-stall-and-review.\n  Evidence of absence: The workflow comments at lines 1535-1542 and the test comments at lines 2360-2364 state that run step timings were not read and the selections are estimates. The PR diff contains no timing-based selection or comparison establishing that the moved steps are the slowest or that their destination jobs have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps removed from `tests-promote-stall-and-review` and their placement in target jobs.\n  Evidence of absence: The workflow comments at lines 1535-1542 and 2292-2296 state that run timings were not read and the selections and destination headroom are estimates, not measurements. The diff contains no timing-based comparison establishing these are the slowest steps or that the target jobs have the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "8be01683146f8df3fde99d2fb34593502c178ecbe874f30b5460731f7ef5fe4d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8776,
+    "run_id": "41730080710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41730080710",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103224330_5605f8f240",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8776,
+    "run_id": "41730080710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T22:43:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
