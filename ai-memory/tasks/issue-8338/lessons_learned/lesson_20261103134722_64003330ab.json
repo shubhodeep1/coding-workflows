@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-03T13:47:22Z",
+  "issue_number": 8338,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=external GitHub check run `copilot-pull-request-reviewer` (not a repository file):unspecified; cited_path=copilot-pull-request-reviewer (external check run, not a repository path); files_touched=tests/e2e_smoke_canary.txt.",
+  "phase": "review_autofix",
+  "pr_number": 8348,
+  "record_id": "lesson_20261103134722_64003330ab",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer (external check run, not a repository path)",
+    "external GitHub check run `copilot-pull-request-reviewer` (not a repository file)",
+    "tests/e2e_smoke_canary.txt"
+  ]
+}
