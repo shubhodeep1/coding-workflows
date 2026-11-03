@@ -624,6 +624,16 @@ jobs:
       PREPUSH_GATE_STEP_STALL_MINUTES: 35
       REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
+      # Stuck states P4 (Refs #8291): Phase 4b's EDITOR_RETRY_BUDGET_MINUTES
+      # counts from the first poll that sees the pinned retry run leave the
+      # queue (in_progress/completed). Until then the run gets its own
+      # queued cap, E2E_RETRY_QUEUED_GRACE_MINUTES, and fails as
+      # retry_queued_timeout when still queued at that cap. Both deadlines
+      # stay within the job ceiling, so the serial budget above is
+      # unchanged. Any value that is not truthy restores the legacy
+      # queued-poll extension. The script defaults both values as well.
+      E2E_PHASE4B_QUEUED_GRACE_ENABLED: ${{ vars.E2E_PHASE4B_QUEUED_GRACE_ENABLED || 'true' }}
+      E2E_RETRY_QUEUED_GRACE_MINUTES: ${{ vars.E2E_RETRY_QUEUED_GRACE_MINUTES || '30' }}
       PHASE7_WAIT_BUDGET_MINUTES: 10
       E2E_FINALIZATION_RESERVE_MINUTES: 20
       POLL_INTERVAL: 10
@@ -2203,7 +2213,9 @@ jobs:
       # for the bait/current head when one exists, or re-dispatch
       # ${REVIEW_WORKFLOW_FILE} via `--ref "${BRANCH}"` and register the
       # oldest matching post-snapshot run. We allow up to 25 minutes for
-      # the pinned run to complete (raised from 10 min
+      # the pinned run to complete, counted from when the run leaves the
+      # queue (E2E_PHASE4B_QUEUED_GRACE_ENABLED, default true; queued time
+      # is capped separately by E2E_RETRY_QUEUED_GRACE_MINUTES) (raised from 10 min
       # after run 25371432937 truncated a still-running successful
       # retry); if the second verification also fails, we hard-fail
       # this step. The retry
@@ -2227,6 +2239,7 @@ jobs:
       #   pr_head_fetch_failed     — pulls/<n> API failed; refused to fail-open commit guard
       #   retry_dispatch_failed    — run discovery/dispatch/registration failed, or wait-review id non-numeric
       #   retry_timeout            — pinned retry run did not complete in 25 min
+      #   retry_queued_timeout     — retry run still queued past E2E_RETRY_QUEUED_GRACE_MINUTES
       #   retry_workflow_failed    — retry run completed but conclusion != success
       #   pr_closed_during_retry   — PR closed/merged while waiting for the retry run
       #   pr_state_check_failed    — fetch_pr_state returned "unknown" 4 consecutive times
