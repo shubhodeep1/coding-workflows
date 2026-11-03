@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly the three lines `status: ok`, `run_id: alt-40831286935` and `updated-by: ai-pipeline`.\n  expected_change_site: `tests/e2e_smoke_canary.txt`\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: None. The reviewer states the file has exactly the three required lines and is the only file in the PR, so no deliverable is missing (SEVERITY: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP:\n  Requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly the three lines `status: ok`, `run_id: alt-40831286935` and `updated-by: ai-pipeline`.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: None. The last-run diff changes `run_id` to `alt-40831286935`. The file now has exactly the three required lines, and it is the only file in the PR. The earlier \"gap\" about `tests/test_implement_post_codex_recovery.py` is not a gap. A plain-text canary file has no visible way to affect that test module, and the check-runs on the PR head show only the external `copilot-pull-request-reviewer` failure. That failure is \"Prompt too big\" (`custom_instructions_too_large`), which comes from the reviewer service and not from this diff. No deliverable is missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c94cc422dcaa4e6c021dbadccda7a9129071189a9ced3e5db7212c422e68a3b4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41640622012",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41640622012",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103131326_1b64310b1a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41640622012"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T13:13:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
