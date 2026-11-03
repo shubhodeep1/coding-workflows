@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- external check-run copilot-pull-request-reviewer (not a repository file):log_tail of failed[0] | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The Copilot reviewer check failed before producing a review (\"Prompt too big after adding system message\", errorCode custom_instructions_too_large).\n  WHY: The merged CLAUDE.md and AGENTS.md instruction text is too large, and the one-line canary edit cannot change that. The source rated it NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR-head review check (copilot-pull-request-reviewer) should complete and produce a review.\n  expected_change_site: None in this PR's diff; the failure is caused by the aggregate size of CLAUDE.md and AGENTS.md (merged system instructions).\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: Check-run 41544551704 failed with `custom_instructions_too_large` (422) before any review was produced, and no diff hunk in this PR maps to the failure.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- external check-run copilot-pull-request-reviewer (not a repository file):log_tail of failed[0] | severity=low | confidence=2\n  PROBLEM: The Copilot reviewer check failed before producing a review (\"Prompt too big after adding system message\", errorCode custom_instructions_too_large).\n  WHY: The Copilot reviewer rejected the merged CLAUDE.md and AGENTS.md instruction text as too large, and the one-line canary edit has no effect on that size. The source rated it NIT, which is mapped here to low.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (severity=NIT, ISSUE_CONFIDENCE: 5)\n  Requirement: PR-head review check (copilot-pull-request-reviewer) should complete and produce a review.\n  Expected change site: None in this PR's diff; the failure is caused by the aggregate size of CLAUDE.md and AGENTS.md (merged system instructions), not the canary edit.\n  Evidence of absence: Check-run 41544551704 failed with `custom_instructions_too_large` (422) before any review was produced; no diff hunk in this PR maps to the failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bea96373d3ca49cc78e13dc92d21cec9a06b42826a31231e0d4f863f64891ac8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41644997618",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41644997618",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103134317_22d9f1906b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41644997618"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T13:43:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
