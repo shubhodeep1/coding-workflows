@@ -5,13 +5,25 @@
   "entry_id": "processed_command_8738_6597540975_approved",
   "issue_number": 8738,
   "metadata": {
+    "branch": "ai/issue-8738",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/8738-reviewer-common-context-sections.md",
+      "scripts/review_run_reviewers.sh",
+      "tests/test_review_reviewer_common_context_sections.py"
+    ],
+    "issue_number": 8738,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8738",
+    "pr_number": 8741,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8741",
+    "run_attempt": "1",
+    "run_id": "41593767754",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41593767754"
   },
   "run_attempt": 1,
   "run_id": "41593767754",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-03T07:05:33Z",
+  "status": "completed",
+  "timestamp": "2026-11-03T07:47:08Z",
   "workflow": "implement"
 }
