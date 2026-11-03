@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:2816-2817 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The code handles the `release_blocker` classification logic in the intake but does not clearly distinguish between the \"filed issue\" path and the \"no issue opened\" path.\n  WHY: The logic depends on several conditions (classification, whether an issue exists, etc.), so the way these states interact with the Telegram alerts might be brittle, although the reviewer says it seems to work; the source severity was NIT, mapped here to low.\n- scripts/workflow_failure_heal_intake.sh:3585-3586 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Telegram warning alert for `already-fixed` blockers uses the `PROGRESS_BRANCH` variable.\n  WHY: If `PROGRESS_BRANCH` is empty or not set, the Telegram message might confuse the operator; the source severity was NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement Phase 1 of release-blocker heal reports (accept, throttle, alert).\n  expected_change_site: All modified files\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer reports no missing implementation. It states that the code correctly implements acceptance, throttling and alerting, as shown in the diffs and tests, and that the implementation appears complete according to the requirements in #8750. The source severity was NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:2816-2817 | severity=NIT | confidence=2\n  PROBLEM: The code handles the `release_blocker` classification logic in the intake but does not clearly distinguish between the \"filed issue\" path and the \"no issue opened\" path.\n  WHY: The logic is complex and depends on several conditions (classification, whether an issue exists, etc.); it seems to work, but the way these states interact with the Telegram alerts might be brittle.\n- scripts/workflow_failure_heal_intake.sh:3585-3586 | severity=NIT | confidence=2\n  PROBLEM: The Telegram warning alert for `already-fixed` blockers uses the `PROGRESS_BRANCH` variable.\n  WHY: If `PROGRESS_BRANCH` is empty or not set, the Telegram message might confuse the operator.\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: Implement Phase 1 of release-blocker heal reports (accept, throttle, alert).\n  Expected change site: All modified files\n  Evidence of absence: The code correctly implements acceptance, throttling, and alerting, as shown in the diffs and tests. The implementation appears complete according to the requirements in #8750.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- BLOCKED: No review target supplied \u2014 the message contains only the unattended system instructions and the reviewer checklist; no diff, PR description, linked issue, or review bundle path is present, and workspace inspection found no uncommitted changes or non-fixture review bundle to evaluate.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d7a3cb507ba303a67f1f10b78756a0648957ea685de94bb4dcb5470d328dd72c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8754,
+    "run_id": "41676156731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41676156731",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103165844_f8220371bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8754,
+    "run_id": "41676156731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T16:58:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
