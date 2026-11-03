@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows (check-run \"copilot-pull-request-reviewer\", run 41544551704, job 125616826829) | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot PR reviewer check-run fails on the PR head with \"custom_instructions_too_large\" (422) because the repository's AGENTS.md and CLAUDE.md exceed the review service's prompt limit.\n  WHY: The PR changes only tests/e2e_smoke_canary.txt and neither causes nor can fix this; the reviewer labelled it NIT (mapped to low) and treats it as pre-existing/infrastructure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows (check-run \"copilot-pull-request-reviewer\", run 41544551704, job 125616826829) | severity=NIT | confidence=3\n  PROBLEM: The Copilot PR reviewer check-run fails on the PR head before reviewing anything, because the repository's AGENTS.md and CLAUDE.md custom instructions exceed the review service's prompt limit. This is not mappable to the diff: the PR changes only tests/e2e_smoke_canary.txt (3 lines).\n  WHY: The Copilot review service rejects the request at the API layer (422 custom_instructions_too_large); the one-file canary change is irrelevant to that path, so the editor should treat it as pre-existing/infrastructure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7b5efffee19e1e0ddf7ef22ae6fbb4589525bcb75de325b36a0b909914363e82",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41664730517",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41664730517",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103154346_dcbf5efa6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41664730517"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T15:43:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
