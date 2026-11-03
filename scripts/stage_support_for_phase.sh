@@ -166,10 +166,11 @@ case "${stage_support_phase}" in
 			lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py
 		)
 		# The optional groups implement.yml's legacy step installs fail-open
-		# (scope guard, Serena, events mirror, transcript archive, Semble);
-		# gh_helpers.sh sources emit_event.sh from its own directory first.
+		# (Serena, events mirror, transcript archive, Semble); the scope guard
+		# is required above, as in the legacy main loop. gh_helpers.sh sources
+		# emit_event.sh from its own directory first.
 		stage_support_optional_scripts=(
-			files_touched_scope_guard.py setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py
+			setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py
 			emit_event.sh emit_event.py transcript_archive.sh install_semble.sh build_semble_wrapper.sh
 			semble_helpers.sh
 		)

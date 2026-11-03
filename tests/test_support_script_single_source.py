@@ -270,10 +270,13 @@ def test_no_bare_support_helper_calls(workflow: str, step_name: str, phase: str)
 		r"(?:(?<![\w/}.-])(?:bash -n|bash|source|python3(?: -I -B)?|-[fL])\s+|(?<!\S)\.\s+|\bgrep\b[^\n|;]*?\s|\")"
 		r"scripts/(" + names + r")(?![\w.])"
 	)
-	exempt: set[str] = set()
+	# Exempt by position: an identical bare call in another step still counts.
+	lines = text.splitlines()
 	for exempt_step in PHASE_EXPECTATIONS[phase].get("bare_exempt_steps", ()):
-		exempt.update(line for line in _step_lines(text, exempt_step) if bare.search(line))
-	offenders = [line.strip() for line in _outside_legacy_code(text) if bare.search(line) and line not in exempt]
+		block = _step_lines(text, exempt_step)
+		start = lines.index(block[0])
+		lines[start:start + len(block)] = [""] * len(block)
+	offenders = [line.strip() for line in _outside_legacy_code("\n".join(lines)) if bare.search(line)]
 	assert not offenders, f"bare scripts/<helper> calls outside the kill-switch region: {offenders}"
 	for call_site in PHASE_EXPECTATIONS[phase]["call_sites"]:
 		assert call_site in text, call_site

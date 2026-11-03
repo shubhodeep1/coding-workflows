@@ -1499,10 +1499,6 @@ jobs:
           fi
           if [ "${support_unified}" = "true" ]; then
             bash .codex-workflow-src/scripts/stage_support_for_phase.sh implement --host-python-dir "${RUNTIME_DIR}/host_python"
-            while IFS= read -r support_list_name; do
-              if [ -n "${support_list_name}" ]; then _fetched_scripts+=("${support_list_name}"); fi
-            done <<< "${support_list_names}"
-            _fetched_scripts+=(codex_model_catalog.json)
             # SUPPORT_SCRIPTS_DIR is only visible from the next step: read the
             # stager's export back and fail closed on anything unexpected.
             support_run_src="$(sed -n 's/^SUPPORT_SCRIPTS_DIR=//p' "${GITHUB_ENV}" | tail -n 1)"
@@ -1511,6 +1507,15 @@ jobs:
               echo "::error::stage_support_for_phase.sh did not export a usable SUPPORT_SCRIPTS_DIR under RUNNER_TEMP." >&2
               exit 1
             fi
+            # Only names the bundle really holds become commit exclusions, as
+            # in the legacy loop: a skipped optional helper must not hide a
+            # consumer-owned scripts/<name> from the implementation commit.
+            while IFS= read -r support_list_name; do
+              [ -n "${support_list_name}" ] || continue
+              if [ -f "${support_run_src}/${support_list_name}" ] && [ ! -L "${support_run_src}/${support_list_name}" ]; then
+                _fetched_scripts+=("${support_list_name}")
+              fi
+            done <<< "$(printf '%s\n' "${support_list_names}" codex_model_catalog.json)"
             # setup_serena.sh reads ${SCRIPT_DIR}/templates; a consumer-tracked
             # regular template (data only, never executed) still wins.
             serena_caller_template="scripts/templates/serena_project.yml.j2"
