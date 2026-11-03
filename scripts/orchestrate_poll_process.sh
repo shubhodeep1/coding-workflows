@@ -18657,6 +18657,12 @@ _heal_counterfactual_hold_notify()
 # which is written to the issue body before the approval. Every
 # error holds. A hold leaves the issue in its phase for a human /approved and
 # does not increment the recovery count; the implement-time guard still runs.
+# Issue #8339: a path_not_granted hold that the guard marks replannable (only
+# directory or glob tokens denied, the rest would be granted) gets one
+# automatic re-plan per issue from ai:awaiting-approval: the label moves to
+# ai:planning and an /answer comment carrying the
+# ai:automation-path-replan:v1 marker is posted. Once that marker is on the
+# issue, a later hold gets the ordinary hold notice for a human.
 # Args: <issue_num> <details_map_json> <comments_json> <phase>
 # Returns 0 to approve, 1 to hold (after logging).
 _plan_auto_approval_gate()
@@ -18677,6 +18683,14 @@ _plan_auto_approval_gate()
   local gate_display_paths="[]"
   local gate_grant_body_file=""
   local gate_fresh_file=""
+  local gate_replannable="false"
+  local gate_replan_marker=""
+  local gate_replan_seen="true"
+  local gate_replan_body=""
+  local gate_replan_jq=""
+  local gate_replan_since=""
+  local gate_replan_recent=""
+  local gate_replan_landed="false"
 
   guard_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/files_touched_scope_guard.py"
   if [ ! -f "${guard_py}" ]; then
@@ -18738,6 +18752,10 @@ _plan_auto_approval_gate()
           --issue-number "${issue_num}" 2>/dev/null || true)"
         gate_decision="$(printf '%s' "${gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
         gate_reason="$(printf '%s' "${gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+        # Issue #8339: strict check; a missing field or bad JSON is false.
+        if printf '%s' "${gate_result}" | jq -e '.replannable == true' >/dev/null 2>&1; then
+          gate_replannable="true"
+        fi
         # Q108: write the proposed exact grant before approving. The body the
         # guard extended comes from this tick's batched snapshot, so it is
         # re-read first (one REST read; no batched call carries a live body)
@@ -18790,6 +18808,84 @@ _plan_auto_approval_gate()
     echo "STALL_SKIP issue=${issue_num} reason=heal_counterfactual_hold phase=${phase} action=none"
     _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
     return 1
+  fi
+  if [ "${gate_reason}" = "path_not_granted" ] && [ "${gate_replannable}" = "true" ] \
+    && [ "${phase}" = "ai:awaiting-approval" ]; then
+    # Issue #8339: one automatic re-plan per issue. The marker counts only in
+    # a trusted comment (same filter as _plan_auto_approval_hold_notify); a
+    # jq failure counts as "seen", so the hold notice below runs as before.
+    gate_replan_marker="<!-- ai:automation-path-replan:v1 issue=${issue_num} -->"
+    gate_replan_jq='
+      [ .[]?
+        | select(type == "object")
+        | select(((.user.login // "") == $login and $login != "")
+            or ((.user.login // "") | test("\\[bot\\]$"))
+            or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+        | (.body // "")
+        | select(contains($marker))
+      ] | length > 0'
+    gate_replan_seen="$(printf '%s' "${comments_json:-[]}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" || gate_replan_seen="true"
+    [ "${gate_replan_seen}" = "false" ] || gate_replan_seen="true"
+    if [ "${gate_replan_seen}" = "false" ] \
+      && ! phase_cap_can_dispatch "ai:planning" "automation_path_replan" "${issue_num}"; then
+      # The callers checked only the ai:implementing cap; a re-plan starts a
+      # plan run, so it waits for the ai:planning cap. No marker is posted,
+      # so a later tick retries the re-plan.
+      echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=automation_path_replan"
+      return 1
+    fi
+    if [ "${gate_replan_seen}" = "false" ]; then
+      # §14 audit: comments_json, details_map_json and the retrigger_plan
+      # comment POST were checked; none of them can change labels, and
+      # plan.yml skips an /answer unless the issue carries ai:planning
+      # (AD-1). This edit runs only on the eligible path and at most once
+      # per issue, because the marker comment below ends eligibility.
+      if ! gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+        --add-label 'ai:planning' --remove-label 'ai:awaiting-approval' >/dev/null 2>&1; then
+        echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_label_failed issue=${issue_num}"
+      else
+        gate_replan_body="/answer
+
+_Orchestrator stall recovery: the plan's \"Files likely to change\" section listed a directory or glob token (for example from placeholder text), and such a token can never be granted exactly. Re-planning once. The earlier clarification answers still apply. List only exact file paths in that section, with no placeholder text. If the new plan is held again, it goes to a maintainer._
+
+${gate_replan_marker}"
+        gate_replan_since="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="${gate_replan_body}" >/dev/null 2>&1; then
+          gate_replan_landed="true"
+        else
+          # gh_retry makes one attempt for this POST, so a failure can be a
+          # lost response for a comment GitHub accepted. §14 audit:
+          # comments_json predates the POST, so one read of the recent
+          # comments runs here, only on this failure branch, with one
+          # attempt. A failed read keeps the rollback below.
+          if gate_replan_recent="$(GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100${gate_replan_since:+&since=${gate_replan_since}}" 2>/dev/null)" \
+            && [ "$(printf '%s' "${gate_replan_recent}" | jq -r --arg marker "${gate_replan_marker}" --arg login "${gate_login}" "${gate_replan_jq}" 2>/dev/null)" = "true" ]; then
+            gate_replan_landed="true"
+            echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_confirmed issue=${issue_num}"
+          fi
+        fi
+        if [ "${gate_replan_landed}" = "true" ]; then
+          phase_cap_note_dispatch "ai:planning"
+          echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan issue=${issue_num}"
+          tg_notify_issue "${issue_num}" "Stall recovery: plan held only by directory or glob tokens; re-planning once." "DEBUG" || true
+        else
+          # Put the issue back in ai:awaiting-approval so the next tick retries
+          # the whole re-plan with its marker; without the marker a plain
+          # retrigger_plan /answer could allow a second automatic re-plan.
+          # If the rollback fails too, the retrigger_plan arm recovers it.
+          # Residual case: if the POST landed but both its response and the
+          # confirmation read were lost, the marker is already on the issue,
+          # so the next tick posts the hold notice for a maintainer instead
+          # of re-planning (never a second re-plan, never a stuck issue).
+          echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=path_not_granted outcome=replan_comment_failed issue=${issue_num}"
+          gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
+            --add-label 'ai:awaiting-approval' --remove-label 'ai:planning' >/dev/null 2>&1 \
+            || echo "::warning::Could not restore ai:awaiting-approval on issue #${issue_num} after a failed re-plan comment; it is left in ai:planning and the re-plan marker could not be confirmed (it may have landed)."
+        fi
+        return 1
+      fi
+    fi
   fi
   echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason:-plan_gate_error} outcome=defer issue=${issue_num} paths=${gate_paths:-none}"
   echo "STALL_SKIP issue=${issue_num} reason=automation_path_plan_hold phase=${phase} action=none"
