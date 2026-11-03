@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:2191-5867 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push test gate reported 7 failures in this test file (tests at lines 2191, 2745, 2761, 3465, 4296, 5470, 5867) on the PR head.\n  WHY: The failures block the gate and the PR merge. Severity disagreement: gemini rated BLOCKER and glm rated MAJOR, so the highest is used. The reviewers also disagree on cause: gemini says the tests depend on the canary content, while glm found no canary references in the 7 cited tests and says the cause must come from the gate logs.\n- copilot-pull-request-reviewer:n/a | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The PR review check failed with `custom_instructions_too_large`.\n  WHY: It is an infrastructure failure in the reviewer agent and needs no code change, but it blocks the check-run status. Severity disagreement: gemini rated MAJOR and glm rated NIT (as a task gap), so the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: All 7 failing tests in `tests/test_implement_post_codex_recovery.py` must pass so the pre-push test gate is green.\n  expected_change_site: tests/test_implement_post_codex_recovery.py (or the workflow/script under test that drifted)\n  confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: Pre-push test gate reported 7 failures, and no diff hunks address them.\n- requirement: The PR-head reviewer check must complete successfully.\n  expected_change_site: none in the diff\n  confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The reviewer check failed because the request was rejected for oversized custom instructions built from `AGENTS.md` + `CLAUDE.md`. This is an infrastructure failure, not mapped to any changed line, and needs no code change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py | severity=BLOCKER | confidence=4\n  PROBLEM: The pre-push test gate reports 7 failures in this test file after the canary file update.\n  WHY: The test suite appears to be sensitive to the content of `tests/e2e_smoke_canary.txt`. The canary update itself is correct per the issue requirements, but the test regressions block PR merge.\n- copilot-pull-request-reviewer | severity=MAJOR | confidence=5\n  PROBLEM: The PR review check failed with `custom_instructions_too_large`.\n  WHY: It is an infrastructure failure in the reviewer agent. It needs no code change but blocks the PR check-run status.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_implement_post_codex_recovery.py:2191, 2745, 2761, 3465, 4296, 5470, 5867 | severity=MAJOR | confidence=3\n  PROBLEM: The pre-push test gate reported 7 test failures in this file on the PR head. The tests execute extracted `run:` blocks from `.github/workflows/implement.yml` with mocked binaries, so a failure indicates workflow-behavior drift against the test contract.\n  WHY: CI runs these regression tests on every push, so 7 failures block the gate and the PR cannot satisfy required checks. The claim that the failures stem from the canary content is not supported by static inspection, because the canary matches its spec and the 7 tests contain no canary references.\n- TASK_GAP: tests/test_implement_post_codex_recovery.py | severity=MAJOR | confidence=3\n  Requirement: All 7 failing tests in `tests/test_implement_post_codex_recovery.py` must pass so the pre-push test gate is green.\n  Expected change site: tests/test_implement_post_codex_recovery.py (or the workflow/script under test that drifted).\n  Evidence of absence: Pre-push test gate reported 7 failures, and no diff hunks in this review address them.\n- TASK_GAP: none in the diff | severity=NIT | confidence=4\n  Requirement: The PR-head reviewer check must complete successfully.\n  Expected change site: none in the diff.\n  Evidence of absence: The reviewer check failed because the request was rejected for oversized custom instructions built from `AGENTS.md` + `CLAUDE.md`. This is an infrastructure failure, not mapped to any line in the changed files (including `tests/e2e_smoke_canary.txt:1-3`, which matches its spec). No diff change can fix this.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fc720585af1396e0a399af23f99b8d6955351d4d09ce02804088d7759ac32c07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41685276887",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41685276887",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103175413_1774ff3ae8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41685276887"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T17:54:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
