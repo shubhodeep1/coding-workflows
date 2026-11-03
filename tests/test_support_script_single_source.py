@@ -16,10 +16,13 @@ between the `support-scripts-legacy` markers, behind the kill switch
 SUPPORT_SCRIPTS_UNIFIED_ENABLED.
 
 PHASE_WORKFLOWS is parametrized so each phase workflow adds one entry: clarify
-(P2a-1), plan (P2a-2) and orchestrate_clarify_respond.yml (P2a-3) today;
-implement.yml comes with the later P2b issue. PHASE_EXPECTATIONS holds the
-per-phase differences (host Python directory, checkout sandbox Dockerfile,
-required call sites).
+(P2a-1), plan (P2a-2), orchestrate_clarify_respond.yml (P2a-3) and
+implement.yml (P2b). PHASE_EXPECTATIONS holds the per-phase differences (host
+Python directory, checkout sandbox Dockerfile, required call sites).
+
+implement.yml (P2b) also fills its trusted run dir
+(IMPLEMENT_STAGED_SUPPORT_RUN_DIR) from the bundle instead of the workspace,
+so a self-repo integration branch's tracked helpers are never overwritten.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ PHASE_WORKFLOWS = [
 		".github/workflows/orchestrate_clarify_respond.yml", "Stage workflow support files", "clarify_respond",
 		id="clarify_respond",
 	),
+	pytest.param(".github/workflows/implement.yml", "Stage workflow support files", "implement", id="implement"),
 ]
 
 # Per-phase differences of the staging step.
@@ -58,6 +62,11 @@ PHASE_WORKFLOWS = [
 #   call_sites         "${SUPPORT_SCRIPTS_DIR:-scripts}/..." calls the workflow must hold
 #   dropped_script     a required script the fail-closed check deletes
 #   list_probe         the step probes `stage_support_for_phase.sh <phase> --list`
+#   isolation_dir      the helper exports CLARIFY_ISOLATION_SUPPORT_DIR (default True)
+#   legacy_sandbox     the legacy branch installs scripts/clarify_sandbox/Dockerfile (default True)
+#   runtime_host_python  the step passes --host-python-dir "${RUNTIME_DIR}/host_python"
+#   bare_exempt_steps  self-contained steps that install a helper from the support
+#                      checkout and source that copy (not a target-branch helper)
 PHASE_EXPECTATIONS = {
 	"clarify": {
 		"host_python": True,
@@ -87,10 +96,39 @@ PHASE_EXPECTATIONS = {
 		"dropped_script": "clarify_data_provision_guard.py",
 		"list_probe": True,
 	},
+	"implement": {
+		"host_python": False,
+		"runtime_host_python": True,
+		"checkout_sandbox": False,
+		"legacy_sandbox": False,
+		"isolation_dir": False,
+		"unified_checkout": {".gitignore"},
+		"call_sites": (
+			f'source "{SUPPORT_PATH}ai_engine.sh"',
+			f'bash "{SUPPORT_PATH}implement_heal_preflight.sh"',
+			f'bash "{SUPPORT_PATH}build_static_context.sh"',
+		),
+		"dropped_script": "implement_commit_changes.sh",
+		"list_probe": True,
+		"bare_exempt_steps": ("Telegram duplicate PR notification",),
+	},
 }
 
 # Scripts that resolve their sibling helpers from their own directory (plan D5).
-OWN_DIR_SCRIPTS = ("run_plan_codex.sh", "plan_split_dispatch.sh")
+OWN_DIR_SCRIPTS = ("run_plan_codex.sh", "plan_split_dispatch.sh", "implement_heal_preflight.sh")
+
+# Prompt and instruction assets implement.yml's staging step installs into the
+# checkout (prompts stay in the checkout, plan D3).
+IMPLEMENT_PROMPT_ASSETS = (
+	"prompts/mode-implement-diagnose.txt", "prompts/mode-implement-repair.txt",
+	"prompts/mode-implement-repair-continuation.txt", "prompts/mode-implement-diagnose-continuation.txt",
+	"prompts/mode-validate-self-heal-continuation.txt", "prompts/contracts/mode-implement-repair-continuation.yml",
+	"prompts/contracts/mode-implement-diagnose-continuation.yml",
+	"prompts/contracts/mode-validate-self-heal-continuation.yml", "prompts/_prelude_serena.txt",
+	"prompts/_templates/mode-implement-diagnose.txt", "prompts/_templates/mode-implement-diagnose-continuation.txt",
+	"prompts/_templates/mode-implement-repair.txt", "prompts/_templates/mode-implement-repair-continuation.txt",
+	"prompts/_templates/mode-validate-self-heal-continuation.txt",
+)
 
 # Real support files the execution fixtures copy; every other name the phase
 # stages is a stub.
@@ -232,7 +270,10 @@ def test_no_bare_support_helper_calls(workflow: str, step_name: str, phase: str)
 		r"(?:(?<![\w/}.-])(?:bash -n|bash|source|python3(?: -I -B)?|-[fL])\s+|(?<!\S)\.\s+|\bgrep\b[^\n|;]*?\s|\")"
 		r"scripts/(" + names + r")(?![\w.])"
 	)
-	offenders = [line.strip() for line in _outside_legacy_code(text) if bare.search(line)]
+	exempt: set[str] = set()
+	for exempt_step in PHASE_EXPECTATIONS[phase].get("bare_exempt_steps", ()):
+		exempt.update(line for line in _step_lines(text, exempt_step) if bare.search(line))
+	offenders = [line.strip() for line in _outside_legacy_code(text) if bare.search(line) and line not in exempt]
 	assert not offenders, f"bare scripts/<helper> calls outside the kill-switch region: {offenders}"
 	for call_site in PHASE_EXPECTATIONS[phase]["call_sites"]:
 		assert call_site in text, call_site
@@ -293,6 +334,7 @@ def _make_support(workspace: Path, phase: str, workflow: str) -> tuple[Path, str
 		"prompts/references/security-money-lens.txt", "prompts/mode-clarify-respond.txt",
 		"prompts/_prelude_common.txt", "prompts/_prelude_output_contract.txt", "prompts/_prelude_role_persona.txt",
 		"prompts/_templates/mode-clarify-respond.txt",
+		*IMPLEMENT_PROMPT_ASSETS,
 	):
 		_write(support / rel, f"{rel}\n")
 	schema = "ai-memory/schemas/workflow_overlay.v1.json"
@@ -322,8 +364,11 @@ def _runner_env(root: Path, workspace: Path, script_ref: str) -> dict[str, str]:
 	runner_temp.mkdir(exist_ok=True)
 	github_env = root / "github_env"
 	github_env.touch()
+	runtime_dir = root / "runtime"
+	runtime_dir.mkdir(exist_ok=True)
 	env.update(
 		{
+			"RUNTIME_DIR": str(runtime_dir),
 			"HOME": str(root),
 			"GITHUB_WORKSPACE": str(workspace),
 			"GITHUB_REPOSITORY": "owner/consumer",
@@ -374,23 +419,26 @@ def test_support_copy_of_stall_guard_wins(tmp_path: Path, workflow: str, step_na
 	host_python = tmp_path / "host-python"
 	expect = PHASE_EXPECTATIONS[phase]
 
-	host_args = ("--host-python-dir", str(host_python)) if expect["host_python"] else ()
+	host_args = ("--host-python-dir", str(host_python)) if expect["host_python"] or expect.get("runtime_host_python") else ()
 	result = _run_helper(target, env, phase, *host_args)
 	assert result.returncode == 0, result.stderr
 	assert f"Support scripts staged phase={phase} sha={head} verify=exact" in result.stdout
 	exported = _github_env(env)
 	bundle = Path(exported["SUPPORT_SCRIPTS_DIR"])
 	assert bundle == tmp_path / "runner" / "coding-workflows-runtime-101-1" / "scripts"
-	assert exported["CLARIFY_ISOLATION_SUPPORT_DIR"] == str(bundle)
+	if expect.get("isolation_dir", True):
+		assert exported["CLARIFY_ISOLATION_SUPPORT_DIR"] == str(bundle)
+		assert (bundle / "clarify_sandbox" / "Dockerfile").is_file()
+	else:
+		assert "CLARIFY_ISOLATION_SUPPORT_DIR" not in exported
 	assert exported["SUPPORT_SCRIPTS_VERIFY"] == "exact"
 	for name in _helper_phase_list(phase, "stage_support_required_scripts"):
 		assert (bundle / name).is_file(), name
 	assert (bundle / "codex_stall_guard.sh").read_bytes() == (REPO_ROOT / "scripts" / "codex_stall_guard.sh").read_bytes()
-	assert (bundle / "clarify_sandbox" / "Dockerfile").is_file()
 	assert (bundle / "emit_event.sh").is_file()
 	for name in _helper_phase_list(phase, "stage_support_data_files"):
 		assert (bundle / name).is_file(), name
-	if expect["host_python"]:
+	if expect["host_python"] or expect.get("runtime_host_python"):
 		assert sorted(p.name for p in host_python.iterdir()) == sorted(
 			_helper_phase_list(phase, "stage_support_host_python_scripts")
 		)
@@ -506,7 +554,7 @@ def test_staging_step_runs_both_modes(tmp_path: Path, workflow: str, step_name: 
 	staged = {p.name for p in (workspace / "scripts").iterdir()}
 	expect = PHASE_EXPECTATIONS[phase]
 	sandbox_in_checkout = (workspace / "scripts" / "clarify_sandbox" / "Dockerfile").is_file()
-	assert sandbox_in_checkout == (expect["checkout_sandbox"] or unified == "false")
+	assert sandbox_in_checkout == (expect["checkout_sandbox"] or (unified == "false" and expect.get("legacy_sandbox", True)))
 	if expect["host_python"]:
 		host_python = Path(exported["CLARIFY_HOST_PYTHON_DIR"])
 		assert sorted(p.name for p in host_python.iterdir()) == sorted(
@@ -514,11 +562,16 @@ def test_staging_step_runs_both_modes(tmp_path: Path, workflow: str, step_name: 
 		)
 	else:
 		assert "CLARIFY_HOST_PYTHON_DIR" not in exported
+	if expect.get("runtime_host_python"):
+		assert (Path(env["RUNTIME_DIR"]) / "host_python" / "load_workflow_overlay.py").is_file()
 	if unified == "true":
 		assert staged == expect["unified_checkout"], staged
 		bundle = Path(exported["SUPPORT_SCRIPTS_DIR"])
 		assert all((bundle / name).is_file() for name in helpers)
-		assert exported["CLARIFY_ISOLATION_SUPPORT_DIR"] == str(bundle)
+		if expect.get("isolation_dir", True):
+			assert exported["CLARIFY_ISOLATION_SUPPORT_DIR"] == str(bundle)
+		else:
+			assert "CLARIFY_ISOLATION_SUPPORT_DIR" not in exported
 	else:
 		assert set(helpers) <= staged
 		assert "SUPPORT_SCRIPTS_DIR" not in exported
@@ -680,6 +733,82 @@ def test_tg_helpers_prefers_support_gh_helpers(tmp_path: Path) -> None:
 		capture_output=True, text=True, timeout=30,
 	)
 	assert fallback.stdout.strip() == "checkout", fallback.stderr
+
+
+IMPLEMENT_WORKFLOW = ".github/workflows/implement.yml"
+IMPLEMENT_STEP = "Stage workflow support files"
+
+
+def _implement_workspace(tmp_path: Path, repository: str, unified: str = "true") -> tuple[Path, Path, dict[str, str]]:
+	"""A git workspace with the implement support checkout inside it."""
+	workspace = tmp_path / "ws"
+	workspace.mkdir()
+	support, head = _make_support(workspace, "implement", IMPLEMENT_WORKFLOW)
+	_git(workspace, "init", "-q")
+	env = _runner_env(tmp_path, workspace, head)
+	env["GITHUB_REPOSITORY"] = repository
+	env["SUPPORT_SCRIPTS_UNIFIED_ENABLED"] = unified
+	return workspace, support, env
+
+
+def test_implement_run_dir_is_filled_from_bundle(tmp_path: Path) -> None:
+	"""Unified: the trusted run dir copies the bundle, never a checkout helper."""
+	workspace, _, env = _implement_workspace(tmp_path, "owner/consumer")
+	_write(workspace / "scripts" / "gh_helpers.sh", "# consumer decoy\n", 0o755)
+	result = _run_staging_step(tmp_path, workspace, IMPLEMENT_WORKFLOW, IMPLEMENT_STEP, env)
+	assert result.returncode == 0, result.stdout + result.stderr
+	exported = _github_env(env)
+	bundle = Path(exported["SUPPORT_SCRIPTS_DIR"])
+	run_dir = Path(exported["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
+	assert run_dir == Path(env["RUNTIME_DIR"]) / "staged_support_run" / "scripts"
+	for name in _legacy_helpers(_workflow_text(IMPLEMENT_WORKFLOW)):
+		assert (run_dir / name).read_bytes() == (bundle / name).read_bytes(), name
+	runtime = Path(env["RUNTIME_DIR"])
+	for name in ("implement_handle_guard_block.sh", "gh_helpers.sh"):
+		assert (runtime / name).read_bytes() == (bundle / name).read_bytes(), name
+	assert (workspace / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8") == "# consumer decoy\n"
+	assert {p.name for p in (workspace / "scripts").iterdir()} == {"gh_helpers.sh", ".gitignore"}
+
+
+@pytest.mark.parametrize("unified", ["true", "false"])
+def test_implement_self_repo_keeps_tracked_helpers(tmp_path: Path, unified: str) -> None:
+	"""Self-repo: unified staging never writes a tracked helper; the kill switch still ledgers it."""
+	workspace, support, env = _implement_workspace(tmp_path, "shubhodeep1/coding-workflows", unified)
+	branch_copy = "# integration branch gh_helpers.sh\n"
+	_write(workspace / "scripts" / "gh_helpers.sh", branch_copy, 0o755)
+	shutil.copytree(support / "prompts", workspace / "prompts")
+	shutil.copytree(support / "ai-memory", workspace / "ai-memory")
+	for name in ("unattended_system_instructions.md", "ai_pipeline.md"):
+		shutil.copy2(support / name, workspace / name)
+	_git(workspace, "add", "--", "scripts", "prompts", "ai-memory", "unattended_system_instructions.md", "ai_pipeline.md")
+	_git(workspace, "commit", "-q", "-m", "branch")
+	result = _run_staging_step(tmp_path, workspace, IMPLEMENT_WORKFLOW, IMPLEMENT_STEP, env)
+	assert result.returncode == 0, result.stdout + result.stderr
+	ledger = Path(_github_env(env)["STAGED_SUPPORT_LEDGER"])
+	if unified == "true":
+		assert (workspace / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8") == branch_copy
+		assert _git(workspace, "status", "--porcelain", "--", "scripts") == ""
+		assert ledger.read_text(encoding="utf-8") == ""
+	else:
+		assert "scripts/gh_helpers.sh" in ledger.read_text(encoding="utf-8").splitlines()
+
+
+def test_implement_unified_keeps_caller_serena_template(tmp_path: Path) -> None:
+	workspace, _, env = _implement_workspace(tmp_path, "owner/consumer")
+	_write(workspace / "scripts" / "templates" / "serena_project.yml.j2", "caller template\n")
+	_git(workspace, "add", "--", "scripts")
+	_git(workspace, "commit", "-q", "-m", "caller template")
+	result = _run_staging_step(tmp_path, workspace, IMPLEMENT_WORKFLOW, IMPLEMENT_STEP, env)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "preserving caller-owned Serena template" in result.stdout
+	bundle = Path(_github_env(env)["SUPPORT_SCRIPTS_DIR"])
+	assert (bundle / "templates" / "serena_project.yml.j2").read_text(encoding="utf-8") == "caller template\n"
+
+
+def test_implement_heal_preflight_resolves_heal_py_from_own_dir() -> None:
+	text = (REPO_ROOT / "scripts" / "implement_heal_preflight.sh").read_text(encoding="utf-8")
+	assert "WORKFLOW_HEAL_PY:-scripts/" not in text
+	assert 'heal_py="${WORKFLOW_HEAL_PY:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/workflow_failure_heal.py}"' in text
 
 
 def test_ci_runs_this_file() -> None:

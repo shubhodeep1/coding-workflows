@@ -326,7 +326,7 @@ def test_implement_step_passes_the_switch_and_the_mount() -> None:
 	step = _implement_step()
 	assert step["env"]["STATIC_CONTEXT_AGENTS_MODE"] == WORKFLOW_ENV_VALUE
 	run = step["run"]
-	assert "bash scripts/build_static_context.sh implement ./pre_assembled_static.txt" in run
+	assert 'bash "${SUPPORT_SCRIPTS_DIR:-scripts}/build_static_context.sh" implement ./pre_assembled_static.txt' in run
 	assert 'HEAL_ROUTE:-false}" = true' in run
 	assert f"grep -qxF '{MARKER}'" in run
 	assert '"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_isolated_exec.sh"' in run
