@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "When planning a workflow or orchestration behavior change, check whether the repository expects both a changelog fragment and an agents.d tracking document. Several merged changes include these alongside implementation and tests, though the convention does not appear universal.",
+  "fingerprint": "0443c5107e72fe6cfa518ea740676fc9538da303e31ac5f26891993b4aeeb64e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41557789015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41557789015",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8339",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8673",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8682",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8683",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8685",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8676",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8684",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8686",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8688",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8703"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261103011429_dc63a2eb61",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Behavioral changes commonly include a changelog.d entry and, for tracked workflow work, an agents.d note.",
+  "timestamps": {
+    "created_at": "2026-11-03T01:14:29Z",
+    "promoted_at": "2026-11-03T01:15:05Z",
+    "superseded_at": null
+  }
+}
