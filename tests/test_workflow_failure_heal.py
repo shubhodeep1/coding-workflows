@@ -10470,9 +10470,63 @@ def test_occurrence_comment_keeps_the_first_line_and_ends_with_the_timestamp() -
 	at = datetime(2026, 11, 3, 9, 30, tzinfo=timezone.utc)
 	lines = heal.compose_occurrence_comment(payload, intake_run_url="u", now=at).splitlines()
 	assert lines[0] == f"<!-- {heal.MARKER_PREFIX}occurrence -->"
-	assert lines[-1] == f"<!-- {heal.MARKER_PREFIX}occurrence_at=2026-11-03T09:30:00Z -->"
+	assert lines[-1] == f"<!-- {heal.MARKER_PREFIX}occurrence_at=2026-11-03T09:30:00Z kind=release_blocker -->"
+	assert lines[1] == "The release blocker was reported again:"
 	# Evidence cannot forge a comment marker in the occurrence comment either.
 	assert sum(line.startswith("<!--") for line in lines) == 2
+	# Other kinds keep their wording and carry their own kind in the marker.
+	other = heal.compose_occurrence_comment(_engine_scoped_payload(), intake_run_url="u", now=at).splitlines()
+	assert other[1] == "Another occurrence of this failure was reported:"
+	assert other[-1] == f"<!-- {heal.MARKER_PREFIX}occurrence_at=2026-11-03T09:30:00Z kind=engine_fallback -->"
+
+
+def test_occurrence_throttle_ignores_other_kinds_markers_and_seeds_from_the_filed_issue() -> None:
+	now = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
+	# A gate failure's workflow_run occurrence on a shared heal issue never throttles a blocker.
+	gate = {"body": heal.compose_occurrence_comment(_engine_scoped_payload(), intake_run_url="u", now=now - timedelta(hours=1)),
+		"user": {"login": "workflow-bot"}}
+	assert heal.occurrence_throttled([gate], now=now, throttle_secs=86400, trusted_login="workflow-bot") == {"throttled": False, "age_secs": None}
+	# A release_blocker issue the pipeline filed opens the window itself.
+	filed = {"author": "workflow-bot", "title": f"Release blocker: {BLOCKER_REASON} on stable ({BLOCKER_WORKFLOW})", "created_at": "2026-11-03T11:00:00Z"}
+	assert heal.occurrence_throttled([], now=now, throttle_secs=86400, trusted_login="workflow-bot", issue=filed) == {"throttled": True, "age_secs": 3600}
+	assert heal.occurrence_throttled([], now=now, throttle_secs=1800, trusted_login="workflow-bot", issue=filed)["throttled"] is False
+	# A gate issue, another author's issue, or no trusted login does not.
+	for issue, login in ((dict(filed, title="Workflow heal: gate failed"), "workflow-bot"), (dict(filed, author="someone"), "workflow-bot"), (filed, "")):
+		assert heal.occurrence_throttled([], now=now, throttle_secs=86400, trusted_login=login, issue=issue)["throttled"] is False
+
+
+def test_intake_release_blocker_first_repeat_after_filing_is_throttled(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	issue = _heal_issue(812, state="open", fp=BLOCKER_FP, created=datetime.now(timezone.utc) - timedelta(hours=1))
+	issue.update({"title": f"Release blocker: {BLOCKER_REASON} on stable ({BLOCKER_WORKFLOW})", "author": "workflow-bot"})
+	state = _intake_state(heal_issues=[issue])
+	state["comments"][f"repos/{SELF_REPO}/issues/812/comments"] = []
+	result, state, _ = _run_intake(_blocker_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL duplicate_throttled existing_issue=812 existing_repo={SELF_REPO} fp={BLOCKER_FP} age=" in result.stdout
+	assert not state.get("comments_posted")
+	assert not [line for line in _tg_lines(tg_log) if "Release blocker" in line]
+
+
+def test_intake_release_blocker_consumer_app_defect_warns(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	state = _intake_state(run_details={BLOCKER_RUN_ID: _blocker_run()})
+	result, state, _ = _run_intake(_blocker_payload(), state, diagnosis=DIAG_CONSUMER_APP_SCOPE,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert len(state.get("issues_created") or []) == 1
+	assert any(f"Release blocker filed: {BLOCKER_REASON} on stable (" in line for line in _tg_lines(tg_log, "WARNING")), _tg_lines(tg_log)
+	assert not [line for line in _tg_lines(tg_log, "DEBUG") if "consumer-side defect" in line]
+
+
+def test_release_blocker_already_fixed_arm_warns() -> None:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	start = text.index('\talready-fixed)')
+	arm = text[start:text.index('\t*)\n', start)]
+	assert 'if [ "${SOURCE_KIND}" = "release_blocker" ]; then' in arm
+	assert 'classified already-fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}, no issue opened.' in arm
+	assert '"WARNING"' in arm
 
 
 def test_release_blocker_title_body_and_skip_reason() -> None:

@@ -6081,21 +6081,27 @@ def compose_issue_body(
 
 
 def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str, now: datetime | None = None) -> str:
-	lines = [f"<!-- {MARKER_PREFIX}occurrence -->", "Another occurrence of this failure was reported:", ""]
+	headline = "The release blocker was reported again:" if payload.get("source_kind") == "release_blocker" else "Another occurrence of this failure was reported:"
+	lines = [f"<!-- {MARKER_PREFIX}occurrence -->", headline, ""]
 	lines.extend(_context_lines(payload, run_summaries=[]))
 	for ref in payload.get("run_refs") or []:
 		lines.append(f"- **Failed run:** {ref['url']}")
 	lines.append(f"- **Heal intake run:** {intake_run_url}")
 	# Last line, never the first: _recovery_occurrence_runs compares lines[0]
-	# with the bare occurrence marker. occurrence_throttled reads it back.
-	lines.append(f"<!-- {MARKER_PREFIX}occurrence_at={_iso(now or _utc_now())} -->")
+	# with the bare occurrence marker. occurrence_throttled reads it back and
+	# counts only release_blocker markers, so another kind's occurrence on a
+	# shared heal issue (a gate failure's workflow_run) never throttles a blocker.
+	kind = safe_token(payload.get("source_kind"), 40) or "unknown"
+	lines.append(f"<!-- {MARKER_PREFIX}occurrence_at={_iso(now or _utc_now())} kind={kind} -->")
 	return "\n".join(lines) + "\n"
 
 
-_OCCURRENCE_AT_RE = re.compile(r"^<!-- " + re.escape(MARKER_PREFIX) + r"occurrence_at=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z) -->$")
+_OCCURRENCE_AT_RE = re.compile(r"^<!-- " + re.escape(MARKER_PREFIX) + r"occurrence_at=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z) kind=([a-z_]{1,40}) -->$")
+# compose_issue_title's prefix for a release_blocker heal issue.
+_RELEASE_BLOCKER_TITLE_PREFIX = "Release blocker: "
 
 
-def occurrence_throttled(comments: Iterable[Any], *, now: datetime, throttle_secs: int, trusted_login: str) -> dict[str, Any]:
+def occurrence_throttled(comments: Iterable[Any], *, now: datetime, throttle_secs: int, trusted_login: str, issue: Any = None) -> dict[str, Any]:
 	"""Whether a release_blocker duplicate was already recorded recently.
 
 	Only an occurrence comment written by ``trusted_login`` (the pipeline
@@ -6103,11 +6109,22 @@ def occurrence_throttled(comments: Iterable[Any], *, now: datetime, throttle_sec
 	line, so neither another commenter nor evidence text quoted inside the
 	comment can silence an alert. The newest such marker younger than
 	``throttle_secs`` throttles. No trusted login, no marker, or an unparsable
-	marker means not throttled (fails open towards visibility).
+	marker means not throttled (fails open towards visibility). Only markers
+	with ``kind=release_blocker`` count.
+
+	``issue`` (optional, an entry of the intake's heal issue list with
+	``author``, ``title`` and ``created_at``) opens the window when the heal
+	issue itself is a release_blocker issue the pipeline account filed: its
+	"filed" WARNING already reached a person, so the next tick's repeat waits.
 	Returns ``{"throttled", "age_secs"}`` (``age_secs`` None without a marker).
 	"""
 	login = trusted_login.strip().casefold() if isinstance(trusted_login, str) else ""
 	newest: datetime | None = None
+	if login and isinstance(issue, dict) and str(issue.get("author") or "").strip().casefold() == login \
+		and str(issue.get("title") or "").startswith(_RELEASE_BLOCKER_TITLE_PREFIX):
+		created = _parse_iso(issue.get("created_at"))
+		if created is not None and created <= now + timedelta(seconds=ENGINE_REPORTER_RUN_CLOCK_SKEW_SECONDS):
+			newest = created
 	if login:
 		for comment in comments or []:
 			text = comment.get("body") if isinstance(comment, dict) else None
@@ -6117,7 +6134,7 @@ def occurrence_throttled(comments: Iterable[Any], *, now: datetime, throttle_sec
 			if not lines or lines[0] != f"<!-- {MARKER_PREFIX}occurrence -->":
 				continue
 			match = _OCCURRENCE_AT_RE.match(lines[-1])
-			stamp = _parse_iso(match.group(1)) if match else None
+			stamp = _parse_iso(match.group(1)) if match and match.group(2) == "release_blocker" else None
 			if stamp is None or stamp > now + timedelta(seconds=ENGINE_REPORTER_RUN_CLOCK_SKEW_SECONDS):
 				continue
 			if newest is None or stamp > newest:
@@ -7353,8 +7370,14 @@ def _cmd_occurrence_throttle(args: argparse.Namespace) -> int:
 		comments = _load_json_file(args.comments_json)
 	except (OSError, ValueError):
 		comments = []
+	issue: Any = None
+	if args.issue_json:
+		try:
+			issue = _load_json_file(args.issue_json)
+		except (OSError, ValueError):
+			issue = None
 	throttle = int(args.throttle_secs) if re.fullmatch(r"[0-9]{1,10}", str(args.throttle_secs or "")) and int(args.throttle_secs) > 0 else DEFAULT_OCCURRENCE_THROTTLE_SECONDS
-	_write_json(occurrence_throttled(comments if isinstance(comments, list) else [], now=_utc_now(), throttle_secs=throttle, trusted_login=args.trusted_login or ""))
+	_write_json(occurrence_throttled(comments if isinstance(comments, list) else [], now=_utc_now(), throttle_secs=throttle, trusted_login=args.trusted_login or "", issue=issue))
 	return 0
 
 
@@ -8656,6 +8679,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--comments-json", required=True, help="issue comments (REST list)")
 	p.add_argument("--throttle-secs", default=str(DEFAULT_OCCURRENCE_THROTTLE_SECONDS))
 	p.add_argument("--trusted-login", default="", help="pipeline account; only its markers count")
+	p.add_argument("--issue-json", default="", help="the duplicate heal issue's list entry (author, title, created_at)")
 	p.set_defaults(func=_cmd_occurrence_throttle)
 
 	p = sub.add_parser("engine-fallback-fingerprint", help="Print the dedup fingerprint of a refused AI engine fallback (role, reason)")

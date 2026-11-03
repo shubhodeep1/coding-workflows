@@ -2270,13 +2270,20 @@ case "${ACTION}" in
 			if [ -z "${BLOCKER_THROTTLE_LOGIN}" ]; then
 				BLOCKER_THROTTLE_LOGIN="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
 			fi
+			[ -n "${BLOCKER_THROTTLE_LOGIN}" ] || log "warn occurrence_throttle_login_unavailable existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
+			# The duplicate's list entry (already fetched for the budget): a
+			# release_blocker issue the pipeline filed opens the window itself.
+			BLOCKER_THROTTLE_ISSUE="${RUNTIME_DIR}/occurrence_throttle_issue.json"
+			jq --argjson n "${EXISTING:-0}" --arg r "${EXISTING_REPO}" \
+				'[.[] | select(.number == $n and (.repository // "") == $r)] | first // {}' "${ISSUES_FILE}" > "${BLOCKER_THROTTLE_ISSUE}" 2>/dev/null \
+				|| printf '{}\n' > "${BLOCKER_THROTTLE_ISSUE}" || true
 			BLOCKER_THROTTLE_SINCE="$(date -u -d "@$(( $(date -u +%s) - OCCURRENCE_THROTTLE_SECS ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
 			if [[ "${EXISTING}" =~ ^[1-9][0-9]*$ ]] && [ -n "${BLOCKER_THROTTLE_SINCE}" ] \
 				&& gh_retry gh api --method GET --paginate "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F since="${BLOCKER_THROTTLE_SINCE}" -F per_page=100 \
 					--jq '.[] | {body: (.body // ""), user: (.user // {})}' 2>/dev/null \
 				| jq -s '.' > "${BLOCKER_THROTTLE_COMMENTS}" 2>/dev/null \
 				&& python3 "${HEAL_PY}" occurrence-throttle --comments-json "${BLOCKER_THROTTLE_COMMENTS}" \
-					--throttle-secs "${OCCURRENCE_THROTTLE_SECS}" --trusted-login "${BLOCKER_THROTTLE_LOGIN}" > "${BLOCKER_THROTTLE_RESULT}" 2>/dev/null \
+					--throttle-secs "${OCCURRENCE_THROTTLE_SECS}" --trusted-login "${BLOCKER_THROTTLE_LOGIN}" --issue-json "${BLOCKER_THROTTLE_ISSUE}" > "${BLOCKER_THROTTLE_RESULT}" 2>/dev/null \
 				&& jq -e '.throttled | type == "boolean"' "${BLOCKER_THROTTLE_RESULT}" >/dev/null 2>&1; then
 				if [ "$(jq -r '.throttled' "${BLOCKER_THROTTLE_RESULT}")" = "true" ]; then
 					log "duplicate_throttled existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} age=$(jq -r '.age_secs // ""' "${BLOCKER_THROTTLE_RESULT}" | tr -cd '0-9') throttle=${OCCURRENCE_THROTTLE_SECS} source=${SOURCE_LABEL}"
@@ -2321,7 +2328,9 @@ case "${ACTION}" in
 			_validation_route_post "${RUNTIME_DIR}/validation_route_comment.md"
 		fi
 		if [ "${SOURCE_KIND}" = "release_blocker" ]; then
-			tg_send_msg "Release blocker still present after ${BLOCKER_AGE_TEXT}: ${BLOCKER_REASON:-unknown} (${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}})"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+			BLOCKER_OCCURRENCE_NOTE=""
+			[ "${DUPLICATE_OCCURRENCE_STATE}" = "posted" ] || BLOCKER_OCCURRENCE_NOTE=" (occurrence comment failed; not throttled)"
+			tg_send_msg "Release blocker still present after ${BLOCKER_AGE_TEXT}: ${BLOCKER_REASON:-unknown} (${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}})${BLOCKER_OCCURRENCE_NOTE}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 			exit 0
 		fi
 		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} matches open heal issue ${EXISTING_URL:-#${EXISTING}} (recorded as another occurrence)." "DEBUG" >/dev/null 2>&1 || true
@@ -3561,7 +3570,11 @@ case "${CLASSIFICATION}" in
 			} > "${RUNTIME_DIR}/source_comment.md"
 			_comment_on_source "${RUNTIME_DIR}/source_comment.md"
 		fi
-		tg_send_msg "Workflow failure heal opened ${NEW_ISSUE_URL} (consumer-side defect) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')." "DEBUG" >/dev/null 2>&1 || true
+		if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+			tg_send_msg "Release blocker filed: ${BLOCKER_REASON:-unknown} on ${HEAD_BRANCH:-unknown} (${NEW_ISSUE_URL})"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		else
+			tg_send_msg "Workflow failure heal opened ${NEW_ISSUE_URL} (consumer-side defect) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')." "DEBUG" >/dev/null 2>&1 || true
+		fi
 		;;
 	pr-self-inflicted)
 		# The crash is in a file this PR changed: the fix belongs in the PR
@@ -3643,7 +3656,12 @@ case "${CLASSIFICATION}" in
 		_comment_on_source "${RUNTIME_DIR}/source_comment.md"
 		SUMMARY_LINE="$(sed -n '/^## Summary/,/^## /p' "${DIAG_FILE}" | sed '1d;/^## /d' | tr '\n' ' ' | head -c 400)"
 		log "no_issue classification=${CLASSIFICATION} fixed_by=${ALREADY_FIXED_COMMITS} branch=${PROGRESS_BRANCH} source=${SOURCE_LABEL} fp=${FP}"
-		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}') is already fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}; no issue opened. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
+		if [ "${SOURCE_KIND}" = "release_blocker" ]; then
+			# A blocker that files no issue still reaches a person (WARNING).
+			tg_send_msg "Release blocker ${BLOCKER_REASON:-unknown} on ${HEAD_BRANCH:-unknown} classified already-fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}, no issue opened. ${SUMMARY_LINE}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		else
+			tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}') is already fixed on ${PROGRESS_BRANCH} by ${ALREADY_FIXED_COMMITS}; no issue opened. ${SUMMARY_LINE}"$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
+		fi
 		;;
 	*)
 		log "error unknown_classification value=${CLASSIFICATION}"
