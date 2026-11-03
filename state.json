@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-03T17:34:42Z",
+  "tick_at": "2026-11-03T18:04:46Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -15,14 +15,14 @@
   },
   "tracking_issues": [
     {
-      "current_wave": 5,
+      "current_wave": 6,
       "integration_ahead_by": "92",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 3,
+        "in_progress": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -30,20 +30,19 @@
       },
       "number": 8291,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Unattended pipeline: remove stuck states (plan P2a-P13 remainder)",
       "total_waves": 20,
-      "wave_complete": true
+      "wave_complete": false
     },
     {
-      "current_wave": 11,
-      "integration_ahead_by": "61",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -51,10 +50,10 @@
       },
       "number": 8427,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Keep unattended work going until the change is delivered and verified (persistent-unattended-workflows plan P1-P11)",
-      "total_waves": 11,
-      "wave_complete": true
+      "total_waves": 0,
+      "wave_complete": false
     },
     {
       "current_wave": 0,
@@ -157,14 +156,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 2,
-      "integration_ahead_by": "5",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -172,10 +170,10 @@
       },
       "number": 8744,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Apply workflow-optimization-2026-09-30-2 recommendations (resolver scope reason code, label-sync hardening) and close out the doc",
-      "total_waves": 2,
-      "wave_complete": true
+      "total_waves": 0,
+      "wave_complete": false
     }
   ]
 }
