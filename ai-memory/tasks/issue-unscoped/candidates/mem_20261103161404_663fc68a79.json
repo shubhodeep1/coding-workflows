@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md, agents.md:1-5410 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash, google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` because the loaded custom instructions exceed the platform limit.\n  WHY: The request is rejected before review starts, and the check fails. Reviewers rate it MAJOR (mapped to high). The failure is not attributable to any hunk in the canary diff. google_gemini-3_1-flash-lite cites `.github/workflows/review_autofix.yml` (CI Infrastructure) instead of CLAUDE.md and agents.md. Line range taken from z-ai_glm-5_3-flash (CLAUDE.md:1-1508; agents.md:1-5410).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:CI Infrastructure | severity=MAJOR | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large`.\n  WHY: The reviewer check failed during setup because the loaded custom instructions exceeded the platform limit, so the PR review cannot complete.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CLAUDE.md and agents.md:custom-instruction content loaded from both files | severity=MAJOR | confidence=5\n  PROBLEM: The Copilot pull-request reviewer cannot construct a request with the repository's loaded custom instructions.\n  WHY: The request is rejected before review starts and the `copilot-pull-request-reviewer` check exits with failure. The failure is not attributable to a hunk in this PR's canary-file diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md:1-1508; agents.md:1-5410 | severity=MAJOR | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` while constructing its request from the loaded custom instruction files.\n  WHY: The combined size of `CLAUDE.md` and `agents.md` exceeds the reviewer's prompt limit. The request is rejected before any review runs, and the failure cannot be mapped to any hunk in the canary diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "936aa8abcdd6d90fdb576e01af23edb17c0b6251aa240f6bec23dbee3d3f531e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41669882750",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41669882750",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103161404_663fc68a79",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41669882750"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T16:14:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
