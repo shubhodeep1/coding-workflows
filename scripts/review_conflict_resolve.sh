@@ -1146,12 +1146,16 @@ _resolver_prepush_test_gate()
 # retry base cannot undo an unauthorized edit to a different tracked path.
 # Keep this snapshot outside the checkout; never reset the merge index.
 _resolver_scope_state() {
+  # RESOLVER_SCOPE_CHECK_ATTEMPT is optional diagnostics only (default: the
+  # retry loop's attempt counter, else "-"); the helper is staged from main.
+  RESOLVER_SCOPE_CHECK_ATTEMPT="${RESOLVER_SCOPE_CHECK_ATTEMPT:-${attempt:--}}" \
   PYTHONDONTWRITEBYTECODE=1 python3 - "${1}" "${RESOLVER_SCOPE_SNAPSHOT_DIR}" \
     "${CONFLICTED_PATHS_FILE}" "${RESOLVER_SCOPE_VIOLATIONS_FILE}" <<'PY'
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -1161,6 +1165,70 @@ action, snapshot_name, allowed_name, violations_name = sys.argv[1:]
 root = Path.cwd()
 snapshot = Path(snapshot_name)
 manifest = snapshot / "manifest.json"
+
+# RESOLVER_SCOPE_CHECK diagnostics: enumerated reason codes and counts only.
+# Keep this allowlist identical to the one in _resolver_attempt_state.
+_SCOPE_CHECK_REASON_CODES = frozenset((
+    "unsafe_path", "symlink_parent", "unsupported_path_type", "conflicted_paths_missing",
+    "snapshot_copy_mismatch", "worktree_changed_during_snapshot", "merge_state_changed",
+    "invalid_conflicted_paths_snapshot", "snapshot_content_mismatch", "restore_blocked_symlink",
+    "restore_blocked_directory", "restore_mismatch", "unknown_action", "attempt_snapshot_exists",
+    "attempt_restore_failed", "worktree_root_mismatch",
+    "os_error", "key_error", "type_error", "json_error", "subprocess_error", "unclassified",
+))
+_scope_check_counts = {"allowed_paths": None, "changed_paths": None, "merge_state_changed": None}
+
+
+def _scope_check_tag(code, message):
+    # A plain ValueError keeps the existing "(ValueError)" error text unchanged.
+    exc = ValueError(message)
+    exc.resolver_scope_reason = code
+    return exc
+
+
+def _scope_check_reason(exc):
+    code = getattr(exc, "resolver_scope_reason", None)
+    if code not in _SCOPE_CHECK_REASON_CODES:
+        # JSONDecodeError subclasses ValueError, so test it first.
+        if isinstance(exc, json.JSONDecodeError):
+            code = "json_error"
+        elif isinstance(exc, subprocess.CalledProcessError):
+            code = "subprocess_error"
+        elif isinstance(exc, OSError):
+            code = "os_error"
+        elif isinstance(exc, KeyError):
+            code = "key_error"
+        elif isinstance(exc, TypeError):
+            code = "type_error"
+        else:
+            code = "unclassified"
+    if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
+        code = "unclassified"
+    return code
+
+
+def _emit_scope_check_line(guard, exc):
+    # Fail-open; never print paths, file contents or exception text here.
+    try:
+        act = action if isinstance(action, str) and re.fullmatch(r"[a-z_-]{1,32}", action) else "-"
+        cls = type(exc).__name__
+        cls = cls if re.fullmatch(r"[A-Za-z0-9_]{1,64}", cls) else "-"
+        att = os.environ.get("RESOLVER_SCOPE_CHECK_ATTEMPT", "-")
+        att = att if re.fullmatch(r"[0-9]{1,6}", att) else "-"
+        counts = {}
+        for name in ("allowed_paths", "changed_paths"):
+            value = _scope_check_counts.get(name)
+            counts[name] = "-" if value is None else str(int(value))
+        merge = _scope_check_counts.get("merge_state_changed")
+        merge = merge if merge in ("true", "false") else "-"
+        print(
+            f"RESOLVER_SCOPE_CHECK guard={guard} action={act} reason={_scope_check_reason(exc)} exc={cls} "
+            f"attempt={att} allowed_paths={counts['allowed_paths']} changed_paths={counts['changed_paths']} "
+            f"merge_state_changed={merge}",
+            file=sys.stderr,
+        )
+    except Exception:
+        pass
 
 
 def git(*args):
@@ -1177,11 +1245,11 @@ def entries():
         if "\n" in path or "\r" in path or "\t" in path or path.startswith("/") or any(
             part in ("", ".", "..") for part in path.split("/")
         ):
-            raise ValueError("unsafe resolver path in worktree")
+            raise _scope_check_tag("unsafe_path", "unsafe resolver path in worktree")
         target = root / path
         if any((root / Path(*target.relative_to(root).parts[:i])).is_symlink()
                for i in range(1, len(target.relative_to(root).parts))):
-            raise ValueError("symlink parent in resolver path")
+            raise _scope_check_tag("symlink_parent", "symlink parent in resolver path")
         try:
             info = target.lstat()
         except FileNotFoundError:
@@ -1192,7 +1260,7 @@ def entries():
         elif stat.S_ISREG(info.st_mode):
             result[path] = ["file", stat.S_IMODE(info.st_mode), hashlib.sha256(target.read_bytes()).hexdigest()]
         else:
-            raise ValueError("unsupported resolver path type")
+            raise _scope_check_tag("unsupported_path_type", "unsupported resolver path type")
     return result
 
 
@@ -1207,7 +1275,7 @@ def merge_state():
 try:
     if action == "capture":
         if not Path(allowed_name).is_file():
-            raise ValueError("conflicted-paths snapshot missing")
+            raise _scope_check_tag("conflicted_paths_missing", "conflicted-paths snapshot missing")
         # An incomplete capture must never be reused after a failed write.
         if snapshot.exists():
             shutil.rmtree(snapshot)
@@ -1220,21 +1288,27 @@ try:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(root / path, destination)
                 if hashlib.sha256(destination.read_bytes()).hexdigest() != value[2]:
-                    raise ValueError("resolver snapshot copy mismatch")
-        if merge_state() != merge_before or entries() != before:
-            raise ValueError("resolver worktree or index changed during snapshot")
+                    raise _scope_check_tag("snapshot_copy_mismatch", "resolver snapshot copy mismatch")
+        _scope_merge_drift = merge_state() != merge_before
+        _scope_check_counts["merge_state_changed"] = "true" if _scope_merge_drift else "false"
+        if _scope_merge_drift or entries() != before:
+            raise _scope_check_tag("worktree_changed_during_snapshot", "resolver worktree or index changed during snapshot")
         manifest.write_text(json.dumps({"paths": before, "merge": merge_before}), encoding="utf-8")
     else:
         saved = json.loads(manifest.read_text(encoding="utf-8"))
         if merge_state() != saved["merge"]:
-            raise ValueError("merge index or MERGE_HEAD changed during resolver attempt")
+            _scope_check_counts["merge_state_changed"] = "true"
+            raise _scope_check_tag("merge_state_changed", "merge index or MERGE_HEAD changed during resolver attempt")
+        _scope_check_counts["merge_state_changed"] = "false"
         current = entries()
         old = saved["paths"]
         changed = sorted(path for path in old.keys() | current.keys() if old.get(path) != current.get(path))
+        _scope_check_counts["changed_paths"] = len(changed)
         if action == "check":
             allowed = set(Path(allowed_name).read_text(encoding="utf-8").splitlines())
+            _scope_check_counts["allowed_paths"] = len(allowed)
             if not allowed or any(not path or path.startswith("/") or ".." in path.split("/") for path in allowed):
-                raise ValueError("invalid conflicted-paths snapshot")
+                raise _scope_check_tag("invalid_conflicted_paths_snapshot", "invalid conflicted-paths snapshot")
             outside = [path for path in changed if path not in allowed]
             Path(violations_name).write_text("".join(path + "\n" for path in outside), encoding="utf-8")
             if outside:
@@ -1247,16 +1321,16 @@ try:
                 if original[0] == "file":
                     source = snapshot / "files" / path
                     if hashlib.sha256(source.read_bytes()).hexdigest() != original[2]:
-                        raise ValueError("resolver snapshot content mismatch")
+                        raise _scope_check_tag("snapshot_content_mismatch", "resolver snapshot content mismatch")
             for path in changed:
                 target = root / path
                 # Never traverse a model-created symlink directory, nor remove
                 # a directory with unknown contents on a retry.
                 if any((root / Path(*target.relative_to(root).parts[:i])).is_symlink()
                        for i in range(1, len(target.relative_to(root).parts))):
-                    raise ValueError("symlink parent blocks resolver restore")
+                    raise _scope_check_tag("restore_blocked_symlink", "symlink parent blocks resolver restore")
                 if target.is_dir() and not target.is_symlink():
-                    raise ValueError("directory blocks resolver restore")
+                    raise _scope_check_tag("restore_blocked_directory", "directory blocks resolver restore")
                 if target.exists() or target.is_symlink():
                     target.unlink()
                 original = old.get(path, ["missing"])
@@ -1269,11 +1343,12 @@ try:
                         target.chmod(original[1])
         elif action == "verify":
             if changed:
-                raise ValueError("resolver worktree restore did not match snapshot")
+                raise _scope_check_tag("restore_mismatch", "resolver worktree restore did not match snapshot")
         else:
-            raise ValueError("unknown resolver scope action")
+            raise _scope_check_tag("unknown_action", "unknown resolver scope action")
 except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
     # Do not echo paths or untrusted exception text into workflow commands.
+    _emit_scope_check_line("scope", exc)
     print(f"::error::Resolver scope {action} failed closed ({type(exc).__name__}).", file=sys.stderr)
     sys.exit(2)
 PY
@@ -1709,6 +1784,9 @@ fi
 _resolver_attempt_state()
 {
   local _state_action="$1"
+  # RESOLVER_SCOPE_CHECK_ATTEMPT is optional diagnostics only (default: the
+  # retry loop's attempt counter, else "-"); the helper is staged from main.
+  RESOLVER_SCOPE_CHECK_ATTEMPT="${RESOLVER_SCOPE_CHECK_ATTEMPT:-${attempt:--}}" \
   RESOLVER_ATTEMPT_TREE_DIR="${RESOLVER_ATTEMPT_TREE_DIR}" \
   CONFLICTED_PATHS_FILE="${CONFLICTED_PATHS_FILE}" \
   python3 - "${_state_action}" <<'PY'
@@ -1716,6 +1794,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -1727,6 +1806,70 @@ root = Path.cwd()
 store = Path(os.environ["RESOLVER_ATTEMPT_TREE_DIR"])
 manifest_file = store / "manifest.json"
 
+# RESOLVER_SCOPE_CHECK diagnostics: enumerated reason codes and counts only.
+# Keep this allowlist identical to the one in _resolver_scope_state.
+_SCOPE_CHECK_REASON_CODES = frozenset((
+	"unsafe_path", "symlink_parent", "unsupported_path_type", "conflicted_paths_missing",
+	"snapshot_copy_mismatch", "worktree_changed_during_snapshot", "merge_state_changed",
+	"invalid_conflicted_paths_snapshot", "snapshot_content_mismatch", "restore_blocked_symlink",
+	"restore_blocked_directory", "restore_mismatch", "unknown_action", "attempt_snapshot_exists",
+	"attempt_restore_failed", "worktree_root_mismatch",
+	"os_error", "key_error", "type_error", "json_error", "subprocess_error", "unclassified",
+))
+_scope_check_counts = {"allowed_paths": None, "changed_paths": None, "merge_state_changed": None}
+
+
+def _scope_check_tag(code, message):
+	# A plain ValueError keeps the existing "(ValueError)" error text unchanged.
+	exc = ValueError(message)
+	exc.resolver_scope_reason = code
+	return exc
+
+
+def _scope_check_reason(exc):
+	code = getattr(exc, "resolver_scope_reason", None)
+	if code not in _SCOPE_CHECK_REASON_CODES:
+		# JSONDecodeError subclasses ValueError, so test it first.
+		if isinstance(exc, json.JSONDecodeError):
+			code = "json_error"
+		elif isinstance(exc, subprocess.CalledProcessError):
+			code = "subprocess_error"
+		elif isinstance(exc, OSError):
+			code = "os_error"
+		elif isinstance(exc, KeyError):
+			code = "key_error"
+		elif isinstance(exc, TypeError):
+			code = "type_error"
+		else:
+			code = "unclassified"
+	if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code):
+		code = "unclassified"
+	return code
+
+
+def _emit_scope_check_line(guard, exc):
+	# Fail-open; never print paths, file contents or exception text here.
+	try:
+		act = action if isinstance(action, str) and re.fullmatch(r"[a-z_-]{1,32}", action) else "-"
+		cls = type(exc).__name__
+		cls = cls if re.fullmatch(r"[A-Za-z0-9_]{1,64}", cls) else "-"
+		att = os.environ.get("RESOLVER_SCOPE_CHECK_ATTEMPT", "-")
+		att = att if re.fullmatch(r"[0-9]{1,6}", att) else "-"
+		counts = {}
+		for name in ("allowed_paths", "changed_paths"):
+			value = _scope_check_counts.get(name)
+			counts[name] = "-" if value is None else str(int(value))
+		merge = _scope_check_counts.get("merge_state_changed")
+		merge = merge if merge in ("true", "false") else "-"
+		print(
+			f"RESOLVER_SCOPE_CHECK guard={guard} action={act} reason={_scope_check_reason(exc)} exc={cls} "
+			f"attempt={att} allowed_paths={counts['allowed_paths']} changed_paths={counts['changed_paths']} "
+			f"merge_state_changed={merge}",
+			file=sys.stderr,
+		)
+	except Exception:
+		pass
+
 
 def git_paths(*args):
 	return set(filter(None, subprocess.check_output(["git", "ls-files", "-z", *args]).split(b"\0")))
@@ -1737,12 +1880,12 @@ def safe_path(raw):
 	parts = Path(path).parts
 	if (not parts or Path(path).is_absolute() or any(p in (".", "..", ".git") for p in parts)
 			or "\n" in path or "\r" in path or "\t" in path):
-		raise ValueError("unsafe resolver path")
+		raise _scope_check_tag("unsafe_path", "unsafe resolver path")
 	parent = root
 	for component in parts[:-1]:
 		parent /= component
 		if parent.is_symlink():
-			raise ValueError("symlink in resolver path ancestry")
+			raise _scope_check_tag("symlink_parent", "symlink in resolver path ancestry")
 	return path
 
 
@@ -1758,7 +1901,7 @@ def file_state(path, copy_to=None):
 		data = (root / path).read_bytes()
 		kind = "file"
 	else:
-		raise ValueError("unsupported resolver path type")
+		raise _scope_check_tag("unsupported_path_type", "unsupported resolver path type")
 	if copy_to is not None:
 		copy_to.write_bytes(data)
 	return {"kind": kind, "sha": hashlib.sha256(data).hexdigest(),
@@ -1771,10 +1914,10 @@ def index_state():
 
 try:
 	if Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"]).decode().strip()).resolve() != root.resolve():
-		raise ValueError("resolver working tree does not match Git root")
+		raise _scope_check_tag("worktree_root_mismatch", "resolver working tree does not match Git root")
 	if action == "capture":
 		if store.exists():
-			raise ValueError("attempt snapshot already exists")
+			raise _scope_check_tag("attempt_snapshot_exists", "attempt snapshot already exists")
 		store.mkdir(parents=True)
 		(store / "files").mkdir()
 		paths = sorted(git_paths("--cached") | git_paths("--others", "--exclude-standard"))
@@ -1790,7 +1933,9 @@ try:
 		for path in entries:
 			safe_path(os.fsencode(path))
 		if index_state() != manifest["index"]:
-			raise ValueError("resolver changed the merge index")
+			_scope_check_counts["merge_state_changed"] = "true"
+			raise _scope_check_tag("merge_state_changed", "resolver changed the merge index")
+		_scope_check_counts["merge_state_changed"] = "false"
 		current = {safe_path(raw) for raw in git_paths("--cached") | git_paths("--others", "--exclude-standard")}
 		current.update(entries)
 		changes = []
@@ -1798,8 +1943,10 @@ try:
 			previous = entries.get(path, {"kind": "missing"})
 			if file_state(path) != {key: value for key, value in previous.items() if key != "slot"}:
 				changes.append(path)
+		_scope_check_counts["changed_paths"] = len(changes)
 		if action == "check":
 			allowed = {safe_path(os.fsencode(p)) for p in Path(os.environ["CONFLICTED_PATHS_FILE"]).read_text().splitlines() if p}
+			_scope_check_counts["allowed_paths"] = len(allowed)
 			outside = [p for p in changes if p not in allowed]
 			if outside:
 				print("::warning::Conflict resolver attempt edited files outside the conflicted set:")
@@ -1814,7 +1961,7 @@ try:
 				if previous["kind"] != "missing":
 					data = (store / "files" / str(previous["slot"])).read_bytes()
 					if hashlib.sha256(data).hexdigest() != previous["sha"]:
-						raise ValueError("attempt snapshot content mismatch")
+						raise _scope_check_tag("snapshot_content_mismatch", "attempt snapshot content mismatch")
 			for path in changes:
 				previous = entries.get(path, {"kind": "missing"})
 				target = root / path
@@ -1839,10 +1986,11 @@ try:
 				file_state(path) != {k: v for k, v in entry.items() if k != "slot"}
 				for path, entry in entries.items()
 			) or any(safe_path(raw) not in entries for raw in git_paths("--cached") | git_paths("--others", "--exclude-standard")):
-				raise ValueError("attempt restore verification failed")
+				raise _scope_check_tag("attempt_restore_failed", "attempt restore verification failed")
 		else:
-			raise ValueError("unknown attempt state action")
+			raise _scope_check_tag("unknown_action", "unknown attempt state action")
 except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+	_emit_scope_check_line("attempt_state", exc)
 	print("::error::Resolver attempt state unavailable or unsafe: " + str(exc), file=sys.stderr)
 	sys.exit(2)
 PY
