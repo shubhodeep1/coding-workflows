@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:5867 | severity=critical | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The PR introduces regressions in tests/test_implement_post_codex_recovery.py as reported by the pre-push test gate; the integration chain test (test_review_pipeline_integration_chain_module_runs_clean) wrapping tests/test_review_pipeline_integration.py fails.\n  WHY: These failures prevent the PR from satisfying CI requirements and indicate a breaking change in the pipeline integration chain (source severity=BLOCKER, mapped to critical; anthropic_claude-sonnet-5_5 and minimax_minimax-m3 noted this test file only names the canary path in string literals and treated the failure as not caused by this PR, which disagrees with this finding).\n- CLAUDE.md / AGENTS.md (copilot-pull-request-reviewer check run 41544333941 on head 90413e3967c6771e95affc97a9bc25e5002ad81c) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The third-party Copilot review check fails before generating any review because its custom-instruction payload (built from AGENTS.md and CLAUDE.md) exceeds its prompt limit (custom_instructions_too_large).\n  WHY: The check exits with status 1 regardless of the diff, so the failure is not attributable to the canary change and cannot be mapped to any hunk in this PR (source severity=NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR body must not use auto-close keywords (Fixes/Closes/Resolves) referencing orchestrator-tracking issues (\u00a719)\n  expected_change_site: PR #8348 body (https://github.com/shubhodeep1/coding-workflows/pull/8348)\n  confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The PR body uses the forbidden auto-close keyword \"Closes\" referencing issue #8338; if #8338 carries the ai:orchestrator-tracking label, merge will silently terminate the orchestrator state machine. (anthropic_claude-sonnet-5_5 and minimax_minimax-m3 judged #8338 a standalone canary issue, so the rule does not apply.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_implement_post_codex_recovery.py:5867 | severity=BLOCKER | confidence=4\n  PROBLEM: The PR introduces regressions in tests/test_implement_post_codex_recovery.py as reported by the pre-push test gate; the integration chain test wrapping tests/test_review_pipeline_integration.py fails.\n  WHY: These failures prevent the PR from satisfying CI requirements and indicate a breaking change in the pipeline integration chain.\n- TASK_GAP\n  Requirement: PR body must not use auto-close keywords (Fixes/Closes/Resolves) referencing orchestrator-tracking issues (\u00a719).\n  Expected change site: PR #8348 body (https://github.com/shubhodeep1/coding-workflows/pull/8348)\n  Evidence of absence: The PR body uses the forbidden auto-close keyword \"Closes\" referencing issue #8338; if #8338 carries the ai:orchestrator-tracking label, merge will silently terminate the orchestrator state machine. Fix by replacing \"Closes\" with \"Refs\" or \"Related to\".\n  severity=BLOCKER | confidence=3\n- CLAUDE.md / AGENTS.md (copilot-pull-request-reviewer check run 41544333941 on head 90413e3967c6771e95affc97a9bc25e5002ad81c) | severity=NIT | confidence=5\n  PROBLEM: The third-party Copilot review check fails before generating any review because its custom-instruction payload (built from AGENTS.md and CLAUDE.md) exceeds its prompt limit (custom_instructions_too_large).\n  WHY: The check exits with status 1 regardless of the diff, so no Copilot review is produced; the failure is not attributable to the canary change and cannot be mapped to any hunk in this PR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "51f81c662dee53a3771f9859f7d4e856b45c0d50b5fa6c51b09b800ab22607dd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41569642418",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41569642418",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103031259_929027d766",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41569642418"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T03:12:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
