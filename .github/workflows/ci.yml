@@ -2237,6 +2237,8 @@ jobs:
       # below come from the source job; the last two first reached it from
       # tests-promote-stall-and-review (#7677), noted above them. None needs
       # Node or the prepared .claude/ live copies. Names and bodies unchanged.
+      # `Clarify loop guard unit tests` moved on to orchestrate-poll (0) in
+      # budget-watch issue #8777.
       - name: Validate process cross-cycle escalation unit tests
         run: |
           set -euo pipefail
@@ -2248,63 +2250,10 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
 
-      # Moved from tests-promote-stall-and-review, which took 16m06s of its
-      # 20 minutes on main (run 39216253741, budget-watch issue #7677). Step
-      # timings were not readable when this was planned; chosen by estimated
-      # cost (test count, weighted for subprocess use), not measured. None
-      # needs git history, Node or the prepared .claude/ live copies. Names
-      # and bodies unchanged.
-      - name: Clarify loop guard unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_wrapper_predicate_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_backoff.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_reasons.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_git_env_isolation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_check_triage_branch_guard.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_header_prompt_staging.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_split_dispatch.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_answer_recommended_parser.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_codex_step_extraction.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
-
       - name: Implement files_touched scope guard unit tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_files_touched_scope_guard.py
-
-      # Moved again from tests-promote-stall-and-review, which took 15m33s of
-      # its 20 minutes on main (run 41042353484, budget-watch issue #8466).
-      # Picked by test and subprocess counts because the run's step timings
-      # could not be read (an estimate, not a measurement). Needs no Node or
-      # prepared .claude/ live copies. Name and body unchanged.
-      # Moved from static-checks, which took 11m17s of its 15 minutes on main
-      # (run 40954844196, budget-watch issue #8394), first to
-      # tests-promote-stall-and-review. That pick was an estimate from test
-      # and subprocess counts, not measured. Name and body unchanged.
-      - name: Validation bootstrap and family direct-run tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_tracking_issue_list_limit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
       # Moved from tests-promote-stall-and-review, which took 15m33s of its 20
       # minutes on main (run 41042353484, budget-watch issue #8466). Picked by
@@ -2334,6 +2283,8 @@ jobs:
     # engine judges and the validation harness sandbox steps.
     # Since #8759, group 1 pins the review-pipeline plumbing step and group
     # 0 the synthesize-smoke step.
+    # Since #8777, group 0 also pins the clarify loop guard step and group
+    # 1 the validation bootstrap step.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -3071,6 +3022,75 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
+
+      # Moved from tests-promote-stall-and-review, which took 16m06s of its
+      # 20 minutes on main (run 39216253741, budget-watch issue #7677). Step
+      # timings were not readable when this was planned; chosen by estimated
+      # cost (test count, weighted for subprocess use), not measured. None
+      # needs git history, Node or the prepared .claude/ live copies. Names
+      # and bodies unchanged.
+      #
+      # Moved again from tests-release-and-log-analysis, which took 15m36s of
+      # its 20 minutes on main (run 41726718996, budget-watch issue #8777), to
+      # group 0. Picked by test and subprocess counts because the run's
+      # step timings could not be read (an estimate, not a measurement). It
+      # uses only temp git repos and needs no git history, Node or prepared
+      # .claude/ live copies. Name and body unchanged.
+      - name: Clarify loop guard unit tests
+        if: strategy.job-index == 0
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_wrapper_predicate_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_backoff.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_reasons.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_git_env_isolation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_check_triage_branch_guard.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_header_prompt_staging.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_split_dispatch.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_answer_recommended_parser.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_codex_step_extraction.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
+
+      # Moved again from tests-promote-stall-and-review, which took 15m33s of
+      # its 20 minutes on main (run 41042353484, budget-watch issue #8466).
+      # Picked by test and subprocess counts because the run's step timings
+      # could not be read (an estimate, not a measurement). Needs no Node or
+      # prepared .claude/ live copies. Name and body unchanged.
+      # Moved from static-checks, which took 11m17s of its 15 minutes on main
+      # (run 40954844196, budget-watch issue #8394), first to
+      # tests-promote-stall-and-review. That pick was an estimate from test
+      # and subprocess counts, not measured. Name and body unchanged.
+      #
+      # Moved again from tests-release-and-log-analysis, which took 15m36s of
+      # its 20 minutes on main (run 41726718996, budget-watch issue #8777), to
+      # group 1. Picked by test and subprocess counts because the run's
+      # step timings could not be read (an estimate, not a measurement). It
+      # first ran in the depth-1 static-checks job and needs no git history,
+      # Node or prepared .claude/ live copies. Name and body unchanged.
+      - name: Validation bootstrap and family direct-run tests
+        if: strategy.job-index == 1
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_tracking_issue_list_limit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
   budget-watch:
     # Early warning for the two budgets CI has hit without notice (workflow
