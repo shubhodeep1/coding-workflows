@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41549900517) fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\"), and the failure cannot be mapped to the changed canary hunk.\n  WHY: The reviewer exceeds its prompt-size limit before any review completes, so no change in this diff can fix it. The reviewer rated it SEVERITY: NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Deliverable should be verifiable by the pipeline's review checks without unrelated reviewer-infrastructure failures.\n  expected_change_site: None within this diff (the failure originates in the `copilot-pull-request-reviewer` check's system-prompt size, outside the changed files).\n  confidence=[5]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: No hunk in the diff touches reviewer configuration, and the only change is the 3-line canary status file at tests/e2e_smoke_canary.txt:1-3.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:Lines 1-3 (the entire changed hunk); failed check run 41549900517 (`copilot-pull-request-reviewer`) | severity=NIT | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\") before any review completes. The failure cannot be mapped to the changed hunk, which only updates the canary status file. There is no source-level fix available in this diff.\n  WHY: The reviewer exceeds its prompt-size limit before creating the review request, so the check fails independently of the PR's content. No change within this diff can resolve it.\n- TASK_GAP:\n  Requirement: Deliverable should be verifiable by the pipeline's review checks without unrelated reviewer-infrastructure failures.\n  Expected change site: None within this diff (the failure originates in the `copilot-pull-request-reviewer` check's system-prompt size, outside the changed files).\n  Evidence of absence: No hunk in the diff touches reviewer configuration; the only change is the 3-line canary status file at tests/e2e_smoke_canary.txt:1-3.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ce8672fdc20886708f6d5bb1c84b848da1983f01ecd7f648a685d9cbb812a8b2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41572674467",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41572674467",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103041451_f77a40bf29",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41572674467"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T04:14:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
