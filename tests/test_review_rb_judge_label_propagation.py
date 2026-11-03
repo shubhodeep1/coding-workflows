@@ -715,16 +715,15 @@ def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_c
 	assert match, f"expected prior_pr_baseline_branch metadata in body:\n{body}"
 	baseline_branch = match.group(1).strip()
 	assert baseline_branch.startswith("ai/reissue-baseline/pr-42-"), baseline_branch
-	expected_footer = textwrap.dedent(
-		f"""\
-		---
-		**Review-blocked reissue metadata**
-		- Replaces: #41 (PR #42 closed — approach rework)
-		- Type: review-blocked-reissue
-		- prior_pr_baseline_branch: {baseline_branch}
-		- files_touched:
-		  - src/app.py
-		  - README.md"""
+	expected_footer = (
+		"---\n"
+		"**Review-blocked reissue metadata**\n"
+		"- Replaces: #41 (PR #42 closed — approach rework)\n"
+		"- Type: review-blocked-reissue\n"
+		f"- prior_pr_baseline_branch: {baseline_branch}\n"
+		"- files_touched:\n"
+		"  - src/app.py\n"
+		"  - README.md"
 	)
 	assert body.rstrip().endswith(expected_footer.rstrip()), (
 		"spot-fix reissue body must emit the canonical footer-scoped baseline metadata contract"
@@ -949,12 +948,11 @@ def test_close_and_reissue_spot_fix_unions_closed_pr_files_into_files_touched() 
 	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
 	body = creates[0][creates[0].index("--body") + 1]
 	footer = body[body.index("- files_touched:"):]
-	assert footer.rstrip() == textwrap.dedent(
-		"""\
-		- files_touched:
-		  - src/app.py
-		  - db/contracts/example.yml
-		  - tests/test_app.py"""
+	assert footer.rstrip() == (
+		"- files_touched:\n"
+		"  - src/app.py\n"
+		"  - db/contracts/example.yml\n"
+		"  - tests/test_app.py"
 	).rstrip(), footer
 	assert "removed_by_pr.py" not in body
 	assert "outside.py" not in body
@@ -1037,13 +1035,12 @@ def test_close_and_reissue_spot_fix_adds_declared_new_output_paths_to_files_touc
 	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
 	body = creates[0][creates[0].index("--body") + 1]
 	footer = body[body.index("- files_touched:"):]
-	assert footer.rstrip() == textwrap.dedent(
-		"""\
-		- files_touched:
-		  - src/app.py
-		  - tests/test_app.py
-		  - tests/fixtures/integration_ref_resolver/mixed_fence_tilde_footer.json
-		  - changelog.d/4605-security-issue-base-binding.md"""
+	assert footer.rstrip() == (
+		"- files_touched:\n"
+		"  - src/app.py\n"
+		"  - tests/test_app.py\n"
+		"  - tests/fixtures/integration_ref_resolver/mixed_fence_tilde_footer.json\n"
+		"  - changelog.d/4605-security-issue-base-binding.md"
 	).rstrip(), footer
 	assert "REISSUE_FILES_TOUCHED_UNION pr=42 judge_files=1 pr_files_added=1 pr_files_skipped=0 total=2" in state["_stdout"]
 	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=2 added=2 skipped=0 total=4" in state["_stdout"]
@@ -1245,10 +1242,21 @@ def test_close_and_reissue_spot_fix_new_output_paths_reject_directory_shaped_pat
 	)
 	scope_guard = importlib.util.module_from_spec(guard_spec)
 	guard_spec.loader.exec_module(scope_guard)
-	status, _allow, oos = scope_guard.evaluate(body, ["tests/fixtures/new_suite/undeclared.json"])
-	assert status == scope_guard.STATUS_OUT_OF_SCOPE, oos
-	status, _allow, oos = scope_guard.evaluate(body, ["src/app.py", ".env.example", "tests/fixtures/new_suite.json"])
-	assert status == scope_guard.STATUS_IN_SCOPE, oos
+	# The tests/fixtures/** auto-allow (SCOPE_GUARD_AUTO_ALLOW_PATHS, #8751) is
+	# switched off so this still checks that a directory-shaped declaration
+	# grants no subtree.
+	saved_auto_allow = os.environ.get("SCOPE_GUARD_AUTO_ALLOW_PATHS")
+	os.environ["SCOPE_GUARD_AUTO_ALLOW_PATHS"] = "none"
+	try:
+		status, _allow, oos = scope_guard.evaluate(body, ["tests/fixtures/new_suite/undeclared.json"])
+		assert status == scope_guard.STATUS_OUT_OF_SCOPE, oos
+		status, _allow, oos = scope_guard.evaluate(body, ["src/app.py", ".env.example", "tests/fixtures/new_suite.json"])
+		assert status == scope_guard.STATUS_IN_SCOPE, oos
+	finally:
+		if saved_auto_allow is None:
+			os.environ.pop("SCOPE_GUARD_AUTO_ALLOW_PATHS", None)
+		else:
+			os.environ["SCOPE_GUARD_AUTO_ALLOW_PATHS"] = saved_auto_allow
 
 
 def test_close_and_reissue_spot_fix_new_output_path_lookup_failure_fails_closed() -> None:
@@ -2122,12 +2130,12 @@ def _build_merge_with_followup_harness(
 	bash harness with stubs for the helpers it depends on.
 
 	Differences from `_build_harness` (close_and_reissue):
-	  - `_safe_gh_jq` forwards to `gh api` so the mergeability-poll loop
-	    sees real (mocked) PR JSON rather than no-op'ing into empty
-	    output.  Without this the MERGE_CONFIRMED gate can never flip
-	    true and every test would skip the issue-create path.
-	  - `sleep` is no-op'd so the mergeability-poll backoff (which the
-	    real script measures in seconds) doesn't slow tests.
+	- `_safe_gh_jq` forwards to `gh api` so the mergeability-poll loop
+		sees real (mocked) PR JSON rather than no-op'ing into empty
+		output.  Without this the MERGE_CONFIRMED gate can never flip
+		true and every test would skip the issue-create path.
+	- `sleep` is no-op'd so the mergeability-poll backoff (which the
+		real script measures in seconds) doesn't slow tests.
 	"""
 	xpg_echo_line = "shopt -s xpg_echo\n\n" if enable_xpg_echo else ""
 	# The check-runs gate now delegates to the shared _pr_checks_completed
