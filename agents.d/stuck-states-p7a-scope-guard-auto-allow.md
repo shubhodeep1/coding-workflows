@@ -3,6 +3,6 @@
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `SCOPE_GUARD_AUTO_ALLOWED` (`scripts/files_touched_scope_guard.py`, `path_in_scope`, stderr: `path=<p> glob=<g>` when the auto-allow alone put a staged or planned path in scope)
-- `SCOPE_GUARD_AUTO_ALLOW_IGNORED` (`scripts/files_touched_scope_guard.py`, `scope_guard_auto_allow_match`, stderr, once per entry per process: `entry=<e> reason=too_many|too_long|absolute|parent_segment|unanchored_glob|automation_prefix`)
+- `SCOPE_GUARD_AUTO_ALLOW_IGNORED` (`scripts/files_touched_scope_guard.py`, `scope_guard_auto_allow_match`, stderr, once per entry per process: `entry=<e> reason=too_many|too_long|absolute|parent_segment|empty_segment|unanchored_glob|automation_prefix`)
 LOG_PREFIX.name=SCOPE_GUARD_AUTO_ALLOWED
 LOG_PREFIX.name=SCOPE_GUARD_AUTO_ALLOW_IGNORED

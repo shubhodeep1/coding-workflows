@@ -564,8 +564,11 @@ def parse_scope_guard_auto_allow_paths(raw: str | None) -> tuple[list[str], list
 			reason = "too_long"
 		elif entry.startswith("/"):
 			reason = "absolute"
-		elif any(segment in {"", ".."} for segment in segments):
+		elif ".." in segments:
 			reason = "parent_segment"
+		elif "" in segments:
+			# A trailing "/" or "//" (e.g. `docs/`): not a parent segment.
+			reason = "empty_segment"
 		elif any(char in segments[0] for char in _GLOB_CHARS):
 			reason = "unanchored_glob"
 		elif segments[0].lower() in SCOPE_GUARD_AUTO_ALLOW_DENY_PREFIXES:

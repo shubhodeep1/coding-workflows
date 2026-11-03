@@ -1745,7 +1745,7 @@ def test_auto_allow_entry_validation() -> None:
 	assert ignored == [("scripts/**", "automation_prefix"), (".GitHub/**", "automation_prefix"),
 		("prompts/*.md", "automation_prefix"), ("**", "unanchored_glob"), ("*.md", "unanchored_glob"),
 		("../x", "parent_segment"), ("/abs", "absolute"), (".git/x", "automation_prefix"),
-		("Workflow-Templates/a", "automation_prefix"), ("a//b", "parent_segment")], ignored
+		("Workflow-Templates/a", "automation_prefix"), ("a//b", "empty_segment")], ignored
 	many = ",".join(f"d{i}/**" for i in range(21))
 	globs, ignored = guard.parse_scope_guard_auto_allow_paths(many)
 	assert len(globs) == 20 and ignored == [("d20/**", "too_many")]
