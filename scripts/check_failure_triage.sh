@@ -237,12 +237,14 @@ triage_supersede_stale_issue()
 	fi
 	# Close before labelling: a failed close must not leave the terminal
 	# ai:closed label on an issue that is still open.
-	if gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/comments" -f body="${supersede_comment}" >/dev/null 2>&1 &&
-		gh api --method PATCH "repos/${REPO}/issues/${supersede_old_issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1 &&
-		gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
+	if ! gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/comments" -f body="${supersede_comment}" >/dev/null 2>&1 ||
+		! gh api --method PATCH "repos/${REPO}/issues/${supersede_old_issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+		log "op=supersede outcome=warn reason=supersede_close_failed old=${supersede_old_issue} new=${supersede_new_issue}"
+	elif gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
 		log "op=supersede outcome=closed old=${supersede_old_issue} new=${supersede_new_issue}"
 	else
-		log "op=supersede outcome=warn reason=supersede_close_failed old=${supersede_old_issue} new=${supersede_new_issue}"
+		# The old issue is closed; only its terminal label is missing.
+		log "op=supersede outcome=warn reason=supersede_label_failed old=${supersede_old_issue} new=${supersede_new_issue}"
 	fi
 	return 0
 }

@@ -3405,6 +3405,13 @@ exit 0
 		self.assertFalse(any("/labels" in call for call in calls), calls)
 		self.assertIn("CHECK_TRIAGE op=supersede outcome=warn reason=supersede_close_failed old=99 new=120", proc.stdout)
 
+	def test_supersede_stage_failed_label_after_close_reports_label_failure(self) -> None:
+		proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120", fail="/labels")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(len(calls), 4, calls)
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=warn reason=supersede_label_failed old=99 new=120", proc.stdout)
+		self.assertNotIn("supersede_close_failed", proc.stdout)
+
 	def test_supersede_stage_skips_when_old_issue_changed_since_collect(self) -> None:
 		cases = {
 			"old_issue_stale": json.dumps({"state": "closed", "labels": [{"name": "ai:blocked"}]}),
