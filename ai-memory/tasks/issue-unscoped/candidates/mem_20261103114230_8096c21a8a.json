@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  expected_change_site: PR base branch and merge state\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The diff updates tests/e2e_smoke_canary.txt as required, but openai_gpt-6-luna found no evidence the PR is merged into orchestrator/project-8693 and saw checks still running (severity BLOCKER, confidence 4). minimax_minimax-m3 reported the same gap as a NIT (confidence 3), saying the merge is an orchestrator post-review action and the PR base is already orchestrator/project-8693. Severity disagreement: BLOCKER vs NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR base branch and merge state\n  Evidence of absence: The reviewed diff updates tests/e2e_smoke_canary.txt (verified on disk: line 1 `status: ok`, line 2 `decompose-run: 41501570285`, exactly two lines, trailing newline \u2014 matches all three file-level acceptance criteria verbatim). The fourth acceptance criterion names an orchestrator-driven merge action that no file edit can satisfy. PR metadata in the review context (per editor summaries, e.g. entry 24) shows baseRefName is already `orchestrator/project-8693`, so the PR is correctly targeted; the actual merge is the orchestrator's post-review action, not a deliverable the diff can land.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR base branch and merge state.\n  Evidence of absence: The PR diff updates `tests/e2e_smoke_canary.txt` as required, but provides no evidence that the PR has been merged into `orchestrator/project-8693`. The provided check-run context shows the PR is still undergoing checks.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "99134c9a6726ceea9801e2051de1ac1b26f3d04ce635e3dc5fefc2cf8343ea6a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41628133929",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41628133929",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103114230_8096c21a8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41628133929"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T11:42:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
