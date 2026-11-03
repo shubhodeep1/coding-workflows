@@ -2,7 +2,9 @@
 # Refuse heal implementation unless the intake-authored, unedited scope is verifiable.
 set -euo pipefail
 
-heal_py="${WORKFLOW_HEAL_PY:-scripts/workflow_failure_heal.py}"
+# Resolve the sibling helper from this script's own directory (the verified
+# support bundle, or the checkout's scripts/ under the kill switch), never the cwd.
+heal_py="${WORKFLOW_HEAL_PY:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/workflow_failure_heal.py}"
 issue_json="${ISSUE_META_FILE:?}"
 
 # Extra key=value log fields set by the support-ref check (expected/actual
