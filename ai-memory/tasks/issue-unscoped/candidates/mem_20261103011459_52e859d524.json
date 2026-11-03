@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI pre-push gate reports failures in this test suite.\n  WHY: The PR description lists this suite as failing, which blocks merge, although the canary change is unlikely to cause it. The source labelled it SEVERITY: MAJOR, which I mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR carries a failed `copilot-pull-request-reviewer` check (run 41549900517) with `custom_instructions_too_large` (status 422), so the required review gate never completes. This is a close paraphrase of the reviewer's problem statement. It is not quoted from the linked issue.\n  expected_change_site: tests/e2e_smoke_canary.txt line 2 (run_id: alt-40831286935); related gate logic at scripts/stable_e2e_step_wait_review.sh:584\n  confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The Copilot reviewer request is rejected with HTTP 422 before any review is created and the check exits with code 1. The gate at scripts/stable_e2e_step_wait_review.sh:584 waits on this check and cannot pass. The reviewer says the failure is unrelated to the canary diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=high | confidence=4\n  PROBLEM: CI pre-push gate reports failures.\n  WHY: The PR description lists this test suite and others as failing. The canary change is unlikely to cause them, but the PR fails the pre-push gate, which blocks merge. The source labelled it SEVERITY: MAJOR, which I mapped to high.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: The PR carries a failed `copilot-pull-request-reviewer` check (run 41549900517) with `custom_instructions_too_large` (status 422), so the required review gate never completes.\n  Expected change site: tests/e2e_smoke_canary.txt line 2 (run_id: alt-40831286935); related gate logic at scripts/stable_e2e_step_wait_review.sh:584\n  Evidence of absence: The Copilot reviewer request is rejected with HTTP 422 before any review is created and the check exits with code 1. The gate at scripts/stable_e2e_step_wait_review.sh:584 waits on this check and cannot pass. The reviewer says the failure is unrelated to the canary diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a965ac0021d2a93ce42c35ec4cf4e3dcc70bb4d1dc184dbb5e87618fcdafe696",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41555262483",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41555262483",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103011459_52e859d524",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41555262483"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T01:14:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
