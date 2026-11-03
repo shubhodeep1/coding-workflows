@@ -2247,6 +2247,36 @@ through `clarify → plan → implement → review`.
   the creation gate (`HEAL_INTAKE_SCOPE_GUARD_ENABLED`) is on, that skip
   runs before the `WORKFLOW_HEAL` diagnosis (`stage=pre_diagnosis`), so no
   model call is spent on a report that can never be filed.
+- **Release blockers (`release_blocker`, stuck-states P4, Phase 1 of
+  `docs/plans/release-blocker-heal-reports-plan.md`):** a report that no run
+  failed but a release or promotion on `stable` or `main` has been held back
+  by the same condition for a while. Only this repository's producers send it
+  (`auto-release-stable.yml`, `promote-main-to-stable.yml` and the poller,
+  through `workflow_failure_heal.py build-blocker-payload`); a report from any
+  other repository is skipped as `release_blocker_foreign_repo`. The payload
+  carries `blocker_reason` (`^[a-z_:]{1,80}$`), `head_branch` (`stable` or
+  `main`), and optionally `head_sha`, `blocker_age_secs`, `blocker_evidence`
+  (cut to 4000 characters and shown as UNTRUSTED), the failed gate runs in
+  `run_refs` and the producing run in `reporter_run`; any other field is
+  rejected. Claimed gate runs are bound like a label report's (they must be
+  failed runs of this repository); when their logs are readable, the gate
+  failure's own fingerprint is used, so the blocker joins the gate's heal
+  issue. Otherwise the fingerprint is the producer's workflow name and the
+  reason only (`release-blocker:<reason>`). Before filing, the intake binds
+  `reporter_run` to a recent run of one of the producer workflow files
+  (`WORKFLOW_HEAL release_blocker_reporter_run outcome=verified|rejected|absent`)
+  and uses that producer's fixed files as the heal scope; without it the report
+  is skipped as `scope_unavailable_no_runs` before the diagnosis, with a
+  WARNING alert. The issue targets `head_branch`. A filed issue, a
+  `consumer-config`, `transient` or `already-fixed` verdict and a recorded
+  repeat each send a WARNING. Repeats are throttled: a duplicate posts an
+  occurrence comment only when the pipeline account recorded no release-blocker
+  occurrence on that issue, and did not file it as a release-blocker issue,
+  within `WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS` (default one day; otherwise
+  `WORKFLOW_HEAL duplicate_throttled`, no comment and no alert). Occurrences
+  of other report kinds on the same issue never throttle a blocker. Verdicts
+  that file no issue are not throttled. Occurrence comments now end with an
+  `occurrence_at` timestamp marker that names the report kind.
 - **Report (consumer side):** the reporter reads the escalated issue / PR, its
   comments, and the repository's recent runs. It links at most 3 listed failed
   runs whose display title matches the issue title, or, for an orchestrator
@@ -2798,6 +2828,7 @@ through `clarify → plan → implement → review`.
 | `HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED` | `true` | Issue #7444 (unblock fix-up for #7434). plan.yml's "Auto-approve clear plan" never writes a pipeline plan grant (Q108) into an `ai:workflow-heal` issue body: it verifies the live `ai:workflow-heal-scope:v1` marker (`workflow_failure_heal.py heal-scope verify`) and approves only when every path the plan lists is inside that scope (`files_touched_scope_guard.py --plan-auto-approval-gate --heal-scope-file`); otherwise it holds with `heal_scope_unverified`, `heal_scope_plan_out_of_scope`, `heal_scope_plan_paths_missing` or `heal_scope_check_unavailable`. A plan whose Files section says it changes no file ("None" as its first text, no bullet after it, no backtick and no path- or filename-shaped token in the section) is approved with reason `heal_scope_plan_no_changes` (#8241), and implement closes the issue through its success-no-op path; an empty or prose-only Files section still holds with `heal_scope_plan_paths_missing`. Every heal-issue plan-gate run, approved or held, logs `PIPELINE_PLAN_GRANT issue=<n> source=plan outcome=skipped reason=heal_issue`. A heal plan that lists no automation path also needs that verified scope now. The implement heal preflight (`scripts/implement_heal_preflight.sh`) accepts an edited heal body only when one GraphQL read of its `userContentEdits` shows every revision written by the `GH_PAT` login with the identical scope marker (log `HEAL_SCOPE_PIPELINE_EDIT_ACCEPTED issue=<n> edits=<k>`); another editor, a deleted revision, more than 100 revisions, a changed marker or a failed read still refuses with `reason=edited detail=editor_untrusted\|edit_history_redacted\|edit_history_unavailable\|marker_changed`. Unset, empty or `true` keeps it on; `false` restores the earlier behaviour (Q108 write, then `reason=edited`); any other value turns it off with a warning. |
 | `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`), phase reports included; enable it only after consumers have synced wrappers whose reporters attach a token. `false` (transition default) accepts them after the binding checks, with a Telegram `DEBUG` notice. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
+| `WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS` | `86400` | coding-workflows only. A `release_blocker` report that duplicates an open heal issue posts no occurrence comment and sends no alert (`WORKFLOW_HEAL duplicate_throttled`) when the pipeline account recorded a release-blocker occurrence on that issue, or filed it as a release-blocker issue, within this many seconds; other report kinds are never throttled. A failed comment read logs `warn occurrence_throttle_unavailable` and posts unless the issue itself was filed as a release-blocker issue within the window; an unresolved pipeline login never throttles (`warn occurrence_throttle_login_unavailable`). A missing, zero or non-numeric value uses the default. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_RUNS` | `3` | Maximum verified run references used for heal prompt evidence. |
 | `HEAL_ISOLATED_EDITOR_WALL_SECS` | `EDITOR_MAX_WALL` (`7800` by default) | Heal editor wall-time limit, for the codex container and for the Claude run alike. Missing or untrusted heal scope refuses implementation and latches `ai:needs-human`; non-heal issues retain the existing editor path. When `IMPLEMENT` resolves to Claude (the default), `scripts/heal_isolated_implement.sh` runs the heal editor and its syntax repairs through `ai_engine.sh` `claude_run` on its own snapshot (in `codex_isolated_exec.sh`'s credential-free write container, never the job's shared workspace sandbox), then applies the same syntax validation and scoped transfer as a codex edit. Claude unavailable (exit 75) runs the isolated codex editor; any other Claude failure fails the run. `HEAL_ISOLATED_EDITOR ... engine=` names the engine that ran. |

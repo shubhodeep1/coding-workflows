@@ -764,13 +764,17 @@ def test_merged_runs_dedupe_keep_order_and_cap(tmp_path: Path) -> None:
 def _lw_freeze_filter() -> str:
 	"""The intake's scope-freeze jq program, as shipped."""
 	text = LW_INTAKE_SCRIPT.read_text(encoding="utf-8")
-	start = text.index("'($self_workflows + $engine_paths) as $base") + 1
+	start = text.index("'($self_workflows + $engine_paths + $blocker_paths) as $base") + 1
 	end = text.index("}' > \"${SCOPE_INPUTS_FROZEN}\"", start) + 1
 	return text[start:end]
 
 
-@pytest.mark.parametrize(("crash", "engine_paths"), [("", []), ("scripts/crash.sh", []), ("", ["scripts/ai_engine.sh", "scripts/claude_engine.py"])])
-def test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker(crash: str, engine_paths: list[str]) -> None:
+@pytest.mark.parametrize(("crash", "engine_paths", "blocker_paths"), [
+	("", [], []), ("scripts/crash.sh", [], []), ("", ["scripts/ai_engine.sh", "scripts/claude_engine.py"], []),
+	# A verified release_blocker reporter run's producer paths (stuck-states P4) count as base paths too.
+	("", [], [".github/workflows/auto-release-stable.yml", "scripts/auto_release_stable.sh"]),
+])
+def test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker(crash: str, engine_paths: list[str], blocker_paths: list[str]) -> None:
 	# #6907/#6916: the source workflow, engine and crash paths sit ahead of the
 	# subject reserve too, so the freeze trims the linked paths to the room left.
 	if shutil.which("jq") is None:
@@ -779,13 +783,14 @@ def test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker(crash: 
 	source = ".github/workflows/test-and-mark-stable.yml"
 	linked = [f"scripts/linked{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_PATHS_MAX)]
 	subjects = [f"scripts/subject{index}.sh" for index in range(heal.HEAL_SCOPE_SUBJECT_RESERVE)]
-	args = {"failing_tests": {"names": [], "files": []}, "engine_runs": [], "engine_paths": engine_paths, "linked_paths": linked,
+	args = {"failing_tests": {"names": [], "files": []}, "engine_runs": [], "engine_paths": engine_paths,
+		"blocker_runs": [], "blocker_paths": blocker_paths, "linked_paths": linked,
 		"runs": [f"{SELF_REPO}:500"], "self_workflows": [source], "consumer_workflows": [], "changed": []}
 	cmd = ["jq", "-n", "--arg", "crash", crash]
 	for key, value in args.items():
 		cmd += ["--argjson", key, json.dumps(value)]
 	frozen = json.loads(subprocess.run([*cmd, _lw_freeze_filter()], capture_output=True, text=True, check=True).stdout)
-	assert frozen["self_workflows"][:1 + len(engine_paths)] == [source, *engine_paths]
+	assert frozen["self_workflows"][:1 + len(engine_paths) + len(blocker_paths)] == [source, *engine_paths, *blocker_paths]
 	assert len(frozen["self_workflows"]) + (1 if crash else 0) == heal.HEAL_SCOPE_LINKED_PATHS_MAX
 	marker = heal.render_heal_scope_marker(crash_file=crash or None, workflow_paths=frozen["self_workflows"],
 		changed_files=[], exists=lambda path: True, runs=frozen["runs"], test_subjects=subjects)
@@ -798,7 +803,7 @@ def test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker(crash: 
 	for key, value in empty.items():
 		cmd += ["--argjson", key, json.dumps(value)]
 	frozen_empty = json.loads(subprocess.run([*cmd, _lw_freeze_filter()], capture_output=True, text=True, check=True).stdout)
-	assert frozen_empty["self_workflows"] == [source, *engine_paths]
+	assert frozen_empty["self_workflows"] == [source, *engine_paths, *blocker_paths]
 
 
 # --- heal_scope_linked_workflows_gate --------------------------------------
