@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:CI test suite | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The changes to tests/e2e_smoke_canary.txt caused failures in tests/test_implement_post_codex_recovery.py.\n  WHY: The PR description reports \"Failures caused by this change: 1\" specifically for `tests/test_implement_post_codex_recovery.py`, so the test suite is no longer passing with the proposed changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/e2e_smoke_canary.txt` to exactly three lines (`status: ok`, `run_id: 40608957733`, `updated-by: ai-pipeline`) with a trailing newline.\n  expected_change_site: `tests/e2e_smoke_canary.txt`\n  confidence=1\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: none. The file at the current PR head matches the required content exactly (3 lines, `decompose-run` line removed, trailing newline present), so the requirement is met. The reviewer rated it SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:CI test suite | confidence=4\n  PROBLEM: The changes to tests/e2e_smoke_canary.txt caused failures in tests/test_implement_post_codex_recovery.py.\n  WHY: The PR description reports \"Failures caused by this change: 1\" specifically for `tests/test_implement_post_codex_recovery.py`, so the test suite is no longer passing with the proposed changes.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (severity=NIT, confidence=1)\n  Requirement: Update `tests/e2e_smoke_canary.txt` to exactly three lines (`status: ok`, `run_id: 40608957733`, `updated-by: ai-pipeline`) with a trailing newline.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: none. The file at the current PR head matches the required content exactly (3 lines, `decompose-run` line removed, trailing newline present). This requirement is met.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7aa5002107e3b376e454e6487872fe575768d950a6e76d143078ee6e296240ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41739808025",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41739808025",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103234355_eabc7f8810",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41739808025"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T23:43:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
