@@ -3290,6 +3290,122 @@ def fingerprint(workflow_name: str, failing_step: str, signature: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Phase failure-fingerprint marker (stuck-states P3a, producer side)
+# ---------------------------------------------------------------------------
+
+# The plan and clarify "Comment on issue failure" steps append one marker to
+# the failure comment they already post; the poller's failure-signature
+# breaker (scripts/orchestrate_lib.py, evaluate_failure_fingerprint_breaker)
+# trips once the same (phase, fp) repeats. orchestrate_lib.py is not staged
+# for plan or clarify, so its regex is copied here verbatim; a test pins the
+# two patterns byte for byte.
+PHASE_FAILURE_FINGERPRINT_PHASES = ("plan", "clarify")
+PHASE_FAILURE_FINGERPRINT_MARKER_RE = re.compile(
+	r"<!-- AI_FAILURE_FINGERPRINT_V1 phase=([a-z][a-z0-9-]{0,31}) fp=([0-9a-f]{12}) run=([1-9][0-9]{0,19}) -->"
+)
+PHASE_FAILURE_FINGERPRINT_NO_ERROR = "no-error-line"
+_PHASE_FAILURE_FINGERPRINT_RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
+
+
+def _phase_failure_failed_step(jobs: Any, runner_name: Any) -> str:
+	"""Name of the first failed step of the job running on ``runner_name``, or "".
+
+	Same selection as review_autofix_step_assemble_failure_evidence.sh: the
+	first job whose runner_name matches, then its first step with
+	conclusion == "failure". A ``continue-on-error`` step reports
+	conclusion "success", so it is never picked here.
+	"""
+	if not isinstance(jobs, dict) or not isinstance(runner_name, str) or not runner_name:
+		return ""
+	job_list = jobs.get("jobs")
+	if not isinstance(job_list, list):
+		return ""
+	for job in job_list:
+		if not isinstance(job, dict) or job.get("runner_name") != runner_name:
+			continue
+		steps = job.get("steps")
+		if not isinstance(steps, list):
+			return ""
+		for step in steps:
+			if isinstance(step, dict) and step.get("conclusion") == "failure":
+				name = step.get("name")
+				return single_line(name, 200) if isinstance(name, str) else ""
+		return ""
+	return ""
+
+
+def _phase_failure_first_error(annotations: Any) -> str:
+	"""Normalized first non-generic failure annotation, or "".
+
+	Best effort: the first failure-level annotation may come from an earlier
+	``continue-on-error`` step that printed ``::error::``. That is still
+	deterministic for a repeated failure, which is all the breaker needs.
+	"""
+	if not isinstance(annotations, list):
+		return ""
+	for annotation in annotations:
+		if not isinstance(annotation, dict) or annotation.get("annotation_level") != "failure":
+			continue
+		message = annotation.get("message")
+		if not isinstance(message, str):
+			continue
+		first = next((line.strip() for line in sanitize_text(message).split("\n") if line.strip()), "")
+		if not first or _GENERIC_ERROR_RE.match(first):
+			continue
+		normalized = normalize_error_line(first)
+		if normalized:
+			return normalized
+	return ""
+
+
+def phase_failure_fingerprint(
+	*,
+	phase: Any,
+	run_id: Any,
+	runner_name: Any,
+	jobs: Any,
+	annotations: Any,
+) -> dict[str, Any]:
+	"""Compute the AI_FAILURE_FINGERPRINT_V1 marker for a failed plan/clarify job. No I/O.
+
+	Returns ``{"marker", "fp", "reason", "error_present"}``. ``marker`` is ""
+	when no marker may be emitted (``reason`` says why). The result never
+	carries the step name or the error text, only their hash.
+	"""
+	result: dict[str, Any] = {"marker": "", "fp": "", "reason": "", "error_present": False}
+	if not isinstance(phase, str) or phase not in PHASE_FAILURE_FINGERPRINT_PHASES:
+		result["reason"] = "invalid_phase"
+		return result
+	run_text = run_id if isinstance(run_id, str) else (str(run_id) if isinstance(run_id, int) and not isinstance(run_id, bool) else "")
+	if not _PHASE_FAILURE_FINGERPRINT_RUN_ID_RE.match(run_text):
+		result["reason"] = "invalid_run_id"
+		return result
+	step_name = _phase_failure_failed_step(jobs, runner_name)
+	if not step_name:
+		# Unknown step: no marker, so the legacy stall ladder keeps running.
+		result["reason"] = "step_unknown"
+		return result
+	error_line = _phase_failure_first_error(annotations)
+	result["error_present"] = bool(error_line)
+	material = "|".join(
+		[
+			phase,
+			step_name.lower(),
+			(error_line or PHASE_FAILURE_FINGERPRINT_NO_ERROR)[:SIGNATURE_CHAR_LIMIT],
+		]
+	)
+	fp = hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
+	marker = f"<!-- AI_FAILURE_FINGERPRINT_V1 phase={phase} fp={fp} run={run_text} -->"
+	if not PHASE_FAILURE_FINGERPRINT_MARKER_RE.fullmatch(marker):
+		result["reason"] = "marker_invalid"
+		return result
+	result["marker"] = marker
+	result["fp"] = fp
+	result["reason"] = "ok"
+	return result
+
+
+# ---------------------------------------------------------------------------
 # Identical-failure fingerprint cap (review_autofix.yml)
 # ---------------------------------------------------------------------------
 
@@ -7033,6 +7149,47 @@ def _cmd_classify_pipeline_ownership(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_phase_failure_fingerprint(args: argparse.Namespace) -> int:
+	"""Print marker= / fp= / error_present= / reason= lines; always exits 0 (fail open)."""
+	jobs: Any = None
+	reason = ""
+	try:
+		jobs = _load_json_file(args.jobs_json)
+	except (OSError, ValueError):
+		reason = "jobs_unavailable"
+	annotations: Any = []
+	if args.annotations_json and not reason:
+		# The workflow step deletes this file when the annotations fetch fails
+		# or the job id is unknown. Emitting a phase+step-only marker then would
+		# merge distinct failures into one fingerprint and could trip the
+		# breaker, so a missing or unusable file posts no marker (fail open).
+		try:
+			annotations = _load_json_file(args.annotations_json)
+		except (OSError, ValueError):
+			annotations = None
+		if not isinstance(annotations, list):
+			# No annotations file is written when the job lookup found no job,
+			# so name the real cause rather than an annotations outage.
+			reason = "annotations_unavailable" if _phase_failure_failed_step(jobs, args.runner_name) else "step_unknown"
+	if reason:
+		result = {"marker": "", "fp": "", "reason": reason, "error_present": False}
+	else:
+		result = phase_failure_fingerprint(
+			phase=args.phase,
+			run_id=args.run_id,
+			runner_name=args.runner_name,
+			jobs=jobs,
+			annotations=annotations,
+		)
+	sys.stdout.write(
+		f"marker={result['marker']}\n"
+		f"fp={result['fp']}\n"
+		f"error_present={1 if result['error_present'] else 0}\n"
+		f"reason={result['reason']}\n"
+	)
+	return 0
+
+
 def _cmd_autofix_failure_streak(args: argparse.Namespace) -> int:
 	try:
 		comments = _load_json_file(args.comments_json)
@@ -8288,6 +8445,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("classify-pipeline-ownership", help="Print pr / none, then the pipeline files the PR changes, for a failure that names no file")
 	p.add_argument("--payload-json", required=True)
 	p.set_defaults(func=_cmd_classify_pipeline_ownership)
+
+	p = sub.add_parser("phase-failure-fingerprint", help="Print marker= / fp= / error_present= / reason= for a failed plan/clarify job (stuck-states P3a); always exits 0")
+	p.add_argument("--phase", required=True, choices=PHASE_FAILURE_FINGERPRINT_PHASES)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--runner-name", required=True)
+	p.add_argument("--jobs-json", required=True, help="jobs API response of the current run attempt")
+	p.add_argument("--annotations-json", default="", help="check-run annotations of the current job; omitted is []; a supplied file that is missing, unreadable or not a list gives reason=annotations_unavailable (step_unknown when no failed step is found) and no marker")
+	p.set_defaults(func=_cmd_phase_failure_fingerprint)
 
 	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
 	p.add_argument("--comments-json", required=True)

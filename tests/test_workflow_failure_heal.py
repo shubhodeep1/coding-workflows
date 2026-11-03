@@ -9968,3 +9968,340 @@ def test_synced_check_issue_and_occurrence_carry_no_free_text() -> None:
 	assert heal.check_synced_check_managed_paths(payload["paths"], {_SYNCED_CHECK_WRAPPER: ["x"]}) is None
 	assert heal.check_synced_check_managed_paths(payload["paths"], {"other": ["x"]}) == "unmanaged_path"
 	assert heal.check_synced_check_managed_paths(payload["paths"], {}) == "release_unavailable"
+
+
+# --- phase failure-fingerprint markers (stuck-states P3a, Refs #8291) ---------------
+
+_PFF_RUNNER = "GitHub Actions 7"
+
+
+def _pff_jobs(step: str = "Run Codex planning", runner: str = _PFF_RUNNER) -> dict:
+	return {
+		"jobs": [
+			{"id": 11, "runner_name": "GitHub Actions 1", "steps": [{"name": "Other job step", "conclusion": "failure"}]},
+			{
+				"id": 22,
+				"runner_name": runner,
+				"steps": [
+					{"name": "Checkout repository", "conclusion": "success"},
+					{"name": "Soft step", "conclusion": "success"},
+					{"name": step, "conclusion": "failure"},
+					{"name": "Comment on issue failure", "conclusion": None},
+				],
+			},
+		]
+	}
+
+
+def _pff_annotations(message: str = "codex planning failed for /tmp/run-123/x at 2026-11-03 (sha deadbeefcafe0123456789abcdef012345678901)") -> list:
+	return [
+		{"annotation_level": "warning", "message": "just a warning"},
+		{"annotation_level": "failure", "message": "Process completed with exit code 1."},
+		{"annotation_level": "failure", "message": message + "\nsecond line"},
+	]
+
+
+def _pff(**overrides) -> dict:
+	kwargs = {"phase": "plan", "run_id": "123456789", "runner_name": _PFF_RUNNER, "jobs": _pff_jobs(), "annotations": _pff_annotations()}
+	kwargs.update(overrides)
+	return heal.phase_failure_fingerprint(**kwargs)
+
+
+def _pff_orchestrate_lib():
+	import importlib
+
+	if str(SCRIPTS_DIR) not in sys.path:
+		sys.path.append(str(SCRIPTS_DIR))
+	return importlib.import_module("orchestrate_lib")
+
+
+def test_phase_failure_fingerprint_is_stable_across_volatile_tokens() -> None:
+	first = _pff()
+	second = _pff(
+		run_id="987654321",
+		annotations=_pff_annotations("codex planning failed for /tmp/run-999/y at 2027-01-09 (sha 0123456789abcdef0123456789abcdef01234567)"),
+	)
+	assert first["reason"] == "ok" and first["error_present"] is True
+	assert re.fullmatch(r"[0-9a-f]{12}", first["fp"])
+	assert first["fp"] == second["fp"]
+	assert first["marker"] == f"<!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp={first['fp']} run=123456789 -->"
+	assert second["marker"].endswith("run=987654321 -->")
+	# Material is phase|lowercased step|normalized first error (D4).
+	expected = hashlib.sha256(
+		"|".join(["plan", "run codex planning", heal.normalize_error_line(_pff_annotations()[2]["message"].split("\n")[0])]).encode("utf-8")
+	).hexdigest()[:12]
+	assert first["fp"] == expected
+
+
+def test_phase_failure_fingerprint_differs_by_step_error_and_phase() -> None:
+	base = _pff()["fp"]
+	assert _pff(jobs=_pff_jobs("Parse plan output"))["fp"] != base
+	assert _pff(annotations=_pff_annotations("a completely different failure"))["fp"] != base
+	assert _pff(phase="clarify")["fp"] != base
+	assert _pff(phase="clarify")["marker"].startswith("<!-- AI_FAILURE_FINGERPRINT_V1 phase=clarify ")
+
+
+def test_phase_failure_fingerprint_skips_generic_annotations_and_falls_back() -> None:
+	generic_only = [
+		{"annotation_level": "failure", "message": "Process completed with exit code 2."},
+		{"annotation_level": "failure", "message": "Merge failed. Aborting."},
+	]
+	none = _pff(annotations=[])
+	generic = _pff(annotations=generic_only)
+	malformed = _pff(annotations={"not": "a list"})
+	assert none["error_present"] is False and none["reason"] == "ok" and none["marker"]
+	assert none["fp"] == generic["fp"] == malformed["fp"]
+	assert generic["error_present"] is False
+	expected = hashlib.sha256(
+		f"plan|run codex planning|{heal.PHASE_FAILURE_FINGERPRINT_NO_ERROR}".encode()
+	).hexdigest()[:12]
+	assert none["fp"] == expected
+
+
+@pytest.mark.parametrize(
+	"jobs",
+	[
+		None,
+		[],
+		{"jobs": "nope"},
+		{"jobs": [{"runner_name": "someone else", "steps": [{"name": "x", "conclusion": "failure"}]}]},
+		{"jobs": [{"runner_name": _PFF_RUNNER, "steps": [{"name": "x", "conclusion": "success"}]}]},
+		{"jobs": [{"runner_name": _PFF_RUNNER, "steps": "bad"}]},
+		{"jobs": [{"runner_name": _PFF_RUNNER, "steps": [{"name": 7, "conclusion": "failure"}]}]},
+	],
+)
+def test_phase_failure_fingerprint_unknown_step_emits_no_marker(jobs) -> None:
+	result = _pff(jobs=jobs)
+	assert result["marker"] == "" and result["fp"] == "" and result["reason"] == "step_unknown"
+
+
+def test_phase_failure_fingerprint_rejects_bad_phase_and_run_id() -> None:
+	assert _pff(phase="implement")["reason"] == "invalid_phase"
+	assert _pff(phase=None)["reason"] == "invalid_phase"
+	for bad in ("0", "abc", "1" * 21, "", "12 34", True, None, "-5"):
+		result = _pff(run_id=bad)
+		assert result["reason"] == "invalid_run_id" and result["marker"] == "", bad
+	assert _pff(run_id=42)["marker"].endswith("run=42 -->")
+
+
+def test_phase_failure_fingerprint_never_leaks_step_or_error_text() -> None:
+	result = _pff(jobs=_pff_jobs("Secret Step Name ghp_abc"), annotations=_pff_annotations("leaky token ghp_abcdef payload"))
+	blob = json.dumps(result)
+	for needle in ("Secret", "ghp_", "leaky", "payload"):
+		assert needle not in blob
+
+
+def test_phase_failure_fingerprint_marker_regex_matches_consumer() -> None:
+	lib = _pff_orchestrate_lib()
+	assert heal.PHASE_FAILURE_FINGERPRINT_MARKER_RE.pattern == lib.FAILURE_FINGERPRINT_MARKER_RE.pattern
+	assert set(heal.PHASE_FAILURE_FINGERPRINT_PHASES) <= set(lib.FAILURE_FINGERPRINT_PHASE_LABELS)
+	for phase in heal.PHASE_FAILURE_FINGERPRINT_PHASES:
+		marker = _pff(phase=phase)["marker"]
+		assert lib.FAILURE_FINGERPRINT_MARKER_RE.fullmatch(marker)
+		assert marker.startswith(lib.FAILURE_FINGERPRINT_MARKER_PREFIX)
+
+
+def test_phase_failure_fingerprint_markers_trip_the_breaker_end_to_end() -> None:
+	lib = _pff_orchestrate_lib()
+	login = "pipeline-bot"
+
+	def comment(cid: int, marker: str, author: str = login) -> dict:
+		return {
+			"id": cid,
+			"user": {"login": author},
+			"created_at": f"2026-11-03T00:0{cid}:00Z",
+			"body": "AI planning workflow failed.\n\nWorkflow: AI Plan\n\n" + marker,
+		}
+
+	same = [comment(1, _pff(run_id="101")["marker"]), comment(2, _pff(run_id="202")["marker"])]
+	decision = lib.evaluate_failure_fingerprint_breaker(same, login, 2, True)
+	assert decision["decision"] == "trip" and decision["phase"] == "plan"
+	assert decision["runs"] == ["101", "202"]
+	assert lib.failure_fingerprint_label_for_phase("plan") == "ai:plan-failed"
+	different = [comment(1, _pff(run_id="101")["marker"]), comment(2, _pff(run_id="202", jobs=_pff_jobs("Parse plan output"))["marker"])]
+	assert lib.evaluate_failure_fingerprint_breaker(different, login, 2, True)["decision"] != "trip"
+	# A re-run of the same run id counts once.
+	rerun = [comment(1, _pff(run_id="101")["marker"]), comment(2, _pff(run_id="101")["marker"])]
+	assert lib.evaluate_failure_fingerprint_breaker(rerun, login, 2, True)["decision"] != "trip"
+
+
+def _pff_cli(tmp_path: Path, *extra: str) -> tuple[int, dict]:
+	proc = subprocess.run(
+		[sys.executable, str(LIB_PATH), "phase-failure-fingerprint", *extra],
+		check=False,
+		capture_output=True,
+		text=True,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		cwd=tmp_path,
+	)
+	fields = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+	return proc.returncode, fields
+
+
+def test_phase_failure_fingerprint_cli_prints_key_values_and_fails_open(tmp_path: Path) -> None:
+	jobs = tmp_path / "jobs.json"
+	jobs.write_text(json.dumps(_pff_jobs()), encoding="utf-8")
+	annotations = tmp_path / "ann.json"
+	annotations.write_text(json.dumps(_pff_annotations()), encoding="utf-8")
+	base = ("--phase", "plan", "--run-id", "555", "--runner-name", _PFF_RUNNER, "--jobs-json")
+	rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(annotations))
+	assert rc == 0 and fields["reason"] == "ok" and fields["error_present"] == "1"
+	assert fields["marker"] == _pff(run_id="555")["marker"] and fields["fp"] == _pff()["fp"]
+	assert set(fields) == {"marker", "fp", "error_present", "reason"}
+	# A supplied annotations file the workflow could not fetch (deleted, garbled
+	# or not a list) posts no marker, so an annotations outage cannot merge
+	# distinct failures into one phase+step fingerprint.
+	not_list = tmp_path / "ann_dict.json"
+	not_list.write_text(json.dumps({"message": "Server Error"}), encoding="utf-8")
+	garbled = tmp_path / "ann_bad.json"
+	garbled.write_text("{not json", encoding="utf-8")
+	for path in (tmp_path / "missing.json", not_list, garbled):
+		rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(path))
+		assert rc == 0 and fields["reason"] == "annotations_unavailable" and fields["marker"] == "" and fields["fp"] == "", path
+	# No job matched the runner, so the workflow never wrote the annotations
+	# file: the reason names the unknown step, not an annotations outage.
+	rc, fields = _pff_cli(tmp_path, "--phase", "plan", "--run-id", "555", "--runner-name", "someone else", "--jobs-json", str(jobs), "--annotations-json", str(tmp_path / "missing.json"))
+	assert rc == 0 and fields["reason"] == "step_unknown" and fields["marker"] == ""
+	empty = tmp_path / "ann_empty.json"
+	empty.write_text("[]", encoding="utf-8")
+	rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(empty))
+	assert rc == 0 and fields["reason"] == "ok" and fields["error_present"] == "0" and fields["marker"]
+	rc, fields = _pff_cli(tmp_path, *base, str(jobs))
+	assert rc == 0 and fields["error_present"] == "0" and fields["marker"]
+	bad = tmp_path / "bad.json"
+	bad.write_text("{not json", encoding="utf-8")
+	for path in (bad, tmp_path / "absent.json"):
+		rc, fields = _pff_cli(tmp_path, *base, str(path), "--annotations-json", str(annotations))
+		assert rc == 0 and fields["marker"] == "" and fields["reason"] == "jobs_unavailable"
+	rc, fields = _pff_cli(tmp_path, "--phase", "clarify", "--run-id", "0", "--runner-name", _PFF_RUNNER, "--jobs-json", str(jobs))
+	assert rc == 0 and fields["marker"] == "" and fields["reason"] == "invalid_run_id"
+
+
+_PFF_WORKFLOWS = {
+	"plan": REPO_ROOT / ".github" / "workflows" / "plan.yml",
+	"clarify": REPO_ROOT / ".github" / "workflows" / "clarify.yml",
+}
+
+
+def _pff_failure_step(phase: str) -> dict:
+	doc = yaml.safe_load(_PFF_WORKFLOWS[phase].read_text(encoding="utf-8"))
+	steps = [step for job in doc["jobs"].values() for step in (job.get("steps") or []) if step.get("name") == "Comment on issue failure"]
+	assert len(steps) == 1, phase
+	return steps[0]
+
+
+@pytest.mark.parametrize("phase", ["plan", "clarify"])
+def test_phase_failure_comment_steps_append_fingerprint_marker(phase: str) -> None:
+	step = _pff_failure_step(phase)
+	env = step["env"]
+	assert env["STALL_FINGERPRINT_BREAKER_ENABLED"] == "${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}"
+	assert env["FP_JOB_STATUS"] == "${{ job.status }}"
+	assert env["FP_RUN_ID"] == "${{ github.run_id }}"
+	assert env["FP_RUN_ATTEMPT"] == "${{ github.run_attempt }}"
+	assert env["FP_REPOSITORY"] == "${{ github.repository }}"
+	assert env["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+	run = step["run"]
+	assert f'python3 "${{FP_HELPER}}" phase-failure-fingerprint --phase {phase} ' in run
+	assert 'FP_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py"' in run
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true' in run
+	assert 'if [ "${FP_JOB_STATUS:-}" = "cancelled" ]; then' in run
+	assert 'elif [ "${FP_JOB_STATUS:-}" != "failure" ]; then' in run
+	assert 'elif [ "${STALL_FINGERPRINT_BREAKER_ENABLED:-true}" != "true" ]; then' in run
+	# The jobs call sits after every skip gate, so a disabled or cancelled run
+	# makes no extra API call.
+	assert run.index("STALL_FINGERPRINT_BREAKER_ENABLED:-true") < run.index("/jobs?per_page=100")
+	assert run.index('"${FP_JOB_STATUS:-}" != "failure"') < run.index("/jobs?per_page=100")
+	assert f"PHASE_FAILURE_FINGERPRINT phase={phase} " in run
+	assert run.count("FP_MARKER_SUFFIX=$'\\n\\n'") == 1
+	# The marker goes last, after the body prefix the heal streak counter reads.
+	prefix = heal.PHASE_FAILURE_COMMENT_PREFIXES[phase][0]
+	if phase == "plan":
+		assert "-f body=$'" + prefix in run and '${PLAN_CANCELLED_SUFFIX}${FP_MARKER_SUFFIX}"' in run
+	else:
+		assert f'REASON="{prefix}' in run and '-f body="${REASON}${FP_MARKER_SUFFIX}"' in run
+	assert run.index("PHASE_FAILURE_FINGERPRINT phase=") < run.index("/issues/${ISSUE_NUMBER}/comments")
+
+
+def _pff_run_step(tmp_path: Path, phase: str, *, job_status: str = "failure", enabled: str = "true", jobs_fail: bool = False, annotations_fail: bool = False) -> tuple[subprocess.CompletedProcess, str, str]:
+	run = _pff_failure_step(phase)["run"]
+	values = {
+		"github.server_url": "https://github.example",
+		"github.repository": "o/r",
+		"github.run_id": "4242",
+		"job.status": job_status,
+	}
+	script = re.sub(r"\$\{\{\s*([a-z_.]+)\s*\}\}", lambda m: values[m.group(1)], run)
+	assert "${{" not in script
+	support = tmp_path / "support"
+	support.mkdir(exist_ok=True)
+	shutil.copy(LIB_PATH, support / "workflow_failure_heal.py")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	(tmp_path / "jobs.json").write_text(json.dumps(_pff_jobs()), encoding="utf-8")
+	(tmp_path / "ann.json").write_text(json.dumps(_pff_annotations()), encoding="utf-8")
+	stub = bin_dir / "gh"
+	stub.write_text(
+		textwrap.dedent(
+			"""\
+			#!/usr/bin/env bash
+			printf '%s\\n' "$2" >> "${GH_STUB_LOG}"
+			case "$2" in
+				*/jobs\\?*) [ "${GH_STUB_JOBS_FAIL:-0}" = 1 ] && exit 1; cat "${GH_STUB_DIR}/jobs.json" ;;
+				*/annotations\\?*) [ "${GH_STUB_ANN_FAIL:-0}" = 1 ] && exit 1; cat "${GH_STUB_DIR}/ann.json" ;;
+				*/comments) for a in "$@"; do case "$a" in body=*) printf '%s' "${a#body=}" > "${GH_STUB_DIR}/body.txt" ;; esac; done ;;
+			esac
+			"""
+		),
+		encoding="utf-8",
+	)
+	stub.chmod(0o755)
+	env = {
+		"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+		"HOME": str(tmp_path),
+		"GH_STUB_LOG": str(tmp_path / "gh.log"),
+		"GH_STUB_DIR": str(tmp_path),
+		"GH_STUB_JOBS_FAIL": "1" if jobs_fail else "0",
+		"GH_STUB_ANN_FAIL": "1" if annotations_fail else "0",
+		"SUPPORT_SCRIPTS_DIR": str(support),
+		"RUNNER_TEMP": str(tmp_path),
+		"RUNNER_NAME": _PFF_RUNNER,
+		"ISSUE_NUMBER": "77",
+		"ISSUE_URL": "https://github.example/o/r/issues/77",
+		"PLAN_FAILURE_CONTEXT": "ctx",
+		"STALL_FINGERPRINT_BREAKER_ENABLED": enabled,
+		"FP_JOB_STATUS": job_status,
+		"FP_RUN_ID": "4242",
+		"FP_RUN_ATTEMPT": "1",
+		"FP_REPOSITORY": "o/r",
+	}
+	proc = subprocess.run(["bash", "-c", script], check=False, capture_output=True, text=True, env=env, cwd=tmp_path)
+	body_path = tmp_path / "body.txt"
+	log_path = tmp_path / "gh.log"
+	return proc, body_path.read_text(encoding="utf-8") if body_path.exists() else "", log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+
+
+@pytest.mark.parametrize("phase", ["plan", "clarify"])
+def test_phase_failure_comment_step_smoke_with_stub_gh(tmp_path: Path, phase: str) -> None:
+	if shutil.which("jq") is None:
+		pytest.skip("jq is not installed")
+	(tmp_path / "ok").mkdir()
+	proc, body, log = _pff_run_step(tmp_path / "ok", phase)
+	assert proc.returncode == 0, proc.stderr
+	marker = _pff(phase=phase, run_id="4242")["marker"]
+	assert body.startswith(heal.PHASE_FAILURE_COMMENT_PREFIXES[phase][0])
+	assert body.endswith("\n\n" + marker) and body.count("AI_FAILURE_FINGERPRINT_V1") == 1
+	assert "check-runs/22/annotations" in log and "attempts/1/jobs" in log
+	assert f"PHASE_FAILURE_FINGERPRINT phase={phase} issue=77 run=4242 outcome=emitted fp=" in proc.stdout
+	for name, kwargs, reason in (
+		("down", {"jobs_fail": True}, "jobs_unavailable"),
+		("ann_down", {"annotations_fail": True}, "annotations_unavailable"),
+		("off", {"enabled": "false"}, "disabled"),
+		("cancel", {"job_status": "cancelled"}, "cancelled"),
+	):
+		(tmp_path / name).mkdir()
+		proc, body, log = _pff_run_step(tmp_path / name, phase, **kwargs)
+		assert proc.returncode == 0, proc.stderr
+		assert body and "AI_FAILURE_FINGERPRINT_V1" not in body, name
+		assert f"outcome=skipped reason={reason} " in proc.stdout, name
+		if name in ("off", "cancel"):
+			assert "/jobs?" not in log, name
