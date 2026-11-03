@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Prefetch once. Before the loop, fetch repos/{repo}/labels?per_page=100 across all pages in a bounded loop, for example at most 20 pages.\" together with running `_label_sync_validation_error(expected_metadata)` \"before any GitHub read\"\n  expected_change_site: scripts/ai_labels.py, cmd_sync_labels (prefetch call site, lines 529-573 / 566-568)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The prefetch was moved inside the loop, gated by prefetch_attempted, so it runs after the first valid label passes validation instead of before the loop. A later invalid label is therefore validated after the shared GitHub read. All reviewers rated it NIT, a structural deviation only. The outcome is functionally correct and the all-invalid case makes zero reads. z-ai_glm-5_3-flash notes that the issue's two requirements conflict here.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Prefetch once. Before the loop, fetch repos/{repo}/labels?per_page=100 across all pages in a bounded loop, for example at most 20 pages.\"\nExpected change site: scripts/ai_labels.py:529-573 (cmd_sync_labels)\nEvidence of absence: The last-run diff moved the prefetch from before the loop into the loop body, gated by the prefetch_attempted flag, so it now fires only after the first label has already cleared both local checks. For a contract with a valid label followed by an invalid label, the shared prefetch read happens before the second label's description check. The functional outcome is correct and arguably better than the literal spec for the all-invalid case, so it is flagged only as a structural deviation.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Run `_label_sync_validation_error(expected_metadata)` right after the name-validation check and before any GitHub read,\" and fetch the repository labels before the processing loop.\nExpected change site: `scripts/ai_labels.py`, `cmd_sync_labels`.\nEvidence of absence: The prefetch runs inside the loop at lines 566-568, after the first valid label passes validation. If a later label is invalid, its validation at lines 539-553 happens after that GitHub read. The prefetch is also not performed before the loop as specified.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Before the loop, fetch `repos/{repo}/labels?per_page=100` across all pages in a bounded loop, for example at most 20 pages. Build a name-keyed map.\" (linked issue #8746, requirement 2). The issue also requires (requirement 1) that each label's `_label_sync_validation_error(expected_metadata)` run \"before any GitHub read\".\nExpected change site: scripts/ai_labels.py, cmd_sync_labels \u2014 the prefetch call site.\nEvidence of absence: The last run diff (and current code at scripts/ai_labels.py:566-568) places `_prefetch_repo_labels(repo)` inside the label loop, deferred until the first label passes both local validations, instead of before the loop as the issue specifies. The issue's two requirements conflict for a contract where an invalid label follows a valid one: literal prefetch-before-loop would issue a GitHub read before that later label's local validation, while the delivered placement guarantees no read precedes any label's validation (documented in the comment at scripts/ai_labels.py:532-535 and covered by tests/test_ai_labels.py::test_sync_labels_all_invalid_contract_makes_no_github_request). All other elements of requirement 2 are present. Reported as a literal placement deviation only.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bbaa664cc11fca7b57cb01e80f2bee63b1285f654fb97494f38127b210bc9130",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8748,
+    "run_id": "41640799730",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41640799730",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103133922_4129b60a70",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8748,
+    "run_id": "41640799730"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T13:39:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
