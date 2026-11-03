@@ -658,6 +658,7 @@ def test_record_run_event_telemetry_includes_phase_timings() -> None:
 				"did_push": True,
 				"commit_sha": "deadbeefcafebabe",
 				"push_attempts": 2,
+				"push_retry_reasons": ["non_fast_forward"],
 				"operation_result": result,
 				"clone_ms": 11,
 				"write_ms": 22,
@@ -673,12 +674,14 @@ def test_record_run_event_telemetry_includes_phase_timings() -> None:
 	assert payload["write_ms"] == 22
 	assert payload["push_ms"] == 33
 	assert payload["push_attempts"] == 2
+	assert payload["push_retry_reasons"] == ["non_fast_forward"]
 	entries = [entry for entry in _extract_ai_memory_telemetry(stderr) if entry.get("op") == "record-run-event"]
 	assert len(entries) == 1
 	assert entries[0]["clone_ms"] == 11
 	assert entries[0]["write_ms"] == 22
 	assert entries[0]["push_ms"] == 33
 	assert entries[0]["push_attempts"] == 2
+	assert entries[0]["push_retry_reasons"] == ["non_fast_forward"]
 
 
 def test_record_run_event_telemetry_defaults_phase_timings_to_zero() -> None:
@@ -692,6 +695,7 @@ def test_record_run_event_telemetry_defaults_phase_timings_to_zero() -> None:
 	assert entries[0]["write_ms"] == 0
 	assert entries[0]["push_ms"] == 0
 	assert entries[0]["push_attempts"] == 1
+	assert entries[0]["push_retry_reasons"] == []
 
 
 def main() -> int:
