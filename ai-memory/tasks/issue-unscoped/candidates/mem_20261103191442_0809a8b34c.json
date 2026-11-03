@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:Test suite failure reported in CI (no line given) | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The CI pre-push test gate indicates a regression in tests/test_implement_post_codex_recovery.py caused by this PR.\n  WHY: The reviewer suspects the modified canary file content (tests/e2e_smoke_canary.txt) is expected by this test suite; source severity was BLOCKER. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 disputed it in their notes, saying the canary path appears only as string literals at lines 5060 and 5779 and the gate lists these as inherited failures.\n- .github/workflows/review_autofix.yml:copilot-pull-request-reviewer check-run (no line given) | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR review workflow fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\").\n  WHY: The CI workflow cannot complete because of an infrastructure prompt-size limit, which blocks the merge gate. Source severity was MAJOR. The same notes dispute it, saying it comes from the Copilot reviewer's own prompt sizing and not from repository code.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:Test suite failure reported in CI | severity=BLOCKER | confidence=4\n  PROBLEM: The CI pre-push test gate indicates a regression in tests/test_implement_post_codex_recovery.py caused by this PR.\n  WHY: The CI failure suggests the modified canary file (tests/e2e_smoke_canary.txt) content is expected by this test suite, either as a runtime input or a fixture expectation. If the suite expects the old canary content, this is a breaking change.\n- .github/workflows/review_autofix.yml:copilot-pull-request-reviewer check-run | severity=MAJOR | confidence=5\n  PROBLEM: The PR review workflow fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\").\n  WHY: The CI workflow cannot complete because of an infrastructure configuration limit. It does not indicate a logic error in the code change, but it blocks the PR's merge gate.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2559c98a78f549d3602134d104cb8588c2183ea84a442321b29e53950bae462f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41694795356",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41694795356",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103191442_0809a8b34c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41694795356"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T19:14:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
