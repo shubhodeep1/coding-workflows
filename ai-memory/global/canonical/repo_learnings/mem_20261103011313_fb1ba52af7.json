@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.85,
+  "details": "When editing GitHub Actions workflows or their scripts, check for matching workflow-contract, overlay, or untrusted-input tests and update them alongside the behavior. Multiple merged changes pair workflow edits with tests that assert structural and security properties.",
+  "fingerprint": "363630ae242382720a04b2af760361745128932c196149f1d584342a266322c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41557789015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41557789015",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8339",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8673",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8682",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8683",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8685",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8676",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8684",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8686",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8688",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8703"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261103011313_fb1ba52af7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow changes in this repository are guarded by dedicated contract tests.",
+  "timestamps": {
+    "created_at": "2026-11-03T01:13:13Z",
+    "promoted_at": "2026-11-03T01:13:54Z",
+    "superseded_at": null
+  }
+}
