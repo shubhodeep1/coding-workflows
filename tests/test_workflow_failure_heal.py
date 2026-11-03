@@ -10053,7 +10053,7 @@ def test_phase_failure_fingerprint_skips_generic_annotations_and_falls_back() ->
 	assert none["fp"] == generic["fp"] == malformed["fp"]
 	assert generic["error_present"] is False
 	expected = hashlib.sha256(
-		"|".join(["plan", "run codex planning", heal.PHASE_FAILURE_FINGERPRINT_NO_ERROR]).encode("utf-8")
+		f"plan|run codex planning|{heal.PHASE_FAILURE_FINGERPRINT_NO_ERROR}".encode()
 	).hexdigest()[:12]
 	assert none["fp"] == expected
 
@@ -10128,6 +10128,7 @@ def test_phase_failure_fingerprint_markers_trip_the_breaker_end_to_end() -> None
 def _pff_cli(tmp_path: Path, *extra: str) -> tuple[int, dict]:
 	proc = subprocess.run(
 		[sys.executable, str(LIB_PATH), "phase-failure-fingerprint", *extra],
+		check=False,
 		capture_output=True,
 		text=True,
 		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
@@ -10147,7 +10148,19 @@ def test_phase_failure_fingerprint_cli_prints_key_values_and_fails_open(tmp_path
 	assert rc == 0 and fields["reason"] == "ok" and fields["error_present"] == "1"
 	assert fields["marker"] == _pff(run_id="555")["marker"] and fields["fp"] == _pff()["fp"]
 	assert set(fields) == {"marker", "fp", "error_present", "reason"}
-	rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(tmp_path / "missing.json"))
+	# A supplied annotations file the workflow could not fetch (deleted, garbled
+	# or not a list) posts no marker, so an annotations outage cannot merge
+	# distinct failures into one phase+step fingerprint.
+	not_list = tmp_path / "ann_dict.json"
+	not_list.write_text(json.dumps({"message": "Server Error"}), encoding="utf-8")
+	garbled = tmp_path / "ann_bad.json"
+	garbled.write_text("{not json", encoding="utf-8")
+	for path in (tmp_path / "missing.json", not_list, garbled):
+		rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(path))
+		assert rc == 0 and fields["reason"] == "annotations_unavailable" and fields["marker"] == "" and fields["fp"] == "", path
+	empty = tmp_path / "ann_empty.json"
+	empty.write_text("[]", encoding="utf-8")
+	rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(empty))
 	assert rc == 0 and fields["reason"] == "ok" and fields["error_present"] == "0" and fields["marker"]
 	rc, fields = _pff_cli(tmp_path, *base, str(jobs))
 	assert rc == 0 and fields["error_present"] == "0" and fields["marker"]
@@ -10205,7 +10218,7 @@ def test_phase_failure_comment_steps_append_fingerprint_marker(phase: str) -> No
 	assert run.index("PHASE_FAILURE_FINGERPRINT phase=") < run.index("/issues/${ISSUE_NUMBER}/comments")
 
 
-def _pff_run_step(tmp_path: Path, phase: str, *, job_status: str = "failure", enabled: str = "true", jobs_fail: bool = False) -> tuple[subprocess.CompletedProcess, str, str]:
+def _pff_run_step(tmp_path: Path, phase: str, *, job_status: str = "failure", enabled: str = "true", jobs_fail: bool = False, annotations_fail: bool = False) -> tuple[subprocess.CompletedProcess, str, str]:
 	run = _pff_failure_step(phase)["run"]
 	values = {
 		"github.server_url": "https://github.example",
@@ -10229,9 +10242,9 @@ def _pff_run_step(tmp_path: Path, phase: str, *, job_status: str = "failure", en
 			#!/usr/bin/env bash
 			printf '%s\\n' "$2" >> "${GH_STUB_LOG}"
 			case "$2" in
-			  */jobs\\?*) [ "${GH_STUB_JOBS_FAIL:-0}" = 1 ] && exit 1; cat "${GH_STUB_DIR}/jobs.json" ;;
-			  */annotations\\?*) cat "${GH_STUB_DIR}/ann.json" ;;
-			  */comments) for a in "$@"; do case "$a" in body=*) printf '%s' "${a#body=}" > "${GH_STUB_DIR}/body.txt" ;; esac; done ;;
+				*/jobs\\?*) [ "${GH_STUB_JOBS_FAIL:-0}" = 1 ] && exit 1; cat "${GH_STUB_DIR}/jobs.json" ;;
+				*/annotations\\?*) [ "${GH_STUB_ANN_FAIL:-0}" = 1 ] && exit 1; cat "${GH_STUB_DIR}/ann.json" ;;
+				*/comments) for a in "$@"; do case "$a" in body=*) printf '%s' "${a#body=}" > "${GH_STUB_DIR}/body.txt" ;; esac; done ;;
 			esac
 			"""
 		),
@@ -10244,6 +10257,7 @@ def _pff_run_step(tmp_path: Path, phase: str, *, job_status: str = "failure", en
 		"GH_STUB_LOG": str(tmp_path / "gh.log"),
 		"GH_STUB_DIR": str(tmp_path),
 		"GH_STUB_JOBS_FAIL": "1" if jobs_fail else "0",
+		"GH_STUB_ANN_FAIL": "1" if annotations_fail else "0",
 		"SUPPORT_SCRIPTS_DIR": str(support),
 		"RUNNER_TEMP": str(tmp_path),
 		"RUNNER_NAME": _PFF_RUNNER,
@@ -10256,7 +10270,7 @@ def _pff_run_step(tmp_path: Path, phase: str, *, job_status: str = "failure", en
 		"FP_RUN_ATTEMPT": "1",
 		"FP_REPOSITORY": "o/r",
 	}
-	proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, cwd=tmp_path)
+	proc = subprocess.run(["bash", "-c", script], check=False, capture_output=True, text=True, env=env, cwd=tmp_path)
 	body_path = tmp_path / "body.txt"
 	log_path = tmp_path / "gh.log"
 	return proc, body_path.read_text(encoding="utf-8") if body_path.exists() else "", log_path.read_text(encoding="utf-8") if log_path.exists() else ""
@@ -10276,6 +10290,7 @@ def test_phase_failure_comment_step_smoke_with_stub_gh(tmp_path: Path, phase: st
 	assert f"PHASE_FAILURE_FINGERPRINT phase={phase} issue=77 run=4242 outcome=emitted fp=" in proc.stdout
 	for name, kwargs, reason in (
 		("down", {"jobs_fail": True}, "jobs_unavailable"),
+		("ann_down", {"annotations_fail": True}, "annotations_unavailable"),
 		("off", {"enabled": "false"}, "disabled"),
 		("cancel", {"job_status": "cancelled"}, "cancelled"),
 	):

@@ -7158,11 +7158,17 @@ def _cmd_phase_failure_fingerprint(args: argparse.Namespace) -> int:
 	except (OSError, ValueError):
 		reason = "jobs_unavailable"
 	annotations: Any = []
-	if args.annotations_json:
+	if args.annotations_json and not reason:
+		# The workflow step deletes this file when the annotations fetch fails
+		# or the job id is unknown. Emitting a phase+step-only marker then would
+		# merge distinct failures into one fingerprint and could trip the
+		# breaker, so a missing or unusable file posts no marker (fail open).
 		try:
 			annotations = _load_json_file(args.annotations_json)
 		except (OSError, ValueError):
-			annotations = []
+			annotations = None
+		if not isinstance(annotations, list):
+			reason = "annotations_unavailable"
 	if reason:
 		result = {"marker": "", "fp": "", "reason": reason, "error_present": False}
 	else:
