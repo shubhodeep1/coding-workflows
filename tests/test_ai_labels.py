@@ -176,15 +176,30 @@ def _run_sync_labels(
 	token: str | None = "test-token",
 	use_main: bool = False,
 	env: dict[str, str | None] | None = None,
+	prefetch_pages: list[object] | None = None,
+	prefetch_log: list[dict[str, str]] | None = None,
 ) -> tuple[int, dict[str, object], str, list[dict[str, str]]]:
 	request_log: list[dict[str, str]] = []
 	stdout_lines: list[str] = []
 	stderr_buffer = io.StringIO()
 	response_iter = iter(responses)
+	prefetch_iter = iter(prefetch_pages or [])
 
 	def _fake_urlopen(request: object, timeout: int = 120) -> _FakeHTTPResponse:
 		assert timeout == 120
 		assert isinstance(request, ai_labels.urllib.request.Request)
+		# The label-list prefetch is routed to its own queue so existing tests
+		# keep their per-label response order. With no prefetch pages, it fails
+		# with a non-retried 404 and the sync falls back to per-label GETs.
+		if "/labels?per_page=" in request.full_url:
+			if prefetch_log is not None:
+				prefetch_log.append({"method": request.get_method(), "url": request.full_url})
+			if prefetch_pages is None:
+				raise _http_error(request.full_url, 404, "Not Found")
+			prefetch_response = next(prefetch_iter)
+			if isinstance(prefetch_response, Exception):
+				raise prefetch_response
+			return prefetch_response
 		request_log.append(
 			{
 				"method": request.get_method(),
@@ -638,6 +653,240 @@ def test_repair_labels_terminal_phase_drops_needs_human():
 	payload = _repair("ai:needs-human,ai:blocked,ai:merged")
 	assert payload["add"] == []
 	assert payload["remove"] == ["ai:blocked", "ai:needs-human"]
+
+
+def _label_page(labels: list[dict[str, str]]) -> _FakeHTTPResponse:
+	return _FakeHTTPResponse(labels)
+
+
+def test_sync_labels_rejects_overlong_description_before_get() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-overlong-desc-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), {
+			"ai:alpha": {"color": "123abc", "description": "d" * 101},
+			"ai:beta": SYNC_LABELS["ai:beta"],
+		})
+		responses = [
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["unchanged"] == 1
+	assert payload["errors"] == [
+		{
+			"action": "validate",
+			"label": "ai:alpha",
+			"message": "description exceeds GitHub's 100-character limit (101)",
+		}
+	]
+	assert [entry["method"] for entry in request_log] == ["GET"]
+	assert all("ai%3Aalpha" not in entry["url"] for entry in request_log)
+	assert "LABEL_SYNC_ERROR:" in stderr_text
+
+
+def test_sync_labels_all_invalid_contract_makes_no_github_request() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-all-invalid-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), {
+			"ai:alpha": {"color": "123abc", "description": "a" * 101},
+			"ai:beta": {"color": "abcdef", "description": "b" * 120},
+		})
+		prefetch_log: list[dict[str, str]] = []
+		rc, payload, _stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=[],
+			prefetch_pages=[],
+			prefetch_log=prefetch_log,
+		)
+
+	assert rc == 1
+	assert [error["action"] for error in payload["errors"]] == ["validate", "validate"]
+	assert prefetch_log == []
+	assert request_log == []
+
+
+def test_sync_labels_prefetch_avoids_per_label_gets() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		api_calls: list[tuple[str, str]] = []
+		original_request = ai_labels._github_api_request
+
+		def _counting_request(path: str, *, method: str = "GET", payload: object = None, require_token: bool = False) -> object:
+			api_calls.append((method, path))
+			if path.startswith("repos/octo-org/octo-repo/labels?per_page="):
+				return [
+					{"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]},
+					{"name": "ai:beta", "color": "000000", "description": "Old beta"},
+				]
+			raise AssertionError(f"unexpected API call: {method} {path}")
+
+		stdout_lines: list[str] = []
+		original_print = ai_labels._print_json
+		stderr_buffer = io.StringIO()
+		try:
+			ai_labels._github_api_request = _counting_request
+			ai_labels._print_json = lambda payload: stdout_lines.append(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+			with contextlib.redirect_stderr(stderr_buffer):
+				rc = ai_labels.cmd_sync_labels(
+					argparse.Namespace(contract_file=str(contract_path), repo="octo-org/octo-repo", dry_run=True)
+				)
+		finally:
+			ai_labels._github_api_request = original_request
+			ai_labels._print_json = original_print
+
+	assert rc == 0
+	payload = json.loads(stdout_lines[0])
+	assert payload == {"created": 0, "updated": 1, "unchanged": 1, "deleted": 0, "errors": []}
+	assert api_calls == [("GET", "repos/octo-org/octo-repo/labels?per_page=100&page=1")]
+	assert all("/labels/ai%3A" not in path for _method, path in api_calls)
+	assert "prefetch unavailable" not in stderr_buffer.getvalue()
+
+
+def test_sync_labels_prefetch_matches_label_names_case_insensitively() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-case-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		prefetch_pages = [
+			_label_page([
+				{"name": "AI:Alpha", **SYNC_LABELS["ai:alpha"]},
+				{"name": "ai:beta", **SYNC_LABELS["ai:beta"]},
+			]),
+		]
+		rc, payload, _stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=[],
+			prefetch_pages=prefetch_pages,
+		)
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
+	assert request_log == []
+
+
+def test_sync_labels_prefetch_failure_falls_back_to_per_label_gets() -> None:
+	failing_prefetches: list[object] = [
+		_http_error("https://api.github.com/repos/octo-org/octo-repo/labels?per_page=100&page=1", 403, "Forbidden"),
+		_FakeHTTPResponse({"name": "not-a-list"}),
+		ai_labels.http.client.IncompleteRead(b""),
+	]
+	for failing_prefetch in failing_prefetches:
+		with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-fallback-") as tmpdir:
+			contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+			responses = [
+				_FakeHTTPResponse({"name": "ai:alpha", "color": "000000", "description": "Old alpha"}),
+				_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+				_FakeHTTPResponse({"name": "ai:beta", "color": "ffffff", "description": "Old beta"}),
+				_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+			]
+			prefetch_log: list[dict[str, str]] = []
+			rc, payload, stderr_text, request_log = _run_sync_labels(
+				contract_path,
+				responses=responses,
+				prefetch_pages=[failing_prefetch],
+				prefetch_log=prefetch_log,
+			)
+
+		assert rc == 0
+		assert payload == {"created": 0, "updated": 2, "unchanged": 0, "deleted": 0, "errors": []}
+		assert [entry["method"] for entry in request_log] == ["GET", "PATCH", "GET", "PATCH"]
+		assert len(prefetch_log) == 1
+		assert "label list prefetch unavailable" in stderr_text
+		assert "falling back to per-label GET for 2 labels" in stderr_text
+
+
+def test_sync_labels_fallback_records_truncated_per_label_get() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-fallback-truncated-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			ai_labels.http.client.IncompleteRead(b""),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["unchanged"] == 1
+	assert len(payload["errors"]) == 1
+	assert payload["errors"][0]["action"] == "get"
+	assert payload["errors"][0]["label"] == "ai:alpha"
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert "LABEL_SYNC_ERROR:" in stderr_text
+
+
+def test_sync_labels_prefetch_paginates_across_two_pages() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-pages-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		filler_labels = [
+			{"name": f"filler-{index:03d}", "color": "eeeeee", "description": "Filler"}
+			for index in range(ai_labels.LABEL_SYNC_PREFETCH_PAGE_SIZE)
+		]
+		prefetch_pages = [
+			_label_page(filler_labels),
+			_label_page([
+				{"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]},
+				{"name": "ai:beta", **SYNC_LABELS["ai:beta"]},
+			]),
+		]
+		prefetch_log: list[dict[str, str]] = []
+		rc, payload, stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=[],
+			prefetch_pages=prefetch_pages,
+			prefetch_log=prefetch_log,
+		)
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
+	assert [entry["url"].rsplit("&", 1)[-1] for entry in prefetch_log] == ["page=1", "page=2"]
+	assert request_log == []
+	assert "prefetch unavailable" not in stderr_text
+
+
+def test_sync_labels_prefetch_missing_label_counts_as_not_found() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-missing-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		prefetch_pages = [
+			_label_page([{"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}]),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=[],
+			dry_run=True,
+			token=None,
+			prefetch_pages=prefetch_pages,
+		)
+
+	assert rc == 0
+	assert payload == {"created": 1, "updated": 0, "unchanged": 1, "deleted": 0, "errors": []}
+	assert request_log == []
+	assert "LABEL_SYNC_CREATED: repo=octo-org/octo-repo label=ai:beta" in stderr_text
+
+
+def test_sync_labels_prefetch_page_cap_falls_back() -> None:
+	full_page = [
+		{"name": f"filler-{index:03d}", "color": "eeeeee", "description": "Filler"}
+		for index in range(ai_labels.LABEL_SYNC_PREFETCH_PAGE_SIZE)
+	]
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-cap-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		prefetch_pages = [
+			_label_page([
+				{"name": f"p{page_index}-{entry['name']}", "color": "eeeeee", "description": "Filler"}
+				for entry in full_page
+			])
+			for page_index in range(ai_labels.LABEL_SYNC_PREFETCH_MAX_PAGES)
+		]
+		responses = [
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=responses,
+			prefetch_pages=prefetch_pages,
+		)
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert "reason=page cap reached" in stderr_text
 
 
 def main() -> int:
