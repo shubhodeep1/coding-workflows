@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/copilot-pull-request-reviewer:CI check-run | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR review workflow fails with `custom_instructions_too_large` while loading configuration files.\n  WHY: The combined size of CLAUDE.md and AGENTS.md exceeds the PR reviewer's context limits, so the job exits with code 1 and blocks the merge. This merges with the z-ai_glm-5_3-flash finding below on the same root cause but a different file reference, so it is listed separately. The source states severity BLOCKER.\n- agents.md; CLAUDE.md:agents.md (5,410 lines); CLAUDE.md (1,508 lines) | severity=high | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large` (HTTP 422, `configurationError: true`) after loading both instruction files.\n  WHY: The combined custom-instruction payload exceeds the reviewer's size limit, so the check exits with code 1 and the PR cannot pass the required reviewer gate. The source states severity MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Do not use auto-close keywords (e.g., `Closes #N`, `Fixes #N`) in the PR description when referencing tracking issues (\u00a719, \u00a721).\n  expected_change_site: PR description body\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description contains \"Closes https://github.com/shubhodeep1/coding-workflows/issues/8337\", which risks killing the orchestrator's state machine for tracking issue #8337 on merge.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/copilot-pull-request-reviewer:CI check-run | severity=BLOCKER | confidence=5\n  PROBLEM: The PR review workflow fails with `custom_instructions_too_large` while loading configuration files.\n  WHY: The combined size of CLAUDE.md and AGENTS.md exceeds the internal context limits of the PR reviewer, causing the job to exit with code 1 and block the PR merge.\n- TASK_GAP: Requirement: Do not use auto-close keywords (e.g., `Closes #N`, `Fixes #N`) in the PR description when referencing tracking issues (\u00a719, \u00a721).\n  Expected change site: PR description body.\n  Evidence of absence: The PR description contains \"Closes https://github.com/shubhodeep1/coding-workflows/issues/8337\", which risks killing the orchestrator's state machine for tracking issue #8337 upon PR merge.\n  severity=BLOCKER | confidence=5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md; CLAUDE.md:agents.md (5,410 lines); CLAUDE.md (1,508 lines) | severity=MAJOR | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large` (HTTP 422, `configurationError: true`) while constructing its request after loading both instruction files. Both files exist at the cited paths and are extremely large.\n  WHY: The combined custom-instruction payload exceeds the reviewer's custom-instruction size limit, so the check exits with code 1 and the PR cannot pass the required reviewer gate. The failure is not mapped to a changed line because the PR modifies only `tests/e2e_smoke_canary.txt`, whose diff matches the linked issue #8337 spec.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1520cb49639059ba672d38093ca1fdac2b930d4d073b24ac86e42a44455e6bf1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41674984491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41674984491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103164500_5d881f2284",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41674984491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T16:45:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
