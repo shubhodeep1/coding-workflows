@@ -3362,6 +3362,72 @@ _MEMORY_PUSH_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+")
 # permanent 403 permission denial back into 16 retries.
 _MEMORY_PUSH_PERMISSION_SPAN_RE = re.compile(r"permission to \S+ denied", re.IGNORECASE)
 
+# Retry-reason telemetry (`push_retry_reasons`, issue #8726): one bounded class
+# per push attempt that was retried, so contention can be told apart from
+# auth, network or rate-limit failures.  Category names follow the shell
+# `_memory_stderr_category` in scripts/memory_helpers.sh where they apply.
+# The classifier only ever returns one of these fixed tokens; the captured
+# git output is matched and then discarded, never stored or logged.
+_MEMORY_PUSH_RETRY_REASONS_MAX = 10
+_MEMORY_PUSH_RETRY_REASON_VALUES = frozenset({"non_fast_forward", "auth", "network", "rate_limited", "other"})
+# Remote contention.  `cannot lock ref` is the observed ref-lock race (run
+# 32849764877).  The bare `failed to push` the shell classifier matches is
+# left out on purpose: git prints it for every rejected ref, including
+# pre-receive hook declines, so it says nothing about contention.
+_MEMORY_PUSH_NON_FAST_FORWARD_RE = re.compile(
+    r"non-fast-forward"
+    r"|\[rejected\]"
+    r"|fetch first"
+    r"|cannot lock ref"
+    r"|failed to update ref"
+    r"|incorrect old value"
+    r"|updates were rejected",
+    re.IGNORECASE,
+)
+# `rate_limited` only when the output explicitly says so.
+_MEMORY_PUSH_EXPLICIT_RATE_LIMIT_RE = re.compile(
+    r"rate[ _-]?limit|too many requests|returned error: 429",
+    re.IGNORECASE,
+)
+# Mirrors the shell `403 [Ff]orbidden` auth rule.
+_MEMORY_PUSH_FORBIDDEN_RE = re.compile(r"(^|[^0-9])403 forbidden", re.IGNORECASE)
+_MEMORY_PUSH_NETWORK_RE = re.compile(
+    r"could not resolve host"
+    r"|timed out"
+    r"|connection reset"
+    r"|connection refused"
+    r"|failed to connect"
+    r"|remote end hung up unexpectedly"
+    r"|early eof"
+    r"|rpc failed"
+    r"|returned error: 50[234]",
+    re.IGNORECASE,
+)
+
+
+def _classify_memory_push_retry_reason(output: str) -> str:
+    """Map failed git push output to one bounded retry-reason token.
+
+    Always returns a value from _MEMORY_PUSH_RETRY_REASON_VALUES and never
+    returns, stores or logs any part of the text it reads.  URLs are removed
+    first so a host, repo or path name cannot decide the class.
+    """
+    text = _MEMORY_PUSH_URL_RE.sub(" ", output or "")
+    without_permission_span = _MEMORY_PUSH_PERMISSION_SPAN_RE.sub(" ", text)
+    if _MEMORY_PUSH_EXPLICIT_RATE_LIMIT_RE.search(without_permission_span):
+        return "rate_limited"
+    # Same 403 exemption _is_permanent_memory_push_failure applies (issue
+    # #7714), so a retried secondary-rate-limit 403 is not labelled `auth`.
+    if _MEMORY_PUSH_HTTP_403_RE.search(text) and _MEMORY_PUSH_RATE_LIMIT_RE.search(without_permission_span):
+        return "rate_limited"
+    if _MEMORY_PUSH_NON_FAST_FORWARD_RE.search(text):
+        return "non_fast_forward"
+    if _MEMORY_PUSH_AUTH_FAILURE_RE.search(text) or _MEMORY_PUSH_FORBIDDEN_RE.search(text):
+        return "auth"
+    if _MEMORY_PUSH_NETWORK_RE.search(text):
+        return "network"
+    return "other"
+
 
 def _is_permanent_memory_push_failure(stderr: str) -> bool:
     """Return True when a failed memory push is a credential/permission error.
@@ -3442,6 +3508,7 @@ def persist_memory_operation(
                     "did_push": False,
                     "commit_sha": None,
                     "push_attempts": 0,
+                    "push_retry_reasons": [],
                     "operation_result": op_result,
                     "clone_ms": clone_ms,
                     "write_ms": write_ms,
@@ -3453,6 +3520,9 @@ def persist_memory_operation(
             write_ms = _memory_persist_elapsed_ms(write_started)
 
             push_started = time.monotonic()
+            # One bounded class per retried attempt, in order (additive
+            # telemetry only; never changes retries, backoff or exceptions).
+            push_retry_reasons: list[str] = []
             for attempt in range(1, push_retries + 1):
                 push = _run_git(
                     clone_dir,
@@ -3467,6 +3537,7 @@ def persist_memory_operation(
                         "did_push": True,
                         "commit_sha": pushed_commit_sha,
                         "push_attempts": attempt,
+                        "push_retry_reasons": list(push_retry_reasons),
                         "operation_result": op_result,
                         "clone_ms": clone_ms,
                         "write_ms": write_ms,
@@ -3487,6 +3558,13 @@ def persist_memory_operation(
                 if attempt >= push_retries:
                     raise MemoryGitError(
                         f"Failed to push memory branch after {push_retries} attempts: {push.stderr.strip()}"
+                    )
+
+                # This attempt is about to be retried: record why.  The raw
+                # output only feeds the classifier and is then discarded.
+                if len(push_retry_reasons) < _MEMORY_PUSH_RETRY_REASONS_MAX:
+                    push_retry_reasons.append(
+                        _classify_memory_push_retry_reason(f"{push.stderr or ''}\n{push.stdout or ''}")
                     )
 
                 # Wait a jittered, exponentially growing interval before

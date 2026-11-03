@@ -392,6 +392,7 @@ def cmd_record_run_event(args: argparse.Namespace) -> int:
         event_type=args.event_type,
         did_push=result.get("did_push", False),
         push_attempts=result.get("push_attempts", 0),
+        push_retry_reasons=result.get("push_retry_reasons", []),
         clone_ms=result.get("clone_ms", 0),
         write_ms=result.get("write_ms", 0),
         push_ms=result.get("push_ms", 0),
@@ -740,6 +741,7 @@ def cmd_record_candidate(args: argparse.Namespace) -> int:
         issue_number=issue_number,
         did_push=result.get("did_push", False),
         push_attempts=result.get("push_attempts", 0),
+        push_retry_reasons=result.get("push_retry_reasons", []),
         clone_ms=result.get("clone_ms", 0),
         write_ms=result.get("write_ms", 0),
         push_ms=result.get("push_ms", 0),
@@ -1028,6 +1030,7 @@ def cmd_prune(args: argparse.Namespace) -> int:
                 "did_push": False,
                 "commit_sha": None,
                 "push_attempts": 0,
+                "push_retry_reasons": [],
             }
         )
         _emit_telemetry("prune", ok=True, enabled=False, marked=0, already_marked=0, not_found=len(record_ids))
@@ -2219,6 +2222,7 @@ def cmd_processed_command_claim(args: argparse.Namespace) -> int:
                 "did_push": False,
                 "commit_sha": None,
                 "push_attempts": 0,
+                "push_retry_reasons": [],
                 "operation_result": {
                     "claimed": True,
                     "entry": None,
@@ -2292,6 +2296,9 @@ def cmd_processed_command_claim(args: argparse.Namespace) -> int:
                         "did_push": False,
                         "commit_sha": None,
                         "push_attempts": int(args.push_retries),
+                        # Per-attempt reasons are lost when the retry loop raises,
+                        # so this recovery path can only report an empty list.
+                        "push_retry_reasons": [],
                         "operation_result": {
                             "claimed": False,
                             "entry": entry,
