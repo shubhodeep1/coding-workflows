@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The canary file content change (`run_id: 40932430968`, `updated-by: ai-pipeline` replacing `decompose-run`) is claimed to have triggered failures in `tests/test_implement_post_codex_recovery.py`, which makes the canary invalid.\n  WHY: The test suite is said to rely on the canary file's specific content, so changing it without updating the corresponding test checks causes a cascade of test failures (source severity MAJOR; other reviewers said the failures are unrelated to this PR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the smoke-test canary (run 40932430968) in `tests/e2e_smoke_canary.txt`.\n  expected_change_site: `tests/e2e_smoke_canary.txt` and corresponding test files that reference it (`tests/test_implement_post_codex_recovery.py`)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR modifies `tests/e2e_smoke_canary.txt` but does not update the tests that verify this canary, leading to failures in `tests/test_implement_post_codex_recovery.py`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=high | confidence=4\n  PROBLEM: The canary file content now contains `run_id: 40932430968` and `updated-by: ai-pipeline` instead of the original `decompose-run`, and this is said to have triggered a failure in `tests/test_implement_post_codex_recovery.py`.\n  WHY: The test suite relies on the canary file's specific content, so changing it without updating the corresponding test checks makes it an invalid canary (source severity MAJOR).\n- TASK_GAP\n  Requirement: Update the smoke-test canary (run 40932430968) in `tests/e2e_smoke_canary.txt`.\n  Expected change site: `tests/e2e_smoke_canary.txt` and corresponding test files that reference it.\n  Evidence of absence: The PR modifies `tests/e2e_smoke_canary.txt` but does not update the tests that verify this canary, leading to failures in `tests/test_implement_post_codex_recovery.py`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0bbd6bf58d19fa2d7466fba8be59e554c1d8235dd38106c71db62c3d83aa9807",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41600240017",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41600240017",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103081431_1764b38cdb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41600240017"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T08:14:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
