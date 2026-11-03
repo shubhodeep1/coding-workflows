@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:2221-2223 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Introduction of an extra newline (blank line) in the prompt output for the full reviewer builder via `printf '\\n'` in emit_full_reviewer_prompt_context_sections.\n  WHY: Reviewer prompt-prefix caching and contract tests depend on byte-identical output, and a second blank line may break that. Severity was not stated by the source, so medium is assigned for the ledger; anthropic_claude-sonnet-5_5 traced the same area and found the output byte-identical.\n- .github/workflows/ci.yml:copilot-pull-request-reviewer check-run | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The third-party copilot-pull-request-reviewer check failed with 422 \"Prompt too big after adding system message\" (custom_instructions_too_large).\n  WHY: The failure is a service limit on instruction size, independent of the diff, since agents.md and CLAUDE.md are not modified by this PR. z-ai_glm-5_3-flash rated it NIT and google_gemini-3_1-flash-lite gave no severity, so low is assigned for the ledger.\n- agents.md, CLAUDE.md:agents.md (5,426 lines), CLAUDE.md (1,508 lines) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The combined size of the Copilot custom-instruction files exceeds the system-message payload limit, so the check fails with a 422.\n  WHY: The failure is pre-existing and independent of this PR's diff, and needs a separate change. The source rated it NIT, mapped here to low.\n- tests/test_files_touched_scope_guard.py:CI check failure | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI check failed.\n  WHY: The failure is listed in the check-run context as caused by this PR and needs investigation. Severity was not stated by the source, so medium is assigned for the ledger.\n- tests/test_gh_api_write_guard.py:CI check failure | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI check failed, with multiple tests failing in this file.\n  WHY: The failure is listed as caused by this PR and needs investigation. Severity was not stated by the source, so medium is assigned for the ledger.\n- tests/test_pr_watch_guard.py:CI check failure | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI check failed.\n  WHY: The failure is listed as caused by this PR and needs investigation. Severity was not stated by the source, so medium is assigned for the ledger.\n- tests/test_workflow_checkout_integration_ref_audit.py:CI check failure | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: CI check failed.\n  WHY: The failure is listed as caused by this PR and needs investigation. Severity was not stated by the source, so medium is assigned for the ledger.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh:around lines 2221-2223 | confidence=4\n  PROBLEM: Introduction of an extra newline (blank line) in the prompt output for the full reviewer builder.\n  WHY: Reviewer prompt-prefix caching and contract tests depend on byte-identical output, and the `printf '\\n'` in `emit_full_reviewer_prompt_context_sections` appears to add a second blank line where only one existed before.\n- .github/workflows/ci.yml:copilot-pull-request-reviewer check-run | confidence=3\n  PROBLEM: Third-party CI failure \"Prompt too big after adding system message\" (custom_instructions_too_large, 422).\n  WHY: The check failed before code review, blocking PR validation, and is reported for investigation even though it may be a systemic service issue.\n- tests/test_files_touched_scope_guard.py:CI check failure | confidence=3\n  PROBLEM: CI check failed.\n  WHY: The failure is listed in the check-run context as caused by this PR and needs investigation to ensure the refactor did not break test infrastructure or contract guards.\n- tests/test_gh_api_write_guard.py:CI check failure | confidence=3\n  PROBLEM: CI check failed.\n  WHY: Multiple tests failed in this file. The failure is listed as caused by this PR and needs investigation.\n- tests/test_pr_watch_guard.py:CI check failure | confidence=3\n  PROBLEM: CI check failed.\n  WHY: The failure is listed as caused by this PR and needs investigation.\n- tests/test_workflow_checkout_integration_ref_audit.py:CI check failure | confidence=3\n  PROBLEM: CI check failed.\n  WHY: The failure is listed as caused by this PR and needs investigation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md, CLAUDE.md:agents.md (5,426 lines), CLAUDE.md (1,508 lines) | severity=NIT | confidence=5\n  PROBLEM: The third-party `copilot-pull-request-reviewer` check failed with a 422 (`custom_instructions_too_large`, \"Prompt too big after adding system message\") before reviewing any code. The combined size of `agents.md` and `CLAUDE.md` exceeds the Copilot system-message payload limit.\n  WHY: The check-run fails on the combined size of the repo's instruction files, independent of the PR's diff. Neither file is modified by this PR, so this is pre-existing service-limit friction. No code edit is needed in this PR, and the fix belongs in a separate change.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5c9260394d77ce0466a6a4a4ac956e2f4c6f9bffc550284aab79480b661744df",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8741,
+    "run_id": "41598509976",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41598509976",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103080914_eaf73b01e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8741,
+    "run_id": "41598509976"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 7 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T08:09:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
