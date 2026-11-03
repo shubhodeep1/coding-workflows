@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:Test execution | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The contract tests fail to run in the current CI environment due to `ModuleNotFoundError: yaml`.\n  WHY: The job sharding logic and step guards cannot be validated against the contract-test guardrail policy when these tests do not run. The source labelled this BLOCKER, which is mapped here to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings)\" into the CI job with the most headroom, unchanged and with the same names.\n  expected_change_site: `.github/workflows/ci.yml`, the step selections around lines 3003-3010 and 3032-3036 (moved from `tests-release-and-log-analysis`, around lines 2972-3043)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The comments at `.github/workflows/ci.yml:2992-3005`, `3003-3010`, `3005-3007`, `3031-3036` and `3034-3036` say the step timings could not be read and the pick is an estimate from test and subprocess counts. The changelog fragment `changelog.d/8759-ci-release-steps-to-poll-groups.md` repeats the disclaimer. The diff does not establish that the moved steps were the slowest. `scripts/ci_budget_watch.py:178` and `scripts/workflow_failure_heal.py:8522` (`linked-run-timeline`) suggest the timings were obtainable. Reviewer severity ranged from NIT (anthropic_claude-sonnet-5_5, confidence 2, judged a limitation of the evidence) to MAJOR (the other four).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings)\" into the CI job with the most headroom, unchanged and with the same names.\nExpected change site: `.github/workflows/ci.yml`, the step comments around lines 3003-3010 and 3032-3036.\nEvidence of absence: The comments say the step timings for run 41670184870 could not be read, so the two steps were picked by test and subprocess counts. The diff does not show that these two steps are the slowest. The steps moved unchanged under their original names, `timeout-minutes` is untouched, and no job was added. The pick is stated openly as an estimate, and earlier moves (#8466, #8730) used the same method. This is a limitation of the evidence, not a missing deliverable.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_poll_test_sharding.py:Test execution | severity=BLOCKER | confidence=5\n  PROBLEM: The contract tests fail to run in the current CI environment due to `ModuleNotFoundError: yaml`.\n  WHY: The job sharding logic and step guards cannot be validated against the project's contract-test guardrail policy when these tests do not run.\n\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings)\" into another CI job.\nExpected change site: .github/workflows/ci.yml, step selections around lines 3003\u20133010 and 3032\u20133036.\nEvidence of absence: Comments at these sites state: \"The run's step timings could not be read, so the pick is an estimate from test and subprocess counts, not a measurement.\" The task required selection by step timings, but the PR relied on proxy estimates.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\nRequirement: Issue #8759 says \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml` around lines 2972-3043, the step selections for \"Review autofix review-pipeline plumbing contract test\" and \"Review synthesize-smoke contract test\", now moved into orchestrate-poll groups 1 and 0.\nEvidence of absence: The comment blocks at `.github/workflows/ci.yml:2992-3005` and `.github/workflows/ci.yml:3031-3036` say the step timings could not be read and the pick is an estimate. The PR does not establish that the two chosen steps were the slowest. The changelog fragment `changelog.d/8759-ci-release-steps-to-poll-groups.md` repeats the disclaimer.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings)\" into another CI job.\nExpected change site: `.github/workflows/ci.yml`, the selection of steps moved from `tests-release-and-log-analysis`.\nEvidence of absence: The workflow comments state the step timings could not be read and the steps were chosen using test and subprocess counts. The requested timing-based selection is absent from the PR diff.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\nRequirement: \"Move its slowest steps (see the run's step timings)\" into another CI job.\nExpected change site: `.github/workflows/ci.yml`, the step selections around lines 3003\u20133010 and 3032\u20133036.\nEvidence of absence: The comments at `.github/workflows/ci.yml:3005-3007` and `.github/workflows/ci.yml:3034-3036` say the timings could not be read. The diff does not establish that the moved steps were the slowest. `scripts/ci_budget_watch.py:178` already fetches `repos/{repo}/actions/runs/{run_id}/jobs?per_page=100`, and the issue body (`scripts/ci_budget_watch.py:127`) points to the same data. The repo also ships a step-timeline renderer (`scripts/workflow_failure_heal.py:8522`, `linked-run-timeline`, fed by `_heal_fetch_linked_runs` at `scripts/workflow_failure_heal_intake.sh:2574/2741`). The timings were obtainable through at least two in-repo paths, so whether the moved steps are the slowest is unverifiable.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "43118a8d8bc8e10e9be21b3c723755d744c6ceaa2ac0f0b37599b345139b18b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8760,
+    "run_id": "41699180548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41699180548",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103193135_fb4f70db10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8760,
+    "run_id": "41699180548"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T19:31:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
