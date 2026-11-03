@@ -49,7 +49,9 @@
 # request-report-identity + wrap-dispatch) when:
 #   last_gate_failed      the gate budget is spent on the tip and the newest
 #                         failed gate run ended RELEASE_BLOCKER_GATE_FAILED_MIN_AGE_SECS
-#                         ago or longer (that run goes in run_refs)
+#                         ago or longer (that run goes in run_refs when it
+#                         ended failure or timed_out; a startup_failure run
+#                         is named in the evidence only)
 #   release_in_flight     the oldest active gate / promote / mark-stable run
 #                         started RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS ago or
 #                         longer (the run is named in the evidence only: the
