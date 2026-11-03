@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/auto_release_stable.sh:release_blocker_check_stale() function, specifically the rb_gate_runs_on_tip variable definition | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `release_blocker_check_stale` pipes `printf '%s' \"${runs_json:-}\"` into `jq`, so when `runs_json` is unset or empty, `jq` may get empty input.\n  WHY: If the `jq` logic does not handle empty input, `rb_gate_runs_on_tip` may come out wrong, which could suppress the `stable_release_stale` report or fire it when it should not (severity not stated by reviewer).\n- scripts/auto_release_stable.sh:report_release_blocker() function | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `report_release_blocker` catches errors from `build-blocker-payload` and `wrap-dispatch`, but it does not handle `python3` failing to run at all (for example `command not found` or a wrong python path).\n  WHY: If `python3` is unavailable, the function would return 0 without logging an error, so the release blocker report would silently not be sent (severity not stated by reviewer).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- Note: reviewer confirmed that the README.md RELEASE_BLOCKER_HEAL_ENABLED row and the header comment in scripts/auto_release_stable.sh (lines 57-58) match the jq filter in release_blocker_check_stale (scripts/auto_release_stable.sh:392). It found all three reporters delivered (release_blocker_check_gate_failed, release_blocker_check_in_flight, release_blocker_check_stale). It attributed the copilot-pull-request-reviewer failure to an external custom_instructions_too_large error (HTTP 422). It did not look into the other failures listed in the PR description. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/auto_release_stable.sh:release_blocker_check_stale() function, specifically the rb_gate_runs_on_tip variable definition | confidence=2\n  PROBLEM: The shell logic in `release_blocker_check_stale` uses `printf '%s' \"${runs_json:-}\"` to build the string piped to `jq`, so an unset or empty `runs_json` may not be handled correctly before `jq` processes it.\n  WHY: If `jq` gets empty input and its logic does not handle that, `rb_gate_runs_on_tip` may be wrong, which could suppress the `stable_release_stale` report or fire it incorrectly.\n- scripts/auto_release_stable.sh:report_release_blocker() function | confidence=3\n  PROBLEM: The function catches errors from `build-blocker-payload` and `wrap-dispatch`, but does not explicitly handle `python3` failing to execute (`command not found` or an incorrect python path).\n  WHY: If `python3` is unavailable, the function would return 0 without logging an error and silently fail to send the release blocker report.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "df00c2ddd52a529e8e19a1dc61d598b7294624718f89e120ec8eedd7fae84f10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8768,
+    "run_id": "41729008057",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41729008057",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103223335_6a43bc0706",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8768,
+    "run_id": "41729008057"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T22:33:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
