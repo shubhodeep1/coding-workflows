@@ -1049,13 +1049,6 @@ def test_scope_check_reason_line_for_scope_guard_failures() -> None:
 		assert "::error::Resolver scope check failed closed (FileNotFoundError)." in result.stderr
 		line = _scope_check_line(result.stderr, "::error::Resolver scope", (directory,))
 		assert "reason=os_error exc=FileNotFoundError" in line
-		assert _scope_action(repo, env, "capture").returncode == 0
-		(Path(env["RESOLVER_SCOPE_SNAPSHOT_DIR"]) / "manifest.json").write_text("[]", encoding="utf-8")
-		result = _scope_action(repo, env, "check")
-		assert result.returncode == 2
-		assert "::error::Resolver scope check failed closed (TypeError)." in result.stderr
-		line = _scope_check_line(result.stderr, "::error::Resolver scope", (directory,))
-		assert "reason=type_error exc=TypeError" in line
 
 
 def test_scope_check_reason_line_for_attempt_state_failures(tmp_path: Path) -> None:

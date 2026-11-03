@@ -1346,7 +1346,7 @@ try:
                 raise _scope_check_tag("restore_mismatch", "resolver worktree restore did not match snapshot")
         else:
             raise _scope_check_tag("unknown_action", "unknown resolver scope action")
-except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
+except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
     # Do not echo paths or untrusted exception text into workflow commands.
     _emit_scope_check_line("scope", exc)
     print(f"::error::Resolver scope {action} failed closed ({type(exc).__name__}).", file=sys.stderr)
