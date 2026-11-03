@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:4317-4324 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The external `copilot-pull-request-reviewer` check fails with HTTP 422 `custom_instructions_too_large` while loading the instruction files (`AGENTS.md` / `agents.md` and `CLAUDE.md`).\n  WHY: The reviewer cannot build its prompt, so the check fails; the severity disagreement is NIT (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) versus MAJOR (openai_gpt-6-luna), and the highest is used. Two reviewers note that the added agents.md text is the automatic fold of existing fragments, so this PR cannot fix the budget.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md (CI check-run `copilot-pull-request-reviewer`, not a code line); hunks near lines 1789, 4314, 4718 and 5062 | severity=NIT | confidence=3\n  PROBLEM: The external Copilot reviewer check failed with `custom_instructions_too_large` (HTTP 422) because the instruction files it loads as custom instructions exceed its prompt budget. It fails before reading any diff.\n  WHY: Nothing in this PR can fix it. The added `agents.md` text is the automatic fold of existing fragments, and \u00a725 forbids hand-editing it. Fixing it needs a separate repo-wide reduction of the instruction files or a change to the Copilot reviewer's configuration.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:4317-4324 | severity=MAJOR | confidence=4\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with HTTP 422 `custom_instructions_too_large` while loading the repository instructions. The newly folded registry entries are included in the `agents.md` custom-instruction file the check loads.\n  WHY: The reviewer cannot construct its prompt or review the PR, and the check exits with failure on this head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/copilot-pull-request-reviewer (external check, no repository file); check run on head 0773f061034bd2910fe376e92580510857fa7df3, run 41717074288, job 126199770978 | severity=NIT | confidence=2\n  PROBLEM: The external `copilot-pull-request-reviewer` check fails with HTTP 422 `custom_instructions_too_large` while loading the instruction files (`AGENTS.md` / `agents.md` and `CLAUDE.md`), before it reads any diff.\n  WHY: The reviewer aborts with exit code 1 at instruction-load time, so it produces no review output. The +18 lines to `agents.md` are the automatic fold of already-present `agents.d/` fragments, and hand-editing them is forbidden. The fix is a separate repo-wide reduction of the instruction files or a Copilot reviewer configuration change.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d5cf1b580c34d3a561254f0e6150d8300a3833dc975998d011324b11f8e0a261",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8774,
+    "run_id": "41717055922",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41717055922",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103215736_17c71a906d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8774,
+    "run_id": "41717055922"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T21:57:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
