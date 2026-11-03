@@ -5,13 +5,27 @@
   "entry_id": "processed_command_8735_6596777061_approved",
   "issue_number": 8735,
   "metadata": {
+    "branch": "ai/issue-8735",
+    "changed_files": [
+      ".github/workflows/promote-main-to-stable.yml",
+      "README.md",
+      "agents.d/stuck-states-p4-cycle-hold.md",
+      "changelog.d/stuck-states-p4-cycle-hold.md",
+      "scripts/promote_main_cycle.sh",
+      "tests/test_promote_main_cycle.py"
+    ],
+    "issue_number": 8735,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8735",
+    "pr_number": 8740,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8740",
+    "run_attempt": "1",
+    "run_id": "41588140188",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41588140188"
   },
   "run_attempt": 1,
   "run_id": "41588140188",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-03T06:12:12Z",
+  "status": "completed",
+  "timestamp": "2026-11-03T07:15:52Z",
   "workflow": "implement"
 }
