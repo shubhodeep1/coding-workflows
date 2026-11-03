@@ -104,9 +104,10 @@ if args[:2] == ["merge-base", "--is-ancestor"]:
 	if os.environ.get("FAKE_GIT_INCOMPLETE_ANCESTRY") == "true" and not os.path.exists(os.environ.get("FAKE_GIT_UNSHALLOW_MARKER", "")):
 		sys.exit(1)
 	sys.exit(0 if args[2] in os.environ.get("FAKE_GIT_ANCESTORS", "").split(",") and args[3] == os.environ.get("FAKE_GIT_HEAD", "c" * 40) else 1)
-if args[:2] == ["diff", "--name-only"] and "FAKE_GIT_DIFF_FILES" in os.environ:
+if args[:1] == ["diff"] and "--name-only" in args and "FAKE_GIT_DIFF_FILES" in os.environ:
 	print("\n".join(name for name in os.environ["FAKE_GIT_DIFF_FILES"].split(",") if name))
 	sys.exit(0)
+print("FAKE_GIT unmatched: " + " ".join(args), file=sys.stderr)
 sys.exit(1)
 '''
 
