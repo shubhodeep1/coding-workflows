@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The PR-head reviewer check (`copilot-pull-request-reviewer`, run 41549900517) failed with `custom_instructions_too_large`, so the canary PR never received the automated review.\n  WHY: The reviewer rejects its own prompt payload as oversized, which is a prompt-size configuration error in the reviewer pipeline and not a defect in the canary file content. The check exits non-zero and shows as a red check on the PR. The source labelled this SEVERITY: NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  PROBLEM: The PR-head reviewer check (`copilot-pull-request-reviewer`, run 41549900517) failed with `custom_instructions_too_large` while creating its review request, so the canary PR never received the automated review.\n  WHY: The reviewer workflow rejects its own prompt payload as oversized before issuing a review; this is a prompt-size configuration error in the reviewer pipeline, not a defect introduced by the canary file content. The check exits non-zero and shows as a red check on the PR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ebce116961002180f6a4dad18b6743948bc8f5217bdde1343d6066f42872abde",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41600247369",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41600247369",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103081506_3392bde2d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41600247369"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T08:15:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
