@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_checkout_integration_ref_audit.py:66-88 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `ALLOWLIST_EXCEPTIONS` entry at line 66 names `propagate-consumer-secrets.yml`, but that workflow file is not in the PR-head checkout, so `test_checkout_workflows_are_all_classified()` (lines 82-88) puts it in `extra = classified - checkout_files` and the assertion at line 88 fails with `Classified workflows without checkout@v5: ['propagate-consumer-secrets.yml']`.\n  WHY: The test suite fails on this revision because the `WORKFLOWS_DIR.glob(\"*.yml\")` scan cannot find the classified workflow; both reviewers rated it NIT (mapped to low) and say the cause is environmental: the workflow exists on the base/merge ref, so the entry is correct for merge-ref CI and fails only until the head branch is synced.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_checkout_integration_ref_audit.py:line 66 (added ALLOWLIST_EXCEPTIONS entry) and the test at lines 82-88 (`test_checkout_workflows_are_all_classified`) | severity=NIT | confidence=4\n  PROBLEM: The new allowlist entry references `propagate-consumer-secrets.yml`, but `.github/workflows/` is missing from this checkout, so `extra` contains `{'propagate-consumer-secrets.yml'}` and `assert not extra, f\"Classified workflows without checkout@v5: {extra}\"` (line 88) fails locally.\n  WHY: pytest invocation of `main()` at line 971 calls `test_checkout_workflows_are_all_classified()` at line 972, and line 88's assertion fires on this PR head; the entry itself is well-formed and needed for the merge-ref CI run (confirmed by `scripts/propagate_consumer_secrets.sh:5-7`, `agents.md:547,690,5341`, `README.md:4477`, `CHANGELOG.md:844`, `docs/INVENTORY.md:88`, `docs/scripts-pending-removal.md:141`), so the defect is environmental and only the local PR-head test fails until the branch is synced.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_checkout_integration_ref_audit.py:66, 84-88 | severity=NIT | confidence=5\n  PROBLEM: `ALLOWLIST_EXCEPTIONS` at line 66 names `propagate-consumer-secrets.yml`, but that workflow file does not exist in the current checkout, so in `test_checkout_workflows_are_all_classified()` (lines 82-88) the entry lands in `extra = classified - checkout_files` and the assertion at line 88 fails with `Classified workflows without checkout@v5: ['propagate-consumer-secrets.yml']`.\n  WHY: The test suite fails on this revision because the classified set includes a workflow that the `WORKFLOWS_DIR.glob(\"*.yml\")` scan cannot find; the workflow exists on the base/merge ref, so the entry fails only against this revision.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7c09a9c8d6e5ad29180b59b5885aaefac35589857824ffe731b7207312a60a90",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8722,
+    "run_id": "41581117837",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41581117837",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103052832_395b46532a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8722,
+    "run_id": "41581117837"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T05:28:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
