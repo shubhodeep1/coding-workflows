@@ -75,6 +75,8 @@ if args[:1] == ["api"]:
         state.setdefault("tag_ref_patches", []).append(args)
         respond({})
     if path.endswith("/git/ref/tags/promote-cycle-frozen"):
+        if state.get("pin_tag_lookup_error"):
+            save(); sys.stderr.write("HTTP 503: Service Unavailable\n"); sys.exit(1)
         if state.get("pin_tag_exists"):
             respond({"object": {"type": "tag", "sha": "8" * 40}})
         save(); sys.stderr.write("HTTP 404: Not Found\n"); sys.exit(1)
@@ -1319,3 +1321,49 @@ def test_released_tick_runs_the_cycle_unpinned() -> None:
 	assert "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42" in proc.stdout
 	_assert_unpinned_dispatch(proc, final, "released_cycle_holds_pin")
 	assert "PROMOTE_CYCLE_PIN outcome=stale_tag_deleted" not in proc.stdout
+
+
+def test_released_issue_keeps_holding_while_the_freeze_tag_exists() -> None:
+	state = {
+		"in_flight": [42],
+		"in_flight_labels": {"42": ["ai:blocked"]},
+		"latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(30)}]},
+		"pin_tag_exists": True,
+		"gate_runs_sequence": GATE_SUCCESS,
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), state, env=TG_ENV)
+	assert proc.returncode == 0, proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tracking_issues=42 tag=promote-cycle-frozen" in proc.stdout
+	assert "PROMOTE_CYCLE_HOLD_RELEASED" not in proc.stdout
+	assert not final.get("dispatches")
+	assert not final.get("tag_deletes")
+	assert final["tg_posts"] == []
+
+
+def test_released_issue_freeze_tag_lookup_failure_fails_closed() -> None:
+	state = {
+		"in_flight": [42],
+		"in_flight_labels": {"42": ["ai:blocked"]},
+		"latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(30)}]},
+		"pin_tag_lookup_error": True,
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert "PROMOTE_CYCLE_SKIPPED reason=guard_unavailable lookup=tag:promote-cycle-frozen" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_freeze_tag_is_ignored_with_pinning_disabled() -> None:
+	state = {
+		"in_flight": [42],
+		"in_flight_labels": {"42": ["ai:blocked"]},
+		"latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(30)}]},
+		"pin_tag_exists": True,
+		"gate_runs_sequence": GATE_SUCCESS,
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_PIN_ENABLED": "false"})
+	assert "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42" in proc.stdout
+	assert "reason=cycle_in_flight" not in proc.stdout
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout

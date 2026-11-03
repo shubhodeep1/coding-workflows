@@ -131,8 +131,13 @@
 # of any present latch label is the latch start. At least
 # PROMOTE_CYCLE_HOLD_MAX_HOURS old: the issue is released (logged, WARNING
 # alert) and no longer holds. A failed, unverified, incomplete or unparseable
-# history keeps the issue holding (fail closed). A tick that released an issue
-# runs unpinned (PROMOTE_CYCLE_PIN reason=released_cycle_holds_pin): the
+# history keeps the issue holding (fail closed). While the promote-cycle-frozen
+# tag exists (and PROMOTE_CYCLE_PIN_ENABLED is not false) a released issue
+# still holds: the follower keeps promote-candidate, which every internal-*.yml
+# wrapper calls, frozen on the parked cycle's candidate, so a new cycle would
+# prove old code (skip detail tag=promote-cycle-frozen, no release alert; the
+# follower deletes the tag after PROMOTE_CYCLE_FREEZE_MAX_SECS). A tick that
+# released an issue runs unpinned (PROMOTE_CYCLE_PIN reason=released_cycle_holds_pin): the
 # released cycle may still own the promote-cycle-frozen tag and its poller
 # deletes that tag without an ownership check when it ends, so a new pinned
 # cycle sharing the tag would lose its freeze.
@@ -550,6 +555,9 @@ PIN_FREEZE_DETAIL=""
 PIN_TAG_CREATED=false
 # Set by promote_cycle_hold_guard when it released a parked tracking issue.
 PROMOTE_CYCLE_HOLD_RELEASED_ISSUES=""
+# Set once a hold-release alert timed out; later alerts this tick are skipped
+# so the waits cannot add up against the job cap.
+PROMOTE_CYCLE_HOLD_ALERT_TIMED_OUT=false
 
 is_http_404()
 {
@@ -754,6 +762,10 @@ pin_freeze()
 promote_cycle_hold_alert()
 {
 	local pid waited=0 limit=150
+	if [ "${PROMOTE_CYCLE_HOLD_ALERT_TIMED_OUT}" = "true" ]; then
+		echo "::warning::promote_main_cycle: an earlier hold-release alert timed out; this one is not sent" >&2
+		return 0
+	fi
 	if type tg_send_msg >/dev/null 2>&1; then
 		( tg_send_msg "$1" WARNING >/dev/null 2>&1 || true ) &
 		pid=$!
@@ -765,6 +777,7 @@ promote_cycle_hold_alert()
 		if kill -0 "${pid}" 2>/dev/null; then
 			pkill -P "${pid}" 2>/dev/null || true
 			kill "${pid}" 2>/dev/null || true
+			PROMOTE_CYCLE_HOLD_ALERT_TIMED_OUT=true
 			echo "::warning::promote_main_cycle: hold-release alert timed out after 30s; not sent" >&2
 		fi
 		wait "${pid}" 2>/dev/null || true
@@ -807,7 +820,7 @@ promote_cycle_hold_history()
 	if ! response="$(gh_retry gh api graphql -f query="${query}" -f owner="${owner}" -f name="${name}" 2>"${err_file}")"; then
 		# One short, single-line reason (auth, rate limit, query error): the last
 		# stderr line, without a leading workflow-command prefix.
-		err_line="$(grep -v '^[[:space:]]*$' "${err_file}" 2>/dev/null | tail -n1 | sed 's/^::[a-z]*:://' | tr -d '\r' | tr -c '[:print:]' ' ' | cut -c1-120 | sed 's/::/: :/g' || true)"
+		err_line="$(grep -v '^[[:space:]]*$' "${err_file}" 2>/dev/null | tail -n1 | sed 's/^::[a-z]*:://' | tr -d '\r' | tr -c '[:print:]' ' ' | cut -c1-120 | tr -s ':' | sed 's/::/: :/g' || true)"
 		rm -f "${err_file}"
 		echo "::warning::Promote cycle hold: GraphQL label history read failed: ${err_line:-no error output}" >&2
 		return 1
@@ -885,7 +898,7 @@ promote_cycle_hold_guard()
 	local listing="$1"
 	local in_flight_csv="$2"
 	local latch_json candidates history_json="" decisions now cap_secs remaining=""
-	local action issue_number detail age hours listed_count decided_count=0
+	local action issue_number detail age hours listed_count decided_count=0 tag_err_file
 	local -a candidate_list=()
 	if ! is_truthy "${PROMOTE_CYCLE_HOLD_RELEASE_ENABLED}"; then
 		skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
@@ -907,6 +920,24 @@ promote_cycle_hold_guard()
 		skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
 	fi
 	listed_count="$(printf '%s' "${listing}" | jq -r 'length' 2>/dev/null || echo "")"
+	# While the freeze tag exists the follower keeps promote-candidate (which
+	# every internal-*.yml wrapper calls) on the parked cycle's candidate, so a
+	# new cycle would run old pipeline code: keep holding until the tag is gone.
+	# With pinning off the follower ignores the tag. 1 read, only on a release.
+	if printf '%s\n' "${decisions}" | grep -q '^release ' \
+		&& [ "$(printf '%s' "${PROMOTE_CYCLE_PIN_ENABLED}" | tr '[:upper:]' '[:lower:]')" != "false" ]; then
+		tag_err_file="$(mktemp)"
+		if gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${PROMOTE_CYCLE_PIN_TAG}" >/dev/null 2>"${tag_err_file}"; then
+			rm -f "${tag_err_file}"
+			echo "::warning::Promote cycle hold: a tracking issue is past the latch cap, but the ${PROMOTE_CYCLE_PIN_TAG} tag still freezes ${PROMOTE_CYCLE_PIN_BRANCH}; keeping every tracking issue holding."
+			skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv} tag=${PROMOTE_CYCLE_PIN_TAG}"
+		fi
+		if ! is_http_404 "${tag_err_file}"; then
+			rm -f "${tag_err_file}"
+			skip_cycle guard_unavailable "lookup=tag:${PROMOTE_CYCLE_PIN_TAG}"
+		fi
+		rm -f "${tag_err_file}"
+	fi
 	while IFS=' ' read -r action issue_number detail age; do
 		[ -n "${action}" ] || continue
 		decided_count=$((decided_count + 1))
