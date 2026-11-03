@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:929-934,2293-2338 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The step `Review autofix review-pipeline plumbing contract test` was moved from `tests-heal-plan-and-validation` to `tests-release-and-log-analysis`, but the task required moving it out of `tests-hooks-and-orchestrator`, so that job's load is not reduced.\n  WHY: `tests-hooks-and-orchestrator` would keep exceeding its timeout. Reported as SEVERITY: MAJOR, mapped to high. Three other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) disputed it. They said the removal is at lines 929-934, inside `tests-hooks-and-orchestrator` (lines 519-931), and the step now appears once, at line 2323.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move the slowest step (Review autofix review-pipeline plumbing contract test) from CI job tests-hooks-and-orchestrator into the CI job with the most headroom (tests-release-and-log-analysis).\n  expected_change_site: .github/workflows/ci.yml, removing the step from tests-hooks-and-orchestrator\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says the diff removes the step from `tests-heal-plan-and-validation` rather than `tests-hooks-and-orchestrator`. Three other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) disputed this and called it a false positive.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:lines 929-934 (removal from tests-heal-plan-and-validation) and 2293-2338 (addition to tests-release-and-log-analysis) | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: The CI step `Review autofix review-pipeline plumbing contract test` was moved from `tests-heal-plan-and-validation` to `tests-release-and-log-analysis`, but the task required moving the slowest step from `tests-hooks-and-orchestrator`, which is currently overloaded.\n  WHY: The `tests-hooks-and-orchestrator` CI job will continue to exceed its timeout because its load was not reduced. The previous autofix run misinterpreted the source job.\n- TASK_GAP:\n  Requirement: \"Move its [tests-hooks-and-orchestrator] slowest steps ... into the CI job with the most headroom ... Move the slowest step (Review autofix review-pipeline plumbing contract test) from CI job tests-hooks-and-orchestrator into the CI job with the most headroom (tests-release-and-log-analysis).\"\n  Expected change site: .github/workflows/ci.yml, removing the step from tests-hooks-and-orchestrator.\n  Evidence of absence: The PR diff removes the step from `tests-heal-plan-and-validation` and adds it to `tests-release-and-log-analysis`. The step was already in `tests-heal-plan-and-validation` and not in `tests-hooks-and-orchestrator`, based on the provided diff. The task explicitly demanded removing it from `tests-hooks-and-orchestrator`, where the budget-watch failure occurred.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "24e6d869adf7eaf0a3f9a0aef6be82528231276825372e32b59a77ace86c45f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8733,
+    "run_id": "41583203096",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41583203096",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103061301_f0607c989f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8733,
+    "run_id": "41583203096"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T06:13:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
