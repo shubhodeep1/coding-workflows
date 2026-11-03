@@ -1,0 +1,29 @@
+{
+  "discovered_at": "2026-11-03T07:50:35Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/collect_pr_check_runs_context.py:1-1; cited_path=check-run `copilot-pull-request-reviewer` (not a repository file); files_touched=.github/workflows/ci.yml, .github/workflows/review_autofix.yml, agents.d/8726-memory-push-retry-reasons.md, agents.d/wfopt-2026-09-30-check-run-pending-identity.md, changelog.d/8725-review-disk-headroom-logging.md, changelog.d/8726-memory-push-retry-reasons.md, changelog.d/wfopt-2026-09-30-check-run-pending-identity.md, scripts/ai_memory.py, scripts/ai_memory_lib.py, scripts/collect_pr_check_runs_context.py, scripts/review_collect_pr_metadata.sh, tests/test_ai_memory_cli.py, tests/test_ai_memory_push_retry_reasons.py, tests/test_collect_pr_check_runs_pending_identity.py, tests/test_review_autofix_disk_headroom_contract.py, tests/test_review_autofix_review_pipeline_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8727,
+  "record_id": "lesson_20261103075035_36e0d4bce5",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "check-run `copilot-pull-request-reviewer` (not a repository file)",
+    "scripts/collect_pr_check_runs_context.py",
+    ".github/workflows/ci.yml",
+    ".github/workflows/review_autofix.yml",
+    "agents.d/8726-memory-push-retry-reasons.md",
+    "agents.d/wfopt-2026-09-30-check-run-pending-identity.md",
+    "changelog.d/8725-review-disk-headroom-logging.md",
+    "changelog.d/8726-memory-push-retry-reasons.md",
+    "changelog.d/wfopt-2026-09-30-check-run-pending-identity.md",
+    "scripts/ai_memory.py",
+    "scripts/ai_memory_lib.py",
+    "scripts/review_collect_pr_metadata.sh",
+    "tests/test_ai_memory_cli.py",
+    "tests/test_ai_memory_push_retry_reasons.py",
+    "tests/test_collect_pr_check_runs_pending_identity.py",
+    "tests/test_review_autofix_disk_headroom_contract.py",
+    "tests/test_review_autofix_review_pipeline_contract.py"
+  ]
+}
