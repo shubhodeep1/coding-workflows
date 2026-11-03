@@ -1700,6 +1700,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_force_tick_repository_env.py
 
+      - name: Review autofix disk headroom contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_disk_headroom_contract.py
+
       - name: Review autofix smoke editor override contract test
         run: |
           set -euo pipefail
@@ -2231,6 +2236,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_backoff.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_reasons.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_git_env_isolation.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_check_triage_branch_guard.py
@@ -2331,6 +2337,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_collect_pr_check_runs_pending_identity.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
@@ -2673,6 +2680,7 @@ jobs:
             tests/test_review_rb_judge_reference_staging.py \
             tests/test_review_resolve_review_threads.py \
             tests/test_review_reviewer_attempt_prompt_isolation.py \
+            tests/test_review_reviewer_common_context_sections.py \
             tests/test_static_context_agents_index.py \
             tests/test_static_context_agents_index_clarify_plan.py \
             tests/test_static_context_agents_index_implement.py \
