@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR introduces a regression in the smoke test canary that causes failures in the test suite (`tests/test_implement_post_codex_recovery.py`).\n  WHY: The pre-push gate report labels this failure as \"caused by this change\", so existing test verification steps that rely on the canary file content break. Severity was not stated by the source, so medium is a placeholder. anthropic_claude-sonnet-5_5 noted it could not determine the cause and saw no link to the canary file.\n- .github/workflows/review_autofix.yml:unspecified | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Copilot review check-run failed with `custom_instructions_too_large`.\n  WHY: The custom instruction payload exceeds the prompt limit, so the reviewer agent exits with status 1 and no automated feedback is produced. Severity was not stated by the source, so medium is a placeholder.\n- agents.md:1 (5,410 lines total); CLAUDE.md:1 (1,508 lines total) | severity=high | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Copilot code review loads `agents.md` and `CLAUDE.md` together as custom instructions, and their combined payload exceeds the Copilot prompt limit (check run 41544404053, errorCode `custom_instructions_too_large`).\n  WHY: The review tool aborts with status 1 before producing any review, on every PR. Source severity was MAJOR, mapped to high. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 judged this unrelated to the PR, and anthropic_claude-sonnet-5_5 called it a Copilot tooling failure not reportable here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:unspecified | confidence=4\n  PROBLEM: The PR introduces a regression in the smoke test canary that causes failures in the test suite (`tests/test_implement_post_codex_recovery.py`).\n  WHY: The pre-push gate report labels this failure as \"caused by this change\", so existing test verification steps that rely on the canary file content break.\n- .github/workflows/review_autofix.yml:unspecified | confidence=5\n  PROBLEM: The Copilot review check-run failed due to `custom_instructions_too_large` (errorCode `custom_instructions_too_large`).\n  WHY: The custom instruction payload exceeds the prompt limit, so the reviewer agent exits with status 1 and no automated feedback is produced.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:1 (5,410 lines total); CLAUDE.md:1 (1,508 lines total) | severity=high | confidence=5\n  PROBLEM: Copilot code review loads `agents.md` and `CLAUDE.md` together as repository custom instructions, and their combined payload exceeds the Copilot prompt limit, so the review tool exits with status 1 before producing any review (failed check run 41544404053, errorCode `custom_instructions_too_large`). The source says this fails on every PR in this repo.\n  WHY: The Copilot reviewer builds its prompt from the two instruction files plus the system message, and the combined size crosses the provider's input limit. The run aborts with `Prompt too big after adding system message`, and the check run reports failure. The source's severity was MAJOR, mapped here to high.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7fd8e163d732ba110f01a4f1c067d12ce65a23a8858e5e6671f264d04dfaa6ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41563457539",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41563457539",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103021429_9ee59004d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41563457539"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T02:14:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
