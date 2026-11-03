@@ -115,14 +115,14 @@ def test_clarify_respond_isolates_every_model_call() -> None:
 	assert "codex --ask-for-approval" not in respond
 	# Each of the three model calls has a Claude branch (Phase 5a) and the
 	# unchanged codex call it falls back to (exit 75, plan D1).
-	assert respond.count('bash scripts/clarify_isolated_run.sh ') == 6
+	assert respond.count('bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" ') == 6
 	for args, rc in (
 		('"${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"', "rc"),
 		('"${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt"', "critic_rc"),
 		('"${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"', "revise_rc"),
 	):
-		assert f"bash scripts/clarify_isolated_run.sh {args} claude CLARIFY_RESPOND || {rc}=$?" in respond
-		assert f"bash scripts/clarify_isolated_run.sh {args} || {rc}=$?" in respond
+		assert f'bash "${{SUPPORT_SCRIPTS_DIR:-scripts}}/clarify_isolated_run.sh" {args} claude CLARIFY_RESPOND || {rc}=$?' in respond
+		assert f'bash "${{SUPPORT_SCRIPTS_DIR:-scripts}}/clarify_isolated_run.sh" {args} || {rc}=$?' in respond
 		assert f'if [ "${{{rc}}}" -eq 75 ]; then' in respond
 	assert respond.count("CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}") == 2
 
