@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Implementer discipline: Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code.\"\n  expected_change_site: tests/test_review_conflict_resolve_retry_prelude_render.py, in test_scope_retry_restores_full_attempt_and_keeps_final_gate (line 656), test_scope_feedback_is_available_for_generic_resolver (line 709) and test_model_index_is_fresh_per_attempt_and_fails_closed (line 931); these tests should have no diff hunks\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: tests/test_review_conflict_resolve_retry_prelude_render.py lines 656, 709 and 931 still carry whitespace-only hunks (four tabs now, where the base had three tabs plus alignment spaces: one space at line 656, five spaces at lines 709 and 931), the earlier reverts never landed, the last-run diff adds the TypeError test but does not remove these hunks. Severity NIT, cosmetic, no runtime effect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- requirement: \"Implementer discipline: Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code.\"\n  expected_change_site: tests/test_review_conflict_resolve_retry_prelude_render.py, in test_scope_retry_restores_full_attempt_and_keeps_final_gate (line 656), test_scope_feedback_is_available_for_generic_resolver (line 709) and test_model_index_is_fresh_per_attempt_and_fails_closed (line 931). These tests should have no diff hunks.\n  Evidence of absence: The PR diff still has three whitespace-only hunks in this file. Lines 656, 709 and 931 start with four tabs. The base had three tabs plus alignment spaces (one space at line 656, five spaces at lines 709 and 931). Three editor summaries said this revert was done. The previous run's diff did not touch these lines, so the reverts never landed. The changes are cosmetic, with no runtime effect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Other items checked: the failed `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large` (HTTP 422), runs no code from this PR and maps to no hunk, so not raised as a defect. The `TypeError` test case added in the last run diff is sound (manifest `[]` makes `saved[\"merge\"]` raise `TypeError`; widened `except` catches it; test expects the unchanged `::error::` line, exit code 2 and `reason=type_error`).\n- HARDENING_SUGGESTIONS: NONE\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- requirement: \"Make append-only, minimal edits, and do not reflow unrelated code.\"\n  expected_change_site: `tests/test_review_conflict_resolve_retry_prelude_render.py`, continuation lines in the existing tests near lines 656, 709, and 931.\n  Evidence of absence: The PR diff still changes indentation on those three unrelated lines; they are whitespace-only hunks. The last-run diff adds the TypeError test but does not remove those hunks.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- requirement: \"Implementer discipline: Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code.\"\n  expected_change_site: tests/test_review_conflict_resolve_retry_prelude_render.py (no hunks in test_scope_retry_restores_full_attempt_and_keeps_final_gate, test_scope_feedback_is_available_for_generic_resolver, or test_model_index_is_fresh_per_attempt_and_fails_closed)\n  Evidence of absence: The reverts did not land. The PR diff still has three whitespace-only hunks, and working-tree lines 656, 709 and 931 now start with four tabs where the base had three tabs plus alignment spaces (three tabs plus one space at line 656; three tabs plus five spaces at lines 709 and 931). Restore base indentation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Note (informational, no code defect): external check-run `copilot-pull-request-reviewer` (run 41629184932) fails with `custom_instructions_too_large` (HTTP 422) because the combined AGENTS.md and CLAUDE.md custom instructions exceed Copilot's size limit. It runs no repository code and fails regardless of PR contents; no editor action is possible. Do not gate merge on this check.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d616370397600fda2043dd20458adc285cbd88c915326c6f037af957f0b8ebc7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8747,
+    "run_id": "41632525262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41632525262",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103122059_3363d3cac0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8747,
+    "run_id": "41632525262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T12:20:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
