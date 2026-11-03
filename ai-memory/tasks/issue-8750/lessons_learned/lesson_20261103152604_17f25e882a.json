@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-03T15:26:04Z",
+  "issue_number": 8750,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=tests/test_gh_api_write_guard.py:1108; cited_path=tests/test_gh_api_write_guard.py, tests/test_files_touched_scope_guard.py, tests/test_orchestrate_lib.py, tests/test_review_autofix_provider_outage_contract.py, tests/test_session_start_extract_repo_slug.py, tests/test_workflow_checkout_integration_ref_audit.py; files_touched=.github/workflows/workflow-failure-heal-intake.yml, README.md, agents.d/stuck-states-p4-rb-intake.md, changelog.d/stuck-states-p4-rb-intake.md, prompts/_templates/mode-workflow-failure-heal.txt, prompts/mode-workflow-failure-heal.txt, scripts/workflow_failure_heal.py, scripts/workflow_failure_heal_intake.sh, tests/test_workflow_failure_heal.py, tests/test_workflow_failure_heal_scope_tests.py.",
+  "phase": "review_autofix",
+  "pr_number": 8754,
+  "record_id": "lesson_20261103152604_17f25e882a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/test_gh_api_write_guard.py, tests/test_files_touched_scope_guard.py, tests/test_orchestrate_lib.py, tests/test_review_autofix_provider_outage_contract.py, tests/test_session_start_extract_repo_slug.py, tests/test_workflow_checkout_integration_ref_aud",
+    "tests/test_gh_api_write_guard.py",
+    ".github/workflows/workflow-failure-heal-intake.yml",
+    "README.md",
+    "agents.d/stuck-states-p4-rb-intake.md",
+    "changelog.d/stuck-states-p4-rb-intake.md",
+    "prompts/_templates/mode-workflow-failure-heal.txt",
+    "prompts/mode-workflow-failure-heal.txt",
+    "scripts/workflow_failure_heal.py",
+    "scripts/workflow_failure_heal_intake.sh",
+    "tests/test_workflow_failure_heal.py",
+    "tests/test_workflow_failure_heal_scope_tests.py"
+  ]
+}
