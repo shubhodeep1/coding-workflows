@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1-1508 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The PR-head Copilot review check fails before producing a review with \"Prompt too big after adding system message\" (`custom_instructions_too_large`).\n  WHY: The loaded CLAUDE.md and agents.md custom-instruction payload exceeds the size limit, so the check exits with failure; the reviewers state it is not caused by the canary content. Severity MAJOR was mapped to high. Not reported by anthropic_claude-sonnet-5_5 or minimax_minimax-m3 as a defect in this PR.\n- agents.md:1-5410 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The same `custom_instructions_too_large` failure, with agents.md as part of the oversized payload.\n  WHY: agents.md is loaded together with CLAUDE.md as Copilot custom instructions and pushes the prompt over the limit. Severity MAJOR was mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- CLAUDE.md and agents.md:Complete custom-instruction payload loaded by the Copilot PR reviewer | severity=MAJOR | confidence=5\n  PROBLEM: The Copilot PR review check fails before producing a review with `Prompt too big after adding system message` (`custom_instructions_too_large`).\n  WHY: The check cannot create its review request with the loaded instructions and exits with failure. The failure is confirmed by the PR-head check run; it is not caused by the canary content changed in this PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md:1-1508 (entire file; also agents.md:1-5410, complete custom-instruction payload) | severity=MAJOR | confidence=5\n  PROBLEM: The PR-head Copilot review check fails before producing a review with \"Prompt too big after adding system message\" and error code `custom_instructions_too_large`.\n  WHY: The reviewer request is constructed with CLAUDE.md and agents.md inlined as custom instructions. Both files are hundreds of kilobytes (CLAUDE.md spans 1508 lines, agents.md spans 5410 lines; CLAUDE.md:20-21 itself documents \"Both files can run to hundreds of kilobytes\"), exceeding the custom-instruction size limit, so the check exits with failure before any review is generated. This failure is not attributable to the canary content.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2d0f290e4e190f14dd0690830da13af4a8f5932e7d9d14c0072a5caa97f0029a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41607623717",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41607623717",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103091329_f6b7b10342",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41607623717"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T09:13:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
