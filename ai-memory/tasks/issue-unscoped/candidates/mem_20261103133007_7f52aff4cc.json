@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR introduces a regression in the test suite, specifically in tests/test_implement_post_codex_recovery.py.\n  WHY: The canary file tests/e2e_smoke_canary.txt is likely used as a reference by these tests, so updating its content (run_id: 40876853022) without updating the tests breaks them. The reviewer gave no severity, so medium is an assumed placeholder. Note that z-ai_glm-5_3-flash reported the tests reference the canary path only in prompt/fixture strings (tests/test_implement_post_codex_recovery.py:5060, 5779) and never read its content.\n- external check-run `copilot-pull-request-reviewer`:N/A | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot PR-reviewer check-run fails with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") on head e540dbc18770bafdac9f8861d6f6b3b123f57ccd, run 41544382408.\n  WHY: This is an infrastructure limit on repo instruction-file size, independent of the PR diff, so the canary change cannot cause or fix it. The reviewer's severity was NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:N/A (Test suite failure) | confidence=4\n  PROBLEM: The PR introduces a regression in the test suite, specifically in tests/test_implement_post_codex_recovery.py.\n  WHY: The smoke-test canary file tests/e2e_smoke_canary.txt is likely used as a reference or dependency by these tests. Updating its content without updating the tests to reflect the new canary value (run_id: 40876853022) causes these test cases to fail. Issue #8363 said to modify only the canary file, so the reviewer concludes the change is incomplete or the tests expect the canary to stay consistent with their assertions.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- external check-run `copilot-pull-request-reviewer` (not a repository file):check-run on head e540dbc18770bafdac9f8861d6f6b3b123f57ccd, run 41544382408 | severity=NIT | confidence=4\n  PROBLEM: The Copilot PR-reviewer check-run fails with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") before producing any review. This is an infrastructure limit on repo instruction-file size (AGENTS.md/CLAUDE.md at the repo level), independent of the PR diff. The reviewer verified that no repository file in the diff maps to this failure.\n  WHY: The Copilot reviewer agent aborts when built custom instructions exceed its prompt-size limit on any PR in this repo, regardless of the change under review.\n- TASK_GAP (recorded by the reviewer as satisfied, no remediation needed) | severity=NIT | confidence=5\n  Requirement: \"Update its content so it is exactly these three lines ... status: ok / run_id: 40876853022 / updated-by: ai-pipeline ... with a trailing newline\", and \"Only modify tests/e2e_smoke_canary.txt\".\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: No gap. tests/e2e_smoke_canary.txt on the PR head contains exactly the three required lines ending with a newline (verified on disk, 3 lines, no extra content). The PR diff touches only that file, and the previous `decompose-run:` line was replaced as required.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "df5d97a5669662e9cb77a6c6ad1f251eb78da17d634786e02a9ad01d6ccab472",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41642902443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41642902443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103133007_7f52aff4cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41642902443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T13:30:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
