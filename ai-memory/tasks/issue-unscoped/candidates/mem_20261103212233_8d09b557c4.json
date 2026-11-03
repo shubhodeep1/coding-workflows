@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:1789-1797, 4314-4327, 4718-4728, 5062-5069 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The agents.md additions (+18 lines) add to repository instruction files that exceed the Copilot reviewer prompt budget, so the copilot-pull-request-reviewer check fails with HTTP 422 custom_instructions_too_large.\n  WHY: The review request is rejected before any diff analysis and the PR gets no Copilot review. Severity disagreement: gemini and luna said MAJOR, glm said NIT (it states the budget was already exceeded on prior heads and no edit in this PR can clear it). The highest severity is used.\n- CHANGELOG.md:1812-1822 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The pool-reset entry's `### For contributors` subsection is followed by two operator-facing entries, which render under a contributors subsection before the next `### For contributors` heading.\n  WHY: This is a documentation-structure artefact only, caused by the assembler's filename-order insertion, with no runtime effect (reported as NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:1789-1797, 4314-4327, 4718-4728, 5062-5069 | severity=MAJOR | confidence=4\n  PROBLEM: The PR adds substantial content to agents.md, contributing to the prompt size limit, which causes the Copilot reviewer CI check to fail.\n  WHY: The repository instruction files exceed the Copilot reviewer prompt budget, causing an HTTP 422 failure (errorCode custom_instructions_too_large) and preventing the automated PR review.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:1792-1793 and 4317-4324 | severity=MAJOR | confidence=3\n  PROBLEM: The additions enlarge the repository instruction file loaded by the Copilot reviewer. On this PR head, the copilot-pull-request-reviewer check failed with HTTP 422, custom_instructions_too_large, after loading AGENTS.md and CLAUDE.md.\n  WHY: The reviewer cannot create its review request, so the check fails without reviewing the PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:1792-1793, 4317-4324 (also 4721-4725, 5065-5066) | severity=NIT | confidence=4\n  PROBLEM: The failed copilot-pull-request-reviewer check (head SHA 0773f061034bd2910fe376e92580510857fa7df3, run 41717074288, job 126199770978) failed with \"Prompt too big after adding system message (statusCode 422, errorCode custom_instructions_too_large)\". AGENTS.md and CLAUDE.md are loaded wholesale and their aggregate size exceeds the budget. This PR's additions add marginally to it but are not the cause.\n  WHY: The review request is rejected server-side with HTTP 422 before review generation. No edit within this PR's changed files can clear the check, because the cause is the pre-existing aggregate size of AGENTS.md and CLAUDE.md.\n- CHANGELOG.md:1812-1822 | severity=NIT | confidence=3\n  PROBLEM: The pool-reset entry's `### For contributors` subsection (line 1812) is followed by two operator-facing entries (at 1816 and 1818), which render under a contributors subsection before the second `### For contributors` at line 1820.\n  WHY: No runtime failure; documentation structure only. The content is preserved verbatim, and the interleaving pattern occurs throughout the pre-existing file.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c86581309fc4bda7833719eb4ddce87e4a2a98508c244025eb61c7440bd7a178",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8774,
+    "run_id": "41717053351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41717053351",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103212233_8d09b557c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8774,
+    "run_id": "41717053351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T21:22:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
