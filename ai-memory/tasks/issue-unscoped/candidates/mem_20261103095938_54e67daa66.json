@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly these three lines: `status: ok`, `run_id: alt-40831286935`, and `updated-by: ai-pipeline`.\n  expected_change_site: `tests/e2e_smoke_canary.txt`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: Both reviewers report the requirement is already satisfied (severity NIT): the file contains exactly the three required lines, so no change is missing.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly these three lines: `status: ok`, `run_id: alt-40831286935`, and `updated-by: ai-pipeline`.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The PR diff and last-run diff both show the file now contains exactly the three required lines. The full PR diff replaces the prior `decompose-run: 41445772297` line with `run_id: alt-40831286935` and adds `updated-by: ai-pipeline`. The last-run diff further refines the run_id to add the `alt-` prefix, matching the issue verbatim. Symbol diff summary lists this as the only changed file.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly these three lines: `status: ok`, `run_id: alt-40831286935`, and `updated-by: ai-pipeline`.\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: Verified on the current ref \u2014 the file already contains exactly these three lines; no change is needed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a3999f877701231bc6f1fa3cd0043aa35323b995c3196db5ac0e22ea90de25f9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41611637912",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41611637912",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103095938_54e67daa66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41611637912"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T09:59:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
