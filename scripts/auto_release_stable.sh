@@ -54,7 +54,9 @@
 #                         started RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS ago or
 #                         longer (the run is named in the evidence only: the
 #                         intake drops claimed runs that did not fail)
-#   stable_release_stale  neither of the above reported, and the unreleased
+#   stable_release_stale  neither of the above reported, no gate run on the
+#                         tip exists other than completed cancelled runs, and
+#                         the unreleased
 #                         work (max of the tag time and the oldest unreleased
 #                         commit) has waited RELEASE_BLOCKER_STABLE_STALE_SECS
 #                         or longer; on the dispatch path the gate is still
