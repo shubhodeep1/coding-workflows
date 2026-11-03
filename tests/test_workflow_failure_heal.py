@@ -10509,6 +10509,20 @@ def test_intake_release_blocker_first_repeat_after_filing_is_throttled(tmp_path:
 	assert not [line for line in _tg_lines(tg_log) if "Release blocker" in line]
 
 
+def test_intake_release_blocker_read_failure_still_throttles_on_the_filed_issue(tmp_path: Path) -> None:
+	# The comment read fails, but the pipeline filed the issue within the window.
+	tg_log = tmp_path / "tg.log"
+	issue = _heal_issue(812, state="open", fp=BLOCKER_FP, created=datetime.now(timezone.utc) - timedelta(hours=1))
+	issue.update({"title": f"Release blocker: {BLOCKER_REASON} on stable ({BLOCKER_WORKFLOW})", "author": "workflow-bot"})
+	result, state, _ = _run_intake(_blocker_payload(), _intake_state(heal_issues=[issue], comments_fetch_fail=True), diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_blocker_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn occurrence_throttle_unavailable existing_issue=812" in result.stdout
+	assert f"WORKFLOW_HEAL duplicate_throttled existing_issue=812 existing_repo={SELF_REPO} fp={BLOCKER_FP} age=" in result.stdout
+	assert not state.get("comments_posted")
+	assert not [line for line in _tg_lines(tg_log) if "Release blocker" in line]
+
+
 def test_intake_release_blocker_consumer_app_defect_warns(tmp_path: Path) -> None:
 	tg_log = tmp_path / "tg.log"
 	state = _intake_state(run_details={BLOCKER_RUN_ID: _blocker_run()})
