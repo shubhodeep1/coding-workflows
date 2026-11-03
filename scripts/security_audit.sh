@@ -254,6 +254,20 @@ security_audit_require_writable_destination() {
 	fi
 }
 
+# Prior-findings prompt block, shared by findings-json mode and the
+# branch-scoped issues audit (single-issue security pass delta re-audit).
+security_audit_append_prior_findings_prompt() {
+	echo || return 1
+	echo "Previously reported findings for this project (earlier fix cycles; their fixes have merged into the audited head):" || return 1
+	echo "=== BEGIN UNTRUSTED PRIOR FINDINGS ===" || return 1
+	cat "${PRIOR_FINDINGS_PROMPT_FILE}" || return 1
+	echo "=== END UNTRUSTED PRIOR FINDINGS ===" || return 1
+	echo "Rules for previously reported findings:" || return 1
+	echo "- Verify each one against the current code. If it is still exploitable, re-emit it with the SAME finding_id and the current line number." || return 1
+	echo "- If it is resolved, omit it. Never report a resolved finding again under a new finding_id." || return 1
+	echo "- Report every remaining instance of the same defect class in the scoped files (sibling code paths, other venues, adapters, handlers) as its own finding. The fix loop converges only when a class is cleared, not one line." || return 1
+}
+
 security_audit_append_prompt_context() {
 	echo || return 1
 	echo "Current UTC date: $(date -u +%F)" || return 1
@@ -283,20 +297,19 @@ security_audit_append_prompt_context() {
 		echo || return 1
 		cat "${OVERSIZED_PROMPT_FILE}" || return 1
 	fi
+	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "findings-json" ] && [ -n "${SECURITY_AUDIT_TARGET_REF}" ] \
+			&& [ -s "${PRIOR_FINDINGS_PROMPT_FILE}" ]; then
+		# Branch-scoped issues audit (single-issue security pass delta
+		# re-audit): same prior-findings block as findings-json mode, without
+		# the project-pass money lens.
+		security_audit_append_prior_findings_prompt || return 1
+	fi
 	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 		echo || return 1
 		echo "Project-pass security and money-handling lens:" || return 1
 		cat "${SECURITY_AUDIT_MONEY_LENS_FILE}" || return 1
 		if [ -s "${PRIOR_FINDINGS_PROMPT_FILE}" ]; then
-			echo || return 1
-			echo "Previously reported findings for this project (earlier fix cycles; their fixes have merged into the audited head):" || return 1
-			echo "=== BEGIN UNTRUSTED PRIOR FINDINGS ===" || return 1
-			cat "${PRIOR_FINDINGS_PROMPT_FILE}" || return 1
-			echo "=== END UNTRUSTED PRIOR FINDINGS ===" || return 1
-			echo "Rules for previously reported findings:" || return 1
-			echo "- Verify each one against the current code. If it is still exploitable, re-emit it with the SAME finding_id and the current line number." || return 1
-			echo "- If it is resolved, omit it. Never report a resolved finding again under a new finding_id." || return 1
-			echo "- Report every remaining instance of the same defect class in the scoped files (sibling code paths, other venues, adapters, handlers) as its own finding. The fix loop converges only when a class is cleared, not one line." || return 1
+			security_audit_append_prior_findings_prompt || return 1
 		fi
 		if [ -s "${FIX_CYCLE_DIFFS_PROMPT_FILE}" ]; then
 			echo || return 1
@@ -378,14 +391,25 @@ if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ] && [ -z "${SECURITY_AUDIT_DIFF_BASE}" ]
 	exit 1
 fi
 # Optional JSON array of findings reported by earlier audits of the same
-# project (findings-json mode only).  Their files are added to the audit
+# project (findings-json mode, or a branch-scoped issues audit with
+# SECURITY_AUDIT_TARGET_REF set: the single-issue security pass delta re-audit,
+# stuck-states P5a).  Their files are added to the audit
 # scope and the list is appended to the prompt so the model verifies each one
 # against the current code and reports remaining instances of the same class
 # instead of re-discovering the project from scratch.
 SECURITY_AUDIT_PRIOR_FINDINGS="${SECURITY_AUDIT_PRIOR_FINDINGS:-}"
-if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
-	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode" >&2
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ] \
+		&& [ -z "${SECURITY_AUDIT_TARGET_REF:-}" ]; then
+	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode or with SECURITY_AUDIT_TARGET_REF" >&2
 	exit 1
+fi
+# Optional destination (issues mode only, default empty) for the surviving
+# findings of this audit as a JSON array. The single-issue security pass
+# report persists them on the PR so the next delta re-audit can carry them
+# forward. A write failure only warns; it never fails the audit.
+SECURITY_AUDIT_PASS_FINDINGS_OUT="${SECURITY_AUDIT_PASS_FINDINGS_OUT:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "issues" ]; then
+	SECURITY_AUDIT_PASS_FINDINGS_OUT=""
 fi
 # Optional JSON array of findings that an operator (`/security-pass-waive`) or
 # the orchestrator's security-pass exhaustion judge accepted as known risks
@@ -707,6 +731,9 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 		echo "::warning::security-audit: SECURITY_AUDIT_FIX_CYCLE_DIFFS file is missing; the audit runs without the newly introduced code section"
 		SECURITY_AUDIT_FIX_CYCLE_DIFFS=""
 	fi
+elif [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+	# Branch-scoped issues audit (single-issue security pass delta re-audit).
+	security_audit_require_file "prior-findings-preflight" "${SECURITY_AUDIT_PRIOR_FINDINGS}"
 fi
 
 LAST_AUDITED_SHA=""
@@ -3318,7 +3345,8 @@ python3 - \
 	"${AUDIT_SCOPE_HEAD_SHA}" \
 	"${AUDIT_SCOPE_BASE_SHA}" \
 	"${SECURITY_AUDIT_TARGET_REF}" \
-	"${OVERSIZED_EXPORT_DIR}/manifest.json" <<'PY'
+	"${OVERSIZED_EXPORT_DIR}/manifest.json" \
+	"${SECURITY_AUDIT_PASS_FINDINGS_OUT}" <<'PY'
 from __future__ import annotations
 
 import base64
@@ -3346,6 +3374,9 @@ head_sha = sys.argv[13].strip()
 last_audited_sha = sys.argv[14].strip()
 target_ref = sys.argv[15].strip()
 oversized_manifest = json.loads(Path(sys.argv[16]).read_text(encoding="utf-8"))
+# Optional (single-issue security pass, stuck-states P5a): surviving-findings
+# export for the PR report. Empty means no export.
+pass_findings_out = sys.argv[17].strip() if len(sys.argv) > 17 else ""
 
 
 def load_json(path: Path, *, label: str):
@@ -3549,6 +3580,23 @@ followup_summary_env_path.write_text(
 	+ "\n",
 	encoding="utf-8",
 )
+if pass_findings_out:
+	pass_finding_fields = (
+		"finding_id", "owasp_or_stride_category", "severity", "confidence",
+		"file", "line", "exploit_scenario", "recommendation",
+	)
+	pass_findings_export = [
+		{key: finding.get(key) for key in pass_finding_fields if key in finding}
+		for finding in findings
+		if isinstance(finding, dict)
+	]
+	pass_findings_path = Path(pass_findings_out)
+	pass_findings_tmp = pass_findings_path.with_name(pass_findings_path.name + ".tmp")
+	try:
+		pass_findings_tmp.write_text(json.dumps(pass_findings_export, ensure_ascii=True), encoding="utf-8")
+		pass_findings_tmp.replace(pass_findings_path)
+	except OSError as exc:
+		print(f"::warning::security-audit: could not write the single-issue security pass findings export: {exc}")
 PY
 
 gh_retry gh issue comment "${TRACKER_NUMBER}" \
