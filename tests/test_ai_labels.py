@@ -742,6 +742,7 @@ def test_sync_labels_prefetch_failure_falls_back_to_per_label_gets() -> None:
 	failing_prefetches: list[object] = [
 		_http_error("https://api.github.com/repos/octo-org/octo-repo/labels?per_page=100&page=1", 403, "Forbidden"),
 		_FakeHTTPResponse({"name": "not-a-list"}),
+		ai_labels.http.client.IncompleteRead(b""),
 	]
 	for failing_prefetch in failing_prefetches:
 		with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-fallback-") as tmpdir:

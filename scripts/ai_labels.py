@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import random
@@ -492,7 +493,7 @@ def _prefetch_repo_labels(repo: str) -> tuple[dict[str, dict[str, Any]] | None, 
             return None, f"HTTP {exc.code}"
         except LabelContractError:
             raise
-        except (urllib.error.URLError, OSError, ValueError, RuntimeError) as exc:
+        except (urllib.error.URLError, OSError, ValueError, RuntimeError, http.client.HTTPException) as exc:
             return None, type(exc).__name__
         if not isinstance(page_items, list):
             return None, f"malformed page {page_number}"
