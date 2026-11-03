@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/ai/label_contract.v1.json:n/a (referenced by .github/workflows/ci.yml line 2073, tests/test_ai_labels.py line 24) | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The contract file was reported missing from the checkout, so the new CI label-sync smoke step and tests/test_ai_labels.py and tests/test_ai_labels_retired.py would fail. Note that z-ai_glm-5_3-flash reported verifying the file exists, with its longest description at 100 characters.\n  WHY: `load_label_contract` would raise FileNotFoundError, which `main()` does not catch. The reviewer could not confirm this and rated it unconfirmed.\n- .github/workflows/ci.yml:n/a (pre-push test gate) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR introduces regressions that cause 7 pre-push tests to fail, including tests/test_ai_labels.py and tests/test_gh_api_write_guard.py. Note that minimax_minimax-m3 and z-ai_glm-5_3-flash judged this stale or not reproducible.\n  WHY: The reviewer says the changes broke the repository contract or integration tests. Severity is BLOCKER, mapped to critical.\n- analysis/workflow-optimization-2026-10-21-4.md:91 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The file still references analysis/workflow-optimization-2026-09-30-2.md, which this PR deletes. analysis/recommendation-processing-report.md lines 1811-1812 do the same.\n  WHY: Nothing breaks, because no test, script or workflow reads that filename. This is a documentation-consistency note only.\n- scripts/ai_labels.py:1011-1015 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: `main()` does not catch OSError from `load_label_contract` (called at line 520), so a missing or unreadable contract exits 1 with a traceback.\n  WHY: The failure is fail-closed, but the CI message \"produced no JSON result\" hides the real cause.\n- scripts/ai_labels.py:496,609-620 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: `_prefetch_repo_labels` catches RuntimeError but the per-label fallback handler does not.\n  WHY: If `_github_api_request` ever reaches its line 273, the RuntimeError aborts the whole sync and loses the errors list.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Reliability 1/Exec 2 asks for the agent's exit class in the RESOLVER_SCOPE_CHECK diagnostic.\n  expected_change_site: scripts/review_conflict_resolve.sh `_emit_scope_check_line` (lines 1224-1229 and 1864-1869)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The emitted line carries `exc=` (the guard's Python exception class) but no agent exit code, because the guard heredocs never see it. The processing report documents this as a deviation. anthropic rated it LOW, and openai rated it NIT, with confidence 4.\n- requirement: Reliability 2 asks the CI label-sync dry-run smoke to assert an empty `errors` array.\n  expected_change_site: .github/workflows/ci.yml \"AI label sync dry-run smoke\" (lines 2095-2111)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The step fails only on `action == \"validate\"` or \"100-character limit\" errors, and other errors are non-fatal. The processing report documents this as intentional. anthropic rated it LOW, and openai rated it NIT, with confidence 4.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/ai/label_contract.v1.json (referenced by .github/workflows/ci.yml line 2073, tests/test_ai_labels.py line 24) | severity=high | confidence=medium\n  PROBLEM: The contract file was not found in the checkout, so the CI smoke step and two test files would fail.\n  WHY: `load_label_contract` raises FileNotFoundError, which `main()` does not catch. The finding is unconfirmed because the tests could not be run.\n- analysis/workflow-optimization-2026-10-21-4.md:91 | severity=low | confidence=high\n  PROBLEM: The file references the deleted analysis/workflow-optimization-2026-09-30-2.md.\n  WHY: This is a documentation-consistency note only.\n- scripts/ai_labels.py:1011-1015 | severity=low | confidence=high\n  PROBLEM: OSError from a missing contract is not caught in `main()`.\n  WHY: The process exits 1 with a traceback and a misleading CI message.\n- scripts/ai_labels.py:496,609-620 | severity=low | confidence=medium\n  PROBLEM: The prefetch and fallback paths catch different exception sets.\n  WHY: RuntimeError could escape the fallback and abort the sync.\n- TASK_GAP: Requirement: The CI label-sync smoke asserts an empty errors array (Reliability 2). Expected change site: .github/workflows/ci.yml lines 2095-2111. Evidence of absence: the step fails only on validate or 100-character errors, which is documented as intentional. SEVERITY=low ISSUE_CONFIDENCE=high\n- TASK_GAP: Requirement: An agent exit-class field on RESOLVER_SCOPE_CHECK (Exec 2 / Reliability 1). Expected change site: scripts/review_conflict_resolve.sh lines 1224-1229 and 1864-1869. Evidence of absence: only `exc=` is emitted, and the deviation is documented. SEVERITY=low ISSUE_CONFIDENCE=high\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:n/a (pre-push test gate) | severity=BLOCKER | confidence=5\n  PROBLEM: The PR causes 7 pre-push test failures, including tests/test_ai_labels.py and tests/test_gh_api_write_guard.py.\n  WHY: The changes broke existing contract or integration tests.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: The RESOLVER_SCOPE_CHECK diagnostic includes the resolver agent's exit class (Reliability 1). Expected change site: scripts/review_conflict_resolve.sh `_emit_scope_check_line` in both guard heredocs. Evidence of absence: `exc=` is the guard's Python exception class, and the agent's exit status is not passed to either emitter. SEVERITY=NIT ISSUE_CONFIDENCE=4\n- TASK_GAP: Requirement: The CI label-sync dry-run smoke asserts an empty errors array (Reliability 2). Expected change site: .github/workflows/ci.yml \"AI label sync dry-run smoke\". Evidence of absence: the workflow fails only on validate or 100-character-limit errors (lines 2095-2111). SEVERITY=NIT ISSUE_CONFIDENCE=4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "42817931c4d2ce1e1e6ff647018124388c7b2b38869c8247eeaa01347a629b92",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8755,
+    "run_id": "41689792967",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41689792967",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103182905_3a603a469b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8755,
+    "run_id": "41689792967"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 7 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T18:29:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
