@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  expected_change_site: PR merge state and the `orchestrator/project-8693` branch (not a file)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The diff only replaces line 2 of tests/e2e_smoke_canary.txt and cannot show a merge. Severity disagreement: openai_gpt-6-luna said BLOCKER, while anthropic_claude-sonnet-5_5 and minimax_minimax-m3 said NIT because the merge is a post-review orchestrator action and the PR base is already orchestrator/project-8693.\n- requirement: \"Line 1 is exactly `status: ok`.\" / \"Line 2 is exactly `decompose-run: 41501570285`.\" / \"The file has no other lines.\"\n  expected_change_site: tests/e2e_smoke_canary.txt (lines 1-2)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The diff at tests/e2e_smoke_canary.txt:1-2 replaces line 2 with the requested run id and leaves line 1 and the trailing newline unchanged, so the file-level criteria are met. The reviewer rated this NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\nExpected change site: the PR's merge state and its base branch.\nEvidence of absence: No diff hunk can satisfy this because the merge is a post-review orchestrator step. The PR diff makes exactly the requested change in tests/e2e_smoke_canary.txt, with line 1 unchanged and line 2 changed from `decompose-run: 40427433026` to `decompose-run: 41501570285`. The `copilot-pull-request-reviewer` check failure is an external-service error (HTTP 422 `custom_instructions_too_large`).\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Line 1 is exactly `status: ok`.\" / \"Line 2 is exactly `decompose-run: 41501570285`.\" / \"The file has no other lines.\"\nExpected change site: tests/e2e_smoke_canary.txt (lines 1-2)\nEvidence of absence: Diff `tests/e2e_smoke_canary.txt:1-2` replaces line 2 with the requested run id and leaves line 1 and the trailing newline unchanged. File-level acceptance criteria are met by the diff.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n\nTASK_GAP:\nRequirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\nExpected change site: PR merge state into the orchestrator integration branch (not a file).\nEvidence of absence: The diff contains only the `tests/e2e_smoke_canary.txt` line replacement and produces no merge commit. The merge is a post-review orchestrator action keyed off `baseRefName: orchestrator/project-8693`, already set on this PR.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\nExpected change site: PR merge state and the `orchestrator/project-8693` branch.\nEvidence of absence: The supplied PR diff only replaces the line in `tests/e2e_smoke_canary.txt`; it does not show that the change has been merged into the target branch.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "75044e67247b15d5e06febda3328585fa63578d1a2ab59600b4f6c3ba54e17a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41704020902",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41704020902",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103194934_54a527cac3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41704020902"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T19:49:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
