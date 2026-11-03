@@ -252,6 +252,8 @@ jobs:
       # Issue #6726: add a verified Integration branch line for orchestrator/project-<N> PR heads.
       TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED: ${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED || 'true' }}
+      # Issue #8671: supersede a blocked triage issue from an older PR head.
+      CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED: ${{ vars.CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED || 'true' }}
       # Issue #8265: a failure whose fix is only in unmodified upstream-managed
       # files goes upstream as one heal report instead of a consumer issue.
       CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED || 'true' }}
@@ -732,12 +734,32 @@ jobs:
           value = re.sub(r"review-blocked-reissue", "review-blocked (untrusted) reissue", value, flags=re.IGNORECASE)
           print(value[:200] or "(unnamed check)")
           ' "${CHECK_NAME}")"
+          # Issue #8671: a recorded stale issue is superseded only when this
+          # token's account opened it and it is still open and ai:blocked;
+          # otherwise (or on any failure) keep the duplicate skip and file nothing.
+          # Runs only when the collect stage recorded a candidate, so a run with
+          # no stale issue always files its issue as before.
+          triage_supersede_check_rc=0
+          if [ -n "$(jq -r '.supersede_issue // "" | tostring' "${RUNTIME_DIR}/triage_metadata.json" 2>/dev/null || true)" ]; then
+            CHECK_TRIAGE_STAGE=supersede-check bash scripts/check_failure_triage.sh || triage_supersede_check_rc=$?
+          fi
+          if [ "${triage_supersede_check_rc}" -ne 0 ]; then
+            if [ "${triage_supersede_check_rc}" -ne 10 ]; then
+              echo "::warning::CHECK_TRIAGE supersede check failed (rc=${triage_supersede_check_rc}); keeping the duplicate skip for PR #${PR_NUMBER}"
+            fi
+            printf 'CHECK_TRIAGE op=supersede outcome=skip_create rc=%s pr=%s\n' "${triage_supersede_check_rc}" "${PR_NUMBER}"
+            exit 0
+          fi
           triage_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
             --title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}" \
             --body-file "${body_file}" --label "ai:check-triage")"
           test -n "${triage_issue_url}"
           printf 'CHECK_TRIAGE created issue=%s fp=%s gen=%s root=%s pr=%s check=%s\n' \
             "${triage_issue_url}" "${triage_post_fp}" "${triage_post_gen}" "${triage_post_root}" "${PR_NUMBER}" "${triage_post_check_name}"
+          # Issue #8671: the new issue exists, so close the stale blocked issue
+          # the collect stage recorded (same Issues-scoped token; never fatal).
+          CHECK_TRIAGE_STAGE=supersede CHECK_TRIAGE_SUPERSEDE_NEW_ISSUE_URL="${triage_issue_url}" \
+            bash scripts/check_failure_triage.sh || true
           source scripts/tg_helpers.sh 2>/dev/null || true
           type tg_send_msg >/dev/null 2>&1 && tg_send_msg \
             "Check-failure auto-triage opened ${triage_issue_url} for ${GITHUB_REPOSITORY} PR #${PR_NUMBER} (check '${triage_post_check_name}', generation ${triage_post_gen}/${CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH}). The pipeline will pick it up." \
