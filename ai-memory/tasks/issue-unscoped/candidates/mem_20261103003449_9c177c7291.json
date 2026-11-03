@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"## Files & Modules \u2026 - `tests/test_orchestrate_tracking_auto_close.py` (new)\" \u2014 issue #8685 names this file as a deliverable, and the Implementation Steps say to add it via step 6.\n  expected_change_site: tests/test_orchestrate_tracking_auto_close.py at the repo root.\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No such file exists; instead tests/orchestrate_tracking_auto_close_cases.py is added (313 lines, full test_* function set) and collected by a shim in tests/test_activation_verify.py:_collect_tracking_auto_close_cases. The functional content is present, but the named file does not. The reviewer rated this SEVERITY: NIT and noted that it was deferred in earlier rounds as TASK_GAP_DEFERRED: tests/test_ci_wires_every_test_file.py requires every new test_* file to be wired into ci.yml, and ci.yml is outside the files_touched grant. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash mentioned the same deviation but chose not to re-flag it because it had been accepted earlier.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"## Files & Modules \u2026 - `tests/test_orchestrate_tracking_auto_close.py` (new)\" \u2014 issue #8685 names this file as a deliverable, and the Implementation Steps say to add it via step 6.\n  Expected change site: tests/test_orchestrate_tracking_auto_close.py at the repo root.\n  Evidence of absence: No such file exists; instead tests/orchestrate_tracking_auto_close_cases.py is added (313 lines, full test_* function set) and collected by a shim in tests/test_activation_verify.py:_collect_tracking_auto_close_cases. The functional content is present, but the named file does not.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n  Note: The deviation is explicitly documented across all five editor rounds as TASK_GAP_DEFERRED because tests/test_ci_wires_every_test_file.py forbids new test_* files outside ci.yml wiring, and ci.yml is outside the issue's files_touched grant. Reviewers in those rounds accepted the shim+minimum-count guard. Re-flagging here only because the file named in the linked issue is still absent.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1380c9ae948d32a8f8b2d97e8fa32c4f2dee7cdf3550b629aaa06c6289fe3f6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8688,
+    "run_id": "41552265301",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41552265301",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103003449_9c177c7291",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8688,
+    "run_id": "41552265301"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T00:34:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
