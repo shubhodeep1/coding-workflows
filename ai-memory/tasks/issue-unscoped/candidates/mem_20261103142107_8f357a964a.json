@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The file content is correct, but CI check-runs show a failure in `copilot-pull-request-reviewer` (\"Prompt too big after adding system message\").\n  WHY: The reviewer tool fails while processing the PR context, so CI fails even though the diff meets the issue requirement. Source severity is MAJOR (mapped to high). Other reviewers judged this failure unrelated to the canary diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Review the PR diff against the linked issue intent and PR description.\n  expected_change_site: N/A (the diff and PR materials were not supplied to this pass)\n  confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: Workspace glob found no PR_DIFF_FILE, PR_CHANGED_FILES_FILE, PR description or issue-body artefacts, so no diff hunks were available to review. Source severity BLOCKER. Anthropic_claude-sonnet-5_5 and minimax_minimax-m3 state this gap does not apply because the diff is inlined in their prompts.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=MAJOR | confidence=4\n  PROBLEM: The file content is correct, but the PR introduces a logic regression in CI check-runs due to a false-positive failure in `copilot-pull-request-reviewer`.\n  WHY: The reviewer tool reports \"Prompt too big after adding system message\" when processing the PR, causing a CI failure, although the diff itself is correct as per the issue requirement.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: Review the PR diff against the linked issue intent and PR description.\n  Expected change site: N/A \u2014 the diff and PR materials were not supplied to this pass.\n  Evidence of absence: Workspace glob found no `PR_DIFF_FILE` / `PR_CHANGED_FILES_FILE` / PR description / issue-body artefacts; no diff hunks exist to review on the current ref.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: high\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "97a12629fd4ab1759b58217b134326eec03d412f64f44d24ea59a38dba4b7171",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41649746294",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41649746294",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103142107_8f357a964a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41649746294"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T14:21:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
