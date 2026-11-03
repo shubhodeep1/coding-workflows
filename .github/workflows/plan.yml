@@ -3443,6 +3443,11 @@ jobs:
         if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
+          FP_JOB_STATUS: ${{ job.status }}
+          FP_RUN_ID: ${{ github.run_id }}
+          FP_RUN_ATTEMPT: ${{ github.run_attempt }}
+          FP_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -3453,8 +3458,67 @@ jobs:
           if [ "${{ job.status }}" = "cancelled" ]; then
             PLAN_CANCELLED_SUFFIX=$'\n<!-- ai:plan-cancelled -->'
           fi
+          # Failure-fingerprint marker (stuck-states P3a, Refs #8291): append one
+          # <!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp=<12 hex> run=<id> --> line
+          # to this comment so the poller's failure-signature breaker
+          # (orchestrate_lib.py evaluate_failure_fingerprint_breaker) can trip
+          # on a repeated identical failure. fp = sha256(phase|failed step|first
+          # non-generic ::error:: annotation, normalized)[:12]; only the hash is
+          # posted, never the step name or the error text.
+          # API audit (§14): no earlier call in this failure path returns job
+          # steps or annotations, so this reuses the jobs-API lookup of
+          # review_autofix_step_assemble_failure_evidence.sh. Cost: 2 REST
+          # calls on a failed run only; 0 when cancelled or when
+          # STALL_FINGERPRINT_BREAKER_ENABLED != true. Fail open: any error
+          # posts the comment without a marker and the legacy ladder runs.
+          FP_MARKER_SUFFIX=""
+          FP_MARKER=""
+          FP_VALUE=""
+          FP_REASON=""
+          FP_ERROR_LINE="0"
+          FP_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workflow_failure_heal.py"
+          FP_MARKER_PATTERN='^<!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp=[0-9a-f]{12} run=[1-9][0-9]{0,19} -->$'
+          if [ "${FP_JOB_STATUS:-}" = "cancelled" ]; then
+            FP_REASON="cancelled"
+          elif [ "${FP_JOB_STATUS:-}" != "failure" ]; then
+            FP_REASON="not_failure"
+          elif [ "${STALL_FINGERPRINT_BREAKER_ENABLED:-true}" != "true" ]; then
+            FP_REASON="disabled"
+          elif [ ! -f "${FP_HELPER}" ]; then
+            FP_REASON="helper_missing"
+          else
+            FP_JOBS_FILE="${RUNNER_TEMP:-/tmp}/phase_fp_jobs.json"
+            FP_ANNOTATIONS_FILE="${RUNNER_TEMP:-/tmp}/phase_fp_annotations.json"
+            rm -f "${FP_JOBS_FILE}" "${FP_ANNOTATIONS_FILE}" || true
+            if gh_retry gh api "repos/${FP_REPOSITORY}/actions/runs/${FP_RUN_ID}/attempts/${FP_RUN_ATTEMPT:-1}/jobs?per_page=100" > "${FP_JOBS_FILE}" 2>/dev/null; then
+              FP_JOB_ID="$(jq -r '[.jobs[]? | select(.runner_name == env.RUNNER_NAME) | .id][0] // empty' "${FP_JOBS_FILE}" 2>/dev/null || true)"
+              if [[ "${FP_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+                gh_retry gh api "repos/${FP_REPOSITORY}/check-runs/${FP_JOB_ID}/annotations?per_page=50" > "${FP_ANNOTATIONS_FILE}" 2>/dev/null || rm -f "${FP_ANNOTATIONS_FILE}" || true
+              fi
+              FP_OUT="$(PYTHONDONTWRITEBYTECODE=1 python3 "${FP_HELPER}" phase-failure-fingerprint --phase plan --run-id "${FP_RUN_ID}" --runner-name "${RUNNER_NAME:-}" --jobs-json "${FP_JOBS_FILE}" --annotations-json "${FP_ANNOTATIONS_FILE}" 2>/dev/null || true)"
+              while IFS= read -r FP_LINE; do
+                case "${FP_LINE}" in
+                  marker=*) FP_MARKER="${FP_LINE#marker=}" ;;
+                  fp=*) FP_VALUE="${FP_LINE#fp=}" ;;
+                  error_present=1) FP_ERROR_LINE="1" ;;
+                  reason=*) FP_REASON="${FP_LINE#reason=}" ;;
+                esac
+              done <<< "${FP_OUT}"
+              [ -n "${FP_REASON}" ] || FP_REASON="helper_failed"
+            else
+              FP_REASON="jobs_unavailable"
+            fi
+          fi
+          [[ "${FP_REASON}" =~ ^[a-z_]{1,40}$ ]] || FP_REASON="unknown"
+          if [ -n "${FP_MARKER}" ] && [[ "${FP_MARKER}" =~ ${FP_MARKER_PATTERN} ]] && [[ "${FP_VALUE}" =~ ^[0-9a-f]{12}$ ]]; then
+            FP_MARKER_SUFFIX=$'\n\n'"${FP_MARKER}"
+            echo "PHASE_FAILURE_FINGERPRINT phase=plan issue=${ISSUE_NUMBER} run=${FP_RUN_ID} outcome=emitted fp=${FP_VALUE} error_line=${FP_ERROR_LINE}"
+          else
+            [ "${FP_REASON}" != "ok" ] || FP_REASON="marker_invalid"
+            echo "PHASE_FAILURE_FINGERPRINT phase=plan issue=${ISSUE_NUMBER} run=${FP_RUN_ID} outcome=skipped reason=${FP_REASON} error_line=${FP_ERROR_LINE}"
+          fi
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}${PLAN_CANCELLED_SUFFIX}"
+            -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}${PLAN_CANCELLED_SUFFIX}${FP_MARKER_SUFFIX}"
 
       - name: Telegram failure notification
         if: failure() || cancelled()
