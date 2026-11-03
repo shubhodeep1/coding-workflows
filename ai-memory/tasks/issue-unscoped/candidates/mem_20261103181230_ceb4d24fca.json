@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The external `copilot-pull-request-reviewer` check (run 41544382408) failed with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\") while loading AGENTS.md and CLAUDE.md as custom instructions.\n  WHY: The failure is in the third-party action's own prompt assembly, before it reads the diff, so no edit to this PR's change set can fix it. Reviewers rated it NIT, and minimax_minimax-m3 called it informational only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:none (external check, no line mapping) | severity=NIT | confidence=5\n  PROBLEM: The Copilot reviewer check (run 41544382408) failed with HTTP 422, \"Prompt too big after adding system message\" (`custom_instructions_too_large`), while loading AGENTS.md and CLAUDE.md as custom instructions.\n  WHY: The failure comes from the third-party action's prompt assembly before it analyzes the diff, so the PR's one-file change set cannot fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary.txt:N/A (external check, not repository code) | confidence=N/A (informational)\n  PROBLEM: The `copilot-pull-request-reviewer` check (run 41544382408, job 125616255928) failed with `custom_instructions_too_large` (HTTP 422, \"Prompt too big after adding system message\").\n  WHY: The Copilot reviewer failed while loading AGENTS.md + CLAUDE.md as custom instructions, before it analyzed the diff. The failure is not in any file this PR touches. The reviewer noted it is informational, not a finding against the PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:whole file (3 lines); failed check-run `copilot-pull-request-reviewer`, run 41544382408, job 125616255928, head e540dbc18770bafdac9f8861d6f6b3b123f57ccd | severity=NIT | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check-run fails with `Prompt too big after adding system message` / `errorCode: custom_instructions_too_large` (HTTP 422). The failure originates in the third-party Copilot reviewer action's own prompt assembly (loading AGENTS.md + CLAUDE.md as custom instructions) before it reads the diff.\n  WHY: The Copilot action aborts during its own setup, so the check cannot be mapped to any changed line or fixed by editing the PR's change set. It was surfaced so the editor can classify it as external/ignorable.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4902bc6152e15291dd97ac41e3501f700ca5774d3228d9d1e8b6437f0eb77180",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41689567310",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41689567310",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103181230_ceb4d24fca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41689567310"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T18:12:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
