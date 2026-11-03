@@ -1807,3 +1807,43 @@ Source commit: `fcb44ee4855705d0d63231dd1c6a66ba51b293e4`
 | REUSE / DEAD-API | informational | No findings in the doc's "API Call Consolidation & Dead-Call Analysis" section. |
 | Prompt Cache & Memory System (static-prefix fingerprint) | informational | Covered by the Cost 2 rejection. |
 | Per-Repo Breakdown top three actions | informational | Covered by the rows above (Cost 1, Speed 1/2, Reliability 2). |
+
+### `analysis/workflow-optimization-2026-09-30-2.md`
+Source doc: `analysis/workflow-optimization-2026-09-30-2.md`
+Processed: 2026-11-03
+Source commit: `8a0fe2f3febf6dbd5fca5b2448cc8f9d091dc97c`
+
+| Recommendation | Verdict | Evidence / reason |
+|---|---|---|
+| Exec 2 / Reliability 1 (resolver scope reason code) | applied | `scripts/review_conflict_resolve.sh` now emits `RESOLVER_SCOPE_CHECK guard=… action=… reason=…` with enumerated reason codes and counts only (optional `RESOLVER_SCOPE_CHECK_ATTEMPT`). The existing `::error::Conflict resolver: …` text and the fail-closed exit are unchanged. Changelog `changelog.d/8745-resolver-scope-check-reason.md`; agents fragment `agents.d/8744-resolver-scope-check-reason.md`. |
+| Exec 5 / Reliability 2 / GH API audit row 1 (label sync) | applied | `cmd_sync_labels` in `scripts/ai_labels.py` checks descriptions locally (`action=validate`) before any API read, then prefetches the labels once with a paginated listing and falls back to per-label reads when that fails (`ai_labels: label list prefetch unavailable`). The `AI label sync dry-run smoke` step in `.github/workflows/ci.yml` fails on `action == "validate"` / 100-character-limit errors; GET, HTTP and transport errors stay non-fatal, so it does not assert a fully empty errors array. The three over-limit descriptions were already corrected in `.github/ai/label_contract.v1.json` (longest is now 100 characters). Changelog `changelog.d/8746-label-sync-validate-prefetch.md`. |
+| Exec 1 / Cost 1 / Reliability 3 (collector mirrored-line attribution) | already-implemented | `_STRUCTURED_COST_TELEMETRY_KEY_TIMESTAMP_RE` and `_dedupe_structured_cost_telemetry_full_logs` in `scripts/collect_workflow_logs.py` keep the child copy and keep parent-only lines; tests in `tests/test_collect_workflow_logs.py`. |
+| Exec 3 / Speed 2 / GH API audit row 2 (check-run wait identity) | already-implemented | `CHECK_RUNS_WAIT_PENDING` and `CHECK_RUNS_WAIT_EXIT` in `scripts/collect_pr_check_runs_context.py` (`agents.d/wfopt-2026-09-30-check-run-pending-identity.md`). |
+| Exec 4 / Speed 1 / Cost 3, timing part (per-model reviewer timing) | already-implemented | `REVIEWER_ATTEMPT_RESULT pass= slot= attempt= model= exit_code= duration_secs= wd_reason= stall_state= failure_class=` in `scripts/review_run_reviewers.sh` (#8097). The line also carries `wd_reason` and `stall_state`, which the doc does not mention. |
+| AI Memory Health (push duration and retry telemetry) | already-implemented | `push_attempts` and `push_ms` in `scripts/ai_memory.py` telemetry; `stderr_category` on fail-open writes in `scripts/memory_helpers.sh`. |
+| Reliability 4 (unavailable log archive vs. workflow failure) | already-implemented | `MISSING_LOG_ARCHIVE_MARKER = "partial_data:missing_log_archive"` in `scripts/collect_workflow_logs.py`; the negative cache is the per-run archive cache, which stores the normalized `Exception` (`cache[identity] = normalized_exc`). |
+| Reliability 5 (separate contract-test and runtime Semble fallbacks) | already-implemented | `semble_contract_test_fallbacks` and `semble_runtime_fallbacks` in `scripts/cost_audit.py`. |
+| SEC-001 (`gh_retry` prints full arguments) | already-implemented | `gh_retry` logs `_gh_cmd_log_summary` instead of the full argument list (`scripts/gh_helpers.sh`). |
+| BUG-001 (sweep active-run snapshot `\|\| true`) | already-implemented | `active_snapshot_incomplete` skip in `.github/workflows/review_autofix_sweep.yml`. |
+| BUG-004 (non-idempotent POST retries) | already-implemented | `_gh_cmd_is_unsafe_post` makes POSTs single-attempt in `gh_retry` (`scripts/gh_helpers.sh`). |
+| EXPR-001 (`implement.yml` support-staging body size) | already-implemented | The `Stage workflow support files` run body in `.github/workflows/implement.yml` contains no `${{ }}`; values pass through `STAGE_*` `env:`. |
+| CONSIST-001 (local `gh_retry` redefinition) | already-implemented | `scripts/review_collect_pr_metadata.sh` calls `gh_retry_to_file` directly and does not redefine `gh_retry()`. |
+| BUG-002, BUG-003, BATCH-003, BATCH-004 | rejected | Obsolete: `scripts/claude_issue_route.py`, `scripts/claude_issue_queue_watchdog.sh` and `scripts/claude_pr_sweep.py` no longer exist. |
+| BATCH-001, BATCH-002, MERGE-001, REUSE-001 | rejected | Tagged RISKY_SKIP by the doc itself (orchestration freshness, comment pagination parity). |
+| DUP-001 (`_parse_iso8601` / `_percentile` consolidation) | rejected | Refactor-only, and the bodies have diverged: `_percentile` in `scripts/cost_audit.py` returns `Optional[float]`, and `scripts/summarize_unselected_runs.py` has its own `_parse_iso8601`. |
+| DUP-002, DUP-004 | rejected | Refactor-only with no defect (§9). |
+| DUP-003 (release tag-publication body) | rejected | Refactoring the release workflows risks the release gates and fixes no defect. |
+| DEBT-001 (`review_autofix.yml` size headroom) | rejected | No action: `tests/test_workflow_file_size_limit.py` enforces the 480,000-byte guard, and extraction happens at the guard (§24). |
+| DEAD-001 (`RAW_REVIEWER_*` assignments) | rejected | `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE` is referenced by `tests/test_review_autofix_review_pipeline_contract.py`; removal is low value and risks contract tests. |
+| Cost 4 (exact-state redispatch suppression) | rejected | A behaviour change that needs evidence from the new `RESOLVER_SCOPE_CHECK` reason code first. |
+| Cost 2 / Prompt Cache & Memory System (prefix reordering and digest telemetry) | rejected | The doc itself rates prompt-prefix reordering a high quality risk, and the digest telemetry has no concrete call site. |
+| Cost 5 (Semble byte counters) | rejected | Measurement-only with an unknown saving. |
+| GH API audit row 3 (sweep request counters) and row 4 (collector endpoint logging) | rejected | Measurement-only, and they would grow inline workflow bodies for no stated saving. |
+| Speed 3 (CI test fake clocks) | rejected | The doc names no specific tests; `CI_SUBTEST_*` timing is the existing measurement. |
+| Speed 4 (runner-queue logging) | rejected | The doc states a saving of 0s. |
+| Orchestrator Health (decision events) | rejected | No concrete gate identified; the skips match normal trigger filtering. |
+| Check-run wait early exit; reviewer tier or pass reduction | rejected | The doc itself defers these pending evidence. |
+| Pipeline Flow Bottlenecks | informational | Covered by the Speed 3, Speed 4, Orchestrator Health and Exec 2–4 rows. |
+| Per-Repo Breakdown top three actions | informational | Covered by the Exec 1, Exec 2 + Cost 4, and Exec 3–5 rows. |
+| Metrics Appendix | informational | No separate recommendation. |
+| Dead Calls (DEAD-API) | informational | The doc says "No findings." |
