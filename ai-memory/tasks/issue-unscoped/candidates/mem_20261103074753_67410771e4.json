@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- copilot-pull-request-reviewer check-run (Actions run 41544404053):log tail | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot reviewer check-run failed with \"Prompt too big after adding system message\" (errorCode custom_instructions_too_large) because the AGENTS.md and CLAUDE.md custom instructions exceeded its limit.\n  WHY: It is an external infrastructure failure, not a defect in the 3-line change to tests/e2e_smoke_canary.txt, and no edit to this PR can fix it. anthropic_claude-sonnet-5_5 reported it under ERROR PATHS & EDGE CASES with SEVERITY: NIT. z-ai_glm-5_3-flash noted it inside its task-completeness section, also as NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- copilot-pull-request-reviewer check-run (Actions run 41544404053):log tail | severity=low (source: NIT) | confidence=5\n  PROBLEM: The Copilot reviewer check-run reports \"Prompt too big after adding system message\" (errorCode custom_instructions_too_large). The AGENTS.md and CLAUDE.md custom instructions exceeded the reviewer's limit.\n  WHY: This is an external infrastructure failure, not a defect in the diff, which touches only the 3-line file tests/e2e_smoke_canary.txt. It occurs before any review starts and would occur with any diff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (reported as no gap; SEVERITY: NIT, ISSUE_CONFIDENCE: 4)\n  Requirement: \"Update its content so it is exactly these three lines ... status: ok / run_id: 40932430968 / updated-by: ai-pipeline ... Only modify tests/e2e_smoke_canary.txt.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none. The reviewer verified the file holds exactly the three required lines with a trailing newline, and pr_changed_files.txt lists only tests/e2e_smoke_canary.txt. It concluded the task is fully delivered. It attributed the failed copilot-pull-request-reviewer check-run (run 41544404053, \"custom_instructions_too_large\") to external Copilot infrastructure. It also said the pre-push-gate failures in tests/test_implement_post_codex_recovery.py cannot map to a canary-only text edit, and the PR body reports 4 inherited failures on the merge-base.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5b5c0de49a1c3737cabe26dfccec1994912c0909345d673e6a20cebe4eac963f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41596902227",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41596902227",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103074753_67410771e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41596902227"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T07:47:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
