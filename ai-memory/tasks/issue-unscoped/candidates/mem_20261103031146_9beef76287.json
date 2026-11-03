@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:unspecified | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Pre-push gate reports that modifying `tests/e2e_smoke_canary.txt` causes failures in recovery pipeline integration tests (e.g. test_review_pipeline_integration_chain_module_runs_clean).\n  WHY: The reviewer claims the tests implicitly depend on the canary file contents, so the change leaves the test pipeline failing. Severity was not stated by the source, so medium is a placeholder. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash found no link between the canary change and these failures.\n- .github/workflows/review_autofix.yml:unspecified | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The third-party copilot-pull-request-reviewer check-run fails with `custom_instructions_too_large` (HTTP 422), which blocks its own automated review.\n  WHY: The combined size of AGENTS.md and CLAUDE.md exceeds the Copilot reviewer's custom-instructions limit. Severity was not stated by the source, so medium is a placeholder. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash noted the same failure but judged it unrelated to this diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:unspecified | confidence=4\n  PROBLEM: Pre-push gate reports that modifying `tests/e2e_smoke_canary.txt` causes failures in recovery pipeline integration tests (test_review_pipeline_integration_chain_module_runs_clean, etc.).\n  WHY: The integration tests likely depend implicitly on the canary file contents, so changing it without updating the tests breaks the pipeline.\n- .github/workflows/review_autofix.yml:unspecified | confidence=5\n  PROBLEM: The third-party Copilot PR reviewer fails with `custom_instructions_too_large` (HTTP 422), which blocks its own automated review.\n  WHY: The combined size of AGENTS.md and CLAUDE.md exceeds the Copilot reviewer's limit, so it cannot run or post reviews.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f046935aca3f3ebb2566b58cd0519476e926ae6199f3c3b9a90a71569c57cc8a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41569639306",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41569639306",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103031146_9beef76287",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41569639306"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T03:11:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
