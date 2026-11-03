@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_labels.py:~1014 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: main() now catches OSError and exits 2 with an AI_LABELS_ERROR line instead of exiting 1 with a traceback. The pre-push gate lists tests/test_ai_labels.py and tests/test_ai_labels_retired.py::test_repo_contract_retires_the_claude_session_labels as failing, and no test was updated for the new behavior.\n  WHY: A test that asserts the old exit code or traceback for a missing contract file would now fail, which contradicts the claim that all 20 sync_labels tests pass. The source labels this MAJOR, which is mapped to high here. anthropic_claude-sonnet-5_5 reviewed the same change and found no problem, because the callers it checked accept any nonzero exit code.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_labels.py:~1014 (main() exception handler, \"except (LabelContractError, ValueError, json.JSONDecodeError, OSError)\") | severity=high (source: MAJOR) | confidence=3\n  PROBLEM: A missing or unreadable contract file used to raise an uncaught OSError, giving exit code 1 and a traceback. It is now caught and gives exit code 2 with one \"AI_LABELS_ERROR: <exc>\" line. The pre-push gate lists tests/test_ai_labels.py and tests/test_ai_labels_retired.py::test_repo_contract_retires_the_claude_session_labels as failing, which contradicts the editor's claim that all 20 sync_labels tests pass.\n  WHY: A test that parses stderr for the traceback or asserts rc==1 on the missing-contract path will fail. The change is otherwise defensible but has no explicit test update.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0a4d7e933409ce831f63f0aaf77aed0a236442d945a3096a7e11a8c9d2129072",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8755,
+    "run_id": "41695222947",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41695222947",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103191602_6531f841bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8755,
+    "run_id": "41695222947"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T19:16:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
