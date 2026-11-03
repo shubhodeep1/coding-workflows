@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1537-1540 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The comment says \"failing run 37499559962 recorded 825s at this step\", but 825s is the whole CI run's elapsed time at failure, not the step's duration.\n  WHY: A later budget-watch move could read it as a measured per-step cost and choose the wrong target job. The reviewers rated this NIT and none reported a runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings)\" into the CI job with the most headroom.\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from `tests-promote-stall-and-review`\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The workflow comment at lines 1535\u20131538 says the run's step timings could not be read and the selection is an estimate based on test and subprocess counts, not a measurement, so the PR does not establish that the moved steps were the slowest according to the run's timings. The reviewer rated this MAJOR. The other three reviewers judged the estimate acceptable, and two of them noted that the post-merge budget-watch run checks the result.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:1537-1540 | severity=NIT | confidence=3\n  PROBLEM: The comment presents 825s (the whole run's elapsed time at failure per `analysis/workflow-optimization-2026-10-06-2.md` line 59) as a per-step measurement for `Orchestrate lib unit tests`.\n  WHY: Nothing breaks in CI, but a later budget-watch move could rely on a wrong figure. The comment also contradicts its own statement that the pick is an estimate.\n- Task completeness: none. All deliverables are present. The step-timing requirement is not a gap, because the picks are stated to be estimates and the post-merge `budget-watch` run checks them.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1537-1540 | severity=NIT | confidence=3\n  PROBLEM: The comment says \"failing run 37499559962 recorded 825s at this step\", but 825s is the run's elapsed time at failure, not the step's duration.\n  WHY: It does not fail at runtime, but it could mislead future budget-watch analysis.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:1537-1540 | severity=NIT | confidence=3\n  PROBLEM: The comment claims 825s was recorded at the step, but `analysis/workflow-optimization-2026-10-06-2.md` lines 26 and 59 describe it as the CI run's elapsed time at failure. The step's own duration cannot be derived from that figure.\n  WHY: Nothing breaks at runtime. A future budget-watch move may read it as a per-step duration and select the wrong target job.\n- Task completeness: none. The reviewer checked the linked-issue deliverables against the diff and found them present.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings)\" into a CI job with the most headroom.\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-promote-stall-and-review`.\n  Evidence of absence: The workflow comment at lines 1535\u20131538 says the run's step timings could not be read and the selection is an estimate based on test and subprocess counts, not a measurement. The PR therefore does not establish that the moved steps were the slowest according to the run's timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "f4281d86c1a1944c9768be64f24cddf2055890d5268dfc4dde5746077cbead8a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8776,
+    "run_id": "41734079049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41734079049",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103231620_199baf5769",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8776,
+    "run_id": "41734079049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T23:16:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
