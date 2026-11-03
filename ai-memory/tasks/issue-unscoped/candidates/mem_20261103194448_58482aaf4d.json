@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:Copilot check-run copilot-pull-request-reviewer (job 125616328401) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The external Copilot reviewer check failed with \"Prompt too big after adding system message\" (errorCode custom_instructions_too_large) because the AGENTS.md and CLAUDE.md custom-instruction payload is too large.\n  WHY: The PR diff touches only tests/e2e_smoke_canary.txt, so the canary change cannot fix it and the linked issue forbids touching other files; the reviewer rated it NIT.\n- tests/test_implement_post_codex_recovery.py:Multiple test methods in the test suite | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The canary change causes a regression in the test suite, as indicated by the PR's pre-push gate failure.\n  WHY: The suite relies on tests/e2e_smoke_canary.txt as a stable marker, so the updated content produces an unexpected state; the reviewer rated it MAJOR. z-ai_glm-5_3-flash said the referenced test failures are unrelated, so the reviewers disagree.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CLAUDE.md:Copilot check-run copilot-pull-request-reviewer (job 125616328401) | severity=low (source: NIT) | confidence=2\n  PROBLEM: The external Copilot reviewer check failed with \"Prompt too big after adding system message\" (errorCode custom_instructions_too_large) because the AGENTS.md and CLAUDE.md custom-instruction payload is too large. This is not caused by the one-file canary change.\n  WHY: The check exits with status 1 before it produces a review. Changing the canary file cannot fix it, and the linked issue forbids touching any other file.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:Multiple test methods in the test suite | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: The canary change causes a regression in the test suite, as indicated by the PR's pre-push gate failure.\n  WHY: The test suite relies on the canary file `tests/e2e_smoke_canary.txt` as a stable marker. By updating its content, the tests now see an unexpected state and fail.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0b9b056ab2889b8ff8de09d46259608715792102f2d9397caf066ca4b5a63752",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41704044021",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41704044021",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103194448_58482aaf4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41704044021"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T19:44:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
