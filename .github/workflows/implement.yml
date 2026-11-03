@@ -1881,8 +1881,11 @@ jobs:
           rm -rf -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
           mkdir -p -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
           for _staged_support_runtime_script in "${_fetched_scripts[@]}"; do
-            # Unified mode lists optional names the support commit may lack.
-            [ -f "${support_run_src}/${_staged_support_runtime_script}" ] || continue
+            # Both branches list only names they staged; a gap is a staging bug.
+            if [ ! -f "${support_run_src}/${_staged_support_runtime_script}" ]; then
+              echo "::error::Staged support ${_staged_support_runtime_script} is missing from ${support_run_src}." >&2
+              exit 1
+            fi
             install -m 0755 "${support_run_src}/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"
           done
           if [ -f "${support_run_src}/codex_model_catalog.json" ]; then
