@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:(no line cited) | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check-run (run 41544333941, job 125616096789) aborts with `Error: Prompt too big after adding system message` (`custom_instructions_too_large`), so the PR never gets reviewed.\n  WHY: The assembled prompt (system message + repo instructions) exceeds the provider's context limit, so the reviewer check fails closed; the source labelled this severity MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: inherited CI test failures on merge base (`test_review_pipeline_integration_chain_module_runs_clean`, `test_staged_support_guard_*`, `test_validator_*` in `tests/test_implement_post_codex_recovery.py`) should be stabilized or fixed so PRs don't inherit red merges\n  expected_change_site: tests/test_implement_post_codex_recovery.py\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The listed tests fail on the merge base and the diff contains no change addressing them.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:(copilot-pull-request-reviewer check-run, run 41544333941, job 125616096789) | severity=MAJOR | confidence=4\n  PROBLEM: The reviewer job aborts during prompt construction with `custom_instructions_too_large`, so the PR never gets reviewed.\n  WHY: The assembled prompt (system message + repo instructions) exceeds the provider's context limit; the workflow fails closed with an unusable reviewer check.\n- TASK_GAP:\n  Requirement: inherited CI test failures on merge base (`test_review_pipeline_integration_chain_module_runs_clean`, `test_staged_support_guard_*`, `test_validator_*` in `tests/test_implement_post_codex_recovery.py`) should be stabilized or fixed so PRs don't inherit red merges.\n  Expected change site: `tests/test_implement_post_codex_recovery.py`\n  Evidence of absence: the listed tests fail on the merge base and the diff contains no change addressing them.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7e405edde9428ffb8b8827d9071a2be46a390a8dbf527c96d8ac2e0da2c043aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41727031914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41727031914",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103221320_dea6d3a3f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41727031914"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T22:13:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
