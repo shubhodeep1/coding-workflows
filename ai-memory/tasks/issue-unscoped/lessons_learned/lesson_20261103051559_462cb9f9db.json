@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-03T05:15:59Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/workflow_failure_heal_pr_reconcile.sh:159-164, 165-168, 189-193, 265-273; cited_path=scripts/workflow_failure_heal_pr_reconcile.sh; files_touched=README.md, agents.d/8389-conflict-sweep-skip-capacity-wait.md, changelog.d/8389-conflict-sweep-skip-capacity-wait.md, scripts/orchestrate_poll_process.sh, tests/test_alert_levels_human_only.py.",
+  "phase": "review_autofix",
+  "pr_number": 8732,
+  "record_id": "lesson_20261103051559_462cb9f9db",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/workflow_failure_heal_pr_reconcile.sh",
+    "README.md",
+    "agents.d/8389-conflict-sweep-skip-capacity-wait.md",
+    "changelog.d/8389-conflict-sweep-skip-capacity-wait.md",
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_alert_levels_human_only.py"
+  ]
+}
