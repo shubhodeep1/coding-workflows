@@ -97,6 +97,11 @@ Matching semantics (allowlist entry -> staged path):
     manifest edits are auto-allowed by basename. Compiled build outputs (e.g.
     `*.js` twins, `dist/**`) are deliberately NOT auto-allowed — sweeping those
     in was the incident this guard exists to stop.
+  * outside --strict-allowlist, paths matching SCOPE_GUARD_AUTO_ALLOW_PATHS
+    (comma-separated globs, default `changelog.d/*.md,tests/fixtures/**`;
+    `none`/`off`/`false`/`0`/`no` disables) are auto-allowed as a last check.
+    Automation prefixes and `.git` are never auto-allowed, in any letter case.
+    Each such decision logs `SCOPE_GUARD_AUTO_ALLOWED` to stderr.
 """
 
 from __future__ import annotations
@@ -180,6 +185,20 @@ LOCKFILE_BASENAMES = frozenset(
 )
 
 _GLOB_CHARS = ("*", "?", "[")
+
+# Data paths auto-allowed alongside lockfiles (stuck-states P7a, Refs #8291):
+# a changelog fragment or a test fixture the files_touched list forgot should
+# not latch ai:scope-blocked. Read from SCOPE_GUARD_AUTO_ALLOW_PATHS on every
+# call. Unset or empty means the default, because the workflows' `vars.X ||
+# 'default'` cannot pass an empty value; an explicit off token disables it.
+# Strict callers (allow_lockfiles=False) never get the allowance.
+SCOPE_GUARD_AUTO_ALLOW_DEFAULT = "changelog.d/*.md,tests/fixtures/**"
+SCOPE_GUARD_AUTO_ALLOW_ENV = "SCOPE_GUARD_AUTO_ALLOW_PATHS"
+SCOPE_GUARD_AUTO_ALLOW_OFF_VALUES = frozenset({"none", "off", "false", "0", "no"})
+SCOPE_GUARD_AUTO_ALLOW_MAX_ENTRIES = 20
+SCOPE_GUARD_AUTO_ALLOW_ENTRY_MAX_CHARS = 200
+SCOPE_GUARD_AUTO_ALLOW_DENY_PREFIXES = AUTOMATION_PATH_PREFIXES + (".git",)
+_SCOPE_GUARD_AUTO_ALLOW_WARNED: set[tuple[str, str]] = set()
 
 
 def extract_files_touched(text: str) -> list[str] | None:
@@ -521,12 +540,82 @@ def is_own_issue_fragment(path: str, issue_number: object) -> bool:
 	return bool(re.fullmatch(r"(?:changelog|agents)\.d/" + number + r"-[A-Za-z0-9][A-Za-z0-9._-]*\.md", path))
 
 
+def parse_scope_guard_auto_allow_paths(raw: str | None) -> tuple[list[str], list[tuple[str, str]]]:
+	"""Parse SCOPE_GUARD_AUTO_ALLOW_PATHS into (globs, ignored entries with reasons).
+
+	Unset or empty uses SCOPE_GUARD_AUTO_ALLOW_DEFAULT; an off token returns
+	nothing. Entries that are too long, absolute, contain an empty or `..`
+	segment, start with a glob, or start with an automation / `.git` prefix
+	(any letter case) are ignored, as is everything past the entry cap.
+	"""
+	value = (raw or "").strip()
+	if not value:
+		value = SCOPE_GUARD_AUTO_ALLOW_DEFAULT
+	if value.lower() in SCOPE_GUARD_AUTO_ALLOW_OFF_VALUES:
+		return [], []
+	globs: list[str] = []
+	ignored: list[tuple[str, str]] = []
+	for entry in normalize_allowlist(value.split(",")):
+		if len(globs) >= SCOPE_GUARD_AUTO_ALLOW_MAX_ENTRIES:
+			ignored.append((entry, "too_many"))
+			continue
+		segments = entry.split("/")
+		if len(entry) > SCOPE_GUARD_AUTO_ALLOW_ENTRY_MAX_CHARS:
+			reason = "too_long"
+		elif entry.startswith("/"):
+			reason = "absolute"
+		elif any(segment in {"", ".."} for segment in segments):
+			reason = "parent_segment"
+		elif any(char in segments[0] for char in _GLOB_CHARS):
+			reason = "unanchored_glob"
+		elif segments[0].lower() in SCOPE_GUARD_AUTO_ALLOW_DENY_PREFIXES:
+			reason = "automation_prefix"
+		else:
+			globs.append(entry)
+			continue
+		ignored.append((entry, reason))
+	return globs, ignored
+
+
+# Like _PLAN_LOG_UNSAFE_RE, but keeps glob characters so a logged glob reads
+# as configured (`changelog.d/*.md`). No whitespace, colon or newline survives.
+_SCOPE_GUARD_LOG_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._/*?\[\]-]")
+
+
+def _scope_guard_log_value(value: str) -> str:
+	return _SCOPE_GUARD_LOG_UNSAFE_RE.sub("_", value)[:PLAN_LOG_PATH_MAX_CHARS]
+
+
+def scope_guard_auto_allow_match(path: str) -> str | None:
+	"""The SCOPE_GUARD_AUTO_ALLOW_PATHS glob that covers ``path``, or None.
+
+	Automation paths, `.git` paths and paths with a `..` segment are never
+	matched. Each ignored configured entry is logged to stderr once per process.
+	"""
+	globs, ignored = parse_scope_guard_auto_allow_paths(os.environ.get(SCOPE_GUARD_AUTO_ALLOW_ENV))
+	for entry, reason in ignored:
+		if (entry, reason) in _SCOPE_GUARD_AUTO_ALLOW_WARNED:
+			continue
+		_SCOPE_GUARD_AUTO_ALLOW_WARNED.add((entry, reason))
+		print(f"SCOPE_GUARD_AUTO_ALLOW_IGNORED entry={_scope_guard_log_value(entry)} reason={reason}",
+			file=sys.stderr)
+	segments = path.split("/")
+	if is_automation_path(path) or segments[0].lower() == ".git" or ".." in segments:
+		return None
+	for glob in globs:
+		if entry_matches(glob, path):
+			return glob
+	return None
+
+
 def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = True,
 	own_fragment_issue: object = None) -> bool:
 	"""True when a staged path is auto-allowed or covered by any allowlist entry.
 
 	``own_fragment_issue`` (an issue number) also allows that issue's own
-	changelog / agents fragments (is_own_issue_fragment).
+	changelog / agents fragments (is_own_issue_fragment). Outside strict mode
+	(``allow_lockfiles``), a path matching SCOPE_GUARD_AUTO_ALLOW_PATHS is
+	allowed as the last check and logged as SCOPE_GUARD_AUTO_ALLOWED.
 	"""
 	if allow_lockfiles and is_lockfile(path):
 		return True
@@ -535,8 +624,14 @@ def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = Tr
 	for entry in allowlist:
 		if entry_matches(entry, path):
 			return True
-	if is_agents_fragment(path):
-		return any(entry_matches(entry, doc) for entry in allowlist for doc in AGENTS_DOC_PATHS)
+	if is_agents_fragment(path) and any(entry_matches(entry, doc) for entry in allowlist for doc in AGENTS_DOC_PATHS):
+		return True
+	if allow_lockfiles:
+		glob = scope_guard_auto_allow_match(path)
+		if glob:
+			print(f"SCOPE_GUARD_AUTO_ALLOWED path={_scope_guard_log_value(path)} glob={_scope_guard_log_value(glob)}",
+				file=sys.stderr)
+			return True
 	return False
 
 

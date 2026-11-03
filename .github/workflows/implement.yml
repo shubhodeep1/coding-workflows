@@ -74,6 +74,9 @@ env:
   # ALLOW_WORKFLOW_EDITS) because vars.* are not auto-exposed to the shell.
   ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
   ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+  # Data paths the scope guard auto-allows outside files_touched (comma-separated
+  # globs; 'none' disables). Automation prefixes are never auto-allowed.
+  SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
   # Optional per-issue ai:scope:<glob> label. Default false during
   # acceptance so existing implement behavior is unchanged until the
   # feature is exercised on a real issue.
