@@ -3243,9 +3243,6 @@ class CheckFailureTriageUpstreamRoutingTests(unittest.TestCase):
 		self.assertIn("CHECK_TRIAGE_WRAPPER_SHA=${SCRIPT_REF}", staging)
 
 
-if __name__ == "__main__":
-	unittest.main()
-
 
 SUPERSEDE_FP = hashlib.sha256(b"owner/repo|pr=17|check=CI").hexdigest()
 
@@ -3337,7 +3334,11 @@ class CheckFailureTriageSupersedeTests(unittest.TestCase):
 			(metadata["supersede_issue"], metadata["supersede_old_head_sha"], metadata["supersede_new_head_sha"]), ("", "", ""),
 		)
 
-	def _supersede_stage(self, metadata: dict, url: str, fail: str = "") -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	OPEN_BLOCKED_ISSUE = json.dumps({"state": "open", "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}]})
+
+	def _supersede_stage(
+		self, metadata: dict, url: str, fail: str = "", old_issue: str | None = None,
+	) -> tuple[subprocess.CompletedProcess[str], list[str]]:
 		with tempfile.TemporaryDirectory(prefix="check-triage-supersede-") as temp_name:
 			temp_path = Path(temp_name)
 			bin_dir = temp_path / "bin"
@@ -3355,6 +3356,8 @@ gh_call_args="$*"
 printf '%s\\n' "${gh_call_args//$'\\n'/\\\\n}" >> "${MOCK_GH_CALLS}"
 case "$*" in
   *"${MOCK_FAIL_MATCH:-__never__}"*) exit 1 ;;
+  *--method*) ;;
+  *) printf '%s' "${MOCK_OLD_ISSUE_JSON}" ;;
 esac
 exit 0
 """)
@@ -3367,6 +3370,7 @@ exit 0
 				"CHECK_TRIAGE_TRUSTED_SUPPORT_DIR": str(trusted), "GITHUB_REPOSITORY": "owner/repo",
 				"GITHUB_SERVER_URL": "https://github.com", "RUNTIME_DIR": str(runtime_dir),
 				"MOCK_GH_CALLS": str(calls_file), "MOCK_FAIL_MATCH": fail or "__never__",
+				"MOCK_OLD_ISSUE_JSON": self.OPEN_BLOCKED_ISSUE if old_issue is None else old_issue,
 				"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
 			})
 			proc = subprocess.run(
@@ -3384,19 +3388,51 @@ exit 0
 	def test_supersede_stage_comments_labels_and_closes_in_order(self) -> None:
 		proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120")
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-		self.assertEqual(len(calls), 3, calls)
-		self.assertTrue(calls[0].startswith("api --method POST repos/owner/repo/issues/99/comments -f body=Superseded: check `CI`"))
-		self.assertIn("New triage: #120", calls[0])
-		self.assertIn("<!-- check-failure-triage:superseded-by=120 -->", calls[0])
-		self.assertEqual(calls[1], "api --method POST repos/owner/repo/issues/99/labels -f labels[]=ai:closed")
+		self.assertEqual(len(calls), 4, calls)
+		self.assertEqual(calls[0], "api repos/owner/repo/issues/99")
+		self.assertTrue(calls[1].startswith("api --method POST repos/owner/repo/issues/99/comments -f body=Superseded: check `CI`"))
+		self.assertIn("New triage: #120", calls[1])
+		self.assertIn("<!-- check-failure-triage:superseded-by=120 -->", calls[1])
+		# Close first: a failed close must not leave ai:closed on an open issue.
 		self.assertEqual(calls[2], "api --method PATCH repos/owner/repo/issues/99 -f state=closed -f state_reason=not_planned")
+		self.assertEqual(calls[3], "api --method POST repos/owner/repo/issues/99/labels -f labels[]=ai:closed")
 		self.assertIn("CHECK_TRIAGE op=supersede outcome=closed old=99 new=120", proc.stdout)
 
 	def test_supersede_stage_failed_close_warns_and_exits_zero(self) -> None:
 		proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120", fail="--method PATCH")
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertEqual(len(calls), 3)
+		self.assertFalse(any("/labels" in call for call in calls), calls)
 		self.assertIn("CHECK_TRIAGE op=supersede outcome=warn reason=supersede_close_failed old=99 new=120", proc.stdout)
+
+	def test_supersede_stage_skips_when_old_issue_changed_since_collect(self) -> None:
+		cases = {
+			"old_issue_stale": json.dumps({"state": "closed", "labels": [{"name": "ai:blocked"}]}),
+			"old_issue_stale_unblocked": json.dumps({"state": "open", "labels": [{"name": "ai:check-triage"}]}),
+			"old_issue_unreadable": "",
+		}
+		for label, payload in cases.items():
+			with self.subTest(case=label):
+				proc, calls = self._supersede_stage(self.SUPERSEDE_METADATA, "https://github.com/owner/repo/issues/120", old_issue=payload)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertEqual(calls, ["api repos/owner/repo/issues/99"])
+				reason = "old_issue_unreadable" if label == "old_issue_unreadable" else "old_issue_stale"
+				self.assertIn(f"CHECK_TRIAGE op=supersede outcome=skip reason={reason} old=99 new=120", proc.stdout)
+
+	def test_historical_mode_never_supersedes(self) -> None:
+		# A stale blocked issue carrying the historical fingerprint stays a
+		# duplicate in historical mode; the supersede branch never runs.
+		hist_fp = hashlib.sha256(b"owner/repo|pr=17|check=CI|run=37922279826|job=113792812346").hexdigest()
+		issue = _stale_triage_issue()
+		issue["body"] = issue["body"].replace(SUPERSEDE_FP, hist_fp)
+		proc, outputs, metadata = self._collect(
+			[issue], CHECK_TRIAGE_HISTORICAL_RUN_ID="37922279826", CHECK_TRIAGE_HISTORICAL_JOB_ID="113792812346",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertNotIn("op=supersede", proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=duplicate_open_issue issue=99", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
 
 	def test_supersede_stage_rejects_invalid_inputs(self) -> None:
 		for url in ("", "https://github.com/other/repo/issues/120", "https://github.com/owner/repo/issues/12x", "https://github.com/owner/repo/pull/120"):
@@ -3426,3 +3462,7 @@ exit 0
 		self.assertEqual(
 			job["env"]["CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED"], "${{ vars.CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED || 'true' }}",
 		)
+
+
+if __name__ == "__main__":
+	unittest.main()

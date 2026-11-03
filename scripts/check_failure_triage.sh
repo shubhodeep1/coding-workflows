@@ -212,7 +212,7 @@ triage_supersede_stale_issue()
 	local supersede_old_issue="${SUPERSEDE_OLD_ISSUE:-}"
 	local supersede_old_head="${SUPERSEDE_OLD_HEAD:-}"
 	local supersede_new_head="${SUPERSEDE_NEW_HEAD:-}"
-	local supersede_comment
+	local supersede_comment supersede_live_state
 	[ -n "${supersede_old_issue}" ] || return 0
 	if [ "${TRIAGE_SUPERSEDE_ENABLED}" != "true" ]; then
 		log "op=supersede outcome=skip reason=disabled old=${supersede_old_issue} new=${supersede_new_issue}"
@@ -226,9 +226,20 @@ triage_supersede_stale_issue()
 	fi
 	supersede_comment="$(printf 'Superseded: check `%s` failed again on the PR'"'"'s current head `%s`; this issue'"'"'s failure was on `%s`. New triage: #%s\n\n<!-- %ssuperseded-by=%s -->' \
 		"${CHECK_NAME_DISPLAY:-(unnamed check)}" "${supersede_new_head}" "${supersede_old_head}" "${supersede_new_issue}" "${MARKER_PREFIX}" "${supersede_new_issue}")"
+	# Re-read the old issue right before writing: diagnose and route ran since
+	# the collect stage, and it may have been resumed or closed meanwhile.
+	supersede_live_state="$(gh api "repos/${REPO}/issues/${supersede_old_issue}" 2>/dev/null |
+		jq -r 'if (.state == "open") and ([.labels[]?.name] | index("ai:blocked")) then "eligible" else "stale" end' 2>/dev/null || echo unreadable)"
+	if [ "${supersede_live_state}" != "eligible" ]; then
+		[ "${supersede_live_state}" = "stale" ] || supersede_live_state="unreadable"
+		log "op=supersede outcome=skip reason=old_issue_${supersede_live_state} old=${supersede_old_issue} new=${supersede_new_issue}"
+		return 0
+	fi
+	# Close before labelling: a failed close must not leave the terminal
+	# ai:closed label on an issue that is still open.
 	if gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/comments" -f body="${supersede_comment}" >/dev/null 2>&1 &&
-		gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1 &&
-		gh api --method PATCH "repos/${REPO}/issues/${supersede_old_issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+		gh api --method PATCH "repos/${REPO}/issues/${supersede_old_issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1 &&
+		gh api --method POST "repos/${REPO}/issues/${supersede_old_issue}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
 		log "op=supersede outcome=closed old=${supersede_old_issue} new=${supersede_new_issue}"
 	else
 		log "op=supersede outcome=warn reason=supersede_close_failed old=${supersede_old_issue} new=${supersede_new_issue}"

@@ -119,8 +119,10 @@ def job_failed_at_checkout(job: dict) -> bool:
 	# Fail closed on a missing or malformed `steps` list. True only when the
 	# first failed step is the checkout step, only `Set up job` ran (and
 	# succeeded) before it, and everything after it was skipped apart from
-	# cleanup steps. Checkout runs before any PR code, so no PR-controlled
-	# step can have written the job's annotations.
+	# cleanup steps. The step is matched by display name only, and a
+	# pull_request run uses the PR's own workflow file, so a PR could name a
+	# step like this and print matching errors; the once-per-head rerun cap
+	# bounds that to one extra rerun of the PR's own CI.
 	steps = job.get("steps")
 	if not isinstance(steps, list) or not steps \
 			or any(not isinstance(step, dict) or not isinstance(step.get("name"), str) for step in steps):
@@ -371,8 +373,8 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 				action_resolution_ids.add(job["id"])
 			elif checkout_fetch_enabled and job_failed_at_checkout(job) \
 					and checkout_fetch_annotations(annotations):
-				# Checkout fetch timeout (issue #8671): checkout runs before
-				# any PR step, and nothing ran after it.
+				# Checkout fetch timeout (issue #8671): nothing ran after the
+				# checkout step; bounded by the once-per-head rerun cap.
 				shutdown_ids.add(job["id"])
 				checkout_fetch_ids.add(job["id"])
 			else:

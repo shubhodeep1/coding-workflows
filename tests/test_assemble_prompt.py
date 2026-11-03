@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -427,17 +426,6 @@ def test_render_prompt_sh_input_already_assembled_keeps_include_line_literal() -
 	assert ' {% include "_partials/site_footer.html" %}\n' in proc.stdout
 
 
-def main() -> int:
-	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
-	for test_fn in tests:
-		test_fn()
-	print("OK: shared-prelude assembly path is byte-stable and flag-gated")
-	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
 
 def test_unblock_judge_prompt_and_template_offer_pr_check_green_not_operator_rerun() -> None:
 	# Issue #8671: a check re-run became an operator step (#8433). Both prompt
@@ -452,3 +440,15 @@ def test_unblock_judge_prompt_and_template_offer_pr_check_green_not_operator_rer
 		assert '{"kind": "pr_check_green", "pr": <number>, "check": "<check name>"}' in text, path
 		schema_lines = [line for line in text.splitlines() if line.strip().startswith('"wait_for":')]
 		assert len(schema_lines) == 1 and '"pr_check_green"' in schema_lines[0], path
+
+
+def main() -> int:
+	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
+	for test_fn in tests:
+		test_fn()
+	print("OK: shared-prelude assembly path is byte-stable and flag-gated")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
