@@ -681,6 +681,26 @@ def test_sync_labels_rejects_overlong_description_before_get() -> None:
 	assert "LABEL_SYNC_ERROR:" in stderr_text
 
 
+def test_sync_labels_all_invalid_contract_makes_no_github_request() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-all-invalid-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), {
+			"ai:alpha": {"color": "123abc", "description": "a" * 101},
+			"ai:beta": {"color": "abcdef", "description": "b" * 120},
+		})
+		prefetch_log: list[dict[str, str]] = []
+		rc, payload, _stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=[],
+			prefetch_pages=[],
+			prefetch_log=prefetch_log,
+		)
+
+	assert rc == 1
+	assert [error["action"] for error in payload["errors"]] == ["validate", "validate"]
+	assert prefetch_log == []
+	assert request_log == []
+
+
 def test_sync_labels_prefetch_avoids_per_label_gets() -> None:
 	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-") as tmpdir:
 		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)

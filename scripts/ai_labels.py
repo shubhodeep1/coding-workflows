@@ -529,16 +529,10 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
     unchanged_count = 0
     errors: list[dict[str, Any]] = []
 
+    # The prefetch is deferred until the first label passes local validation,
+    # so an invalid label (or an all-invalid contract) never costs a GitHub read.
     prefetched_labels: dict[str, dict[str, Any]] | None = None
-    if label_items:
-        prefetched_labels, prefetch_failure_reason = _prefetch_repo_labels(repo)
-        if prefetched_labels is None:
-            print(
-                "ai_labels: label list prefetch unavailable "
-                f"(reason={_sanitize_log_detail(prefetch_failure_reason or 'unknown')}); "
-                f"falling back to per-label GET for {len(label_items)} labels",
-                file=sys.stderr,
-            )
+    prefetch_attempted = False
 
     for label_name, raw_metadata in label_items:
         expected_metadata = _normalize_label_sync_metadata(label_name, raw_metadata)
@@ -568,6 +562,17 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
             )
             continue
         label_path = _github_label_path(repo, label_name)
+
+        if not prefetch_attempted:
+            prefetch_attempted = True
+            prefetched_labels, prefetch_failure_reason = _prefetch_repo_labels(repo)
+            if prefetched_labels is None:
+                print(
+                    "ai_labels: label list prefetch unavailable "
+                    f"(reason={_sanitize_log_detail(prefetch_failure_reason or 'unknown')}); "
+                    f"falling back to per-label GET for {len(label_items)} labels",
+                    file=sys.stderr,
+                )
 
         if prefetched_labels is not None:
             # A label missing from a complete prefetch counts as a 404.
