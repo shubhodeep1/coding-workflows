@@ -1449,7 +1449,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_parse_and_post_answer.sh"
+          # The poster cds to its own parent directory; from the support
+          # bundle that is not the checkout, so GIT_DIR keeps its memory
+          # dedup reading this repository's origin. Unset SUPPORT_SCRIPTS_DIR
+          # (kill switch) adds nothing and runs scripts/ as before.
+          env ${SUPPORT_SCRIPTS_DIR:+"GIT_DIR=${GITHUB_WORKSPACE}/.git"} bash "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_parse_and_post_answer.sh"
 
       # Standalone mode: record every decision, with who took it and any
       # placeholder setup items, in the issue's single trusted
