@@ -1509,3 +1509,17 @@ def test_delta_audit_wiring() -> None:
 	assert {"audit_diff_since", "prior_findings"} <= set(template_triggers["workflow_dispatch"]["inputs"])
 	review_text = expanded_review_autofix_text()
 	assert review_text.count("SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}") >= 4
+
+
+def test_findings_source_without_stored_payload_keeps_todays_dispatch(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()], payload=""), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH]
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "delta re-audit" not in posted[-1][-1] and "delta_since=" not in result.stdout
+
+
+def test_carry_forward_diff_lists_rename_sources() -> None:
+	text = (Path(__file__).resolve().parents[1] / "scripts" / "review_single_issue_security_pass.sh").read_text(encoding="utf-8")
+	assert 'diff --no-renames --name-only "${carry_since}..${head_sha}"' in text

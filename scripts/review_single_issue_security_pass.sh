@@ -585,6 +585,16 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			delta_since="$(printf '%s' "${delta_source}" | cut -f1)"
 			delta_comment_id="$(printf '%s' "${delta_source}" | cut -f2)"
 			delta_status="$(printf '%s' "${delta_source}" | cut -f3)"
+			# A findings result without the stored payload (posted before P5a,
+			# or omitted over the size cap) can never be verified by the audit,
+			# so request a full audit instead of announcing a delta re-audit.
+			if [ "${delta_status}" = "findings" ] && ! jq -e --argjson id "${delta_comment_id}" \
+				'any(.[]?; type == "object" and .id == $id and ((.body // "") | test("(^|\n)Audited findings sha256: [0-9a-f]{64}")))' \
+				"${comments}" >/dev/null 2>&1; then
+				delta_since=""
+			fi
+		fi
+		if [ -n "${delta_since}" ]; then
 			delta_dispatch_args=("${dispatch_args[@]}" -f audit_diff_since="${delta_since}")
 			if [ "${delta_status}" = "findings" ]; then
 				delta_dispatch_args+=(-f prior_findings="${delta_comment_id}")
@@ -902,7 +912,7 @@ single_pass_report()
 		# was given prior findings.
 		if [[ "${carry_since}" =~ ^[0-9a-f]{40}$ ]] && [ -n "${carry_prior}" ] && [ -r "${carry_prior}" ]; then
 			carry_git_ok="true"
-			if ! carry_touched="$(git -C "${GITHUB_WORKSPACE:-.}/audit-data" diff --name-only "${carry_since}..${head_sha}" 2>/dev/null)"; then
+			if ! carry_touched="$(git -C "${GITHUB_WORKSPACE:-.}/audit-data" diff --no-renames --name-only "${carry_since}..${head_sha}" 2>/dev/null)"; then
 				# Fail closed: without the touched-file list every prior finding
 				# that was not re-reported is carried.
 				carry_git_ok="false"

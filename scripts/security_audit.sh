@@ -400,7 +400,7 @@ fi
 SECURITY_AUDIT_PRIOR_FINDINGS="${SECURITY_AUDIT_PRIOR_FINDINGS:-}"
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ] \
 		&& [ -z "${SECURITY_AUDIT_TARGET_REF:-}" ]; then
-	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode" >&2
+	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode or with SECURITY_AUDIT_TARGET_REF" >&2
 	exit 1
 fi
 # Optional destination (issues mode only, default empty) for the surviving
