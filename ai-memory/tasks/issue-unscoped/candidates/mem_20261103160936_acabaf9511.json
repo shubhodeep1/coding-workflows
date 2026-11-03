@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:580-581 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: parse_scope_guard_auto_allow_paths ignores glob entries with a trailing slash because they are classified as empty_segment.\n  WHY: A valid configured glob like tests/fixtures/ splits into [\"tests\", \"fixtures\", \"\"] and is incorrectly marked as an invalid entry, causing it to be ignored when it should be processed and allowed (source severity MAJOR, mapped to high; anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash dispute this as intentional, documented, tested, fail-closed behavior, with the default form being tests/fixtures/**).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automation and .git prefixes are always denied, in any letter case.\"\n  expected_change_site: scripts/files_touched_scope_guard.py\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The deny check in parse_scope_guard_auto_allow_paths only verifies the first segment (segments[0].lower()), so it fails to deny nested automation paths such as \"a/scripts/**\" or \"b/.git/foo\" (source severity NIT; anthropic_claude-sonnet-5_5 disputes this, saying scope_guard_auto_match checks is_automation_path(path) on every candidate path and test_auto_allow_path_hard_deny covers it)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:580-581 | severity=MAJOR | confidence=4\n  PROBLEM: parse_scope_guard_auto_allow_paths ignores glob entries with a trailing slash because they are classified as empty_segment.\n  WHY: A valid configured glob like tests/fixtures/ splits into [\"tests\", \"fixtures\", \"\"] and is incorrectly marked as an invalid entry, causing it to be ignored when it should be processed and allowed.\n- TASK_GAP\n  Requirement: \"Automation and .git prefixes are always denied, in any letter case.\"\n  Expected change site: scripts/files_touched_scope_guard.py\n  Evidence of absence: The deny check in parse_scope_guard_auto_allow_paths only verifies the first segment (segments[0].lower()). It fails to deny automation paths that are nested, e.g., configured as \"a/scripts/**\" or \"b/.git/foo\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Implement stuck-states P7a: scope guard auto-allows changelog.d/*.md and tests/fixtures/** (SCOPE_GUARD_AUTO_ALLOW_PATHS)\"\n  Expected change site: scripts/files_touched_scope_guard.py, .github/workflows/{implement,plan,orchestrate_poll}.yml, tests/test_files_touched_scope_guard.py, README.md, agents.d/stuck-states-p7a-scope-guard-auto-allow.md, changelog.d/stuck-states-p7a-scope-guard-auto-allow.md.\n  Evidence of absence: All listed paths carry hunks in the PR diff (implement.yml:77-79, plan.yml:105, orchestrate_poll.yml 5 sites at 939, 1350, 1571, 1670, 1699; scripts/files_touched_scope_guard.py:543-621 and 630-636; 9 new tests in tests/test_files_touched_scope_guard.py:1675-1811; new agents.d and changelog.d fragments). The plan P7 acceptance criteria (docs/plans/remove-unattended-pipeline-stuck-states-plan.md:193-199) are covered by tests. No gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "792c32b69c1d95f1f159c9ebd7a22723f92df7527312f4415eb0985af8a48a38",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8753,
+    "run_id": "41668076797",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41668076797",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103160936_acabaf9511",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8753,
+    "run_id": "41668076797"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T16:09:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
