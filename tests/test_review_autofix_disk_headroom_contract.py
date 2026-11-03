@@ -148,7 +148,8 @@ def _workflow_doc() -> dict:
 					break
 				steps_lines.append(line)
 			step_indent = min(
-				(_indent(l) for l in steps_lines if l.strip().startswith("- ")), default=6
+				(_indent(step_line) for step_line in steps_lines if step_line.strip().startswith("- ")),
+				default=6,
 			)
 			steps = _parse_steps(steps_lines, step_indent)
 		jobs[job_id] = {"steps": steps}
