@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2055-2096 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new pre-cleanup and post-cleanup logging steps appear to be causing CI failures in `test_gh_api_write_guard.py` and `test_pr_watch_guard.py` as noted by preliminary reviewers.\n  WHY: Source labelled this severity BLOCKER (mapped to critical); it says the new steps in the `codex-agent` job might break the strict step-ordering or environment isolation these tests expect. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) rejected this claim as not demonstrated by the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update tests, changelog, and agents fragments in the same change (per issue description).\n  expected_change_site: agents.d/8725-review-disk-headroom-logging.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR lacks the `agents.d/` fragment, and `tests/test_agents_fragment_contract.py` is reported failing in the pre-push gate as a result. Severity MAJOR per source. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected this gap, saying no requirement or contract needs an agents fragment for this logging-only change.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:2055-2096 | severity=BLOCKER | confidence=4\n  PROBLEM: The new pre-cleanup and post-cleanup logging steps appear to be causing CI failures in `test_gh_api_write_guard.py` and `test_pr_watch_guard.py` as noted by preliminary reviewers.\n  WHY: These tests validate that the workflow remains under specific guard constraints. New steps in the `codex-agent` job might break the strict step-ordering or environment isolation they expect.\n- TASK_GAP:\n  Requirement: Update tests, changelog, and agents fragments in the same change (per issue description).\n  Expected change site: agents.d/8725-review-disk-headroom-logging.md\n  Evidence of absence: The PR lacks the corresponding `agents.d/` fragment, and `tests/test_agents_fragment_contract.py` is failing in the pre-push gate as a result.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a64f03fbeb014d641adfe60d9d443744a9b33c14b85406ccf7d7661a4fe51568",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8729,
+    "run_id": "41578184267",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41578184267",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103045213_1dd334cca6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8729,
+    "run_id": "41578184267"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T04:52:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
