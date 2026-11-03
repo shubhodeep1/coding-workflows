@@ -210,7 +210,22 @@ release_blocker_evidence_header()
 release_blocker_alert()
 {
 	local release_blocker_alert_skip="$1" release_blocker_alert_reason="$2"
-	tg_send_msg "Release blocker report could not be dispatched (${release_blocker_alert_skip}): ${release_blocker_alert_reason} on $(release_blocker_safe "${AUTO_RELEASE_STABLE_BRANCH}"). Refs #8291" WARNING >/dev/null 2>&1 || true
+	local release_blocker_alert_pid release_blocker_alert_waited=0
+	# tg_send_msg's curl has no time limit, so the send runs in the background
+	# and is abandoned after 30 seconds (150 polls of 0.2 s), as in
+	# promote_main_cycle.sh, so a stalled Telegram never delays the tick.
+	( tg_send_msg "Release blocker report could not be dispatched (${release_blocker_alert_skip}): ${release_blocker_alert_reason} on $(release_blocker_safe "${AUTO_RELEASE_STABLE_BRANCH}"). Refs #8291" WARNING >/dev/null 2>&1 || true ) &
+	release_blocker_alert_pid=$!
+	while kill -0 "${release_blocker_alert_pid}" 2>/dev/null && [ "${release_blocker_alert_waited}" -lt 150 ]; do
+		sleep 0.2
+		release_blocker_alert_waited=$((release_blocker_alert_waited + 1))
+	done
+	if kill -0 "${release_blocker_alert_pid}" 2>/dev/null; then
+		pkill -P "${release_blocker_alert_pid}" 2>/dev/null || true
+		kill "${release_blocker_alert_pid}" 2>/dev/null || true
+		echo "::warning::Release blocker Telegram alert timed out after 30s; not sent."
+	fi
+	wait "${release_blocker_alert_pid}" 2>/dev/null || true
 }
 
 # report_release_blocker <reason> <age_secs> <evidence_file> [failed_run_id]
@@ -328,9 +343,9 @@ release_blocker_check_in_flight()
 # updated_at (no created_at fallback, which would overstate the age).
 release_blocker_check_gate_failed()
 {
-	local rb_fields="" rb_id="" rb_updated="" rb_age="" rb_evidence=""
-	rb_fields="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure"))] | sort_by(.created_at) | last // empty | ((.id // "") | tostring), ((.updated_at // "") | tostring)' 2>/dev/null)" || rb_fields=""
-	{ IFS= read -r rb_id; IFS= read -r rb_updated; } <<< "${rb_fields}" || true
+	local rb_fields="" rb_id="" rb_updated="" rb_conclusion="" rb_claim_id="" rb_age="" rb_evidence=""
+	rb_fields="$(printf '%s' "${runs_json}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.status == "completed" and .head_sha == $sha and .head_branch == $branch and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure"))] | sort_by(.created_at) | last // empty | ((.id // "") | tostring), ((.updated_at // "") | tostring), ((.conclusion // "") | tostring)' 2>/dev/null)" || rb_fields=""
+	{ IFS= read -r rb_id; IFS= read -r rb_updated; IFS= read -r rb_conclusion; } <<< "${rb_fields}" || true
 	rb_age="$(release_blocker_age_from_iso "${rb_updated:-}")"
 	if [ -z "${rb_age}" ]; then
 		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=last_gate_failed lookup=updated_at"
@@ -340,22 +355,37 @@ release_blocker_check_gate_failed()
 		return 0
 	fi
 	[[ "${rb_id}" =~ ^[0-9]{1,20}$ ]] || rb_id=""
+	# Claim the run in run_refs only when it has a failed job: a
+	# startup_failure run has no jobs, so the intake's bind_report_claims
+	# would drop it as run_not_failed and reject the report (no_bound_runs).
+	# It stays named in the evidence; the report then binds its reporter run.
+	case "${rb_conclusion}" in
+		failure|timed_out) rb_claim_id="${rb_id}" ;;
+		*) rb_claim_id="" ;;
+	esac
 	release_blocker_ensure_work_dir || { echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=last_gate_failed stage=build detail=work_dir_unavailable"; release_blocker_fired="true"; return 0; }
 	rb_evidence="${RELEASE_BLOCKER_WORK_DIR}/evidence.txt"
 	{
 		release_blocker_evidence_header last_gate_failed "${rb_age}" "${RELEASE_BLOCKER_GATE_FAILED_MIN_AGE_SECS}"
 		printf 'gate_run=%s conclusion=%s updated_at=%s attempts=%s max=%s\n' "$(release_blocker_run_url "${rb_id}")" "$(release_blocker_safe "${last_conclusion_on_tip:-}")" "$(release_blocker_safe "${rb_updated}")" "${failed_attempts_on_tip}" "${AUTO_RELEASE_STABLE_MAX_ATTEMPTS}"
 	} > "${rb_evidence}" 2>/dev/null || true
-	report_release_blocker last_gate_failed "${rb_age}" "${rb_evidence}" "${rb_id}" || true
+	report_release_blocker last_gate_failed "${rb_age}" "${rb_evidence}" "${rb_claim_id}" || true
 }
 
 # stable_release_stale: pending_since = max(tag time, oldest unreleased commit
 # date), both from responses the tick already fetched. A fresh patch on top
-# of an old tag therefore does not read as stale.
+# of an old tag therefore does not read as stale. Only reported while no gate
+# run has started on the tip (the plan's condition): once a gate ran there,
+# release_in_flight / last_gate_failed own the blocker, and promoted commits
+# keep their `main` dates, so a running release would otherwise read as stale.
 release_blocker_check_stale()
 {
-	local rb_tag_time="" rb_tag_age="" rb_commit_age="" rb_age="" rb_pending_since="" rb_last_gate="" rb_last_id="" rb_last_conclusion="" rb_evidence=""
+	local rb_tag_time="" rb_tag_age="" rb_commit_age="" rb_age="" rb_pending_since="" rb_last_gate="" rb_last_id="" rb_last_conclusion="" rb_evidence="" rb_gate_runs_on_tip=""
 	if [ "${release_blocker_fired}" = "true" ]; then
+		return 0
+	fi
+	rb_gate_runs_on_tip="$(printf '%s' "${runs_json:-}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.head_sha == $sha and .head_branch == $branch)] | length' 2>/dev/null)" || rb_gate_runs_on_tip=""
+	if ! [[ "${rb_gate_runs_on_tip}" =~ ^0$ ]]; then
 		return 0
 	fi
 	rb_tag_time="${tag_tagger_date:-}"

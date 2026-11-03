@@ -380,7 +380,7 @@ def test_last_gate_failed_past_threshold_sends_one_report() -> None:
 	assert report["workflow_name"] == "Auto release stable"
 	assert report["blocker_evidence"].startswith("reason=last_gate_failed")
 	assert "/actions/runs/777" in report["blocker_evidence"]
-	assert f"RELEASE_BLOCKER_REPORTED reason=last_gate_failed age=" in proc.stdout
+	assert "RELEASE_BLOCKER_REPORTED reason=last_gate_failed age=" in proc.stdout
 	assert "run_ref=777" in proc.stdout
 	# The report comes before the unchanged skip line.
 	assert proc.stdout.index("RELEASE_BLOCKER_REPORTED") < proc.stdout.index("AUTO_RELEASE_SKIPPED")
@@ -477,13 +477,46 @@ def test_at_most_one_report_per_tick_prefers_release_in_flight() -> None:
 	assert [r["blocker_reason"] for r in _reports(state)] == ["release_in_flight"]
 
 
-def test_stale_reported_on_in_flight_path_when_the_run_is_recent() -> None:
+def test_stale_not_reported_while_a_gate_run_is_active_on_the_tip() -> None:
+	# A gate already started on the tip: the release is progressing, so the
+	# plan's "no gate run started on the tip since" condition does not hold.
 	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(600)}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active], tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
 	assert proc.returncode == 0, proc.stderr
 	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_stale_reported_on_in_flight_path_when_no_gate_ran_on_the_tip() -> None:
+	active = {"id": 992, "status": "in_progress", "conclusion": None, "head_sha": "5" * 40, "head_branch": "main", "created_at": _ago(600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, promote_runs=[active], tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
 	assert [r["blocker_reason"] for r in _reports(state)] == ["stable_release_stale"]
+
+
+def test_stale_not_reported_on_the_retry_path() -> None:
+	runs = [_failed_gate(_ago(3600))]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(state["dispatches"]) == 1
+	assert not state.get("heal_dispatches")
+
+
+def test_last_gate_failed_startup_failure_is_not_claimed_in_run_refs() -> None:
+	run = _failed_gate(_ago(2 * 86400), run_id=778)
+	run["conclusion"] = "startup_failure"
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[run]), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	reports = _reports(state)
+	assert [r["blocker_reason"] for r in reports] == ["last_gate_failed"]
+	assert reports[0]["run_refs"] == []
+	assert "/actions/runs/778" in reports[0]["blocker_evidence"]
+	assert "run_ref=none" in proc.stdout
 
 
 def test_reporter_kill_switch_sends_nothing() -> None:
