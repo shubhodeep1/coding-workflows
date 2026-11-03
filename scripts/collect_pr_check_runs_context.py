@@ -269,6 +269,9 @@ def _sanitize_wait_field(value: Any, limit: int = 80) -> str:
 	text = "".join("_" if (ord(ch) < 32 or ord(ch) == 127) else ch for ch in text)
 	while "::" in text:
 		text = text.replace("::", ":_")
+	# Legacy "##[command]" annotation syntax.
+	while "##[" in text:
+		text = text.replace("##[", "#_[")
 	text = re.sub(r"[\s|,]", "_", text)
 	if not text:
 		text = "-"
