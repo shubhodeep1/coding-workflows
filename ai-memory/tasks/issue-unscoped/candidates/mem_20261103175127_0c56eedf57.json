@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly three lines (`status: ok`, `run_id: 40876853022`, `updated-by: ai-pipeline`).\n  expected_change_site: `tests/e2e_smoke_canary.txt`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says the final file content is compliant. It says the file was patched rather than fully overwritten, which missed the instruction \"Overwrite the entire file\". It rated this SEVERITY: NIT and not a blocker.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Update `tests/e2e_smoke_canary.txt` so its content is exactly three lines (`status: ok`, `run_id: 40876853022`, `updated-by: ai-pipeline`).\n  Expected change site: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The PR diff (or file on disk) contains the requested content, but the reviewer's review of the provided hunks indicates the file was patched rather than fully overwritten as requested in the task constraints (\"Overwrite the entire file\"). The final file state is compliant, so the reviewer says this is not a blocker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "edfd0dc262c093d8aa9b196faa9dd545dcc45ccb0257f0dd314de9860536af7c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8373,
+    "run_id": "41685014811",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41685014811",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103175127_0c56eedf57",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8373,
+    "run_id": "41685014811"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T17:51:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
