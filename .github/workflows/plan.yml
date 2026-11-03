@@ -619,7 +619,7 @@ jobs:
           if [ "${support_unified}" = "true" ]; then
             bash .codex-workflow-src/scripts/stage_support_for_phase.sh plan
             while IFS= read -r support_list_name; do
-              [ -n "${support_list_name}" ] && _fetched_scripts+=("${support_list_name}")
+              if [ -n "${support_list_name}" ]; then _fetched_scripts+=("${support_list_name}"); fi
             done <<< "${support_list_names}"
             _fetched_scripts+=(codex_model_catalog.json)
             # SUPPORT_SCRIPTS_DIR is only visible from the next step; the
