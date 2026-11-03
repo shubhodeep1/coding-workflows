@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan: update the `decompose-run` marker in `tests/e2e_smoke_canary_b.txt`\n\nPlanning ref: `orchestrator/project-8709` at `fcb44ee4855705d0d63231dd1c6a66ba51b293e4` (integration branch mismatch: false).\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\n- None. This is a data-only edit. Line 2 changes from `decompose-run: 41445772297` to `decompose-run: 41552424693`, and line 1 stays `status: ok` with LF line endings and one trailing newline. I checked the current bytes with `cat -A` and they match the issue's description: two lines, each ending in LF.\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Leave the deterministic smoke test unchanged\n- Chosen: edit only `tests/e2e_smoke_canary_b.txt`.\n- Alternatives considered: also editing `tests/test_review_conflict_resolve_smoke_deterministic.py`, which the decomposition listed as an expected file.\n- Why: that test mentions `canary_b` only in a comment (line 80) and does not check the `decompose-run` value. The issue's scope rule also forbids touching any other file, so the decomposition's list is out of date.\n\n## Security considerations\n- No trust boundaries, endpoints, inputs or secrets are involved. The file holds only a public run ID.\n\n## Potential risks or edge cases\n- Conflict between the issue and the decomposition: the decomposition lists the test file as expected, but the issue says to change only the canary file. This plan follows the issue (see D1).\n- Keep exactly one trailing newline and do not add a third line.\n\n## Testing considerations\n- Run the issue's acceptance checks: `head -n1`, `sed -n 2p`, `wc -l` (should report 2), and `git diff --stat` (should show only the canary file changed).\n- Optionally run `pytest tests/test_review_conflict_resolve_smoke_deterministic.py`. It should be unaffected.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for a one-line change to a single file, and this plan does exactly that with no new code or helpers. The only judgement call is leaving out the advisory test file: it does not depend on the marker value, and the issue's discipline rule forbids editing it.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "74af556658ad2a2c87416e106137991fc18aa2b8097a631333f12ed8c6444511",
+  "lineage": {
+    "issue_number": 8711,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41553393856",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41553393856",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8711"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261103003604_9f663e4463",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8711,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41553393856"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8711",
+  "timestamps": {
+    "created_at": "2026-11-03T00:36:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
