@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_labels.py:1013-1015 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `except` block in `main()` catches `OSError` broadly, which may mask unrelated system or IO failures during contract validation.\n  WHY: The comment implies it handles only missing or unreadable contract files; the reviewer recommends narrowing it to `FileNotFoundError`/`PermissionError`. The source states no severity or confidence, so low and 2 are inferred.\n- scripts/review_conflict_resolve.sh:1189 / 1829 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `RESOLVER_SCOPE_CHECK` diagnostics log `exc={cls}`, the Python exception class, instead of the resolver agent's exit class.\n  WHY: This makes exit reasons non-standard to parse in CI logs. The source states no severity or confidence, so low and 2 are inferred.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Emit an enumerated RESOLVER_SCOPE_CHECK reason, action, attempt, allowed/changed-path counts, merge-state-changed flag, and agent exit class\n  expected_change_site: scripts/review_conflict_resolve.sh (retry loop and the two guard heredocs)\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: `exc=` carries the guard's Python exception class, not the agent exit code, and the guard heredocs never see that exit code. The omission is recorded in analysis/recommendation-processing-report.md and was left in by earlier rounds. Severity NIT.\n- requirement: Have the CI smoke assert an empty errors array\n  expected_change_site: .github/workflows/ci.yml (\"AI label sync dry-run smoke\" step)\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The step fails only on `action == \"validate\"` or a \"100-character limit\" message. GET, HTTP and transport errors stay non-fatal, which is deliberate and documented. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (no code findings; the other checklist sections reported NONE):\n  Requirement: Emit an enumerated RESOLVER_SCOPE_CHECK reason, action, attempt, allowed/changed-path counts, merge-state-changed flag, and agent exit class\n  Expected change site: scripts/review_conflict_resolve.sh, retry loop and the two guard heredocs\n  Evidence of absence: `exc=` carries the guard's Python exception class, not the resolver agent's exit code. The guard heredocs never see that exit code. The omission is recorded in analysis/recommendation-processing-report.md.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- TASK_GAP:\n  Requirement: Have this CI smoke assert an empty errors array\n  Expected change site: .github/workflows/ci.yml, \"AI label sync dry-run smoke\" step\n  Evidence of absence: The step fails only on `action == \"validate\"` or a \"100-character limit\" message. GET, HTTP and transport errors stay non-fatal by design.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- Note: The reviewer verified that `RuntimeError` in the per-label GET fallback and `OSError` in `main()` of scripts/ai_labels.py hold up. The Copilot check failure (`custom_instructions_too_large`, HTTP 422) is external to the PR. HARDENING_SUGGESTIONS: None. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/ai_labels.py:1013-1015\n  PROBLEM: The `except` block catches `OSError` broadly, which may mask unrelated system or IO failures during contract validation.\n  WHY: The comment implies it handles only missing or unreadable contract files. The reviewer recommends narrowing it to `FileNotFoundError`/`PermissionError`, or re-raising unrelated types.\n- scripts/review_conflict_resolve.sh:1189 / 1829\n  PROBLEM: The `RESOLVER_SCOPE_CHECK` diagnostics log `exc={cls}`, the Python exception class, instead of the standardized agent exit class.\n  WHY: This makes exit reasons non-standard to parse in CI logs. The reviewer recommends logging the resolver agent's exit class.\n- .github/workflows/ci.yml (step: AI label sync dry-run smoke)\n  PROBLEM: The smoke step lacks an explicit assertion (e.g. `assert len(errors) == 0`) that fails CI when the dry-run result contains errors.\n  WHY: Without it, unexpected errors can pass the step. The reviewer recommends adding a zero-errors assertion.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4075e431175485da88f787992df1448c210866322e5b80e2b37a378519af86d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8755,
+    "run_id": "41708706852",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41708706852",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103202103_84d4cc4d72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8755,
+    "run_id": "41708706852"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T20:21:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
