@@ -302,7 +302,10 @@ def test_run_plan_appends_the_block_only_on_the_heal_route() -> None:
 				shutil.copy(CF_PROMPT, root / "prompts" / CF_PROMPT.name)
 			(root / "evidence.md").write_text("EVIDENCE\n", encoding="utf-8")
 			(root / "prompt.txt").write_text("BASE\n", encoding="utf-8")
+			# The runner resolves render_prompt.sh from its own directory
+			# (RUN_PLAN_CODEX_SUPPORT_DIR, set at the top of run_plan_codex.sh).
 			env = {"PATH": os.environ.get("PATH", ""), "HEAL_ROUTE": heal_route, "RUNTIME_DIR": str(root),
+				"RUN_PLAN_CODEX_SUPPORT_DIR": str(root / "scripts"),
 				"HEAL_EVIDENCE_FILE": str(root / "evidence.md"), "CODEX_PROMPT_FILE": str(root / "prompt.txt")}
 			proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], cwd=root, env=env,
 				capture_output=True, text=True, check=False)

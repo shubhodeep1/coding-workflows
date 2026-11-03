@@ -15,8 +15,11 @@ bundle under RUNNER_TEMP (SUPPORT_SCRIPTS_DIR), and every later call uses
 between the `support-scripts-legacy` markers, behind the kill switch
 SUPPORT_SCRIPTS_UNIFIED_ENABLED.
 
-PHASE_WORKFLOWS is parametrized so plan.yml, orchestrate_clarify_respond.yml
-and implement.yml (later P2a/P2b issues) each add one entry.
+PHASE_WORKFLOWS is parametrized so each phase workflow adds one entry: clarify
+(P2a-1) and plan (P2a-2) today; orchestrate_clarify_respond.yml and
+implement.yml come with the later P2a/P2b issues. PHASE_EXPECTATIONS holds the
+per-phase differences (host Python directory, checkout sandbox Dockerfile,
+required call sites).
 """
 
 from __future__ import annotations
@@ -40,7 +43,38 @@ SUPPORT_PATH = "${SUPPORT_SCRIPTS_DIR:-scripts}/"
 # (workflow, staging step name, stage_support_for_phase.sh phase)
 PHASE_WORKFLOWS = [
 	pytest.param(".github/workflows/clarify.yml", "Stage workflow support files", "clarify", id="clarify"),
+	pytest.param(".github/workflows/plan.yml", "Stage workflow support files", "plan", id="plan"),
 ]
+
+# Per-phase differences of the staging step.
+#   host_python        the phase passes --host-python-dir (CLARIFY_HOST_PYTHON_DIR)
+#   checkout_sandbox   unified mode still installs scripts/clarify_sandbox/Dockerfile
+#                      into the checkout (clarify's preseed step reads it there)
+#   unified_checkout   entries the unified step leaves in the checkout's scripts/
+#   call_sites         "${SUPPORT_SCRIPTS_DIR:-scripts}/..." calls the workflow must hold
+#   dropped_script     a required script the fail-closed check deletes
+#   list_probe         the step probes `stage_support_for_phase.sh <phase> --list`
+PHASE_EXPECTATIONS = {
+	"clarify": {
+		"host_python": True,
+		"checkout_sandbox": True,
+		"unified_checkout": {"clarify_sandbox", ".gitignore"},
+		"call_sites": (f'source "{SUPPORT_PATH}ai_engine.sh"', f'bash "{SUPPORT_PATH}clarify_isolated_run.sh"'),
+		"dropped_script": "auto_decisions.py",
+		"list_probe": False,
+	},
+	"plan": {
+		"host_python": False,
+		"checkout_sandbox": False,
+		"unified_checkout": {".gitignore"},
+		"call_sites": (f'source "{SUPPORT_PATH}ai_engine.sh"', f'bash "{SUPPORT_PATH}run_plan_codex.sh"'),
+		"dropped_script": "plan_split_dispatch.sh",
+		"list_probe": True,
+	},
+}
+
+# Scripts that resolve their sibling helpers from their own directory (plan D5).
+OWN_DIR_SCRIPTS = ("run_plan_codex.sh", "plan_split_dispatch.sh")
 
 # Real support files the execution fixtures copy; every other name the phase
 # stages is a stub.
@@ -152,7 +186,7 @@ def test_staging_step_binds_kill_switch(workflow: str, step_name: str, phase: st
 	body = "\n".join(step)
 	assert KILL_SWITCH_BINDING in body
 	assert 'support_unified="${SUPPORT_SCRIPTS_UNIFIED_ENABLED:-true}"' in body
-	assert f"bash .codex-workflow-src/scripts/stage_support_for_phase.sh {phase} " in body
+	assert re.search(r"bash \.codex-workflow-src/scripts/stage_support_for_phase\.sh " + re.escape(phase) + r"(?: |$)", body, re.M)
 	begin, end = _legacy_region(step)
 	assert step[begin - 1].strip() == "else", "the legacy region must be the kill-switch else branch"
 	assert step[end + 1].strip() == "fi"
@@ -184,8 +218,8 @@ def test_no_bare_support_helper_calls(workflow: str, step_name: str, phase: str)
 	)
 	offenders = [line.strip() for line in _outside_legacy_code(text) if bare.search(line)]
 	assert not offenders, f"bare scripts/<helper> calls outside the kill-switch region: {offenders}"
-	assert f'source "{SUPPORT_PATH}ai_engine.sh"' in text
-	assert f'bash "{SUPPORT_PATH}clarify_isolated_run.sh"' in text
+	for call_site in PHASE_EXPECTATIONS[phase]["call_sites"]:
+		assert call_site in text, call_site
 
 
 @pytest.mark.parametrize(("workflow", "step_name", "phase"), PHASE_WORKFLOWS)
@@ -236,7 +270,12 @@ def _make_support(workspace: Path, phase: str, workflow: str) -> tuple[Path, str
 	_write(scripts / "emit_event.sh", "# emit_event stub\n", 0o755)
 	_write(scripts / "codex_model_catalog.json", "{}\n")
 	_write(scripts / "clarify_sandbox" / "Dockerfile", "FROM node:22-bookworm-slim\n")
-	for rel in ("unattended_system_instructions.md", "ai_pipeline.md", "prompts/header.txt", "prompts/_identity_recall.txt"):
+	if "claude_settings.json.tmpl" not in names:
+		_write(scripts / "claude_settings.json.tmpl", "{}\n")
+	for rel in (
+		"unattended_system_instructions.md", "ai_pipeline.md", "prompts/header.txt", "prompts/_identity_recall.txt",
+		"prompts/references/security-money-lens.txt",
+	):
 		_write(support / rel, f"{rel}\n")
 	schema = "ai-memory/schemas/workflow_overlay.v1.json"
 	(support / schema).parent.mkdir(parents=True, exist_ok=True)
@@ -315,8 +354,10 @@ def test_support_copy_of_stall_guard_wins(tmp_path: Path, workflow: str, step_na
 	status_before = _git(target, "status", "--porcelain")
 	env = _runner_env(tmp_path, target, head)
 	host_python = tmp_path / "host-python"
+	expect = PHASE_EXPECTATIONS[phase]
 
-	result = _run_helper(target, env, phase, "--host-python-dir", str(host_python))
+	host_args = ("--host-python-dir", str(host_python)) if expect["host_python"] else ()
+	result = _run_helper(target, env, phase, *host_args)
 	assert result.returncode == 0, result.stderr
 	assert f"Support scripts staged phase={phase} sha={head} verify=exact" in result.stdout
 	exported = _github_env(env)
@@ -329,9 +370,14 @@ def test_support_copy_of_stall_guard_wins(tmp_path: Path, workflow: str, step_na
 	assert (bundle / "codex_stall_guard.sh").read_bytes() == (REPO_ROOT / "scripts" / "codex_stall_guard.sh").read_bytes()
 	assert (bundle / "clarify_sandbox" / "Dockerfile").is_file()
 	assert (bundle / "emit_event.sh").is_file()
-	assert sorted(p.name for p in host_python.iterdir()) == sorted(
-		_helper_phase_list(phase, "stage_support_host_python_scripts")
-	)
+	for name in _helper_phase_list(phase, "stage_support_data_files"):
+		assert (bundle / name).is_file(), name
+	if expect["host_python"]:
+		assert sorted(p.name for p in host_python.iterdir()) == sorted(
+			_helper_phase_list(phase, "stage_support_host_python_scripts")
+		)
+	else:
+		assert not host_python.exists()
 	# Read-only with respect to the issue checkout: no executables, and the
 	# stager's cwd write stays in its scratch directory.
 	assert _git(target, "status", "--porcelain") == status_before
@@ -402,12 +448,14 @@ def test_helper_rejects_mismatched_or_invalid_ref(tmp_path: Path, workflow: str,
 	assert _run_helper(workspace, head_env, phase, "--bogus").returncode == 2
 
 	# A required script missing at the support commit fails closed.
-	(support / "scripts" / "auto_decisions.py").unlink()
+	dropped = PHASE_EXPECTATIONS[phase]["dropped_script"]
+	assert dropped in _helper_phase_list(phase, "stage_support_required_scripts")
+	(support / "scripts" / dropped).unlink()
 	_git(support, "add", "-A")
 	_git(support, "commit", "-q", "-m", "drop")
 	result = _run_helper(workspace, _runner_env(tmp_path, workspace, _git(support, "rev-parse", "HEAD")), phase)
 	assert result.returncode == 1
-	assert "Missing required support script auto_decisions.py" in result.stderr
+	assert f"Missing required support script {dropped}" in result.stderr
 
 
 def _staging_step_script(workflow: str, step_name: str) -> str:
@@ -438,13 +486,18 @@ def test_staging_step_runs_both_modes(tmp_path: Path, workflow: str, step_name: 
 	exported = _github_env(env)
 	helpers = _legacy_helpers(_workflow_text(workflow))
 	staged = {p.name for p in (workspace / "scripts").iterdir()}
-	assert (workspace / "scripts" / "clarify_sandbox" / "Dockerfile").is_file()
-	host_python = Path(exported["CLARIFY_HOST_PYTHON_DIR"])
-	assert sorted(p.name for p in host_python.iterdir()) == sorted(
-		_helper_phase_list(phase, "stage_support_host_python_scripts")
-	)
+	expect = PHASE_EXPECTATIONS[phase]
+	sandbox_in_checkout = (workspace / "scripts" / "clarify_sandbox" / "Dockerfile").is_file()
+	assert sandbox_in_checkout == (expect["checkout_sandbox"] or unified == "false")
+	if expect["host_python"]:
+		host_python = Path(exported["CLARIFY_HOST_PYTHON_DIR"])
+		assert sorted(p.name for p in host_python.iterdir()) == sorted(
+			_helper_phase_list(phase, "stage_support_host_python_scripts")
+		)
+	else:
+		assert "CLARIFY_HOST_PYTHON_DIR" not in exported
 	if unified == "true":
-		assert staged == {"clarify_sandbox", ".gitignore"}, staged
+		assert staged == expect["unified_checkout"], staged
 		bundle = Path(exported["SUPPORT_SCRIPTS_DIR"])
 		assert all((bundle / name).is_file() for name in helpers)
 		assert exported["CLARIFY_ISOLATION_SUPPORT_DIR"] == str(bundle)
@@ -474,6 +527,117 @@ def test_missing_helper_falls_back_to_legacy_staging(tmp_path: Path, workflow: s
 	assert "using the legacy support staging" in result.stdout
 	assert "SUPPORT_SCRIPTS_DIR" not in _github_env(env)
 	assert (workspace / "scripts" / "codex_stall_guard.sh").is_file()
+
+
+def _run_staging_step(tmp_path: Path, workspace: Path, workflow: str, step_name: str, env: dict[str, str]) -> subprocess.CompletedProcess:
+	script = tmp_path / "step.sh"
+	script.write_text(_staging_step_script(workflow, step_name), encoding="utf-8")
+	return subprocess.run(
+		["bash", "--noprofile", "--norc", "-e", str(script)],
+		cwd=workspace, env=env, capture_output=True, text=True, timeout=180,
+	)
+
+
+def _gitignore_names(workspace: Path) -> set[str]:
+	text = (workspace / "scripts" / ".gitignore").read_text(encoding="utf-8")
+	return {line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")}
+
+
+@pytest.mark.parametrize(("workflow", "step_name", "phase"), PHASE_WORKFLOWS)
+def test_helper_list_is_read_only(tmp_path: Path, workflow: str, step_name: str, phase: str) -> None:
+	"""--list prints the phase's names without SCRIPT_REF or GITHUB_ENV and writes nothing."""
+	cwd = tmp_path / "cwd"
+	cwd.mkdir()
+	env = _base_env(tmp_path)
+	env["HOME"] = str(tmp_path)
+	result = subprocess.run(["bash", str(HELPER), phase, "--list"], cwd=cwd, env=env, capture_output=True, text=True, timeout=30)
+	assert result.returncode == 0, result.stderr
+	expected = (
+		_helper_phase_list(phase, "stage_support_required_scripts")
+		+ _helper_phase_list(phase, "stage_support_optional_scripts")
+		+ _helper_phase_list(phase, "stage_support_data_files")
+	)
+	assert result.stdout.splitlines() == expected
+	assert not list(cwd.iterdir())
+	unknown = subprocess.run(["bash", str(HELPER), "unknown-phase", "--list"], cwd=cwd, env=env, capture_output=True, text=True, timeout=30)
+	assert unknown.returncode == 2
+	mixed = subprocess.run(
+		["bash", str(HELPER), phase, "--list", "--host-python-dir", str(tmp_path / "hp")],
+		cwd=cwd, env=env, capture_output=True, text=True, timeout=30,
+	)
+	assert mixed.returncode == 2
+	assert not (tmp_path / "hp").exists()
+
+
+LIST_PROBE_WORKFLOWS = [param for param in PHASE_WORKFLOWS if PHASE_EXPECTATIONS[param.values[2]]["list_probe"]]
+
+
+@pytest.mark.parametrize(("workflow", "step_name", "phase"), LIST_PROBE_WORKFLOWS)
+def test_unified_gitignore_keeps_legacy_manifest(tmp_path: Path, workflow: str, step_name: str, phase: str) -> None:
+	"""The consumer scripts/.gitignore (template-owned path guard input) loses no name."""
+	names: dict[str, set[str]] = {}
+	for unified in ("false", "true"):
+		root = tmp_path / unified
+		workspace = root / "ws"
+		workspace.mkdir(parents=True)
+		_, head = _make_support(workspace, phase, workflow)
+		env = _runner_env(root, workspace, head)
+		env["SUPPORT_SCRIPTS_UNIFIED_ENABLED"] = unified
+		result = _run_staging_step(root, workspace, workflow, step_name, env)
+		assert result.returncode == 0, result.stdout + result.stderr
+		names[unified] = _gitignore_names(workspace)
+	assert names["false"] <= names["true"], names["false"] - names["true"]
+	assert set(_legacy_helpers(_workflow_text(workflow))) <= names["true"]
+
+
+@pytest.mark.parametrize(("workflow", "step_name", "phase"), LIST_PROBE_WORKFLOWS)
+def test_helper_without_phase_case_falls_back(tmp_path: Path, workflow: str, step_name: str, phase: str) -> None:
+	"""An older support ref whose helper only knows clarify degrades to the legacy staging."""
+	workspace = tmp_path / "ws"
+	workspace.mkdir()
+	support, _ = _make_support(workspace, phase, workflow)
+	helper = support / "scripts" / "stage_support_for_phase.sh"
+	text = helper.read_text(encoding="utf-8")
+	stripped = re.sub(r"^\t" + re.escape(phase) + r"\)\n.*?^\t\t;;\n", "", text, count=1, flags=re.M | re.S)
+	assert stripped != text
+	helper.write_text(stripped, encoding="utf-8")
+	_git(support, "add", "-A")
+	_git(support, "commit", "-q", "-m", "clarify-only helper")
+	env = _runner_env(tmp_path, workspace, _git(support, "rev-parse", "HEAD"))
+	result = _run_staging_step(tmp_path, workspace, workflow, step_name, env)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"cannot stage the {phase} phase; using the legacy support staging" in result.stdout
+	assert "SUPPORT_SCRIPTS_DIR" not in _github_env(env)
+	assert set(_legacy_helpers(_workflow_text(workflow))) <= {p.name for p in (workspace / "scripts").iterdir()}
+
+
+@pytest.mark.parametrize("name", OWN_DIR_SCRIPTS)
+def test_own_dir_scripts_have_no_bare_helper_calls(name: str) -> None:
+	text = (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
+	bare = re.compile(r"(?:\b(?:bash|source|python3(?: -I -B)?)|-[fL])\s+\"?scripts/[\w.-]+\.(?:sh|py)\b")
+	offenders = [line.strip() for line in text.splitlines() if not line.strip().startswith("#") and bare.search(line)]
+	assert not offenders, offenders
+
+
+def test_plan_split_dispatch_sources_its_own_directory(tmp_path: Path) -> None:
+	"""Copied into a bundle, plan_split_dispatch.sh sources the bundle's gh_helpers.sh, not the cwd copy."""
+	bundle = tmp_path / "bundle"
+	cwd = tmp_path / "checkout"
+	bundle.mkdir()
+	shutil.copy2(REPO_ROOT / "scripts" / "plan_split_dispatch.sh", bundle / "plan_split_dispatch.sh")
+	_write(bundle / "gh_helpers.sh", 'touch "${BUNDLE_MARKER:?}"\n')
+	_write(cwd / "scripts" / "gh_helpers.sh", 'touch "${CWD_MARKER:?}"\n')
+	env = _base_env(tmp_path)
+	env.update({"BUNDLE_MARKER": str(tmp_path / "bundle-sourced"), "CWD_MARKER": str(tmp_path / "cwd-sourced")})
+	for key in ("REPO", "ISSUE_NUMBER", "ISSUE_JSON_FILE", "GH_TOKEN"):
+		env.pop(key, None)
+	result = subprocess.run(
+		["bash", str(bundle / "plan_split_dispatch.sh")], cwd=cwd, env=env, capture_output=True, text=True, timeout=30,
+	)
+	# No REPO: a usage error right after the helpers are sourced.
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert (tmp_path / "bundle-sourced").exists()
+	assert not (tmp_path / "cwd-sourced").exists()
 
 
 def test_tg_helpers_prefers_support_gh_helpers(tmp_path: Path) -> None:

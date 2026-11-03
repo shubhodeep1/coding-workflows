@@ -224,9 +224,8 @@ def test_workflows_pass_the_switch_with_index_fallback(workflow: str, phase: str
 	assert len(steps) == 1
 	step = steps[0]
 	assert step["env"]["STATIC_CONTEXT_AGENTS_MODE"] == WORKFLOW_ENV_VALUE
-	# clarify.yml runs the support bundle copy (stuck-states plan P2a);
-	# plan.yml still calls the bare path.
-	script = '"${SUPPORT_SCRIPTS_DIR:-scripts}/build_static_context.sh"' if workflow == "clarify.yml" else "scripts/build_static_context.sh"
+	# Both workflows run the support bundle copy (stuck-states plan P2a).
+	script = '"${SUPPORT_SCRIPTS_DIR:-scripts}/build_static_context.sh"'
 	assert f"bash {script} {phase} ./pre_assembled_static.txt" in step["run"]
 
 
