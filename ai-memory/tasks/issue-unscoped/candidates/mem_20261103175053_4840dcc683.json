@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The change is merged through a PR into `orchestrator/project-8693`.\n  expected_change_site: PR merge into `orchestrator/project-8693` (orchestrator action, not a diff deliverable)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The supplied PR diff establishes the file update but does not establish the merge, the checkout contains no reference to `project-8693`, no `orchestrator/` directory or `project-8693` file exists. Severity disagreement: openai_gpt-6-luna and z-ai_glm-5_3-flash rated it BLOCKER, while anthropic_claude-sonnet-5_5 and minimax_minimax-m3 rated it NIT and said the merge is an orchestrator action that no file edit can perform.\n- requirement: Replace line 2 of tests/e2e_smoke_canary.txt with `decompose-run: 41501570285`. Keep exactly two lines and do not modify any other file. (minimax_minimax-m3 quoted it as: rewrite tests/e2e_smoke_canary.txt so it contains exactly two lines: status: ok / decompose-run: 41501570285)\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: Both reviewers reported no absence. The diff replaces `decompose-run: 40427433026` with `decompose-run: 41501570285`, leaves `status: ok` as line 1, adds no third line and touches only this file. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: Replace line 2 of tests/e2e_smoke_canary.txt with `decompose-run: 41501570285`. Keep exactly two lines and do not modify any other file.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: None. The diff replaces `decompose-run: 40427433026` with `decompose-run: 41501570285`, leaves `status: ok` as line 1, and touches only this one file. The diff adds no third line.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR merge, handled by the orchestrator after review. It is not a diff deliverable.\n  Evidence of absence: No file edit can perform a merge. This is not a defect in the diff, so the reviewer did not raise it as a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"rewrite tests/e2e_smoke_canary.txt so it contains exactly two lines: status: ok / decompose-run: 41501570285\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The diff at tests/e2e_smoke_canary.txt lines 1-2 contains exactly `status: ok` and `decompose-run: 41501570285` with the trailing newline preserved. Every file-level acceptance criterion in the linked issue is satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR merge into orchestrator/project-8693 (orchestrator action, not a diff deliverable)\n  Evidence of absence: PR metadata shows baseRefName=orchestrator/project-8693. The merge is performed by the orchestrator after review passes, and a file edit cannot perform the merge.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR merge into `orchestrator/project-8693`.\n  Evidence of absence: The supplied PR diff establishes the file update, but does not establish that the PR has been merged into the required branch.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR merge into `orchestrator/project-8693`.\n  Evidence of absence: No PR diff or ledger was supplied in this pass; the current checkout contains no reference to `project-8693` (grep across the repo finds only unrelated digits within Actions run IDs, e.g. `40831286935` in `CHANGELOG.md:4427`), and no `orchestrator/` directory or `project-8693` file exists (glob `**/project-8693*` \u2192 no files). The merge status cannot be verified from code or supplied artefacts, so the requirement is unmet/unproven as delivered.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a0f844395c2dfcb27fd2e23d041236f30cc18f1777b57bc1ffd4ced4c02644b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41685260352",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41685260352",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103175053_4840dcc683",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41685260352"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T17:50:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
