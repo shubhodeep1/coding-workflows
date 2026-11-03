@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8771_6614731143_approved",
   "issue_number": 8771,
   "metadata": {
+    "branch": "ai/issue-8771",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/8771-ci-promote-steps-to-heal-and-release.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 8771,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8771",
+    "pr_number": 8776,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8776",
+    "run_attempt": "1",
+    "run_id": "41713328753",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41713328753"
   },
   "run_attempt": 1,
   "run_id": "41713328753",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-03T20:32:58Z",
+  "status": "completed",
+  "timestamp": "2026-11-03T21:12:35Z",
   "workflow": "implement"
 }
