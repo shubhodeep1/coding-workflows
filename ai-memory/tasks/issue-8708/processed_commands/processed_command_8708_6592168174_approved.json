@@ -1,0 +1,17 @@
+{
+  "actor": "shubhodeep1",
+  "command": "approved",
+  "comment_id": 6592168174,
+  "entry_id": "processed_command_8708_6592168174_approved",
+  "issue_number": 8708,
+  "metadata": {
+    "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8708",
+    "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41553768669"
+  },
+  "run_attempt": 1,
+  "run_id": "41553768669",
+  "schema_version": "processed_command_entry.v1",
+  "status": "claimed",
+  "timestamp": "2026-11-03T00:39:33Z",
+  "workflow": "implement"
+}
