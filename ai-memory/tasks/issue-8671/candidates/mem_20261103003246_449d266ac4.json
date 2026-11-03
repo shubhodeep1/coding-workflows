@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8671,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8671\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8712\",\"pr_number\":8712,\"branch\":\"ai/issue-8671\",\"run_id\":\"41544682262\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41544682262\",\"changed_files\":[\".github/workflows/check_failure_triage.yml\",\".github/workflows/review_autofix_sweep.yml\",\"README.md\",\"agents.d/8671-transient-ci-and-stale-triage.md\",\"changelog.d/8671-transient-ci-and-stale-triage.md\",\"prompts/_templates/mode-judge-unblock.txt\",\"prompts/mode-judge-unblock.txt\",\"scripts/check_failure_triage.sh\",\"scripts/check_triage_resolution.py\",\"scripts/ci_cancelled_rerun.py\",\"scripts/unblock_actions.py\",\"scripts/unblock_judge.sh\",\"scripts/unblock_ledger.py\",\"tests/test_assemble_prompt.py\",\"tests/test_check_failure_triage_workflow_security.py\",\"tests/test_check_triage_resolution.py\",\"tests/test_ci_cancelled_rerun.py\",\"tests/test_unblock_judge.py\"]}",
+  "fingerprint": "82ba1a86acbbfcac6d21a47fd45895d6c3ade344578bf47b0ca4a87d7e916464",
+  "lineage": {
+    "issue_number": 8671,
+    "parent_ids": [],
+    "pr_number": 8712,
+    "run_id": "41544682262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41544682262",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8712"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261103003246_449d266ac4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8671,
+    "level": "run",
+    "pr_number": 8712,
+    "run_id": "41544682262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8671: https://github.com/shubhodeep1/coding-workflows/pull/8712",
+  "timestamps": {
+    "created_at": "2026-11-03T00:32:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
