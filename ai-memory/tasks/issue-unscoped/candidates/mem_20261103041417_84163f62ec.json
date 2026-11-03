@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:2-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The PR-head `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large` (\"Prompt too big after adding system message\"), so the reviewer exited with code 1 and produced no review.\n  WHY: Reviewer confirmed via the check-run log that the failure is an infrastructure/prompt-size failure and is not caused by the changed canary content; the source severity was NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:lines 2-3 (`run_id: 40831286935` / `updated-by: ai-pipeline`) | severity=NIT | confidence=5\n  PROBLEM: The PR-head `copilot-pull-request-reviewer` check failed with `custom_instructions_too_large` (\"Prompt too big after adding system message\"), so the reviewer exited with code 1 and produced no review.\n  WHY: Confirmed via the check-run log; the failure is not mapped to the changed canary content (the diff only updates the canary `run_id`), so it is an infrastructure/prompt-size failure, not a diff defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d5d75b96fcee1cb626198a551a4b74052e985d43d0dbace14b059edcc09e5605",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41572671192",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41572671192",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103041417_84163f62ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41572671192"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T04:14:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
