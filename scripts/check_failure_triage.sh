@@ -212,7 +212,7 @@ triage_supersede_stale_issue()
 	local supersede_old_issue="${SUPERSEDE_OLD_ISSUE:-}"
 	local supersede_old_head="${SUPERSEDE_OLD_HEAD:-}"
 	local supersede_new_head="${SUPERSEDE_NEW_HEAD:-}"
-	local supersede_comment supersede_live_state
+	local supersede_comment supersede_live_state supersede_login
 	[ -n "${supersede_old_issue}" ] || return 0
 	if [ "${TRIAGE_SUPERSEDE_ENABLED}" != "true" ]; then
 		log "op=supersede outcome=skip reason=disabled old=${supersede_old_issue} new=${supersede_new_issue}"
@@ -226,10 +226,22 @@ triage_supersede_stale_issue()
 	fi
 	supersede_comment="$(printf 'Superseded: check `%s` failed again on the PR'"'"'s current head `%s`; this issue'"'"'s failure was on `%s`. New triage: #%s\n\n<!-- %ssuperseded-by=%s -->' \
 		"${CHECK_NAME_DISPLAY:-(unnamed check)}" "${supersede_new_head}" "${supersede_old_head}" "${supersede_new_issue}" "${MARKER_PREFIX}" "${supersede_new_issue}")"
+	# Only an issue the authenticated account (the token that just created the
+	# new issue) opened may be superseded (#8671). One /user read, made only
+	# for a recorded candidate; an unreadable identity fails closed.
+	supersede_login="$(gh api user 2>/dev/null | jq -r '.login // ""' 2>/dev/null || true)"
+	if ! [[ "${supersede_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$ ]]; then
+		log "op=supersede outcome=skip reason=identity_unavailable old=${supersede_old_issue} new=${supersede_new_issue}"
+		return 0
+	fi
 	# Re-read the old issue right before writing: diagnose and route ran since
 	# the collect stage, and it may have been resumed or closed meanwhile.
 	supersede_live_state="$(gh api "repos/${REPO}/issues/${supersede_old_issue}" 2>/dev/null |
-		jq -r 'if (.state == "open") and ([.labels[]?.name] | index("ai:blocked")) then "eligible" else "stale" end' 2>/dev/null || echo unreadable)"
+		jq -r --arg login "${supersede_login}" 'if (.user.login // "") != $login then "foreign_author" elif (.state == "open") and ([.labels[]?.name] | index("ai:blocked")) then "eligible" else "stale" end' 2>/dev/null || echo unreadable)"
+	if [ "${supersede_live_state}" = "foreign_author" ]; then
+		log "op=supersede outcome=skip reason=not_own_issue old=${supersede_old_issue} new=${supersede_new_issue}"
+		return 0
+	fi
 	if [ "${supersede_live_state}" != "eligible" ]; then
 		[ "${supersede_live_state}" = "stale" ] || supersede_live_state="unreadable"
 		log "op=supersede outcome=skip reason=old_issue_${supersede_live_state} old=${supersede_old_issue} new=${supersede_new_issue}"
