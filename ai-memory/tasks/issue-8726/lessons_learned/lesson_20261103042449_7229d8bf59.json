@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-03T04:24:49Z",
+  "issue_number": 8726,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/ai_memory.py:2298-2301; cited_path=scripts/ai_memory.py; files_touched=scripts/ai_memory.py, scripts/ai_memory_lib.py, tests/test_ai_memory_cli.py, tests/test_ai_memory_push_retry_reasons.py, .github/workflows/ci.yml.",
+  "phase": "review_autofix",
+  "pr_number": 8731,
+  "record_id": "lesson_20261103042449_7229d8bf59",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ai_memory.py",
+    "scripts/ai_memory_lib.py",
+    "tests/test_ai_memory_cli.py",
+    "tests/test_ai_memory_push_retry_reasons.py",
+    ".github/workflows/ci.yml"
+  ]
+}
