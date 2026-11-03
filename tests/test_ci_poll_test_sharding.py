@@ -28,6 +28,7 @@ that drops tests would turn a green CI into a lie.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 import tempfile
@@ -2963,6 +2964,9 @@ POLL_GROUP_TWO_8772_BOUNDARY_MODULES = (
 	"tests/test_workflow_untrusted_input_contract.py",
 )
 POLL_GROUP_TWO_8772_MODULE_COUNT = 52
+# sha256 of the sorted, newline-joined module paths, so swapping an interior
+# module for another one is caught too.
+POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "a9fd35d08c872bb8b425964f565525d2255fc50964f0e19f26676959e7f03757"
 
 
 class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
@@ -3028,6 +3032,8 @@ class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
 		named = re.findall(r"tests/[A-Za-z0-9_]+\.py", body)
 		self.assertEqual(len(named), POLL_GROUP_TWO_8772_MODULE_COUNT, named)
 		self.assertEqual(len(set(named)), POLL_GROUP_TWO_8772_MODULE_COUNT, named)
+		digest = hashlib.sha256("\n".join(sorted(named)).encode("utf-8")).hexdigest()
+		self.assertEqual(digest, POLL_GROUP_TWO_8772_MODULE_SET_SHA256, named)
 
 
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
