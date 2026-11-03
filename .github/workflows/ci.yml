@@ -2313,7 +2313,7 @@ jobs:
       # that job's largest step not split into parallel processes: 9 modules
       # and about 367 test functions, of which
       # tests/test_review_autofix_review_pipeline_contract.py alone has 227
-      # tests and about 244 subprocess call sites. The run's step timings could
+      # tests and about 145 subprocess call sites. The run's step timings could
       # not be read, so the pick is an estimate, not a measurement. The step
       # arrived in the hooks job in #8395, after #8281 last relieved that job.
       # tests-release-and-log-analysis has had no budget-watch issue since
