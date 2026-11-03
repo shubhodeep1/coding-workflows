@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:entire file, CLAUDE.md:entire file | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The combined content of `agents.md` (5410 lines) and `CLAUDE.md` (1508 lines) exceeds the custom instructions prompt limit for the `copilot-pull-request-reviewer` check, causing it to fail with `custom_instructions_too_large`.\n  WHY: The check exits with code 1 before reviewing the PR; the reviewer labelled it NIT (mapped to low), and anthropic_claude-sonnet-5_5 and minimax_minimax-m3 judged the same failure an external, pre-existing issue not caused by this PR's diff.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md, CLAUDE.md:entire files (file-level issue) | severity=low (source: NIT) | confidence=4\n  PROBLEM: The combined content of `agents.md` (5410 lines) and `CLAUDE.md` (1508 lines) exceeds the custom instructions prompt limit for the `copilot-pull-request-reviewer` check, causing the check to fail with `custom_instructions_too_large` while building its prompt.\n  WHY: The Copilot code review system loads `AGENTS.md` and `CLAUDE.md` as custom instructions. Because their combined size is too large, the check exits with code 1 before it can review the PR, blocking the review process.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "edb4f22bc7971a182969db5c86e77fd8438c9f355b1de5cf85350887ebbdefd5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41569649258",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41569649258",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103031355_20f656168b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41569649258"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T03:13:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
