@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:2748-2863 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test `test_each_step_runs_in_one_poll_group` is defined multiple times with different implementations (lines 2748-2763, 2831-2861), so the later definition shadows the earlier one.\n  WHY: Python overwrites the first definition on import, so the one in `MovedHealToHooksStepsContractTest` is likely lost or shadowed by the one in `MovedHooks8730StepsContractTest`. The source rated this MAJOR, which is mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` and their target group allocation\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, anthropic_claude-sonnet-5_5]\n  EVIDENCE: The move rationale at `.github/workflows/ci.yml` lines 3003\u20133009 states the run's step timings could not be read and the selection is an estimate from test and subprocess counts, so the PR does not show these were the slowest steps by actual timings or that the target group had the most headroom. anthropic_claude-sonnet-5_5 rated this NIT with confidence 1 and found the deliverables present (steps moved, names unchanged, no `timeout-minutes` raise, no new job, changelog fragment present). It judged the estimate disclosed and consistent with earlier moves (#8466, #8730). The other two reviewers rated it MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP (the reviewer declined to raise it; severity NIT):\n- Requirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names\"\n  Expected change site: `.github/workflows/ci.yml` and `tests/test_ci_poll_test_sharding.py`\n  Evidence of absence: none. Both are present, and the source job no longer defines either step. The changelog fragment is also present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_poll_test_sharding.py:2748-2763, 2831-2861 | severity=MAJOR | confidence=4\n  PROBLEM: The test `test_each_step_runs_in_one_poll_group` is defined multiple times with different implementations.\n  WHY: Python overwrites the first definition with the second on import, so the one in `MovedHealToHooksStepsContractTest` is likely lost or shadowed by the one in `MovedHooks8730StepsContractTest`.\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` and their target group allocation.\n  Evidence of absence: The move rationale at `.github/workflows/ci.yml` lines 3003\u20133009 states the run's step timings could not be read and that the selection is an estimate from test and subprocess counts. The PR fails to provide evidence that these were the slowest steps according to the job's actual step timings, or that the target group had the required headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` and their target group allocation.\n  Evidence of absence: The move rationale at `.github/workflows/ci.yml:3003-3009` says the run's step timings could not be read and the selection is an estimate based on test and subprocess counts. The changes therefore do not establish that these were the slowest steps by the requested timings or that their target group had the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: A review target (PR diff, linked issue body / PR description, or last-run diff) to evaluate against the nine lenses.\n  Expected change site: Not applicable \u2014 the deliverable is a review of a supplied diff, not a code change site.\n  Evidence of absence: The reviewer input contained only instruction fragments, cross-pollination findings from other models, and a quoted test excerpt (`tests/test_ci_poll_test_sharding.py:2206-2245`). No PR diff, linked issue body, PR description, or last-run diff was supplied, and a workspace search found only test fixtures and historical analysis reports. Without the diff, the fabrication ban prohibits emitting verifiable findings under the first eight lenses.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: high\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e01f154ab760313c75cea4c78d33df38d4819c390edd827f9c07c2933f81996b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8760,
+    "run_id": "41693035760",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41693035760",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103185003_44287d69be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8760,
+    "run_id": "41693035760"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T18:50:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
