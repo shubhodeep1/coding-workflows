@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pre-push gate attributes failures in this file to the canary change, but the file does not read `tests/e2e_smoke_canary.txt` in a way the change would affect.\n  WHY: The real cause of the failures needs separate investigation (source labelled it SEVERITY: MAJOR; mapped to high).\n- .github/workflows/review_autofix.yml; agents.md:N/A | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with a 422 error because the combined size of `CLAUDE.md` and `agents.md` exceeds the service limit.\n  WHY: The CI job fails and blocks the merge; this is a configuration issue unrelated to the canary change (source labelled it SEVERITY: MAJOR; mapped to high). Other reviewers saw the same failure but judged it not attributable to this diff and raised no finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=MAJOR | confidence=4\n  PROBLEM: The PR description states that the change caused test failures in this file, yet the file does not read `tests/e2e_smoke_canary.txt` in a way the requested content change would affect.\n  WHY: The pre-push gate report is incorrect about the cause; the actual source of the failures must be investigated independently of the canary update.\n- .github/workflows/review_autofix.yml; agents.md:N/A | severity=MAJOR | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with a 422 error because the combined size of `CLAUDE.md` and `agents.md` exceeds the service limit.\n  WHY: The CI job terminates with a failure and blocks the merge; this is a system-level configuration issue, not caused by the content change in `tests/e2e_smoke_canary.txt`.\n- TASK_GAP (reported as a NIT, and its own evidence says the requirement is satisfied): tests/e2e_smoke_canary.txt | severity=NIT | confidence=5\n  Requirement: Update `tests/e2e_smoke_canary.txt` so it is exactly these three lines: `status: ok`, `run_id: 40608957733`, `updated-by: ai-pipeline`.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The PR diff (original_pr_diff.patch) shows the file content is updated to `status: ok`, `run_id: 40608957733`, and `updated-by: ai-pipeline`, ending with a newline. The file content is correct, and the task requirements are satisfied.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7bb3d90ddd3341554e601d9da2184a82553f57f8e940eb17e240afc12253c96c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41560254038",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41560254038",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103014147_77150f5751",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41560254038"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T01:41:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
