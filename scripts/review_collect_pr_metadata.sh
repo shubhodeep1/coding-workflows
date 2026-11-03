@@ -66,13 +66,6 @@ do
 	fi
 done
 
-gh_retry()
-{
-	local outfile="$1"
-	shift
-	gh_retry_to_file "${outfile}" gh "$@"
-}
-
 # _fetch_linked_issue_bodies_graphql — Batch-fetch linked issue or PR
 # title/body fallback context via one GraphQL call.
 #
@@ -135,7 +128,7 @@ _fetch_linked_issue_bodies_graphql()
 		echo '[]'
 		return 1
 	fi
-	if ! gh_retry "${response_file}" api graphql -f query="${query}"; then
+	if ! gh_retry_to_file "${response_file}" gh api graphql -f query="${query}"; then
 		rm -f "${response_file}"
 		echo '[]'
 		return 1
@@ -191,7 +184,7 @@ if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; the
 		# the wrong base on a transient API failure or a non-`main` default.
 		branch_review_repo_json="${TMP_RUNTIME_DIR}/branch_review_repo.json"
 		branch_review_default_branch=""
-		if gh_retry "${branch_review_repo_json}" api "repos/${REPOSITORY}"; then
+		if gh_retry_to_file "${branch_review_repo_json}" gh api "repos/${REPOSITORY}"; then
 			branch_review_default_branch="$(jq -r '.default_branch // empty' "${branch_review_repo_json}" 2>/dev/null || true)"
 		fi
 		if [ -z "${branch_review_default_branch}" ] \
@@ -228,23 +221,23 @@ if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; the
 		> "${PR_META_FILE}"
 	echo "AUTOFIX_NO_PR_METADATA_SYNTHESIZED head_ref=${HEAD_REF_OVERRIDE} head_sha=${HEAD_SHA_OVERRIDE} base_ref=${BASE_REF_OVERRIDE}"
 else
-	gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+	gh_retry_to_file "${PR_PAYLOAD_FILE}" gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
 	issue_comments_raw="${TMP_RUNTIME_DIR}/gh_issue_comments_raw.json"
 	reviews_raw="${TMP_RUNTIME_DIR}/gh_reviews_raw.json"
 	review_comments_raw="${TMP_RUNTIME_DIR}/gh_review_comments_raw.json"
-	gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
+	gh_retry_to_file "${issue_comments_raw}" gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
 	jq -s 'add // []' "${issue_comments_raw}" > "${PR_ISSUE_COMMENTS_FILE}"
 	printf '[]\n' > "${PR_REVIEWS_FILE}"
 	case "$(printf '%s' "${REVIEW_BREAK_GLASS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on)
-			if gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"; then
+			if gh_retry_to_file "${reviews_raw}" gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"; then
 				jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
 			else
 				echo "::warning::Optional top-level PR reviews fetch failed; continuing with PR_REVIEWS_FILE=[] for break-glass/advisory consumers."
 			fi
 			;;
 	esac
-	gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100"
+	gh_retry_to_file "${review_comments_raw}" gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100"
 	jq -s 'add // []' "${review_comments_raw}" > "${PR_REVIEW_COMMENTS_FILE}"
 
 	jq '{
@@ -277,7 +270,7 @@ _linked_fetch_ok="false"
 _linked_raw='[]'
 if [ -n "${PR_NUMBER:-}" ]; then
 	_linked_tmp="$(mktemp)"
-	if gh_retry "${_linked_tmp}" api graphql \
+	if gh_retry_to_file "${_linked_tmp}" gh api graphql \
 		-f owner="${REPOSITORY_OWNER}" \
 		-f name="${REPOSITORY_NAME}" \
 		-F number="${PR_NUMBER}" \
