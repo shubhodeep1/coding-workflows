@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8750,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8750\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8754\",\"pr_number\":8754,\"branch\":\"ai/issue-8750\",\"run_id\":\"41630192470\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41630192470\",\"changed_files\":[\".github/workflows/workflow-failure-heal-intake.yml\",\"README.md\",\"agents.d/stuck-states-p4-rb-intake.md\",\"changelog.d/stuck-states-p4-rb-intake.md\",\"prompts/_templates/mode-workflow-failure-heal.txt\",\"prompts/mode-workflow-failure-heal.txt\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/test_workflow_failure_heal.py\",\"tests/test_workflow_failure_heal_scope_tests.py\"]}",
+  "fingerprint": "786772b8a02e31f4ea6dbeff5bd8d92c86fd998f583c0250290bfba8e4a27575",
+  "lineage": {
+    "issue_number": 8750,
+    "parent_ids": [],
+    "pr_number": 8754,
+    "run_id": "41630192470",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41630192470",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8754"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261103130213_b32eddcd83",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8750,
+    "level": "run",
+    "pr_number": 8754,
+    "run_id": "41630192470"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8750: https://github.com/shubhodeep1/coding-workflows/pull/8754",
+  "timestamps": {
+    "created_at": "2026-11-03T13:02:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
