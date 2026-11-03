@@ -202,6 +202,19 @@ def test_untrusted_names_are_sanitised_and_secrets_never_logged() -> None:
 		assert secret not in stdout
 
 
+def test_legacy_annotation_syntax_is_neutralised() -> None:
+	module = _load_module()
+	assert module._sanitize_wait_field("abc##[error]pwned") == "abc#_[error]pwned"
+	assert module._sanitize_wait_field("###[warning]x") == "##_[warning]x"
+	result = _run_helper(check_runs_responses=[{"json": [{"check_runs": [
+		{"id": 1, "name": "abc##[error]pwned", "status": "in_progress", "app": {"slug": "x##[warning]"}},
+	]}]}])
+	pending = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_PENDING ")
+	assert len(pending) == 1, result["stdout"]
+	assert "##[" not in pending[0]
+	assert _checks_entries(pending[0]) == ["abc#_[error]pwned|x#_[warning]|in_progress|-"]
+
+
 def test_pending_list_is_truncated_above_twenty_entries() -> None:
 	runs = [
 		{"id": idx, "name": f"check-{idx}", "status": "queued", "app": {"slug": "ci"}}
