@@ -135,6 +135,7 @@ Copy this block when adding a new entry:
   - `gh workflow view auto-release-stable.yml -R shubhodeep1/coding-workflows` confirms the 6-hourly schedule still exists and still runs `scripts/auto_release_stable.sh`.
   - `git ls-remote origin refs/heads/stable 'refs/tags/stable^{}'` prints the same commit for both refs (nothing on the `stable` branch is waiting for a release).
   - `gh api "repos/shubhodeep1/coding-workflows/actions/workflows/test-and-mark-stable.yml/runs?per_page=1"` shows the latest run was not dispatched by the schedule, i.e. a replacement release path is live.
+  - `gh issue list -R shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search "Release blocker in:title"` returns no issue titled `Release blocker: last_gate_failed on stable`, `Release blocker: release_in_flight on stable` or `Release blocker: stable_release_stale on stable` (no release-blocker report from this script is still being healed).
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_auto_release_stable.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 

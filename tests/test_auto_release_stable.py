@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -17,6 +18,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "auto-release-stable.yml"
 
 TIP = "1" * 40
 TAG_OBJECT = "2" * 40
+RUN_ID = "4242"
 
 MOCK_GH = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -31,20 +33,36 @@ def respond(payload):
     save()
     sys.stdout.write(json.dumps(payload))
     sys.exit(0)
+if args[:3] == ["api", "-X", "POST"] and args[3].endswith("/dispatches"):
+    if state.get("dispatch_error"):
+        save(); sys.stderr.write("HTTP 403: Resource not accessible by integration\n"); sys.exit(1)
+    body = json.loads(Path(args[args.index("--input") + 1]).read_text())
+    state.setdefault("heal_dispatches", []).append(body)
+    respond({})
 if args[:1] == ["api"]:
     path = args[1]
-    if path.endswith("/git/ref/heads/stable"):
+    if "/git/ref/heads/" in path:
         respond({"object": {"type": "commit", "sha": state["branch_tip"]}})
     if path.endswith("/git/ref/tags/stable"):
         if state.get("tag_missing"):
             save(); sys.stderr.write("404\n"); sys.exit(1)
         if state.get("tag_lookup_error"):
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        if state.get("tag_lightweight"):
+            respond({"object": {"type": "commit", "sha": state["tag_commit"]}})
         respond({"object": {"type": "tag", "sha": state["tag_object"]}})
     if "/git/tags/" in path:
-        respond({"object": {"type": "commit", "sha": state["tag_commit"]}})
+        tag = {"object": {"type": "commit", "sha": state["tag_commit"]}}
+        if state.get("tagger_date"):
+            tag["tagger"] = {"date": state["tagger_date"]}
+        respond(tag)
     if "/compare/" in path:
-        respond({"status": state.get("compare_status", "ahead"), "ahead_by": 1, "behind_by": 0})
+        compare = {"status": state.get("compare_status", "ahead"), "ahead_by": 1, "behind_by": 0}
+        if state.get("compare_commit_dates"):
+            compare["commits"] = [{"commit": {"committer": {"date": d}}} for d in state["compare_commit_dates"]]
+        if state.get("base_commit_date"):
+            compare["base_commit"] = {"commit": {"committer": {"date": state["base_commit_date"]}}}
+        respond(compare)
     if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
         respond({"workflow_runs": state.get("promote_runs", [])})
     if "/actions/workflows/mark-stable.yml/runs" in path:
@@ -77,9 +95,14 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[sub
 			"GH_TOKEN": "x",
 			"GITHUB_OUTPUT": str(output_file),
 			"PYTHONDONTWRITEBYTECODE": "1",
+			"GITHUB_RUN_ID": RUN_ID,
+			"GITHUB_RUN_ATTEMPT": "1",
+			"GITHUB_WORKFLOW": "Auto release stable",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
 		}
 	)
-	for key in ("BASH_ENV", "ENV"):
+	# Keep a CI runner's OIDC and Telegram settings out of the script under test.
+	for key in ("BASH_ENV", "ENV", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "RELEASE_BLOCKER_HEAL_ENABLED", "RELEASE_BLOCKER_GATE_FAILED_MIN_AGE_SECS", "RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS", "RELEASE_BLOCKER_STABLE_STALE_SECS", "RELEASE_BLOCKER_HEAL_PY", "AUTO_RELEASE_STABLE_BRANCH"):
 		run_env.pop(key, None)
 	if env:
 		run_env.update(env)
@@ -285,9 +308,20 @@ def test_workflow_contract() -> None:
 	assert "workflow_dispatch" in wf["on"]
 	assert wf["concurrency"]["group"] == "promote-main-to-stable", "must share the promote job's group so check-then-dispatch never interleaves with a promotion"
 	assert wf["concurrency"]["cancel-in-progress"] is False
-	assert wf["permissions"] == {"contents": "read", "actions": "write"}
+	assert wf["permissions"] == {"contents": "read", "actions": "write", "id-token": "write"}
 	run_step = next(s for s in wf["jobs"]["release-check"]["steps"] if "run" in s)
 	assert "bash scripts/auto_release_stable.sh" in run_step["run"]
+	assert "${{" not in run_step["run"], "bind expressions through env:, never inside run:"
+	for name, default in (
+		("RELEASE_BLOCKER_HEAL_ENABLED", "true"),
+		("RELEASE_BLOCKER_GATE_FAILED_MIN_AGE_SECS", "86400"),
+		("RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS", "21600"),
+		("RELEASE_BLOCKER_STABLE_STALE_SECS", "86400"),
+	):
+		assert run_step["env"][name] == "${{ vars." + name + " || '" + default + "' }}", name
+	assert run_step["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
+	assert run_step["env"]["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID }}"
+	assert run_step["env"]["TG_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID }}"
 	assert run_step["env"]["AUTO_RELEASE_STABLE_ENABLED"] == "${{ vars.AUTO_RELEASE_STABLE_ENABLED || 'true' }}"
 	assert run_step["env"]["AUTO_RELEASE_STABLE_MAX_ATTEMPTS"] == "${{ vars.AUTO_RELEASE_STABLE_MAX_ATTEMPTS || '3' }}"
 
@@ -306,3 +340,187 @@ def test_compare_identical_counts_as_up_to_date() -> None:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, compare_status="identical"))
 	assert "AUTO_RELEASE_SKIPPED reason=up_to_date" in proc.stdout
 	assert not state.get("dispatches")
+
+
+# --- Release-blocker reporters (stuck-states P4 / release-blocker Phase 2a) ---
+
+
+def _ago(seconds: int) -> str:
+	return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _reports(state: dict) -> list[dict]:
+	return [body["client_payload"]["report"] for body in state.get("heal_dispatches", [])]
+
+
+def _failed_gate(updated_at: str | None, run_id: int = 777) -> dict:
+	run = {"id": run_id, "status": "completed", "conclusion": "failure", "head_sha": TIP, "head_branch": "stable", "created_at": _ago(3 * 86400)}
+	if updated_at is not None:
+		run["updated_at"] = updated_at
+	return run
+
+
+def test_last_gate_failed_past_threshold_sends_one_report() -> None:
+	runs = [_failed_gate(_ago(2 * 86400))]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_SKIPPED reason=last_gate_failed sha={TIP} conclusion=failure attempts=1 max=1" in proc.stdout
+	assert "dispatched=false" in state["github_output"]
+	assert not state.get("dispatches")
+	assert len(state["heal_dispatches"]) == 1
+	assert state["heal_dispatches"][0]["event_type"] == "workflow-failure-heal"
+	report = _reports(state)[0]
+	assert report["source_kind"] == "release_blocker"
+	assert report["blocker_reason"] == "last_gate_failed"
+	assert report["head_branch"] == "stable"
+	assert report["head_sha"] == TIP
+	assert report["run_refs"][0]["run_id"] == "777"
+	assert report["reporter_run"]["run_id"] == RUN_ID
+	assert report["workflow_name"] == "Auto release stable"
+	assert report["blocker_evidence"].startswith("reason=last_gate_failed")
+	assert "/actions/runs/777" in report["blocker_evidence"]
+	assert f"RELEASE_BLOCKER_REPORTED reason=last_gate_failed age=" in proc.stdout
+	assert "run_ref=777" in proc.stdout
+	# The report comes before the unchanged skip line.
+	assert proc.stdout.index("RELEASE_BLOCKER_REPORTED") < proc.stdout.index("AUTO_RELEASE_SKIPPED")
+
+
+def test_last_gate_failed_recently_does_not_report() -> None:
+	runs = [_failed_gate(_ago(600))]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=last_gate_failed" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_last_gate_failed_without_updated_at_is_guard_unavailable() -> None:
+	runs = [_failed_gate(None)]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs), env={"AUTO_RELEASE_STABLE_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=last_gate_failed lookup=updated_at" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_release_in_flight_past_threshold_reports_from_each_run_list() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(8 * 3600), "run_started_at": _ago(7 * 3600)}
+	for key, workflow in (("runs", "test-and-mark-stable.yml"), ("promote_runs", "promote-main-to-stable.yml"), ("legacy_runs", "mark-stable.yml")):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, **{key: [active]}))
+		assert proc.returncode == 0, (key, proc.stderr)
+		assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout, key
+		assert not state.get("dispatches"), key
+		reports = _reports(state)
+		assert len(reports) == 1, key
+		assert reports[0]["blocker_reason"] == "release_in_flight", key
+		assert reports[0]["run_refs"] == [], key
+		assert f"workflow={workflow}" in reports[0]["blocker_evidence"], key
+		assert "/actions/runs/991" in reports[0]["blocker_evidence"], key
+
+
+def test_release_in_flight_recent_run_does_not_report() -> None:
+	active = {"id": 991, "status": "queued", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active]))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_stable_release_stale_reports_and_still_dispatches_the_gate() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400), _ago(3600)]))
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_DISPATCHED sha={TIP}" in proc.stdout
+	assert len(state["dispatches"]) == 1
+	reports = _reports(state)
+	assert len(reports) == 1
+	assert reports[0]["blocker_reason"] == "stable_release_stale"
+	assert reports[0]["run_refs"] == []
+	assert reports[0]["blocker_evidence"].startswith("reason=stable_release_stale")
+	assert 2 * 86400 - 120 <= reports[0]["blocker_age_secs"] <= 2 * 86400 + 120
+
+
+def test_stable_release_stale_ignores_a_fresh_patch_on_an_old_tag() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, tagger_date=_ago(30 * 86400), compare_commit_dates=[_ago(3600)]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(state["dispatches"]) == 1
+	assert not state.get("heal_dispatches")
+
+
+def test_stable_release_stale_uses_the_base_commit_date_for_a_lightweight_tag() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, tag_lightweight=True, base_commit_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(state["dispatches"]) == 1
+	reports = _reports(state)
+	assert [r["blocker_reason"] for r in reports] == ["stable_release_stale"]
+
+
+def test_stable_release_stale_without_dates_is_guard_unavailable() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40))
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=stable_release_stale lookup=tag_time" in proc.stdout
+	assert len(state["dispatches"]) == 1
+	assert not state.get("heal_dispatches")
+
+
+def test_at_most_one_report_per_tick_prefers_release_in_flight() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active], tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert [r["blocker_reason"] for r in _reports(state)] == ["release_in_flight"]
+
+
+def test_stale_reported_on_in_flight_path_when_the_run_is_recent() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active], tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert [r["blocker_reason"] for r in _reports(state)] == ["stable_release_stale"]
+
+
+def test_reporter_kill_switch_sends_nothing() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active]), env={"RELEASE_BLOCKER_HEAL_ENABLED": "false"})
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=disabled blocker=release_in_flight" in proc.stdout
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("heal_dispatches")
+
+
+def test_dispatch_denied_warns_and_keeps_the_tick_outcome() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active], dispatch_error=True))
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=dispatch_denied blocker=release_in_flight detail=" in proc.stdout
+	assert "::warning::Release blocker report release_in_flight on stable could not be dispatched" in proc.stdout
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert "dispatched=false" in state["github_output"]
+
+
+def test_invalid_threshold_warns_and_uses_the_default() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "stable", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active]), env={"RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS": "abc"})
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::RELEASE_BLOCKER_IN_FLIGHT_MIN_AGE_SECS must be a non-negative integer (got 'abc'); using 21600." in proc.stdout
+	assert [r["blocker_reason"] for r in _reports(state)] == ["release_in_flight"]
+
+
+def test_unsupported_branch_is_payload_invalid_without_failing_the_tick() -> None:
+	active = {"id": 991, "status": "in_progress", "conclusion": None, "head_sha": TIP, "head_branch": "release", "created_at": _ago(7 * 3600)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[active]), env={"AUTO_RELEASE_STABLE_BRANCH": "release"})
+	assert proc.returncode == 0, proc.stderr
+	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=release_in_flight stage=build" in proc.stdout
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	assert not state.get("heal_dispatches")
