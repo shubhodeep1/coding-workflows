@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-03T15:53:00Z",
+  "tick_at": "2026-11-03T16:09:25Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,7 +16,7 @@
   "tracking_issues": [
     {
       "current_wave": 5,
-      "integration_ahead_by": "89",
+      "integration_ahead_by": "90",
       "issue_counts": {
         "closed": 0,
         "done": 2,
@@ -156,14 +156,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 2,
-      "integration_ahead_by": "3",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -171,10 +170,10 @@
       },
       "number": 8744,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Apply workflow-optimization-2026-09-30-2 recommendations (resolver scope reason code, label-sync hardening) and close out the doc",
-      "total_waves": 2,
-      "wave_complete": true
+      "total_waves": 0,
+      "wave_complete": false
     }
   ]
 }
