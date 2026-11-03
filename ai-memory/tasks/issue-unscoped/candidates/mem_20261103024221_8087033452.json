@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:whole suite | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: CI check-runs reported failure of this suite on the PR head.\n  WHY: The suite failed during CI execution; no cause in the changed file was identified and the failure is inherited/unrelated to the PR's changes (source severity NIT).\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The copilot-pull-request-reviewer check (job 125616096789) failed with `Prompt too big after adding system message` (`custom_instructions_too_large`).\n  WHY: The check exits with code 1 before producing a review; the provided diff does not identify a cause in the changed file (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_implement_post_codex_recovery.py:whole suite | severity=low | confidence=2\n  PROBLEM: CI check-runs reported failure of this suite on the PR head.\n  WHY: The suite failed during CI execution; no cause in the changed file was identified and the failure is inherited/unrelated to the PR's changes (source severity NIT).\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  PROBLEM: The copilot-pull-request-reviewer check (job 125616096789) failed with `Prompt too big after adding system message` (`custom_instructions_too_large`).\n  WHY: The check exits with code 1 before producing a review; the provided diff does not identify a cause in the changed file (source severity NIT).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "aba3491342381a0c8243ba5cec11884a3f5e79487c0ae2b0354ad768b1575080",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8348,
+    "run_id": "41566595776",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41566595776",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103024221_8087033452",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8348,
+    "run_id": "41566595776"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T02:42:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
