@@ -1153,7 +1153,7 @@ def test_old_latch_releases_the_hold_and_alerts() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), state, env=TG_ENV)
 	assert proc.returncode == 0, proc.stderr
-	assert re.search(r"^PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42 reason=ai:blocked latch_age_secs=\d+ max_hours=24$", proc.stdout, re.M), proc.stdout
+	assert re.search(r"^PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42 reason=ai:blocked latch_age_secs=\d+ max_hours=24$", proc.stdout, re.MULTILINE), proc.stdout
 	assert "reason=cycle_in_flight" not in proc.stdout
 	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
 	assert _graphql_calls(final) == 1
@@ -1281,3 +1281,41 @@ def test_cycle_step_env_wires_the_hold_and_telegram() -> None:
 		"ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}",
 	):
 		assert f"          {row}\n" in cycle_job, row
+
+
+def test_release_reason_names_the_label_with_the_newest_event() -> None:
+	state = {
+		"in_flight": [42],
+		"in_flight_labels": {"42": ["ai:harness-broken", "ai:blocked"]},
+		"latch_events": {"42": [{"label": "ai:harness-broken", "createdAt": _hours_ago(48)}, {"label": "ai:blocked", "createdAt": _hours_ago(30)}]},
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final, _ = _run(Path(tmp), state)
+	match = re.search(r"^PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42 reason=(\S+) latch_age_secs=(\d+) ", proc.stdout, re.MULTILINE)
+	assert match, proc.stdout
+	assert match.group(1) == "ai:blocked"
+	assert 29 * 3600 < int(match.group(2)) < 31 * 3600
+
+
+def test_graphql_failure_reason_is_logged() -> None:
+	state = {"in_flight": [42], "in_flight_labels": {"42": ["ai:blocked"]}, "latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(48)}]}, "graphql_error": True}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final, _ = _run(Path(tmp), state)
+	match = re.search(r"^::warning::Promote cycle hold: GraphQL label history read failed: (.+)$", proc.stdout + proc.stderr, re.MULTILINE)
+	assert match, proc.stdout + proc.stderr
+	assert match.group(1).strip() and match.group(1) != "no error output"
+	assert "::" not in match.group(1)
+
+
+def test_released_tick_runs_the_cycle_unpinned() -> None:
+	state = {
+		"in_flight": [42],
+		"in_flight_labels": {"42": ["ai:blocked"]},
+		"latch_events": {"42": [{"label": "ai:blocked", "createdAt": _hours_ago(30)}]},
+		"gate_runs_sequence": GATE_SUCCESS,
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), state)
+	assert "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=42" in proc.stdout
+	_assert_unpinned_dispatch(proc, final, "released_cycle_holds_pin")
+	assert "PROMOTE_CYCLE_PIN outcome=stale_tag_deleted" not in proc.stdout

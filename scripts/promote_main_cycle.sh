@@ -68,7 +68,7 @@
 # runs the smoke gate on the branch and passes the candidate as baseline and
 # smoke SHA, so the verifying run promotes exactly that commit. Any skipped,
 # failed or timed-out step after the freeze deletes the tag (EXIT trap). Log:
-#   PROMOTE_CYCLE_PIN outcome=skipped reason=<disabled|wrappers_not_pinned|support_not_pinned|branch_missing|branch_unprotected|branch_lookup_failed|freeze_failed>
+#   PROMOTE_CYCLE_PIN outcome=skipped reason=<disabled|released_cycle_holds_pin|wrappers_not_pinned|support_not_pinned|branch_missing|branch_unprotected|branch_lookup_failed|freeze_failed>
 #   PROMOTE_CYCLE_PIN outcome=stale_tag_deleted age=<n>s|unknown
 #   PROMOTE_CYCLE_PIN outcome=candidate_advanced main_tip=<sha> candidate=<sha>
 #   PROMOTE_CYCLE_PIN outcome=frozen candidate=<sha>
@@ -131,7 +131,11 @@
 # of any present latch label is the latch start. At least
 # PROMOTE_CYCLE_HOLD_MAX_HOURS old: the issue is released (logged, WARNING
 # alert) and no longer holds. A failed, unverified, incomplete or unparseable
-# history keeps the issue holding (fail closed).
+# history keeps the issue holding (fail closed). A tick that released an issue
+# runs unpinned (PROMOTE_CYCLE_PIN reason=released_cycle_holds_pin): the
+# released cycle may still own the promote-cycle-frozen tag and its poller
+# deletes that tag without an ownership check when it ends, so a new pinned
+# cycle sharing the tag would lose its freeze.
 #
 # Operator-step drain (plan item 4d): whenever the `stable` tag resolves, the
 # cycle first runs `operator_step_issue.py tick` with the tag's commit, before
@@ -544,6 +548,8 @@ pin_candidate_sha=""
 PIN_PREFLIGHT_REASON=""
 PIN_FREEZE_DETAIL=""
 PIN_TAG_CREATED=false
+# Set by promote_cycle_hold_guard when it released a parked tracking issue.
+PROMOTE_CYCLE_HOLD_RELEASED_ISSUES=""
 
 is_http_404()
 {
@@ -556,6 +562,12 @@ pin_preflight()
 	PIN_PREFLIGHT_REASON=""
 	if [ "$(printf '%s' "${PROMOTE_CYCLE_PIN_ENABLED}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
 		PIN_PREFLIGHT_REASON=disabled
+		return 1
+	fi
+	# A released parked cycle may still own the shared freeze tag, and its
+	# poller deletes the tag when it ends; never share the tag with it.
+	if [ -n "${PROMOTE_CYCLE_HOLD_RELEASED_ISSUES}" ]; then
+		PIN_PREFLIGHT_REASON=released_cycle_holds_pin
 		return 1
 	fi
 	local -a wrappers=()
@@ -650,10 +662,9 @@ pin_freeze()
 	local err_file tag_ref_json tag_obj frozen_at age_note tag_obj_sha branch_tip compare_status new_obj
 	PIN_FREEZE_DETAIL=""
 	err_file="$(mktemp)"
-	# Guards 1-2 showed no other cycle job and no labelled tracking issue still
-	# holding (a human-latched issue past PROMOTE_CYCLE_HOLD_MAX_HOURS no longer
-	# holds), so a tag that still exists, e.g. one a released parked cycle left
-	# behind, is stale.
+	# Guards 1-2 showed no other cycle job and no labelled tracking issue, so a
+	# tag that still exists is stale. (A tick that released a parked issue
+	# never reaches here: pin_preflight runs it unpinned.)
 	if tag_ref_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${PROMOTE_CYCLE_PIN_TAG}" 2>"${err_file}")"; then
 		age_note="age=unknown"
 		tag_obj="$(printf '%s' "${tag_ref_json}" | jq -r 'if (.object.type // "") == "tag" then .object.sha else empty end' 2>/dev/null || true)"
@@ -738,10 +749,25 @@ pin_freeze()
 # --- Bounded hold (stuck-states P4) -------------------------------------------
 
 # promote_cycle_hold_alert <text>: best-effort WARNING; never fails the cycle.
+# tg_send_msg's curl has no time limit, so the send runs in the background and
+# is abandoned after 30 seconds.
 promote_cycle_hold_alert()
 {
+	local pid waited=0 limit=150
 	if type tg_send_msg >/dev/null 2>&1; then
-		tg_send_msg "$1" WARNING >/dev/null 2>&1 || true
+		( tg_send_msg "$1" WARNING >/dev/null 2>&1 || true ) &
+		pid=$!
+		# 150 polls of 0.2 s = 30 s.
+		while kill -0 "${pid}" 2>/dev/null && [ "${waited}" -lt "${limit}" ]; do
+			sleep 0.2
+			waited=$((waited + 1))
+		done
+		if kill -0 "${pid}" 2>/dev/null; then
+			pkill -P "${pid}" 2>/dev/null || true
+			kill "${pid}" 2>/dev/null || true
+			echo "::warning::promote_main_cycle: hold-release alert timed out after 30s; not sent" >&2
+		fi
+		wait "${pid}" 2>/dev/null || true
 	else
 		echo "::warning::promote_main_cycle: tg_helpers.sh not available; hold-release alert not sent" >&2
 	fi
@@ -764,7 +790,7 @@ promote_cycle_hold_history()
 	local owner="$1"
 	local name="$2"
 	shift 2
-	local aliases="" issue_number count=0 query response
+	local aliases="" issue_number count=0 query response err_file err_line
 	if ! [[ "${owner}" =~ ^[A-Za-z0-9_.-]+$ ]] || ! [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
 		return 1
 	fi
@@ -777,9 +803,16 @@ promote_cycle_hold_history()
 		return 1
 	fi
 	query="query(\$owner:String!,\$name:String!){repository(owner:\$owner,name:\$name){${aliases} }}"
-	if ! response="$(gh_retry gh api graphql -f query="${query}" -f owner="${owner}" -f name="${name}" 2>/dev/null)"; then
+	err_file="$(mktemp)" || return 1
+	if ! response="$(gh_retry gh api graphql -f query="${query}" -f owner="${owner}" -f name="${name}" 2>"${err_file}")"; then
+		# One short, single-line reason (auth, rate limit, query error): the last
+		# stderr line, without a leading workflow-command prefix.
+		err_line="$(grep -v '^[[:space:]]*$' "${err_file}" 2>/dev/null | tail -n1 | sed 's/^::[a-z]*:://' | tr -d '\r' | tr -c '[:print:]' ' ' | cut -c1-120 | sed 's/::/: :/g' || true)"
+		rm -f "${err_file}"
+		echo "::warning::Promote cycle hold: GraphQL label history read failed: ${err_line:-no error output}" >&2
 		return 1
 	fi
+	rm -f "${err_file}"
 	if ! printf '%s' "${response}" | jq -e 'type == "object" and ((.data.repository? // null) | type) == "object"' >/dev/null 2>&1; then
 		return 1
 	fi
@@ -792,24 +825,27 @@ promote_cycle_hold_history()
 #   release <n> <label> <age_secs> newest latch at least cap_secs old
 #   keep <n> <reason>              latch_recent, or history_unverified /
 #                                  history_incomplete / history_unparseable
-# <label> is the first present latch label in PROMOTE_CYCLE_HOLD_LATCH_LABELS
-# order. With several latch labels the newest event sets the age (D2); the age
-# never falls back to the issue's creation time.
+# <label> is the latch label whose newest event sets the age: with several
+# latch labels the newest event sets the age (D2); the age never falls back to
+# the issue's creation time. The history goes to jq through a file, not argv,
+# so a large response cannot hit the per-argument limit (MAX_ARG_STRLEN).
 promote_cycle_hold_decide()
 {
 	local listing="$1"
 	local history="${2:-}"
 	local now="$3"
 	local cap="$4"
-	local latch_json
+	local latch_json hist_file rc=0
 	[ -n "${history}" ] || history="null"
 	latch_json="$(printf '%s\n' "${PROMOTE_CYCLE_HOLD_LATCH_LABELS[@]}" | jq -R . | jq -sc .)"
+	hist_file="$(mktemp)" || return 1
+	printf '%s' "${history}" > "${hist_file}"
 	printf '%s' "${listing}" | jq -r \
 		--argjson L "${latch_json}" \
-		--argjson hist "${history}" \
+		--slurpfile hist "${hist_file}" \
 		--argjson now "${now}" \
 		--argjson cap "${cap}" '
-		($hist | (try .data.repository catch null) | if type == "object" then . else {} end) as $repo
+		(($hist[0]? // null) | (try .data.repository catch null) | if type == "object" then . else {} end) as $repo
 		| .[]
 		| select((.number | type) == "number")
 		| . as $issue
@@ -827,13 +863,16 @@ promote_cycle_hold_decide()
 					[$per[][] | (try (if type == "string" then fromdateiso8601 else null end) catch null)] as $times
 					| if any($times[]; . == null) then "keep \($n) history_unparseable"
 					  else
-						(($now - ($times | max)) | floor) as $age
-						| if $age >= $cap then "release \($n) \($present[0]) \($age)"
+						([range(0; $present | length) as $k | {l: $present[$k], t: ([$per[$k][] | fromdateiso8601] | max)}] | max_by(.t)) as $newest
+						| (($now - $newest.t) | floor) as $age
+						| if $age >= $cap then "release \($n) \($newest.l) \($age)"
 						  else "keep \($n) latch_recent" end
 					  end
 				  end
 			  end
-		  end'
+		  end' || rc=$?
+	rm -f "${hist_file}"
+	return "${rc}"
 }
 
 # promote_cycle_hold_guard <listing_json> <in_flight_csv>
@@ -891,6 +930,7 @@ promote_cycle_hold_guard()
 					skip_cycle cycle_in_flight "tracking_issues=${in_flight_csv}"
 				fi
 				hours=$((age / 3600))
+				PROMOTE_CYCLE_HOLD_RELEASED_ISSUES+="${issue_number},"
 				echo "PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=${issue_number} reason=${detail} latch_age_secs=${age} max_hours=${PROMOTE_CYCLE_HOLD_MAX_HOURS}"
 				echo "::warning::Promote cycle hold released: tracking issue #${issue_number} has been parked on ${detail} for ${hours}h (cap ${PROMOTE_CYCLE_HOLD_MAX_HOURS}h); the cycle no longer waits for it."
 				promote_cycle_hold_alert "Promote cycle: tracking issue #${issue_number} in ${GITHUB_REPOSITORY} has been parked on ${detail} for ${hours}h (cap ${PROMOTE_CYCLE_HOLD_MAX_HOURS}h); the daily cycle no longer waits for it."
