@@ -5,13 +5,31 @@
   "entry_id": "processed_command_8717_6592662822_approved",
   "issue_number": 8717,
   "metadata": {
+    "branch": "ai/issue-8717",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      ".github/workflows/security-audit.yml",
+      "README.md",
+      "agents.d/stuck-states-p5a-security-pass-delta.md",
+      "changelog.d/stuck-states-p5a-security-pass-delta.md",
+      "scripts/review_single_issue_security_pass.sh",
+      "scripts/security_audit.sh",
+      "tests/test_security_audit_workflow_contract.py",
+      "tests/test_single_issue_security_pass.py",
+      "workflow-templates/ai-security-audit.yml"
+    ],
+    "issue_number": 8717,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8717",
+    "pr_number": 8720,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8720",
+    "run_attempt": "1",
+    "run_id": "41557630165",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/41557630165"
   },
   "run_attempt": 1,
   "run_id": "41557630165",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-03T01:09:16Z",
+  "status": "completed",
+  "timestamp": "2026-11-03T02:09:51Z",
   "workflow": "implement"
 }
