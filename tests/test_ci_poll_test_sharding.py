@@ -2570,8 +2570,10 @@ MOVED_STATIC_8394_STEPS = {
 
 
 # Step moved out of tests-heal-plan-and-validation, which took 15m10s of its 20 minutes (run 40954844196, budget-watch issue #8395): step name -> module paths its body names.
+# It first went to tests-hooks-and-orchestrator and now runs in tests-release-and-log-analysis (budget-watch issue #8730).
 HEAL_TO_HOOKS_SOURCE_JOB_ID = "tests-heal-plan-and-validation"
-HEAL_TO_HOOKS_TARGET_JOB_ID = "tests-hooks-and-orchestrator"
+# moved on to tests-release-and-log-analysis in budget-watch issue #8730; constant name kept
+HEAL_TO_HOOKS_TARGET_JOB_ID = "tests-release-and-log-analysis"
 HEAL_TO_HOOKS_SETUP_STEP = "Install Python CI dependencies"
 MOVED_HEAL_TO_HOOKS_STEPS = {
 	"Review autofix review-pipeline plumbing contract test": (
@@ -2720,7 +2722,7 @@ class MovedPollGroupThree8472StepsContractTest(unittest.TestCase):
 
 
 class MovedHealToHooksStepsContractTest(unittest.TestCase):
-	"""The step moved out of tests-heal-plan-and-validation runs once, in the hooks job (#8395)."""
+	"""The step moved out of tests-heal-plan-and-validation runs once (#8395), now in the release job (#8730)."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -2770,6 +2772,76 @@ class MovedHealToHooksStepsContractTest(unittest.TestCase):
 			with self.subTest(step=name):
 				self.assertIn(name, names)
 				self.assertLess(setup_index, names.index(name))
+
+
+# Step moved out of tests-hooks-and-orchestrator, which took 15m07s of its 20
+# minutes (run 41570422282, budget-watch issue #8730), to the end of
+# tests-release-and-log-analysis. Picked by test and subprocess counts because
+# the run's step timings could not be read. The module list stays in
+# MOVED_HEAL_TO_HOOKS_STEPS so it is kept in one place.
+HOOKS_8730_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
+HOOKS_8730_TARGET_JOB_ID = "tests-release-and-log-analysis"
+HOOKS_8730_SETUP_STEP = "Install Python CI dependencies"
+MOVED_HOOKS_8730_STEPS = {
+	name: MOVED_HEAL_TO_HOOKS_STEPS[name]
+	for name in ("Review autofix review-pipeline plumbing contract test",)
+}
+
+
+class MovedHooks8730StepsContractTest(unittest.TestCase):
+	"""The step moved out of tests-hooks-and-orchestrator runs once, unguarded, in the release job (#8730)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_release_job(self) -> None:
+		for name in MOVED_HOOKS_8730_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[HOOKS_8730_TARGET_JOB_ID],
+				)
+
+	def test_moved_steps_left_the_hooks_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[HOOKS_8730_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_HOOKS_8730_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_have_no_guard(self) -> None:
+		# The release job has no matrix, so a leftover guard would skip the
+		# step silently.
+		for name in MOVED_HOOKS_8730_STEPS:
+			for owner, step in self.owning_steps(name):
+				with self.subTest(step=name, job=owner):
+					self.assertNotIn("if", step)
+					self.assertNotIn("strategy", self.jobs()[owner])
+
+	def test_moved_steps_run_after_the_release_job_setup(self) -> None:
+		names = [step.get("name") for step in self.jobs()[HOOKS_8730_TARGET_JOB_ID]["steps"]]
+		self.assertIn(HOOKS_8730_SETUP_STEP, names, HOOKS_8730_TARGET_JOB_ID)
+		setup_index = names.index(HOOKS_8730_SETUP_STEP)
+		for name in MOVED_HOOKS_8730_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(setup_index, names.index(name))
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_HOOKS_8730_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
 
 
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
