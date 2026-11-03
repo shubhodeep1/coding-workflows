@@ -606,9 +606,10 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
                 existing_label = None
             except LabelContractError:
                 raise
-            except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+            except (urllib.error.URLError, OSError, ValueError, RuntimeError, http.client.HTTPException) as exc:
                 # The fallback runs right after the prefetch failed, so the
-                # same truncated read (IncompleteRead) is handled the same way.
+                # same truncated read (IncompleteRead) is handled the same way;
+                # RuntimeError matches the prefetch handler (retry loop fallthrough).
                 _append_label_sync_error(
                     errors,
                     repo=repo,
@@ -1010,7 +1011,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return int(args.func(args))
-    except (LabelContractError, ValueError, json.JSONDecodeError) as exc:
+    except (LabelContractError, ValueError, json.JSONDecodeError, OSError) as exc:
+        # OSError: a missing or unreadable contract file gets a named error, not a traceback.
         print(f"AI_LABELS_ERROR: {exc}", file=sys.stderr)
         return 2
 
