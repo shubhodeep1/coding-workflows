@@ -378,14 +378,21 @@ release_blocker_check_gate_failed()
 # run has started on the tip (the plan's condition): once a gate ran there,
 # release_in_flight / last_gate_failed own the blocker, and promoted commits
 # keep their `main` dates, so a running release would otherwise read as stale.
+# A completed `cancelled` run does not count: it spends no attempt and no
+# other reporter owns it, so a tip whose gates keep being cancelled still
+# reaches this report.
 release_blocker_check_stale()
 {
 	local rb_tag_time="" rb_tag_age="" rb_commit_age="" rb_age="" rb_pending_since="" rb_last_gate="" rb_last_id="" rb_last_conclusion="" rb_evidence="" rb_gate_runs_on_tip=""
 	if [ "${release_blocker_fired}" = "true" ]; then
 		return 0
 	fi
-	rb_gate_runs_on_tip="$(printf '%s' "${runs_json:-}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.head_sha == $sha and .head_branch == $branch)] | length' 2>/dev/null)" || rb_gate_runs_on_tip=""
-	if ! [[ "${rb_gate_runs_on_tip}" =~ ^0$ ]]; then
+	rb_gate_runs_on_tip="$(printf '%s' "${runs_json:-}" | jq -r --arg sha "${branch_tip}" --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.head_sha == $sha and .head_branch == $branch and ((.status == "completed" and .conclusion == "cancelled") | not))] | length' 2>/dev/null)" || rb_gate_runs_on_tip=""
+	if ! [[ "${rb_gate_runs_on_tip}" =~ ^[0-9]+$ ]]; then
+		echo "RELEASE_BLOCKER_REPORT_SKIPPED reason=guard_unavailable blocker=stable_release_stale lookup=gate_runs"
+		return 0
+	fi
+	if [ "${rb_gate_runs_on_tip}" -ne 0 ]; then
 		return 0
 	fi
 	rb_tag_time="${tag_tagger_date:-}"

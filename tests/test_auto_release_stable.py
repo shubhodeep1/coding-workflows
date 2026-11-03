@@ -557,3 +557,17 @@ def test_unsupported_branch_is_payload_invalid_without_failing_the_tick() -> Non
 	assert "RELEASE_BLOCKER_REPORT_SKIPPED reason=payload_invalid blocker=release_in_flight stage=build" in proc.stdout
 	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
 	assert not state.get("heal_dispatches")
+
+
+def test_stale_reported_when_the_tip_only_has_cancelled_gate_runs() -> None:
+	# Cancelled gates spend no attempt and no other reporter owns them, so
+	# they must not suppress stable_release_stale.
+	runs = [{"id": 993, "status": "completed", "conclusion": "cancelled", "head_sha": TIP, "head_branch": "stable", "created_at": _ago(3600)}]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, tagger_date=_ago(3 * 86400), compare_commit_dates=[_ago(2 * 86400)]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(state["dispatches"]) == 1
+	reports = _reports(state)
+	assert [r["blocker_reason"] for r in reports] == ["stable_release_stale"]
+	assert "/actions/runs/993" in reports[0]["blocker_evidence"]
+	assert "conclusion=cancelled" in reports[0]["blocker_evidence"]
