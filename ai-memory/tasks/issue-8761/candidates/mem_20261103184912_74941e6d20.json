@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8761,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8761\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8768\",\"pr_number\":8768,\"branch\":\"ai/issue-8761\",\"run_id\":\"41688738391\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41688738391\",\"changed_files\":[\".github/workflows/auto-release-stable.yml\",\"README.md\",\"agents.d/stuck-states-p4-rb-auto-release-reporters.md\",\"changelog.d/stuck-states-p4-rb-auto-release-reporters.md\",\"docs/scripts-pending-removal.md\",\"scripts/auto_release_stable.sh\",\"tests/test_auto_release_stable.py\"]}",
+  "fingerprint": "f62491c6816e51be0d9aa818e67262eb1602c822b3c4d1faa18984a306da8f37",
+  "lineage": {
+    "issue_number": 8761,
+    "parent_ids": [],
+    "pr_number": 8768,
+    "run_id": "41688738391",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41688738391",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8768"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261103184912_74941e6d20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8761,
+    "level": "run",
+    "pr_number": 8768,
+    "run_id": "41688738391"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8761: https://github.com/shubhodeep1/coding-workflows/pull/8768",
+  "timestamps": {
+    "created_at": "2026-11-03T18:49:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
