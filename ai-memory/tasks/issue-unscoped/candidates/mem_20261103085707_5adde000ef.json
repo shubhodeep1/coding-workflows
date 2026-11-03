@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #8235 scope: only modify tests/e2e_smoke_canary.txt (the copilot-pull-request-reviewer check failed with custom_instructions_too_large)\n  expected_change_site: tests/e2e_smoke_canary.txt (whole file, 3 lines)\n  confidence=[ISSUE_CONFIDENCE: high]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The copilot-pull-request-reviewer check-run (head f64a6c52, job 125616826829) fails with custom_instructions_too_large (422) because AGENTS.md plus CLAUDE.md exceed the reviewer's prompt limit. The reviewer itself says this is repo-wide, pre-existing and out of scope for this PR, and it noted it for the aggregator rather than as a fixable gap. Severity was stated as MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (under TASK COMPLETENESS / INTENT GAPS):\n  File: tests/e2e_smoke_canary.txt\n  Line or code reference: whole file (3 lines)\n  Problem: The third-party PR reviewer check-run (`copilot-pull-request-reviewer`, head f64a6c52, job 125616826829) fails with `custom_instructions_too_large` (422) because the combined size of its custom instructions (`AGENTS.md` + `CLAUDE.md`) exceeds the reviewer's prompt limit.\n  Why it fails at runtime: The reviewer aborts before producing any review, leaving the PR check failed. The failure is repo-wide and pre-existing, and issue #8235's scope restricts changes to `tests/e2e_smoke_canary.txt` only, so it is an out-of-scope condition rather than an unmet deliverable of this PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: high\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c86e137291b89970f2041410944500f122de2562d9124be49b5958c3b082a7b3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41604246616",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41604246616",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103085707_5adde000ef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41604246616"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T08:57:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
