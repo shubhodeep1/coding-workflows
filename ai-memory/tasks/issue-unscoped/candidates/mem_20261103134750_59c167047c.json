@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:1349 (caller 3745-3753) | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: Adding `TypeError` to the scope guard's except tuple in the `_resolver_scope_state` heredoc changes a TypeError from exit 1 to exit 2. The caller used to treat exit 1 as scope drift and retry. It now refuses to retry or commit.\n  WHY: The linked issue's requirement 3 says \"Do not change retry or commit behaviour\". Severity disagreement: both reviewers rated it MAJOR. Sonnet-5_5 had confidence 3 and noted the change fails closed and is disclosed in the changelog fragment. GLM had confidence 4. Severity is mapped to high, which is the highest of the two ratings.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code.\"\n  expected_change_site: tests/test_review_conflict_resolve_retry_prelude_render.py lines 656, 709, 931\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff still carries three whitespace-only hunks (`@@ -653`, `@@ -706`, `@@ -928`) in `test_scope_retry_restores_full_attempt_and_keeps_final_gate`, `test_scope_feedback_is_available_for_generic_resolver` and `test_model_index_is_fresh_per_attempt_and_fails_closed`. The base lines use three tabs plus spaces and the head lines use four tabs. No hunk restores the original indentation. Severity disagreement: NIT from sonnet and luna, MAJOR from GLM.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_conflict_resolve.sh:1349 (caller 3745-3753) | severity=MAJOR | confidence=3\n  PROBLEM: The PR adds `TypeError` to the scope guard's except tuple. A TypeError now exits 2, so the caller at lines 3746-3748 refuses to retry or commit. It used to exit 1 and be treated as scope drift, which triggered restore, verify and retry.\n  WHY: Requirement 3 says \"Do not change retry or commit behaviour\". The change is disclosed in the changelog fragment and the new test depends on it. It also fails closed and is arguably more correct, but it still deviates from the stated constraint.\n\nTASK_GAP:\n- Requirement: \"Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code.\"\n  Expected change site: tests/test_review_conflict_resolve_retry_prelude_render.py, lines 656, 709 and 931\n  Evidence of absence: The PR diff still carries three whitespace-only hunks (`@@ -653`, `@@ -706`, `@@ -928`). The base side starts with three tabs plus one or five spaces and the head side has four tabs. The last run diff touched only the new TypeError test case.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n\nOther points: The failed external check `copilot-pull-request-reviewer` (`custom_instructions_too_large`, HTTP 422) maps to no code in the diff. The new TypeError test case looks correct. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Make append-only, minimal edits, and do not reflow unrelated code.\"\n  Expected change site: `tests/test_review_conflict_resolve_retry_prelude_render.py`, lines 656, 709, and 931\n  Evidence of absence: The PR diff still changes only indentation on these unrelated lines. No hunk restores their original indentation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_conflict_resolve.sh:1349 (caller 3745\u20133753) | severity=MAJOR | confidence=4\n  PROBLEM: `TypeError` was added to the `_resolver_scope_state` except tuple. It now reaches the handler at lines 1351\u20131353, which calls `sys.exit(2)`.\n  WHY: Before the change, an uncaught TypeError exited 1 and the caller at lines 3750\u20133770 restored, verified and retried. With exit 2, the caller at lines 3746\u20133748 refuses to retry or commit. Requirement 3 says \"Do not change retry or commit behaviour\".\n\nTASK_GAP:\n- Requirement: \"Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code.\" (linked issue, Implementer discipline)\n  Expected change site: tests/test_review_conflict_resolve_retry_prelude_render.py lines 656, 709, 931 (continuation lines in `test_scope_retry_restores_full_attempt_and_keeps_final_gate`, `test_scope_feedback_is_available_for_generic_resolver`, `test_model_index_is_fresh_per_attempt_and_fails_closed`)\n  Evidence of absence: Base lines carry three tabs plus one space (line 656) and three tabs plus five spaces (lines 709, 931). On disk all three carry four tabs. The PR patch still contains three whitespace-only hunks in tests the PR does not otherwise touch. The earlier autofix revert never reached the head commit.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "61f1dc14d2620a2d0c1a1e63292bb2d205ba2967d91732ed93d95455f03abd2f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8747,
+    "run_id": "41644958503",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41644958503",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103134750_59c167047c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8747,
+    "run_id": "41644958503"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T13:47:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
