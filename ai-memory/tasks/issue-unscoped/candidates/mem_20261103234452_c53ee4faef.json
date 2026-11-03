@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  expected_change_site: PR target branch / merge state (post-review orchestrator step, not a diff hunk)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The diff changes only `tests/e2e_smoke_canary.txt`, and no diff hunk can perform or establish the merge. Severity disagreement: openai_gpt-6-luna rated BLOCKER (confidence 4). The others rated NIT (confidence 1, 5 and 1) and said the PR base is already `orchestrator/project-8693` and the file-level criteria are met.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR base branch and orchestrator merge. This is a post-review orchestrator action, not a file edit.\n  Evidence of absence: Not a real gap. The diff changes only `tests/e2e_smoke_canary.txt`, which is the only file the issue allows. Line 2 changes from `decompose-run: 40427433026` to `decompose-run: 41501570285`. Line 1 stays `status: ok`, and no third line is added. The PR body uses `Refs #8693`, not a closing keyword, which follows \u00a721. The PR base is already the integration branch, and no diff hunk can perform the merge.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\nNote: The CI failure `copilot-pull-request-reviewer` (HTTP 422 `custom_instructions_too_large`) comes from an external service, not from this diff. No code change in this PR can fix it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Replace the stale second line (`decompose-run: 40427433026`) with `decompose-run: 41501570285`. [...] The file has no other lines. [...] Do not modify any other file.\" Plus: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: `tests/e2e_smoke_canary.txt` lines 1-2 (file content) and PR base branch / orchestrator merge (process step).\n  Evidence of absence: File-level criteria are fully met on HEAD. `tests/e2e_smoke_canary.txt` lines 1-2 read exactly `status: ok` then `decompose-run: 41501570285` with a trailing newline and no other lines, and `pr_changed_files.txt` lists only that file. The merge criterion is a post-review orchestrator step, so no diff hunk can perform the merge. Prior editor summaries on this PR record `baseRefName: orchestrator/project-8693`, so the PR already targets the integration branch. The PR body uses `Closes #8696` (correct sub-issue convention, \u00a721) and `Refs #8693` (correct tracking-issue convention, \u00a721).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \u201cThe change is merged through a PR into `orchestrator/project-8693`.\u201d\n  Expected change site: The pull request\u2019s target branch and merge state.\n  Evidence of absence: The PR diff updates `tests/e2e_smoke_canary.txt`, but does not establish that the change has been merged into `orchestrator/project-8693`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: The GitHub pull request's merge state (post-review orchestrator process step; not a diff change site).\n  Evidence of absence: The diff changes only `tests/e2e_smoke_canary.txt`. The PR is based on `orchestrator/project-8693`, and the orchestrator performs the merge after review. Earlier editor summaries record `baseRefName: orchestrator/project-8693`, and the PR body uses `Refs #8693` (no auto-close keyword, per \u00a719). No diff hunk can establish the merge itself. This is a process step outside the diff's scope, not a missing deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "69fd26c603c1779288d1978b206a24ab278158c8acc2782610c2d756734c2b7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41739788437",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41739788437",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103234452_c53ee4faef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41739788437"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T23:44:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
