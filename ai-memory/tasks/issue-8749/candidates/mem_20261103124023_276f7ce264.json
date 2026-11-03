@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8749,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8749\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8752\",\"pr_number\":8752,\"branch\":\"ai/issue-8749\",\"run_id\":\"41630196403\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41630196403\",\"changed_files\":[\".github/workflows/test-and-mark-stable.yml\",\"README.md\",\"agents.d/stuck-states-p4-phase4b-timing.md\",\"changelog.d/stuck-states-p4-phase4b-timing.md\",\"scripts/stable_e2e_step_verify_bait_removed.sh\",\"tests/test_test_and_mark_stable_review_blocked_budget.py\"]}",
+  "fingerprint": "939096acddfa0e63b5ea65c26ab60b3fb3502fd7f66107bb4c41582f84eb5d2e",
+  "lineage": {
+    "issue_number": 8749,
+    "parent_ids": [],
+    "pr_number": 8752,
+    "run_id": "41630196403",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41630196403",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8752"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261103124023_276f7ce264",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8749,
+    "level": "run",
+    "pr_number": 8752,
+    "run_id": "41630196403"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8749: https://github.com/shubhodeep1/coding-workflows/pull/8752",
+  "timestamps": {
+    "created_at": "2026-11-03T12:40:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
