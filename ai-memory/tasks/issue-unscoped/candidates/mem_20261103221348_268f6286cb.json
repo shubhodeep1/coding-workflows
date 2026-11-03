@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:2 | severity=low | confidence=1\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: None \u2014 the diff sets line 2 to exactly `decompose-run: 41501570285`, line 1 remains `status: ok`, no extra lines, trailing newline preserved.\n  WHY: The reviewer reported this as a NIT with no runtime failure (Why it fails at runtime: N/A); it is a confirmation, not a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  expected_change_site: PR merge into `orchestrator/project-8693` (no file or symbol applies)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff only updates `tests/e2e_smoke_canary.txt` and contains no merge into the required branch; the merge is an orchestrator action after review, not part of the diff. Severity disagreement: openai_gpt-6-luna rated BLOCKER (confidence 5); anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rated NIT (confidence 1).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: the PR merge itself. No file or symbol applies.\n  Evidence of absence: the merge happens after review, so the diff cannot contain it. No code change is missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n(All other checklist categories: NONE. HARDENING_RISK_SCORE: 0.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR merge into `orchestrator/project-8693`.\n  Evidence of absence: The PR diff only updates `tests/e2e_smoke_canary.txt`; it contains no merge into the required branch.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/e2e_smoke_canary.txt:2 | severity=NIT | confidence=1\n  PROBLEM: None \u2014 the diff sets line 2 to exactly `decompose-run: 41501570285`, line 1 remains `status: ok`, no extra lines, trailing newline preserved.\n  WHY: N/A\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR merge into `orchestrator/project-8693`.\n  Evidence of absence: The PR diff changes only `tests/e2e_smoke_canary.txt` (line 2, `decompose-run: 41501570285`); the merge-into-branch clause is an orchestrator action outside the diff, so there is no actionable code gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5d4be41225fc6b3d957d7a0f56f75f172f91e4c8f514683a034c49007397d1c8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41727008213",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41727008213",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103221348_268f6286cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41727008213"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T22:13:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
