@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: (no requirement identified; the reviewer reported that \"the review inputs (LINKED ISSUE body, PR DESCRIPTION, PR DIFF, LAST RUN DIFF) were not present in the reviewer bundle\", so intent-vs-delivery comparison was not performed)\n  expected_change_site: (not identified; the reviewer bundle inputs were missing)\n  confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The reviewer said no diff artifacts exist in the checkout (branch `ai/issue-8761`, with no git access to compute the branch diff) and that the `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder is unfilled. It labelled this SEVERITY: BLOCKER and ISSUE_CONFIDENCE: HIGH. It is a blocked-review notice, not a missing deliverable.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (BLOCKER)\n  Requirement: (none identified) intent-vs-delivery comparison is impossible because the review inputs (LINKED ISSUE body, PR DESCRIPTION, PR DIFF, LAST RUN DIFF) were not present in the reviewer bundle\n  Expected change site: (not identified)\n  Evidence of absence: no diff artifacts exist in the checkout (branch `ai/issue-8761`, with no git access to compute the branch diff), and the `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder is unfilled\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: HIGH\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f5a555b59367c8b41d26f8fd456fa1aeb53b0f952d00773117dda16f6ba39d7b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8768,
+    "run_id": "41740630639",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41740630639",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103235720_878ce6b684",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8768,
+    "run_id": "41740630639"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T23:57:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
