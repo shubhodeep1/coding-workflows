@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update the decompose-run marker in `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `orchestrator/project-8709` at `fcb44ee4855705d0d63231dd1c6a66ba51b293e4`. The integration branch matches the metadata.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for one exact edit to one line of one existing file and forbids touching any other file. No scripts, workflows, schedulers, supervisors or database work are involved (\u00a720.E: this only modifies an existing file, wires into no entry point and adds nothing to `docs/scripts-pending-removal.md`). The full change and the shortcut are the same edit.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data-only edit. Line 2 changes from `decompose-run: 41445772297` to `decompose-run: 41552424693`, and line 1 stays `status: ok`. The file keeps exactly two lines ending in LF, with a trailing newline. A byte-level check confirmed that is its current format.\n\n## Data structures affected\nOnly the contents of the canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Leave the advisory test files alone\n- Chosen: edit only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: also editing the 11 test files on the decomposition's \"Expected files\" list.\n- Why: those tests mention the canary file by path but do not contain the old value `41445772297`, so the new marker does not break them. The issue also explicitly says to modify only this file.\n\n## Security considerations\nNo trust boundary, endpoint, external input, secret or money handling is involved. The only abuse risk is the edit spreading beyond its scope, and the `git diff --stat` acceptance check catches that.\n\n## Risks and edge cases\n- Conflict with the issue: the \"Expected files\" list includes test files, but the issue's scope rule says to change only the canary file. The scope rule wins; see D1.\n- Lesson from issue 8383: the review step may raise findings in other files. Those are out of scope for this issue.\n- Keep the trailing newline, keep LF line endings and do not add a third line.\n\n## Testing considerations\nRun the four acceptance checks:\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 41552424693`.\n- `wc -l tests/e2e_smoke_canary.txt` reports 2.\n- `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n\nOptionally, run `pytest tests/test_review_autofix_smoke_editor_override.py` as a quick sanity check.\n\n## Pre-execution self-check\nThe plan is implementable as written: it is one file, the exact new content is specified, no other open pull request delivers this work, and the new marker is not yet on the planning ref.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "0dd847e6dd54784213f4e53829ad5e2ae877b7a94dfc2ab033f00701b900c730",
+  "lineage": {
+    "issue_number": 8710,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41553354000",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41553354000",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8710"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261103003525_ed92e69b3b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8710,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41553354000"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8710",
+  "timestamps": {
+    "created_at": "2026-11-03T00:35:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
