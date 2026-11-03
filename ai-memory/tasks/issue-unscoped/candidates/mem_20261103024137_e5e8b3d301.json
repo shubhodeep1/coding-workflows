@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md / agents.md:(copilot-pull-request-reviewer instruction loading step, not part of the diff) | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The Copilot PR review check fails at request construction with HTTP 422 `custom_instructions_too_large` because the combined repository-level custom-instruction payload exceeds the size limit, so the reviewer exits code 1 before producing any review.\n  WHY: The reviewer flagged it at NIT severity as pre-existing infrastructure state, not attributable to the canary diff, which does not modify these instruction files.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md / agents.md:(copilot-pull-request-reviewer instruction loading step, not part of the diff) | severity=NIT | confidence=5\n  PROBLEM: The Copilot PR review check fails at request construction with HTTP 422 `custom_instructions_too_large` because the combined repository-level custom-instruction payload exceeds the size limit, so the reviewer exits code 1 before producing any review.\n  WHY: The instruction files' combined size is over the API limit on every PR-head run; the current canary diff does not modify these instruction files, so the failure is pre-existing infrastructure state and not attributable to this task edit.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "64053086ad553e698f3d099ce28bae41f1c3594c279ed44ebcc6b62c9897baa5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41566598854",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41566598854",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103024137_e5e8b3d301",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41566598854"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T02:41:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
