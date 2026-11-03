@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-03T20:53:43Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=(external check-run copilot-pull-request-reviewer; no repository file):n/a; cited_path=external check-run copilot-pull-request-reviewer; files_touched=.github/workflows/ci.yml, agents.d/8744-resolver-scope-check-reason.md, analysis/recommendation-processing-report.md, analysis/workflow-optimization-2026-09-30-2.md, changelog.d/8745-resolver-scope-check-reason.md, changelog.d/8746-label-sync-validate-prefetch.md, scripts/ai_labels.py, scripts/review_conflict_resolve.sh, tests/test_ai_labels.py, tests/test_review_conflict_resolve_retry_prelude_render.py.",
+  "phase": "review_autofix",
+  "pr_number": 8755,
+  "record_id": "lesson_20261103205343_bb255da005",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "external check-run copilot-pull-request-reviewer",
+    "(external check-run copilot-pull-request-reviewer; no repository file)",
+    ".github/workflows/ci.yml",
+    "agents.d/8744-resolver-scope-check-reason.md",
+    "analysis/recommendation-processing-report.md",
+    "analysis/workflow-optimization-2026-09-30-2.md",
+    "changelog.d/8745-resolver-scope-check-reason.md",
+    "changelog.d/8746-label-sync-validate-prefetch.md",
+    "scripts/ai_labels.py",
+    "scripts/review_conflict_resolve.sh",
+    "tests/test_ai_labels.py",
+    "tests/test_review_conflict_resolve_retry_prelude_render.py"
+  ]
+}
