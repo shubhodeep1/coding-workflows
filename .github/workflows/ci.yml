@@ -1536,7 +1536,8 @@ jobs:
       # from test and subprocess counts (9 modules, about 240 test functions),
       # not a measurement. It was also the slowest step that could be timed in
       # the planning sandbox (about 49s across eight of its nine modules, a
-      # relative weight only); failing run 37499559962 recorded 825s at this
+      # relative weight only); 825s was the whole run's elapsed time, not this
+      # step's duration, when run 37499559962 failed at this
       # step. This job's last budget-watch issue was #8395 (15m10s, run
       # 40954844196), which moved a step out of it; its headroom now is an
       # estimate, not a measurement. It needs no git
