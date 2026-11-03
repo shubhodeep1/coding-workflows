@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_verify_bait_removed.sh:669-682 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The retry report function decides on `retry_queued_timeout` with the condition `[ -n \"${RETRY_RUN_ID}\" ] && [ -z \"${RETRY_RUN_STARTED_EPOCH}\" ]` plus `retry_seen_queued=1`. If a run has started (so `RETRY_RUN_STARTED_EPOCH` is set) and the loop then times out after a transient error (rate limit, malformed JSON), the function skips `retry_queued_timeout` and falls back to the generic `retry_timeout`.\n  WHY: Some timeout scenarios get the wrong status, which can hide the intended `retry_queued_timeout` when the run was actually seen. The source rated this MAJOR, mapped here to high. No other reviewer raised it: anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash checked retry_report_timeout() (lines 487-504) and found no defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Phase 4b's budget starts at the adopted run's `run_started_at`.\" (Stuck states P4: test-and-mark-stable Phase 4b retry budget starts at run_started_at)\n  expected_change_site: scripts/stable_e2e_step_verify_bait_removed.sh, where the retry run's start time sets the editor-budget deadline (RETRY_RUN_STARTED_EPOCH at lines 654-655)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The reviewers cite three things. First, scripts/stable_e2e_step_verify_bait_removed.sh:654-655 sets RETRY_RUN_STARTED_EPOCH=$(date +%s) at poll time, not from the API's run_started_at field. Second, lines 651-666 set the deadline from the local time when polling first sees `in_progress` or `completed`. Third, `run_started_at` is read only afterwards, into RETRY_RUN_STARTED_AT_LOG at lines 662-666, and is used only for logging (lines 686-691 also cited by gemini). Severity disagreement: gemini and openai rated MAJOR, minimax rated NIT. minimax calls the poll-latch defensible, noting it is documented and that the previous editor rejected run_started_at because GitHub sets it equal to created_at for queued runs. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash deliberately did not re-raise this gap. They cite the same reason (documented at scripts/stable_e2e_step_verify_bait_removed.sh:446-448) and the prior editor's won't-fix decision.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stable_e2e_step_verify_bait_removed.sh:669-682 | severity=MAJOR | confidence=3\n  PROBLEM: The retry report function uses an incorrect condition `[ -n \"${RETRY_RUN_ID}\" ] && [ -z \"${RETRY_RUN_STARTED_EPOCH}\" ]` (plus `retry_seen_queued=1`) to decide on `retry_queued_timeout`. If the run started and a transient error (rate limit, malformed JSON) then leads to a timeout, the function skips `retry_queued_timeout` and falls back to the generic `retry_timeout`.\n  WHY: Some timeout scenarios get the wrong status, which may hide the intended `retry_queued_timeout` when the run was actually seen.\n- TASK_GAP\n  Requirement: \"Stuck states P4: test-and-mark-stable Phase 4b retry budget starts at run_started_at.\"\n  Expected change site: scripts/stable_e2e_step_verify_bait_removed.sh\n  Evidence of absence: The current implementation (lines 654-655, 686-691) bases the budget start (the `DEADLINE` calculation) on the time the script polls the run, not on the run's own `run_started_at` timestamp. `run_started_at` is logged for debugging only and is not used to calculate the budget start.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Phase 4b retry budget starts at run_started_at (per issue #8749 title and P4 plan: 'Phase 4b's budget starts at the adopted run's run_started_at').\"\n  Expected change site: scripts/stable_e2e_step_verify_bait_removed.sh, where the deadline is computed from the moment the retry run is first observed as in_progress/completed.\n  Evidence of absence: scripts/stable_e2e_step_verify_bait_removed.sh:654-655 sets RETRY_RUN_STARTED_EPOCH=$(date +%s) at poll time, not from the API's run_started_at field. run_started_at is captured into RETRY_RUN_STARTED_AT_LOG at lines 662-666 but only logged. The deviation is documented in the agents fragment and the script comment, and the previous editor rejected run_started_at because GitHub sets it equal to created_at for queued runs. The reviewer calls the poll-latch defensible and arguably more conservative, but notes that the literal issue title and P4 plan wording are not met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Phase 4b's budget starts at the adopted run's `run_started_at`.\" The linked issue also says the retry budget starts at `run_started_at`.\n  Expected change site: `scripts/stable_e2e_step_verify_bait_removed.sh`, where the retry run's start time sets the editor-budget deadline.\n  Evidence of absence: Lines 651-666 set the deadline from the local time when polling first observes `in_progress` or `completed` (lines 654-655). `run_started_at` is read only afterwards, for logging (lines 662-666), so the budget does not start at the run-reported timestamp.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c5db7347d521b3855b113b774d80b881a2388ecd8ba15c252631a7f7208b3712",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8752,
+    "run_id": "41643065620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41643065620",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103134518_6b75fa0631",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8752,
+    "run_id": "41643065620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T13:45:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
