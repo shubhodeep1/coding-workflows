@@ -2062,6 +2062,10 @@ jobs:
       - name: AI label sync dry-run smoke
         env:
           GH_TOKEN: ${{ github.token }}
+        # Only label-contract defects fail this step: errors with
+        # action == "validate" or a "100-character limit" message. Get / HTTP /
+        # transport errors stay non-fatal (documented assumption) so the smoke
+        # does not flake on token scope or rate-limit problems.
         run: |
           set -euo pipefail
           RESULT_JSON="/tmp/ai-label-sync-dry-run.json"
@@ -2077,6 +2081,22 @@ jobs:
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           assert set(payload) == {"created", "updated", "unchanged", "deleted", "errors"}
           assert isinstance(payload["errors"], list)
+          validation_failures = [
+              error
+              for error in payload["errors"]
+              if isinstance(error, dict)
+              and (
+                  error.get("action") == "validate"
+                  or "100-character limit" in str(error.get("message", ""))
+              )
+          ]
+          if validation_failures:
+              failing_labels = sorted({str(error.get("label", "<unknown>")) for error in validation_failures})
+              print(
+                  "::error::AI label sync dry-run: label contract validation errors for: "
+                  + ", ".join(failing_labels)
+              )
+              sys.exit(1)
           PY
 
       - name: Phase label transition and fallback contract tests
