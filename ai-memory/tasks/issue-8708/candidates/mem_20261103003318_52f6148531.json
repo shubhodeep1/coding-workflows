@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Planning ref\n- `git rev-parse HEAD`: fcb44ee4855705d0d63231dd1c6a66ba51b293e4\n- Branch: `main`. The integration branch mismatch line reads `unknown`, not `true`, and this is a standalone issue.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue spells out the whole change: overwrite one file that already exists with three exact lines. No helper, script, workflow or test needs to change, so the plan keeps to exactly that scope. By the \u00a76 priorities (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the complete change and the minimal change are the same thing here.\n\n## Functions or modules to implement\n- None. This is a data-only edit. Replace the whole content of `tests/e2e_smoke_canary.txt` with:\n  ```\n  status: ok\n  run_id: 41552424693\n  updated-by: ai-pipeline\n  ```\n  The file must end with exactly one trailing newline. It must have no comments, no headers and no blank lines.\n\n## Data structures affected\n- Only the canary file. It currently holds two lines: `status: ok` and `decompose-run: 41445772297`. The `decompose-run` line is removed and replaced by the `run_id` and `updated-by` lines.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file instead of editing lines in place\n- Chosen: overwrite the whole file, using the `printf` content given in the issue.\n- Alternatives considered: replace only the `decompose-run` line and append the `updated-by` line.\n- Why: the issue asks for a complete replacement. A full overwrite also guarantees the exact bytes and the single trailing newline.\n\n## Security considerations\n- No trust boundary, endpoint, secret or external input is involved. The run ID is a public workflow run number, not a credential.\n\n## Risks and edge cases\n- A missing trailing newline, or an extra one, would break the \"exactly three lines\" requirement.\n- Earlier lessons (issue 8383) show reviewers flagging findings in `.github/workflows/review_autofix.yml`. Those are out of scope and must not be applied.\n- No conflicts were found between the issue and the codebase: the file exists at the stated path.\n\n## Testing considerations\n- Run `printf 'status: ok\\nrun_id: 41552424693\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt`. It should exit 0.\n- Run `git diff --stat`. It should show only `tests/e2e_smoke_canary.txt`.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "da256906fdb289b80618aea5d5219d6ff494aaf502cd6a1a0e01ba770c36e0e5",
+  "lineage": {
+    "issue_number": 8708,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "41553150538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41553150538",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8708"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261103003318_52f6148531",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8708,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "41553150538"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8708",
+  "timestamps": {
+    "created_at": "2026-11-03T00:33:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
