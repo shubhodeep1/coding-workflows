@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Replace the stale second line (`decompose-run: 40427433026`)\" with `decompose-run: 41501570285`, with exactly two lines, a trailing newline, and no other file modified.\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: None. The diff hunk changes exactly line 2 and leaves line 1 (`status: ok`) intact, and `pr_changed_files.txt` lists only this file, so the requirement is met. Severity NIT.\n- requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  expected_change_site: PR merge state / the PR's base branch and the orchestrator's merge step\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Severity disagreement: openai_gpt-6-luna said BLOCKER (confidence 4, the artifacts do not establish that the PR has been merged), while the others said NIT (confidence 1 to 5, a post-review merge action by the orchestrator, not a code deliverable; the PR base is already `orchestrator/project-8693`). Highest severity is BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Replace the stale second line (`decompose-run: 40427433026`)\" with `decompose-run: 41501570285`, with exactly two lines, a trailing newline, and no other file modified.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: None. The diff hunk changes exactly line 2 and leaves line 1 (`status: ok`) intact. `pr_changed_files.txt` lists only this file. The requirement is met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: the PR's base branch and the orchestrator's merge step. No file edit can satisfy this.\n  Evidence of absence: This is a post-review merge action by the orchestrator, not a code deliverable. The PR is the vehicle for the change, and the merge is expected to happen after review. This is not a defect in the diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR merge process.\n  Evidence of absence: This is a post-review merge action managed by the orchestrator system, not a code deliverable. The PR base branch is already set to `orchestrator/project-8693`, satisfying the requirement that the PR targets the correct branch for the orchestrator to merge.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR merge state for the PR targeting `orchestrator/project-8693`.\n  Evidence of absence: The provided artifacts show the PR head under review but do not establish that the PR has been merged into `orchestrator/project-8693`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"Replace the stale second line (`decompose-run: 40427433026`)\" with `decompose-run: 41501570285`, with exactly two lines, a trailing newline, and no other file modified.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: None. The diff hunk changes exactly that line. The on-disk file shows the two required lines and a trailing newline. `pr_changed_files.txt` lists only this file. This requirement is met, so there is no gap.\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: the PR's base branch and the orchestrator's merge step. No file edit can satisfy this.\n  Evidence of absence: This is a post-review merge action, not a code deliverable. The PR is the vehicle for the change. The merge happens after review, so the missing merge is expected at this stage and is not a defect in the diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "478b74c5d69311a6a09476807b42679fff7b371e10923e402b3d7f149a1f60c9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41669836379",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41669836379",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103161209_88d53bf5ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41669836379"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T16:12:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
