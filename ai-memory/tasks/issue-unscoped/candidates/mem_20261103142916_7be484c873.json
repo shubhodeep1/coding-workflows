@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code.\" (linked issue #8745, Implementer discipline)\n  expected_change_site: `tests/test_review_conflict_resolve_retry_prelude_render.py` lines 656, 709, 931 (in `test_scope_retry_restores_full_attempt_and_keeps_final_gate`, `test_scope_feedback_is_available_for_generic_resolver`, `test_model_index_is_fresh_per_attempt_and_fails_closed`). They should carry the base continuation indentation.\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The full PR diff still carries three whitespace-only hunks (`@@ -653`, `@@ -706`, `@@ -928`) in tests this PR does not otherwise touch. The last autofix diff did not change lines 656, 709 or 931. On disk, 656, 709 and 931 still start with four or five tabs and match the PR's `+` indentation, not the base. The editor's earlier claim of a revert did not land. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code.\" (linked issue #8745, Implementer discipline)\n- Expected change site: `tests/test_review_conflict_resolve_retry_prelude_render.py` lines 656, 709 and 931. They should carry the base indentation: three tabs plus one space at 656, and three tabs plus five spaces at 709 and 931.\n- Evidence of absence: A grep shows all three lines start with four tabs. The full PR diff still carries the three whitespace-only hunks (`@@ -653`, `@@ -706`, `@@ -928`). The last run diff did not change these lines.\n- SEVERITY: NIT\n- ISSUE_CONFIDENCE: 5\n(All other checklist sections: NONE. The `copilot-pull-request-reviewer` `custom_instructions_too_large` failure was judged external and not raised. HARDENING_RISK_SCORE: 0.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Stay inside files_touched. Make append-only, minimal edits, and do not reflow unrelated code. Tabs or existing indentation as the file uses.\" (linked issue #8745, Implementer discipline)\n- Expected change site: `tests/test_review_conflict_resolve_retry_prelude_render.py` lines 656, 709, 931. They should carry the base indentation (4 tabs + 1 space at 656; 3 tabs + 5 spaces at 709 and 931) so hunks `@@ -653`, `@@ -706`, `@@ -928` disappear.\n- Evidence of absence: `last_run_diff.patch` makes no edit to lines 656, 709 or 931. On disk, line 656 begins with 5 tabs, and lines 709 and 931 with 4 tabs. All three match the original PR's `+` indentation, so the three whitespace-only hunks remain. The editor's last-run comment describes a change that did not land.\n- SEVERITY: NIT\n- ISSUE_CONFIDENCE: 5\n(All other checklist sections: NONE. The reviewer also verified that the scope guard except tuple at `scripts/review_conflict_resolve.sh:1349` and the attempt-state guard at `scripts/review_conflict_resolve.sh:1992` are correct.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Make append-only, minimal edits, and do not reflow unrelated code.\"\n- Expected change site: `tests/test_review_conflict_resolve_retry_prelude_render.py`, the continuation lines in `test_scope_retry_restores_full_attempt_and_keeps_final_gate`, `test_scope_feedback_is_available_for_generic_resolver`, and `test_model_index_is_fresh_per_attempt_and_fails_closed`.\n- Evidence of absence: The full PR diff still contains three whitespace-only indentation hunks at `@@ -653`, `@@ -706`, and `@@ -928`. The last autofix diff did not remove them.\n- SEVERITY: NIT\n- ISSUE_CONFIDENCE: 5\n(All other checklist sections: NONE.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: The linked issue's \"Implementer discipline\" requires append-only, minimal edits with no reflow of unrelated code.\n- Expected change site: `tests/test_review_conflict_resolve_retry_prelude_render.py` lines 656, 709, 931. Restore base continuation indentation (three tabs plus one space at 656; three tabs plus five spaces at 709 and 931) so the hunks at @@ -653, @@ -706, @@ -928 disappear.\n- Evidence of absence: Verified on disk, lines 656, 709 and 931 match `^\\t\\t\\t\\t\"` (four-tab continuation). The base form `^\\t\\t\\t +` matches zero lines in the file, so the reflow landed and was never reverted.\n- SEVERITY: NIT\n- ISSUE_CONFIDENCE: 5\n(All other checklist sections: NONE.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c2d37588f2ab058f20ba145245d4ed6f72770d7fc10a63042ce2e6842d482a1b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8747,
+    "run_id": "41648829406",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41648829406",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103142916_7be484c873",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8747,
+    "run_id": "41648829406"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T14:29:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
