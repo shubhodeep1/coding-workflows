@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3224 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with \"Prompt too big after adding system message\" because AGENTS.md and CLAUDE.md are loaded into the context.\n  WHY: This stops the reviewer pipeline from completing and leaves the PR unverified. Severity was reported as MAJOR, which is mapped to high. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) saw the same failure but called it a Copilot service limit unrelated to this diff.\n- tests/test_implement_post_codex_recovery.py:N/A | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `tests/test_implement_post_codex_recovery.py` is reported failing after the canary file update, although the author's manual check found no test reading the file.\n  WHY: The failure suggests the updated canary content is validated directly or through a side effect, which would be a regression in the smoke/recovery suite. Severity was reported as MAJOR, which is mapped to high. anthropic_claude-sonnet-5_5 noted the failures but did not re-check them.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:3224 | severity=MAJOR | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check is failing due to a \"Prompt too big after adding system message\" error caused by loading AGENTS.md and CLAUDE.md into the context.\n  WHY: This prevents the reviewer pipeline from completing its review, leaving the PR in an unverified state and blocking the final review signal.\n- tests/test_implement_post_codex_recovery.py:N/A | severity=MAJOR | confidence=4\n  PROBLEM: The PR description indicates that `tests/test_implement_post_codex_recovery.py` is failing after the canary file update, despite the author's manual check suggesting no tests read the file.\n  WHY: The test suite failure suggests that the updated canary content is indeed being validated, either directly or through side-effect, causing a regression in the smoke/recovery test suite.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "73a929870b28dcc72a8e346ea76a2065b1a93875ee8f43c4eb50b34a80dddd3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41555265445",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41555265445",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103011715_6fcf9f2e48",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41555265445"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T01:17:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
