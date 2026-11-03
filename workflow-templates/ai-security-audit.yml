@@ -16,6 +16,16 @@ on:
         required: false
         default: ""
         type: string
+      audit_diff_since:
+        description: "Single-issue security pass delta re-audit: last audited PR head (verified by the audit); empty = full audit"
+        required: false
+        default: ""
+        type: string
+      prior_findings:
+        description: "Single-issue security pass delta re-audit: findings result comment id (verified by the audit); empty = none"
+        required: false
+        default: ""
+        type: string
 permissions:
   contents: read
   issues: write
@@ -32,6 +42,8 @@ jobs:
     with:
       ref: ${{ inputs.ref || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
+      audit_diff_since: ${{ inputs.audit_diff_since || '' }}
+      prior_findings: ${{ inputs.prior_findings || '' }}
     # Least privilege: forward only the secrets the reusable workflow
     # declares, never inherit them all (consumer repos hold other secrets).
     secrets:

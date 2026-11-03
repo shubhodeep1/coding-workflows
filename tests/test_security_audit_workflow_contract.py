@@ -3208,6 +3208,11 @@ def test_security_audit_workflow_declares_branch_audit_inputs_on_both_triggers()
 		inputs = triggers[trigger]["inputs"]
 		assert inputs["ref"]["default"] == ""
 		assert inputs["ref"]["type"] == "string"
+		# Single-issue security pass delta re-audit (stuck-states P5a): optional
+		# requests the audit verifies before it narrows the scope.
+		for delta_input in ("audit_diff_since", "prior_findings"):
+			assert inputs[delta_input]["default"] == ""
+			assert inputs[delta_input]["type"] == "string"
 		# The weekly follow-up cap is gone (every finding is filed), so the
 		# short-lived bypass input never shipped.
 		assert "bypass_weekly_cap" not in inputs
@@ -3321,6 +3326,87 @@ def test_security_audit_target_ref_routes_followups_and_keeps_tracker_marker() -
 	assert f"branch `claude/implement-plan-demo` changes since its merge-base with the default branch (`{first_sha}`..`{head_sha}`)" in comment
 	# No tracker body edit carries the branch head as the default-branch marker.
 	assert not any(head_sha in body for body in final_state.get("issue_edit_bodies", []))
+
+
+def test_security_audit_branch_issues_audit_accepts_prior_findings_and_exports_findings() -> None:
+	"""Single-issue security pass delta re-audit (stuck-states P5a).
+
+	A branch-scoped issues audit (SECURITY_AUDIT_TARGET_REF) accepts prior
+	findings, renders the untrusted prior-findings block without the
+	project-pass money lens, and writes the surviving findings to
+	SECURITY_AUDIT_PASS_FINDINGS_OUT for the PR report.
+	"""
+	with tempfile.TemporaryDirectory(prefix="security-audit-pass-delta-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, second_sha, head_sha = _git_fixture_repo_three_commits(tmp_path)
+		prior_findings_path = tmp_path / "prior.json"
+		prior_findings_path.write_text(
+			json.dumps([{"finding_id": "prior-b", "file": "file_b.py", "line": 1, "severity": "high", "exploit_scenario": "Earlier pass finding."}]),
+			encoding="utf-8",
+		)
+		export_path = tmp_path / "single-pass-findings.json"
+		tracker_state = {
+			"issue_list_responses": [
+				[
+					{
+						"number": 9000,
+						"title": "AI Security Audit Tracker",
+						"body": "<!-- ai:security-audit-tracker:v1 -->\n",
+						"state": "OPEN",
+						"url": "https://github.com/owner/repo/issues/9000",
+					}
+				],
+			],
+			"api_responses": [[[]]],
+			"next_issue_number": 9100,
+		}
+		base_env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_TARGET_REF": "ai/issue-7",
+			"SECURITY_AUDIT_DIFF_BASE": first_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_DIFF_SINCE": second_sha,
+			"SECURITY_AUDIT_PRIOR_FINDINGS": str(prior_findings_path),
+		}
+		proc, final_state = _run_security_audit(
+			json.loads(json.dumps(tracker_state)),
+			codex_output=json.dumps(
+				[
+					_finding_payload("new-c", file_path="file_c.py"),
+					_finding_payload("prior-b", file_path="file_b.py"),
+					_finding_payload("unchanged-a", file_path="file_a.py"),
+				]
+			),
+			cwd=repo_dir,
+			extra_env={**base_env, "SECURITY_AUDIT_PASS_FINDINGS_OUT": str(export_path)},
+		)
+		exported = json.loads(export_path.read_text(encoding="utf-8")) if export_path.exists() else None
+
+		missing_prior = dict(base_env, SECURITY_AUDIT_PRIOR_FINDINGS=str(tmp_path / "missing.json"))
+		missing_proc, _ = _run_security_audit(json.loads(json.dumps(tracker_state)), cwd=repo_dir, extra_env=missing_prior)
+
+		unset_export = tmp_path / "unset-export.json"
+		unset_proc, _ = _run_security_audit(
+			json.loads(json.dumps(tracker_state)),
+			codex_output=json.dumps([_finding_payload("new-c", file_path="file_c.py")]),
+			cwd=repo_dir,
+			extra_env=base_env,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "prior-findings=1 (1 cited files kept in scope)" in proc.stdout
+	prompt = final_state["codex_stdin"][0]
+	assert "Previously reported findings for this project" in prompt
+	assert prompt.count("=== BEGIN UNTRUSTED PRIOR FINDINGS ===") == 1
+	assert "re-emit it with the SAME finding_id" in prompt
+	assert "Project-pass security and money-handling lens:" not in prompt
+	assert exported is not None
+	assert sorted(finding["finding_id"] for finding in exported) == ["new-c", "prior-b"]
+	assert set(exported[0]) <= {"finding_id", "owasp_or_stride_category", "severity", "confidence", "file", "line", "exploit_scenario", "recommendation"}
+	assert all(body.count("- Integration branch: `ai/issue-7`") == 1 for body in final_state.get("issue_create_bodies", []))
+	_assert_security_audit_failure_context(missing_proc, phase="prior-findings-preflight", path_suffix="missing.json", expected_cwd=repo_dir)
+	assert unset_proc.returncode == 0, unset_proc.stderr
+	assert not unset_export.exists()
 
 
 def test_security_audit_target_ref_routes_through_the_integration_ref_resolver() -> None:
