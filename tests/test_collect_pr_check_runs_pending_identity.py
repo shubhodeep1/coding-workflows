@@ -1,0 +1,398 @@
+#!/usr/bin/env python3
+"""Contract tests for the CHECK_RUNS_WAIT_PENDING / CHECK_RUNS_WAIT_EXIT
+diagnostics in scripts/collect_pr_check_runs_context.py.
+
+The diagnostics name the in-flight check-runs while the review step waits, and
+summarise the wait when it ends. They must not change wait semantics, the
+(id, status)-only backoff equality, or the snapshot file.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import json
+import os
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CHECK_RUNS_HELPER = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
+HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
+
+_MOCK_GH = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+args = sys.argv[1:]
+state.setdefault("calls", []).append(args)
+
+if args[:1] == ["api"] and any("/check-runs" in arg for arg in args):
+	responses = state.get("check_runs_responses", []) or []
+	idx = int(state.get("check_runs_index", 0) or 0)
+	if idx < len(responses):
+		response = responses[idx]
+		state["check_runs_index"] = idx + 1
+	else:
+		response = state.get("check_runs_default", {"json": [{"check_runs": []}]})
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+	exit_code = int(response.get("exit_code", 0) or 0)
+	stdout = json.dumps(response["json"]) if "json" in response else str(response.get("stdout", ""))
+	stderr = str(response.get("stderr", ""))
+	if stdout:
+		sys.stdout.write(stdout)
+	if stderr:
+		sys.stderr.write(stderr + ("" if stderr.endswith("\n") else "\n"))
+	sys.exit(exit_code)
+
+state_path.write_text(json.dumps(state), encoding="utf-8")
+sys.stderr.write(f"mock gh: unsupported args: {args!r}\n")
+sys.exit(1)
+'''
+
+
+def _run_helper(
+	*,
+	check_runs_responses: list[dict[str, object]],
+	self_run_id: str = "",
+	wait_timeout_secs: str = "0",
+	poll_interval_secs: str = "20",
+) -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-pending-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		mock_gh = bin_dir / "gh"
+		mock_gh.write_text(_MOCK_GH, encoding="utf-8")
+		mock_gh.chmod(0o755)
+		state_file = tmp / "gh_state.json"
+		state_file.write_text(json.dumps({"check_runs_responses": check_runs_responses}), encoding="utf-8")
+		payload_file = tmp / "pr_payload.json"
+		payload_file.write_text(json.dumps({"head": {"sha": HEAD_SHA}}), encoding="utf-8")
+		context_file = tmp / "pr_check_runs_context.txt"
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(state_file),
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"GH_TOKEN": "test-token",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"PR_PAYLOAD_FILE": str(payload_file),
+			"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+			"CHECK_RUNS_AUTOFIX_ENABLED": "true",
+			"CHECK_RUNS_WAIT_TIMEOUT_SECS": wait_timeout_secs,
+			"CHECK_RUNS_POLL_INTERVAL_SECS": poll_interval_secs,
+			"CHECK_RUNS_LOG_TAIL_BYTES": "0",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"SELF_RUN_ID": self_run_id,
+			"CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT": "false",
+		})
+		env.pop("PR_CHECK_RUNS_HEAD_SHA_OVERRIDE", None)
+		result = subprocess.run(
+			["python3", str(CHECK_RUNS_HELPER)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		return {
+			"returncode": result.returncode,
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"context_text": context_file.read_text(encoding="utf-8"),
+		}
+
+
+def _lines_with_prefix(stdout: str, prefix: str) -> list[str]:
+	return [line for line in stdout.splitlines() if line.startswith(prefix)]
+
+
+def _checks_entries(pending_line: str) -> list[str]:
+	match = re.search(r" checks=(\S+)", pending_line)
+	assert match, pending_line
+	return match.group(1).split(",")
+
+
+def _load_module():
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_pending_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def test_pending_identities_are_listed_in_id_order() -> None:
+	result = _run_helper(check_runs_responses=[{"json": [{"check_runs": [
+		{"id": 20, "name": "lint", "status": "queued", "app": {"slug": "github-actions"}},
+		{"id": 10, "name": "unit-tests", "status": "in_progress", "app": {"slug": "github-actions"}, "started_at": "2020-01-01T00:00:00Z"},
+		{"id": 5, "name": "done", "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"}},
+	]}]}])
+	assert result["returncode"] == 0, result
+	pending = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_PENDING ")
+	assert len(pending) == 1, result["stdout"]
+	line = pending[0]
+	assert line.startswith(f"CHECK_RUNS_WAIT_PENDING head_sha={HEAD_SHA} poll=1 in_flight=2 self_excluded=0 checks="), line
+	entries = _checks_entries(line)
+	assert len(entries) == 2
+	assert re.fullmatch(r"unit-tests\|github-actions\|in_progress\|\d+", entries[0]), entries
+	assert int(entries[0].rsplit("|", 1)[1]) > 0
+	assert entries[1] == "lint|github-actions|queued|-"
+	assert "truncated=" not in line
+	assert "done|" not in line
+
+
+def test_self_run_exclusion_count_is_reported() -> None:
+	result = _run_helper(
+		self_run_id="777",
+		check_runs_responses=[{"json": [{"check_runs": [
+			{"id": 1, "name": "self-review-job", "status": "in_progress", "app": {"slug": "github-actions"}, "details_url": "https://github.com/owner/repo/actions/runs/777/job/9"},
+			{"id": 2, "name": "other-check", "status": "in_progress", "app": {"slug": "github-actions"}, "details_url": "https://github.com/owner/repo/actions/runs/888/job/3"},
+		]}]}],
+	)
+	pending = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_PENDING ")
+	assert len(pending) == 1, result["stdout"]
+	assert " in_flight=1 self_excluded=1 " in pending[0], pending[0]
+	assert "self-review-job" not in pending[0]
+	assert _checks_entries(pending[0]) == ["other-check|github-actions|in_progress|-"]
+	# Existing line stays byte-identical and agrees with in_flight.
+	assert "::warning::CHECK_RUNS_WAIT_TIMEOUT reached after 0s with 1 check-run(s) still queued/in_progress; proceeding with snapshot." in result["stdout"].splitlines()
+
+
+def test_untrusted_names_are_sanitised_and_secrets_never_logged() -> None:
+	long_name = "L" * 200
+	result = _run_helper(check_runs_responses=[{"json": [{"check_runs": [
+		{
+			"id": 1,
+			"name": "evil\n::error::pwned | x",
+			"status": "in_progress",
+			"app": {"slug": "a b::c"},
+			"details_url": "https://example.com/actions/runs/1/job/2?token=SECRET123",
+			"output": {"title": "TITLELEAK", "summary": "SUMMARYLEAK"},
+		},
+		{"id": 2, "name": long_name, "status": "queued\r\n::warning::x", "app": "not-a-dict"},
+	]}]}])
+	stdout = result["stdout"]
+	for line in stdout.splitlines():
+		if line.startswith("::"):
+			assert line.startswith("::warning::CHECK_RUNS_WAIT_TIMEOUT "), line
+	pending = _lines_with_prefix(stdout, "CHECK_RUNS_WAIT_PENDING ")
+	assert len(pending) == 1, stdout
+	line = pending[0]
+	assert "::" not in line
+	assert "\r" not in line and "\n" not in line
+	entries = _checks_entries(line)
+	assert entries[0] == "evil:_error:_pwned___x|a_b:_c|in_progress|-", entries
+	name2, slug2, status2, elapsed2 = entries[1].split("|")
+	assert name2 == "L" * 80 + "..."
+	assert slug2 == "-"
+	assert status2 == "queued:_warning:_x"
+	assert elapsed2 == "-"
+	for secret in ("SECRET123", "SUMMARYLEAK", "TITLELEAK", "example.com"):
+		assert secret not in stdout
+
+
+def test_legacy_annotation_syntax_is_neutralised() -> None:
+	module = _load_module()
+	assert module._sanitize_wait_field("abc##[error]pwned") == "abc#_[error]pwned"
+	assert module._sanitize_wait_field("###[warning]x") == "##_[warning]x"
+	result = _run_helper(check_runs_responses=[{"json": [{"check_runs": [
+		{"id": 1, "name": "abc##[error]pwned", "status": "in_progress", "app": {"slug": "x##[warning]"}},
+	]}]}])
+	pending = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_PENDING ")
+	assert len(pending) == 1, result["stdout"]
+	assert "##[" not in pending[0]
+	assert _checks_entries(pending[0]) == ["abc#_[error]pwned|x#_[warning]|in_progress|-"]
+
+
+def test_pending_list_is_truncated_above_twenty_entries() -> None:
+	runs = [
+		{"id": idx, "name": f"check-{idx}", "status": "queued", "app": {"slug": "ci"}}
+		for idx in range(25, 0, -1)
+	]
+	result = _run_helper(check_runs_responses=[{"json": [{"check_runs": runs}]}])
+	pending = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_PENDING ")
+	assert len(pending) == 1, result["stdout"]
+	line = pending[0]
+	assert " in_flight=25 " in line
+	assert line.endswith(" truncated=5"), line
+	entries = _checks_entries(line)
+	assert entries == [f"check-{idx}|ci|queued|-" for idx in range(1, 21)]
+	for idx in range(21, 26):
+		assert f"check-{idx}|" not in line
+
+
+def test_exit_line_on_ready() -> None:
+	result = _run_helper(check_runs_responses=[{"json": [{"check_runs": []}]}])
+	assert result["returncode"] == 0, result
+	exits = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_EXIT")
+	assert len(exits) == 1, result["stdout"]
+	assert re.fullmatch(
+		rf"CHECK_RUNS_WAIT_EXIT head_sha={HEAD_SHA} status=ready polls=1 waited_s=\d+ last_in_flight=0",
+		exits[0],
+	), exits
+	assert not _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_PENDING")
+	assert "collection_status: ready\n" in result["context_text"]
+
+
+def test_exit_line_on_timeout() -> None:
+	result = _run_helper(check_runs_responses=[{"json": [{"check_runs": [
+		{"id": 1, "name": "slow", "status": "in_progress", "app": {"slug": "github-actions"}},
+	]}]}])
+	stdout_lines = result["stdout"].splitlines()
+	exits = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_EXIT")
+	assert len(exits) == 1, result["stdout"]
+	assert re.fullmatch(
+		rf"CHECK_RUNS_WAIT_EXIT head_sha={HEAD_SHA} status=timeout polls=1 waited_s=\d+ last_in_flight=1",
+		exits[0],
+	), exits
+	assert "::warning::CHECK_RUNS_WAIT_TIMEOUT reached after 0s with 1 check-run(s) still queued/in_progress; proceeding with snapshot." in stdout_lines
+	# The pending line names the stuck check on the timeout poll itself.
+	pending_idx = next(i for i, line in enumerate(stdout_lines) if line.startswith("CHECK_RUNS_WAIT_PENDING "))
+	timeout_idx = stdout_lines.index("::warning::CHECK_RUNS_WAIT_TIMEOUT reached after 0s with 1 check-run(s) still queued/in_progress; proceeding with snapshot.")
+	assert pending_idx < timeout_idx
+	assert "collection_status: timeout\n" in result["context_text"]
+
+
+def test_exit_line_on_api_error() -> None:
+	result = _run_helper(check_runs_responses=[{"exit_code": 1, "stderr": "mock gh: check-runs failure"}])
+	exits = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_EXIT")
+	assert len(exits) == 1, result["stdout"]
+	assert re.fullmatch(
+		rf"CHECK_RUNS_WAIT_EXIT head_sha={HEAD_SHA} status=api_error polls=1 waited_s=\d+ last_in_flight=0",
+		exits[0],
+	), exits
+	assert "collection_status: api_error\n" in result["context_text"]
+
+
+def _run_in_process(module, responses: list[str], *, poll_interval: str = "20") -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-pending-inproc-") as td:
+		tmp = Path(td)
+		payload_file = tmp / "pr_payload.json"
+		payload_file.write_text(json.dumps({"head": {"sha": HEAD_SHA}}), encoding="utf-8")
+		context_file = tmp / "pr_check_runs_context.txt"
+		clock = {"now": 1_700_000_000.0}
+		sleeps: list[int] = []
+		calls = {"n": 0}
+
+		def _fake_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
+			idx = min(calls["n"], len(responses) - 1)
+			calls["n"] += 1
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout=responses[idx], stderr="")
+
+		def _fake_sleep(secs: float) -> None:
+			sleeps.append(int(secs))
+			clock["now"] += secs
+
+		original_env = os.environ.copy()
+		original_api = module._run_check_runs_api
+		original_time = module.time
+		try:
+			os.environ.update({
+				"PR_PAYLOAD_FILE": str(payload_file),
+				"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+				"CHECK_RUNS_AUTOFIX_ENABLED": "true",
+				"CHECK_RUNS_WAIT_TIMEOUT_SECS": "3600",
+				"CHECK_RUNS_POLL_INTERVAL_SECS": poll_interval,
+				"CHECK_RUNS_LOG_TAIL_BYTES": "0",
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SELF_RUN_ID": "",
+				"CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT": "false",
+			})
+			os.environ.pop("PR_CHECK_RUNS_HEAD_SHA_OVERRIDE", None)
+			module._run_check_runs_api = _fake_api
+			module.time = SimpleNamespace(time=lambda: clock["now"], sleep=_fake_sleep)
+			stdout = io.StringIO()
+			stderr = io.StringIO()
+			with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+				returncode = module.main()
+		finally:
+			os.environ.clear()
+			os.environ.update(original_env)
+			module._run_check_runs_api = original_api
+			module.time = original_time
+		return {
+			"returncode": returncode,
+			"stdout": stdout.getvalue(),
+			"stderr": stderr.getvalue(),
+			"sleeps": sleeps,
+			"context_text": context_file.read_text(encoding="utf-8"),
+		}
+
+
+def _pending_snapshot(poll: int) -> str:
+	# Same (id, status) every poll; name and started_at change every poll.
+	return json.dumps([{"check_runs": [{
+		"id": 42,
+		"name": f"renamed-{poll}",
+		"status": "in_progress",
+		"app": {"slug": "github-actions"},
+		"started_at": f"2023-11-14T22:1{poll}:00Z",
+	}]}])
+
+
+_COMPLETED_SNAPSHOT = json.dumps([{"check_runs": [{
+	"id": 42, "name": "renamed-final", "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"},
+}]}])
+
+
+def test_backoff_still_escalates_when_only_elapsed_time_and_names_change() -> None:
+	module = _load_module()
+	result = _run_in_process(module, [_pending_snapshot(p) for p in range(1, 5)] + [_COMPLETED_SNAPSHOT])
+	assert result["returncode"] == 0, result
+	# poll_interval=20: unchanged snapshots escalate 20 -> 40 -> 80 (x4 cap).
+	assert result["sleeps"] == [20, 40, 80, 80], result["sleeps"]
+	waiting = [line for line in result["stdout"].splitlines() if line.startswith("Waiting for ")]
+	assert len(waiting) == 4
+	assert waiting[0].startswith(f"Waiting for 1 in-progress/queued check-run(s) on {HEAD_SHA} (sleep 20s, deadline in ")
+	assert waiting[1].startswith(f"Waiting for 1 in-progress/queued check-run(s) on {HEAD_SHA} (sleep 40s, deadline in ")
+	pending = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_PENDING ")
+	assert [re.search(r" poll=(\d+) ", line).group(1) for line in pending] == ["1", "2", "3", "4"]
+	assert "renamed-1|github-actions|in_progress|" in pending[0]
+	assert "renamed-4|github-actions|in_progress|" in pending[3]
+	exits = _lines_with_prefix(result["stdout"], "CHECK_RUNS_WAIT_EXIT")
+	assert len(exits) == 1
+	assert re.fullmatch(
+		rf"CHECK_RUNS_WAIT_EXIT head_sha={HEAD_SHA} status=ready polls=5 waited_s=220 last_in_flight=0",
+		exits[0],
+	), exits
+	assert "collection_status: ready\n" in result["context_text"]
+
+
+def test_diagnostics_fail_open_without_changing_status_or_snapshot() -> None:
+	responses = [_pending_snapshot(1), _COMPLETED_SNAPSHOT]
+	baseline = _run_in_process(_load_module(), responses)
+
+	module = _load_module()
+
+	def _boom(*args, **kwargs):
+		raise RuntimeError("diagnostics boom")
+
+	module._build_wait_identity = _boom
+	module._format_wait_pending_line = _boom
+	module._sanitize_wait_field = _boom
+	patched = _run_in_process(module, responses)
+
+	assert patched["returncode"] == 0, patched
+	assert "wait diagnostics skipped (RuntimeError)" in patched["stderr"]
+	assert not _lines_with_prefix(patched["stdout"], "CHECK_RUNS_WAIT_PENDING")
+	assert not _lines_with_prefix(patched["stdout"], "CHECK_RUNS_WAIT_EXIT")
+	assert patched["sleeps"] == baseline["sleeps"] == [20]
+	assert patched["context_text"] == baseline["context_text"]
+	assert "collection_status: ready\n" in patched["context_text"]
+
+
+if __name__ == "__main__":
+	import pytest
+
+	raise SystemExit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))

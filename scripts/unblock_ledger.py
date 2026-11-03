@@ -122,8 +122,10 @@ import hashlib
 import json
 import re
 import sys
+import unicodedata
 import zipfile
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 # Labels a pipeline stop leaves on an item that only a human used to clear.
 # ai:review-blocked is not here: the review-blocked judge owns it and hands
@@ -171,8 +173,11 @@ TERMINAL_VERDICT = "close"
 # pr_on_branch: pull request <pr> merged and its merge commit is on <branch>;
 # item_closed: issue or pull request <n> is closed; placeholder_retired: the
 # `_UNSET_OPERATOR_STEP` operator step is done (set as a repository variable
-# or secret; a name missing from code alone does not count).
-HOLD_KINDS = ("pr_on_branch", "item_closed", "placeholder_retired")
+# or secret; a name missing from code alone does not count); pr_check_green
+# (issue #8671): pull request <pr>'s current head passes check <check>, read
+# from the check-triage gate (scripts/check_triage_resolution.py). Its ref is
+# <pr>@<percent-encoded check name>, because check names often hold spaces.
+HOLD_KINDS = ("pr_on_branch", "item_closed", "placeholder_retired", "pr_check_green")
 HOLD_STATES = ("done", "expired")
 MAX_HOLDS_PER_ITEM = 3
 # The deterministic conditions under which `decide` makes an item terminal;
@@ -240,7 +245,7 @@ AUTOMATION_PATH_REJECTION_RE = re.compile(
 )
 HOLD_MARKER_RE = re.compile(
 	r"^<!-- ai:unblock-wait:v1 item=(?P<item>[1-9][0-9]*) hold=(?P<kind>[a-z_]+) "
-	r"ref=(?P<ref>[A-Za-z0-9_./@-]{1,120})(?: (?P<state>done|expired))? -->$"
+	r"ref=(?P<ref>[A-Za-z0-9_./@%-]{1,120})(?: (?P<state>done|expired))? -->$"
 )
 # A branch name a hold may name: no option-like start, no `..`, `//`, `@{`,
 # trailing `/` or `.`, or `.lock` suffix, as `git check-ref-format` refuses.
@@ -474,6 +479,19 @@ def hold_ref(wait_for: object, item: int | None = None) -> tuple[str, str]:
 		if item is not None and number == item:
 			raise UsageError("wait_for item_closed cannot wait for the blocked item itself")
 		return kind, str(number)
+	if kind == "pr_check_green":
+		pr, check = wait_for.get("pr"), wait_for.get("check")
+		if type(pr) is not int or pr < 1:
+			raise UsageError("wait_for pr_check_green needs 'pr': a positive pull request number")
+		if (
+			not isinstance(check, str) or not 1 <= len(check) <= 100
+			or any(unicodedata.category(char).startswith("C") or char in ",`<>" for char in check)
+		):
+			raise UsageError("wait_for pr_check_green needs 'check': a check name of 1-100 plain characters")
+		ref = f"{pr}@{quote(check, safe='').replace('~', '%7E')}"
+		if len(ref) > 120:
+			raise UsageError("wait_for pr_check_green check name is too long for a hold marker")
+		return kind, ref
 	name = wait_for.get("placeholder")
 	if not isinstance(name, str) or not ENV_NAME_RE.match(name) or not name.endswith(OPERATOR_PLACEHOLDER_SUFFIX):
 		raise UsageError(f"wait_for placeholder_retired needs 'placeholder': a name ending in {OPERATOR_PLACEHOLDER_SUFFIX}")
@@ -491,6 +509,11 @@ def wait_for_from_ref(kind: str, ref: str) -> dict:
 		if not ref.isdigit():
 			raise UsageError(f"hold ref {ref!r} is not an issue number")
 		return {"kind": kind, "item": int(ref)}
+	if kind == "pr_check_green":
+		pr, sep, check = ref.partition("@")
+		if not sep or not pr.isdigit() or not check:
+			raise UsageError(f"hold ref {ref!r} is not <pr>@<check>")
+		return {"kind": kind, "pr": int(pr), "check": unquote(check)}
 	return {"kind": kind, "placeholder": ref}
 
 
