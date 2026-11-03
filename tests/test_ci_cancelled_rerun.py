@@ -394,7 +394,7 @@ def annotation(message, level="failure"):
 	return {"message": message, "annotation_level": level}
 
 
-def classify(jobs, annotations, enabled=True):
+def classify(jobs, annotations, enabled=True, checkout_enabled=True):
 	"""Run the real classifier against stubbed jobs/annotations reads."""
 	def fake_annotations(repo, check_run_id):
 		value = annotations[check_run_id - 1000]
@@ -404,7 +404,8 @@ def classify(jobs, annotations, enabled=True):
 	jobs_mock = mock.Mock(side_effect=jobs) if isinstance(jobs, Exception) else mock.Mock(return_value=jobs)
 	with mock.patch.object(HELPER, "list_run_jobs", jobs_mock), \
 		mock.patch.object(HELPER, "failure_annotations", side_effect=fake_annotations) as reads:
-		return HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 123, action_resolution_enabled=enabled), reads
+		return HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 123, action_resolution_enabled=enabled,
+			checkout_fetch_enabled=checkout_enabled), reads
 
 
 def test_shutdown_failure_with_lint_aggregate_is_classified_shutdown():
@@ -615,7 +616,7 @@ def test_action_resolution_verdict_reruns_once_with_new_reason():
 	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="action_resolution")
 	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=action_resolution"]
 	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
-	assert exercise.classifier.call_args.kwargs == {"action_resolution_enabled": True}
+	assert exercise.classifier.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": True}
 
 
 def test_action_resolution_flag_off_falls_back_to_genuine():
@@ -628,7 +629,7 @@ def test_action_resolution_flag_off_falls_back_to_genuine():
 		mock.patch.object(HELPER, "classify_runner_shutdown", return_value="genuine") as classifier, \
 		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
 		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "", action_resolution_enabled=False)
-	assert classifier.call_args.kwargs == {"action_resolution_enabled": False}
+	assert classifier.call_args.kwargs == {"action_resolution_enabled": False, "checkout_fetch_enabled": True}
 	assert "action=skip reason=other_conclusion" in output.getvalue()
 	post.assert_not_called()
 
@@ -650,6 +651,7 @@ def test_main_reads_action_resolution_flag(tmp_path, monkeypatch):
 	snapshot = tmp_path / "snapshot.json"
 	snapshot.write_text(json.dumps([pr()]), encoding="utf-8")
 	monkeypatch.setenv("CI_CANCELLED_PR_SNAPSHOT", str(snapshot))
+	monkeypatch.delenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", raising=False)
 	for value, expected in ((None, True), ("false", False), ("bogus", False)):
 		if value is None:
 			monkeypatch.delenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", raising=False)
@@ -657,7 +659,7 @@ def test_main_reads_action_resolution_flag(tmp_path, monkeypatch):
 			monkeypatch.setenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", value)
 		with mock.patch.object(HELPER, "process") as processed, contextlib.redirect_stderr(io.StringIO()):
 			HELPER.main()
-		assert processed.call_args.kwargs == {"action_resolution_enabled": expected}
+		assert processed.call_args.kwargs == {"action_resolution_enabled": expected, "checkout_fetch_enabled": True}
 
 
 @pytest.mark.parametrize("steps", [
@@ -730,3 +732,150 @@ def test_action_resolution_keeps_once_per_head_cap():
 	assert "reason=already_retried" in lines[0]
 	exercise.classifier.assert_not_called()
 	post.assert_not_called()
+
+
+# --- Checkout-fetch recovery (issue #8671) ---------------------------------
+
+CHECKOUT_8433 = [
+	"RPC failed; HTTP 408 curl 22 The requested URL returned error: 408",
+	"expected 'packfile'",
+	"RPC failed; HTTP 408 curl 22 The requested URL returned error: 408",
+	"expected 'packfile'",
+	"RPC failed; HTTP 408 curl 22 The requested URL returned error: 408",
+	"expected 'packfile'",
+	"The process '/usr/bin/git' failed with exit code 128",
+]
+
+
+def checkout_steps(checkout_name="Checkout repository", after=None):
+	steps = [
+		{"name": "Set up job", "conclusion": "success"},
+		{"name": checkout_name, "conclusion": "failure"},
+	]
+	steps += after if after is not None else [
+		{"name": "Set up Python", "conclusion": "skipped"},
+		{"name": "Run tests", "conclusion": "skipped"},
+		{"name": "Post Checkout repository", "conclusion": "success"},
+		{"name": "Complete job", "conclusion": "success"},
+	]
+	return steps
+
+
+def checkout_job(job_id=2, steps=None):
+	return dict(job("tests-hooks-and-orchestrator", job_id), steps=checkout_steps() if steps is None else steps)
+
+
+@pytest.mark.parametrize("checkout_name", ["Checkout repository", "Run actions/checkout@v5"])
+def test_checkout_fetch_job_is_eligible(checkout_name):
+	jobs = [checkout_job(steps=checkout_steps(checkout_name)), job("static-checks", 1, "success")]
+	verdict, reads = classify(jobs, {2: [annotation(message) for message in CHECKOUT_8433]})
+	assert verdict == "checkout_fetch"
+	assert reads.call_count == 1
+
+
+def test_checkout_fetch_verdict_reruns_once_with_new_reason():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="checkout_fetch")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=checkout_fetch"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+
+
+def test_checkout_fetch_already_retried_is_not_rerun():
+	lines, _, post = exercise(completed=[run(conclusion="failure", attempt=2)], classify="checkout_fetch")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=skip reason=already_retried"]
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("steps", [
+	checkout_steps(after=[{"name": "Run tests", "conclusion": "failure"}]),
+	checkout_steps(after=[{"name": "Run tests", "conclusion": "success"}]),
+	checkout_steps(checkout_name="Run tests"),
+	[{"name": "Set up job", "conclusion": "success"}, {"name": "Prepare", "conclusion": "success"},
+		{"name": "Checkout repository", "conclusion": "failure"}],
+	[{"name": "Checkout repository", "conclusion": "failure"}, {"name": 5, "conclusion": "skipped"}],
+	[],
+	"not-a-list",
+])
+def test_checkout_fetch_requires_failure_at_checkout_before_any_step(steps):
+	verdict, _ = classify([checkout_job(steps=steps)], {2: [annotation(message) for message in CHECKOUT_8433]})
+	assert verdict == "genuine"
+
+
+@pytest.mark.parametrize("messages", [
+	CHECKOUT_8433 + ["Process completed with exit code 1."],
+	["The process '/usr/bin/git' failed with exit code 128"],
+	["early EOF", "expected 'packfile'"],
+	["RPC failed; HTTP 403 curl 22 The requested URL returned error: 403"],
+	[],
+])
+def test_checkout_fetch_annotations_must_all_be_fetch_errors(messages):
+	verdict, _ = classify([checkout_job()], {2: [annotation(message) for message in messages]})
+	assert verdict == "genuine"
+
+
+@pytest.mark.parametrize("messages", [
+	["fetch-pack: unexpected disconnect while reading sideband packet", "early EOF"],
+	["the remote end hung up unexpectedly", "The process '/usr/bin/git' failed with exit code 128"],
+	["RPC failed; HTTP 502 curl 22 The requested URL returned error: 502"],
+])
+def test_checkout_fetch_other_fetch_errors_are_eligible(messages):
+	verdict, _ = classify([checkout_job()], {2: [annotation(message) for message in messages]})
+	assert verdict == "checkout_fetch"
+
+
+def test_checkout_fetch_flag_off_is_genuine():
+	verdict, _ = classify([checkout_job()], {2: [annotation(message) for message in CHECKOUT_8433]},
+		checkout_enabled=False)
+	assert verdict == "genuine"
+
+
+def test_checkout_fetch_mixed_with_shutdown_and_lint_reruns():
+	jobs = [job("static-checks", 1), checkout_job(), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN), annotation("The operation was canceled.")],
+		2: [annotation(message) for message in CHECKOUT_8433],
+		3: [annotation("CI jobs that did not succeed: static-checks, tests-hooks-and-orchestrator"),
+			annotation("Process completed with exit code 1.")],
+	})
+	assert verdict == "checkout_fetch"
+
+
+def test_checkout_fetch_next_to_genuine_failure_is_genuine():
+	jobs = [job("static-checks", 1), checkout_job()]
+	verdict, _ = classify(jobs, {
+		1: [annotation("Process completed with exit code 1.")],
+		2: [annotation(message) for message in CHECKOUT_8433],
+	})
+	assert verdict == "genuine"
+
+
+@pytest.mark.parametrize("raw,expected,warned", [
+	(None, True, False), ("", True, False), ("True", True, False),
+	("false", False, False), ("enable", False, True),
+])
+def test_checkout_fetch_flag_parser(raw, expected, warned):
+	err = io.StringIO()
+	with contextlib.redirect_stderr(err):
+		assert HELPER.checkout_fetch_rerun_enabled(raw) is expected
+	assert ("::warning::CI_CHECKOUT_FETCH_RERUN_ENABLED" in err.getvalue()) is warned
+	if warned:
+		assert raw not in err.getvalue()
+
+
+def test_main_reads_checkout_fetch_flag(tmp_path, monkeypatch):
+	snapshot = tmp_path / "snapshot.json"
+	snapshot.write_text(json.dumps([pr()]), encoding="utf-8")
+	monkeypatch.setenv("CI_CANCELLED_PR_SNAPSHOT", str(snapshot))
+	monkeypatch.delenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", raising=False)
+	for value, expected in ((None, True), ("false", False), ("bogus", False)):
+		if value is None:
+			monkeypatch.delenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", raising=False)
+		else:
+			monkeypatch.setenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", value)
+		with mock.patch.object(HELPER, "process") as processed, contextlib.redirect_stderr(io.StringIO()):
+			HELPER.main()
+		assert processed.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": expected}
+
+
+def test_workflow_forwards_checkout_fetch_flag():
+	text = (ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
+	assert "CI_CHECKOUT_FETCH_RERUN_ENABLED: ${{ vars.CI_CHECKOUT_FETCH_RERUN_ENABLED || 'true' }}" in text
