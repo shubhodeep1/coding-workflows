@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  expected_change_site: PR target branch and merge state (not a file edit)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The diff only changes `tests/e2e_smoke_canary.txt`, so it cannot show the PR's target branch or merge state. Severity disagreement: openai_gpt-6-luna says BLOCKER, while anthropic_claude-sonnet-5_5 and google_gemini-3_1-flash-lite say NIT. The NIT reviewers say the merge is an orchestrator step after review and that the PR base is already `orchestrator/project-8693`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR base branch and merge state. This is not a file edit.\n  Evidence of absence: None of the file content is missing. The diff makes the one change the issue asks for in `tests/e2e_smoke_canary.txt`: line 2 goes from `decompose-run: 40427433026` to `decompose-run: 41501570285`, and line 1 stays `status: ok`. No other file is touched. The merge cannot be shown by a diff. Earlier editor comments record that the PR's base branch is already `orchestrator/project-8693` and that the orchestrator merges the PR after review. I did not check the base branch myself. This is a post-review orchestrator step, not a missing deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR target branch and merge status for `orchestrator/project-8693`\n  Evidence of absence: The PR diff implements the file changes required for the canary update, but the merge into `orchestrator/project-8693` is an operational / lifecycle step managed by the orchestrator, not a code implementation gap. No code change can enforce it. The requirement is satisfied by the PR structure (PR base branch is correctly set to `orchestrator/project-8693`).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR target branch and merge state.\n  Evidence of absence: The provided PR diff only changes `tests/e2e_smoke_canary.txt`; it does not establish the PR's target branch or that the change has been merged into `orchestrator/project-8693`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "83ed703daba13bb73dfed9a24263c150765756caa7b49a30ab9a5df71269b67f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41664695003",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41664695003",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103154135_2ef90bfacf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41664695003"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T15:41:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
