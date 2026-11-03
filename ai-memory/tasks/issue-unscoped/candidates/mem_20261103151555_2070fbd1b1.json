@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:3339-3342 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The sentence added to README item 10h says \"each such path logs `SCOPE_GUARD_AUTO_ALLOWED`\", which covers dependency lockfiles too, but `path_in_scope` returns early for lockfiles at `scripts/files_touched_scope_guard.py:623-624`, before the auto-allow branch at lines 632-637 that holds the only `SCOPE_GUARD_AUTO_ALLOWED` print (line 635), so lockfiles never emit that line.\n  WHY: Nothing fails at runtime, but operators and log scrapers who follow item 10h and grep the registered stable prefix `SCOPE_GUARD_AUTO_ALLOWED` will find no entry for any lockfile exempted from rollback; the `SCOPE_GUARD_AUTO_ALLOW_PATHS` README row (line 382) and the agents.d fragment (agents.d/stuck-states-p7a-scope-guard-auto-allow.md:5) scope the log line correctly. Every reviewer rated this NIT, which the required enum has no slot for, so it is mapped to low. Confidence ranged from 3 to 4 (minimax 3, the others 4). Gemini cited it as \"Section 10g\", but it quotes the same sentence.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:Item 10h (\"Issue scope-lock label\"), the sentence added in the last run: \"Dependency lockfiles and paths matching `SCOPE_GUARD_AUTO_ALLOW_PATHS` (default `changelog.d/*.md,tests/fixtures/**`; `none` turns it off) are not rolled back, and each such path logs `SCOPE_GUARD_AUTO_ALLOWED`.\" | severity=NIT | confidence=4\n  PROBLEM: The rollback exemption is described correctly, since scripts/implement_commit_changes.sh (lines 747-750) calls scripts/files_touched_scope_guard.py without `--strict-allowlist`, so `allow_lockfiles` stays True. The logging claim is wrong for lockfiles, though: in `path_in_scope` (scripts/files_touched_scope_guard.py line 623), `if allow_lockfiles and is_lockfile(path): return True` returns before the auto-allow branch at lines 632-637, which is the only place `SCOPE_GUARD_AUTO_ALLOWED` is printed. Item 10h is the only place that implies one log line per lockfile.\n  WHY: Nothing breaks at runtime, but an operator auditing rollback escapes by grepping `SCOPE_GUARD_AUTO_ALLOWED` would miss every lockfile exemption. Suggested fix: \"...are not rolled back; each path exempted by `SCOPE_GUARD_AUTO_ALLOW_PATHS` logs `SCOPE_GUARD_AUTO_ALLOWED`.\"\n- Task completeness: NONE. The reviewer notes that issue #8751 is fully delivered and that the harness-broken auto-revalidate half of plan item P7 (P7b) is outside the P7a scope.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- README.md:Section 10g, line ~3339 | severity=NIT | confidence=4\n  PROBLEM: The description states \"Dependency lockfiles and paths matching SCOPE_GUARD_AUTO_ALLOW_PATHS ... are not rolled back, and each such path logs SCOPE_GUARD_AUTO_ALLOWED.\"\n  WHY: This misleads operators, because the implementation in scripts/files_touched_scope_guard.py emits the SCOPE_GUARD_AUTO_ALLOWED log line only for paths matching SCOPE_GUARD_AUTO_ALLOW_PATHS, not for dependency lockfiles.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:README.md item 10h, the inserted sentence at the end of the 10h block (around line 3339) added by the LAST RUN DIFF | severity=NIT | confidence=3\n  PROBLEM: \"each such path\" grammatically covers both \"Dependency lockfiles\" and \"paths matching `SCOPE_GUARD_AUTO_ALLOW_PATHS`\", but only auto-allow matches emit `SCOPE_GUARD_AUTO_ALLOWED`. In `scripts/files_touched_scope_guard.py:path_in_scope`, the early `if allow_lockfiles and is_lockfile(path): return True` returns for lockfiles before the auto-allow branch, so a lockfile never reaches the `print(f\"SCOPE_GUARD_AUTO_ALLOWED \u2026\")` line.\n  WHY: Nothing fails at runtime, but readers of 10h would expect `SCOPE_GUARD_AUTO_ALLOWED` lines for every exempt lockfile path and find none. The agents.d fragment bullet and the `SCOPE_GUARD_AUTO_ALLOW_PATHS` variables-table row scope the log line correctly. Smallest fix: drop the trailing \"and each such path logs \u2026\" clause, or restrict it to the auto-allow paths.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:3342, item 10h | severity=NIT | confidence=4\n  PROBLEM: \"Each such path logs `SCOPE_GUARD_AUTO_ALLOWED`\" also refers to dependency lockfiles, but `path_in_scope` returns for lockfiles at `scripts/files_touched_scope_guard.py:623-624`, before reaching the logging branch at lines 632-637.\n  WHY: Lockfiles are allowed without emitting that log prefix, contrary to the README, so operators who rely on the documented log to trace allowed scope-lock paths will see no entry for lockfiles.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:line 3342 (item 10h, introduced by the last-run diff) | severity=NIT | confidence=4\n  PROBLEM: \"each such path\" grammatically covers dependency lockfiles as well as auto-allow matches, but in scripts/files_touched_scope_guard.py lockfiles return from `path_in_scope` at line 623-624, before the auto-allow block at lines 632-637 where the `SCOPE_GUARD_AUTO_ALLOWED` print (line 635) lives. The agents.d fragment (agents.d/stuck-states-p7a-scope-guard-auto-allow.md:5) and the main `SCOPE_GUARD_AUTO_ALLOW_PATHS` README row (line 382) scope the log line to auto-allow matches only.\n  WHY: There is no code failure, but `SCOPE_GUARD_AUTO_ALLOWED` is a registered stable log prefix, so log scrapers and operators relying on 10h will see no line for any lockfile exempted from rollback. Suggested fix: \"... are not rolled back, and each `SCOPE_GUARD_AUTO_ALLOW_PATHS` match logs `SCOPE_GUARD_AUTO_ALLOWED`\".\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8faf616d3ad36de7c36368eff32f6fc4bfbcbb166615088039c4488a1e435706",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8753,
+    "run_id": "41657386758",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41657386758",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103151555_2070fbd1b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8753,
+    "run_id": "41657386758"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T15:15:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
