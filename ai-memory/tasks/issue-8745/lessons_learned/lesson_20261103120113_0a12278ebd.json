@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-03T12:01:13Z",
+  "issue_number": 8745,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=(external check) copilot-pull-request-reviewer:N/A; cited_path=copilot-pull-request-reviewer (check run 41629184932, no repository file); files_touched=agents.d/8744-resolver-scope-check-reason.md, changelog.d/8745-resolver-scope-check-reason.md, scripts/review_conflict_resolve.sh, tests/test_review_conflict_resolve_retry_prelude_render.py.",
+  "phase": "review_autofix",
+  "pr_number": 8747,
+  "record_id": "lesson_20261103120113_0a12278ebd",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer (check run 41629184932, no repository file)",
+    "(external check) copilot-pull-request-reviewer",
+    "agents.d/8744-resolver-scope-check-reason.md",
+    "changelog.d/8745-resolver-scope-check-reason.md",
+    "scripts/review_conflict_resolve.sh",
+    "tests/test_review_conflict_resolve_retry_prelude_render.py"
+  ]
+}
