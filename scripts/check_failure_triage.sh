@@ -655,7 +655,11 @@ if [ "${TRIAGE_STAGE}" = "supersede-check" ]; then
 	fi
 	supersede_check_fp="$(jq -r '.fingerprint // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
 	supersede_check_pr="$(jq -r '.pr_number // "" | tostring' "${TRIAGE_METADATA_FILE}" 2>/dev/null || echo '')"
-	if triage_supersede_old_issue_eligible "stage=pre_create"; then
+	if [ "${TRIAGE_SUPERSEDE_ENABLED}" != "true" ]; then
+		# Switched off after collect: the old issue stays open, so filing a
+		# second one would leave two issues with the same fingerprint.
+		log "op=supersede outcome=skip reason=disabled old=${SUPERSEDE_OLD_ISSUE} stage=pre_create"
+	elif triage_supersede_old_issue_eligible "stage=pre_create"; then
 		exit 0
 	fi
 	log "skip reason=duplicate_open_issue issue=${SUPERSEDE_OLD_ISSUE} fp=${supersede_check_fp//[^0-9a-f]/} pr=${supersede_check_pr//[^0-9]/}"

@@ -2593,7 +2593,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		# The routing gate itself must call the helper before its exit.
 		gate = script_text.split("--- PR-head routing gate", 1)[1].split("# --- Collect failing check-run context", 1)[0]
 		self.assertIn("triage_report_routing_unverified\n\t\texit 0", gate)
-		dedup = script_text.split("skip reason=duplicate_open_issue", 1)[1].split("exit 0", 1)[0]
+		dedup = script_text.split("skip reason=duplicate_open_issue issue=${EXISTING}", 1)[1].split("exit 0", 1)[0]
 		self.assertIn("triage_report_routing_unverified", dedup)
 		# Base-gate skips (success, pending and the #7283 routed-head base) also
 		# report an unverified route.

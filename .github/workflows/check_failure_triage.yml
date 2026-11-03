@@ -737,9 +737,16 @@ jobs:
           # Issue #8671: a recorded stale issue is superseded only when this
           # token's account opened it and it is still open and ai:blocked;
           # otherwise (or on any failure) keep the duplicate skip and file nothing.
+          # Runs only when the collect stage recorded a candidate, so a run with
+          # no stale issue always files its issue as before.
           triage_supersede_check_rc=0
-          CHECK_TRIAGE_STAGE=supersede-check bash scripts/check_failure_triage.sh || triage_supersede_check_rc=$?
+          if [ -n "$(jq -r '.supersede_issue // "" | tostring' "${RUNTIME_DIR}/triage_metadata.json" 2>/dev/null || true)" ]; then
+            CHECK_TRIAGE_STAGE=supersede-check bash scripts/check_failure_triage.sh || triage_supersede_check_rc=$?
+          fi
           if [ "${triage_supersede_check_rc}" -ne 0 ]; then
+            if [ "${triage_supersede_check_rc}" -ne 10 ]; then
+              echo "::warning::CHECK_TRIAGE supersede check failed (rc=${triage_supersede_check_rc}); keeping the duplicate skip for PR #${PR_NUMBER}"
+            fi
             printf 'CHECK_TRIAGE op=supersede outcome=skip_create rc=%s pr=%s\n' "${triage_supersede_check_rc}" "${PR_NUMBER}"
             exit 0
           fi
