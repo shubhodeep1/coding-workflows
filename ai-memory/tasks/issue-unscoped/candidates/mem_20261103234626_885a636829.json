@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- AGENTS.md/CLAUDE.md:n/a | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR introduces a CI failure in `copilot-pull-request-reviewer` because the combined size of the custom instruction files (`AGENTS.md` and `CLAUDE.md`) exceeds the Copilot reviewer's limit for custom instructions.\n  WHY: The job fails with `custom_instructions_too_large` (HTTP 422), which blocks CI and stops the Copilot reviewer from working; the source labelled it MAJOR (mapped to high). Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3) judged this external and unrelated to the diff, so they disagree on whether it is a defect of this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Prevent `AGENTS.md`/`CLAUDE.md` growth from breaking the `copilot-pull-request-reviewer` check (`custom_instructions_too_large`, HTTP 422).\n  expected_change_site: a CI guard analogous to `tests/test_workflow_file_size_limit.py`, extended to `CLAUDE.md`, `AGENTS.md` and `unattended_system_instructions.md`\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: size guards exist only for workflow files and release manifests (`tests/test_workflow_file_size_limit.py`, `ci_budget_watch.py:116`, `tests/test_release_manifest.py`), and no test or CI step bounds the size of `CLAUDE.md`/`AGENTS.md`\n- requirement: Reduce the custom-instructions payload that trips the Copilot 422 without losing \u00a76 numbering references.\n  expected_change_site: CLAUDE.md \u00a721.I, \u00a726, \u00a728 and their counterparts in `unattended_system_instructions.md`\n  confidence=[3]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: CLAUDE.md:1067-1072 (\u00a721.I), the CLAUDE.md \u00a726/\u00a728 headers and `unattended_system_instructions.md` \u00a720/\u00a724 retain full prose for retired sections, and no PR change compresses them\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml (or other workflows):AGENTS.md and CLAUDE.md | severity=MAJOR | confidence=5\n  PROBLEM: The PR introduces a CI failure in `copilot-pull-request-reviewer` because the combined size of the custom instruction files (`AGENTS.md` and `CLAUDE.md`) exceeds the Copilot reviewer's limit for custom instructions.\n  WHY: The `copilot-pull-request-reviewer` job fails with `custom_instructions_too_large` (HTTP 422). This does not affect production code logic, but it blocks CI and the Copilot PR reviewer.\n- TASK_GAP (severity=NIT, ISSUE_CONFIDENCE=5)\n  Requirement: Update `tests/e2e_smoke_canary.txt` so it is exactly three lines: `status: ok`, `run_id: alt-40831286935` and `updated-by: ai-pipeline`.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: The file is already updated correctly and all requirements are met.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP 1 \u2014 No size guard for the agent instruction files (severity=MAJOR, ISSUE_CONFIDENCE=4)\n  Requirement: Prevent `AGENTS.md`/`CLAUDE.md` growth from breaking the `copilot-pull-request-reviewer` check (`custom_instructions_too_large`, HTTP 422).\n  Expected change site: a CI guard analogous to `tests/test_workflow_file_size_limit.py`, extended to `CLAUDE.md`, `AGENTS.md` and `unattended_system_instructions.md`\n  Evidence of absence: size guards exist only for workflow files and release manifests (`tests/test_workflow_file_size_limit.py`, `ci_budget_watch.py:116`, `tests/test_release_manifest.py`), and no test or CI step bounds the size of `CLAUDE.md`/`AGENTS.md`.\n- TASK_GAP 2 \u2014 Retired-section placeholders still carry full prose weight (severity=MAJOR, ISSUE_CONFIDENCE=3)\n  Requirement: Reduce the custom-instructions payload that trips the Copilot 422 without losing \u00a76 numbering references.\n  Expected change site: CLAUDE.md \u00a721.I, \u00a726, \u00a728 and their counterparts in `unattended_system_instructions.md`\n  Evidence of absence: CLAUDE.md:1067-1072 (\u00a721.I), the CLAUDE.md \u00a726/\u00a728 headers and `unattended_system_instructions.md` \u00a720/\u00a724 retain full prose for retired mechanisms; no PR change compresses them.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d2976dc60c6fec4d2cc521b680de7b01960d8894e9a1b167688eee7e84cff2e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8346,
+    "run_id": "41739804398",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41739804398",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103234626_885a636829",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8346,
+    "run_id": "41739804398"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T23:46:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
