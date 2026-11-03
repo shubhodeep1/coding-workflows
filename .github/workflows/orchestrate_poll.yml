@@ -936,6 +936,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
         run: |
           set -euo pipefail
           # Consumers pinned to older support commits may not have this
@@ -1346,6 +1347,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
@@ -1566,6 +1568,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
@@ -1664,6 +1667,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
 
       - name: Run unblock scan without active projects
@@ -1692,6 +1696,7 @@ jobs:
           ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
           ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
           PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          SCOPE_GUARD_AUTO_ALLOW_PATHS: ${{ vars.SCOPE_GUARD_AUTO_ALLOW_PATHS || 'changelog.d/*.md,tests/fixtures/**' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: bash scripts/orchestrate_poll_process.sh
 
