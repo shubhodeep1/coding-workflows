@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-03T08:10:39Z",
+  "issue_number": 8738,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=agents.md:1; cited_path=agents.md; files_touched=.github/workflows/ci.yml, changelog.d/8738-reviewer-common-context-sections.md, scripts/review_run_reviewers.sh, tests/test_review_reviewer_common_context_sections.py.",
+  "phase": "review_autofix",
+  "pr_number": 8741,
+  "record_id": "lesson_20261103081039_d1e784d33e",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.md",
+    ".github/workflows/ci.yml",
+    "changelog.d/8738-reviewer-common-context-sections.md",
+    "scripts/review_run_reviewers.sh",
+    "tests/test_review_reviewer_common_context_sections.py"
+  ]
+}
