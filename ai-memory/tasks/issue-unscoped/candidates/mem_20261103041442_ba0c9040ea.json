@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\"), an upstream prompt-size limit from AGENTS.md and CLAUDE.md, not caused by the canary diff.\n  WHY: The linked issue allows edits only to tests/e2e_smoke_canary.txt, so this PR cannot fix it. Both reviewers rated it NIT, mapped here to low. anthropic_claude-sonnet-5_5 cited the file at lines 1-3 and google_gemini-3_1-flash-lite gave \"CI Pipeline failure\" with no line.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=NIT | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check (job 125616328401) failed with `custom_instructions_too_large` (\"Prompt too big after adding system message\"), caused by AGENTS.md and CLAUDE.md. It fails before the diff is reviewed.\n  WHY: The check exits 1 on an upstream prompt-size limit, and the linked issue allows edits only to tests/e2e_smoke_canary.txt, so this PR cannot fix it. The reviewer listed it because the check-run fails, not because the diff is wrong.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- (CI Pipeline failure):N/A | severity=NIT | confidence=5\n  PROBLEM: The `copilot-pull-request-reviewer` check consistently fails with `custom_instructions_too_large` (\"Prompt too big after adding system message\").\n  WHY: This is an upstream prompt-size limitation triggered by AGENTS.md and CLAUDE.md. It is not caused by changes in `tests/e2e_smoke_canary.txt` and cannot be fixed within this PR, since the issue constrains changes to that file.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "576ea0b79854406f1a0a9c6dab24697db25a6bebaf2bbfce9b8403747556d2d8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41572668245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41572668245",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103041442_ba0c9040ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41572668245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T04:14:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
