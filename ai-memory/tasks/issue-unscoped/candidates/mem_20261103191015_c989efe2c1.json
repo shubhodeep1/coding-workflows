@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Line 2 of tests/e2e_smoke_canary.txt must be `decompose-run: 41501570285` (replacing `decompose-run: 40427433026`). The file must have exactly two lines, and no other file may be modified.\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: Nothing is missing. The diff replaces line 2 as required, and line 1 (`status: ok`) is unchanged. No third line is added, and tests/e2e_smoke_canary.txt is the only changed file. The final acceptance item (merge into `orchestrator/project-8693`) cannot be satisfied by a file edit, so it is not a gap in the diff. Source severity: NIT.\n- requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  expected_change_site: PR delivery into `orchestrator/project-8693`\n  confidence=[3]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The provided PR diff updates `tests/e2e_smoke_canary.txt` but does not establish that the PR has been merged into the required branch. The PR description says the PR is automated implementation, and merge completion is not evidenced by the diff or supplied PR metadata. Source severity: BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: Line 2 of tests/e2e_smoke_canary.txt must be `decompose-run: 41501570285` (replacing `decompose-run: 40427433026`). The file must have exactly two lines, and no other file may be modified.\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: Nothing is missing. The diff replaces line 2 as required, and line 1 (`status: ok`) is unchanged. No third line is added, and tests/e2e_smoke_canary.txt is the only changed file. The diff does not touch the trailing newline, so it is taken to be preserved. The final acceptance item is the merge into `orchestrator/project-8693`. No file edit can satisfy it, because the orchestrator merges the PR after review. This is therefore not a gap in the diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n- Note: The failed `copilot-pull-request-reviewer` check stopped with HTTP 422 `custom_instructions_too_large` before it reviewed anything. The error comes from that external service, and no line in this PR can fix it.\n- HARDENING_SUGGESTIONS: none\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The change is merged through a PR into `orchestrator/project-8693`.\"\n  Expected change site: PR delivery into `orchestrator/project-8693`.\n  Evidence of absence: The provided PR diff updates `tests/e2e_smoke_canary.txt` but does not establish that the PR has been merged into the required branch. The PR description says the PR is automated implementation; merge completion is not evidenced by the diff or supplied PR metadata.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNote: The output was not a review. It asked for the PR diff or PR number/URL (Q1: A to paste the diff, or Q1: B to provide a PR number/URL) and reported no findings.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c85b4cb2e57864b6be8d8bd83f1c76a9259fd414f6ce82de3854d7f9bde47013",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8701,
+    "run_id": "41694759015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41694759015",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103191015_c989efe2c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8701,
+    "run_id": "41694759015"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T19:10:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
