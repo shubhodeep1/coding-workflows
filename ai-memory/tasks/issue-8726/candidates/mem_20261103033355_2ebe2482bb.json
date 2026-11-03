@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8726,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8726\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8731\",\"pr_number\":8731,\"branch\":\"ai/issue-8726\",\"run_id\":\"41568792755\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41568792755\",\"changed_files\":[\".github/workflows/ci.yml\",\"scripts/ai_memory.py\",\"scripts/ai_memory_lib.py\",\"tests/test_ai_memory_cli.py\",\"tests/test_ai_memory_push_retry_reasons.py\"]}",
+  "fingerprint": "7e8064b6b62ef48f4bcd5a0928104fa0171ec546277bf57aad908fc0cb89d738",
+  "lineage": {
+    "issue_number": 8726,
+    "parent_ids": [],
+    "pr_number": 8731,
+    "run_id": "41568792755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41568792755",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8731"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261103033355_2ebe2482bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8726,
+    "level": "run",
+    "pr_number": 8731,
+    "run_id": "41568792755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8726: https://github.com/shubhodeep1/coding-workflows/pull/8731",
+  "timestamps": {
+    "created_at": "2026-11-03T03:33:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
