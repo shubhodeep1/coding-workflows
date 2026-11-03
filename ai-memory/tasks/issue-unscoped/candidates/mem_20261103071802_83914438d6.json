@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:N/A | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Multiple tests in `tests/test_implement_post_codex_recovery.py` fail in the pre-push test gate after updating `tests/e2e_smoke_canary.txt`.\n  WHY: The suite is claimed to be brittle or to depend on the canary file's exact contents, which breaks the integration tests. The source labels this MAJOR, which is mapped to high. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) disputed this in their notes and did not report it as a finding.\n- .github/workflows/review_autofix.yml:N/A | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `copilot-pull-request-reviewer` check fails consistently with `custom_instructions_too_large` (422 error), which blocks the automated review.\n  WHY: CLAUDE.md and AGENTS.md exceed the service's prompt-size limit, so the review workflow is blocked whatever the code change. The source labels this BLOCKER, which is mapped to critical. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) called it an external or pre-existing failure that this diff does not cause.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:N/A (pre-push test gate failures: test_review_pipeline_integration_chain_module_runs_clean, test_staged_support_guard_marks_only_auto_release_safe_conflicts, etc.) | severity=MAJOR | confidence=4\n  PROBLEM: Multiple tests in `tests/test_implement_post_codex_recovery.py` fail in the pre-push test gate after updating `tests/e2e_smoke_canary.txt`.\n  WHY: The suite appears brittle or to depend on the canary file's exact contents, which causes the integration tests to fail.\n- .github/workflows/review_autofix.yml:N/A (Check-run: copilot-pull-request-reviewer) | severity=BLOCKER | confidence=5\n  PROBLEM: The PR reviewer check fails consistently with `custom_instructions_too_large` (422 error), which prevents the automated review.\n  WHY: The custom instructions (CLAUDE.md/AGENTS.md) exceed the service's prompt-size limit, so the review workflow is blocked whatever the code change.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1b8ba7432013fd4a1a1f9f04b4f881c25435c2f383cd81484d00db1faae9f856",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8239,
+    "run_id": "41593571604",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41593571604",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103071802_83914438d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8239,
+    "run_id": "41593571604"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T07:18:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
