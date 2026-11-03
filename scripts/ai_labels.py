@@ -567,10 +567,21 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
             prefetch_attempted = True
             prefetched_labels, prefetch_failure_reason = _prefetch_repo_labels(repo)
             if prefetched_labels is None:
+                # Count only labels that pass local validation: invalid ones are
+                # skipped before any read, so they never get a per-label GET.
+                fallback_get_count = sum(
+                    1
+                    for fallback_name, fallback_metadata in label_items
+                    if _label_sync_name_validation_error(fallback_name) is None
+                    and _label_sync_validation_error(
+                        _normalize_label_sync_metadata(fallback_name, fallback_metadata)
+                    )
+                    is None
+                )
                 print(
                     "ai_labels: label list prefetch unavailable "
                     f"(reason={_sanitize_log_detail(prefetch_failure_reason or 'unknown')}); "
-                    f"falling back to per-label GET for {len(label_items)} labels",
+                    f"falling back to per-label GET for {fallback_get_count} labels",
                     file=sys.stderr,
                 )
 

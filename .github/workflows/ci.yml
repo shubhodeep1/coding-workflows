@@ -2102,7 +2102,8 @@ jobs:
               )
           ]
           if validation_failures:
-              failing_labels = sorted({str(error.get("label", "<unknown>")) for error in validation_failures})
+              # Collapse CR/LF and other whitespace so a label name cannot start a new workflow command.
+              failing_labels = sorted({" ".join(str(error.get("label", "<unknown>")).split()) for error in validation_failures})
               print(
                   "::error::AI label sync dry-run: label contract validation errors for: "
                   + ", ".join(failing_labels)
