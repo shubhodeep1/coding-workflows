@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_support_for_phase.sh:181 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `claude_engine.py` is included in `stage_support_required_scripts` for `implement`.\n  WHY: According to the reviewer, `claude_engine.py` depends on staging settings that are only active in other phases, or on a staging environment that this phase may not provide in the same way, which could make the support staging step in `implement.yml` fail at runtime. The source severity was MAJOR, mapped here to high; no other reviewer flagged this.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The implementation must ensure all required support scripts are staged for the `implement` phase to allow running from the verified support bundle.\n  expected_change_site: .github/workflows/implement.yml staging step.\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `implement.yml` was updated to use `scripts/stage_support_for_phase.sh implement`, but multiple tests (`tests/test_agents_fragment_contract.py`, `tests/test_changelog_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_mcp_handshake_probe.py`, `tests/test_orchestrate_lib.py`, `tests/test_setup_serena_toml.py`, `tests/test_workflow_checkout_integration_ref_audit.py`) fail on the head SHA, which the reviewer reads as the staging mechanism not providing the expected environment or files compared with the legacy implementation. The source severity was BLOCKER. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each said these failures do not come from this PR's diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stage_support_for_phase.sh:181 | severity=MAJOR | confidence=3\n  PROBLEM: `claude_engine.py` is included in `stage_support_required_scripts` for `implement`.\n  WHY: `claude_engine.py` depends on staging settings that are only active in other phases or requires a staging environment that this phase may not fully provide in the same way, potentially causing runtime failures during the support staging step in `implement.yml`.\n- TASK_GAP | severity=BLOCKER | confidence=4\n  Requirement: The implementation must ensure all required support scripts are staged for the `implement` phase to allow running from the verified support bundle.\n  Expected change site: .github/workflows/implement.yml staging step.\n  Evidence of absence: `implement.yml` was updated to use `scripts/stage_support_for_phase.sh implement`, but multiple tests (`tests/test_agents_fragment_contract.py`, `tests/test_changelog_fragment_contract.py`, `tests/test_files_touched_scope_guard.py`, `tests/test_gh_api_write_guard.py`, `tests/test_mcp_handshake_probe.py`, `tests/test_orchestrate_lib.py`, `tests/test_setup_serena_toml.py`, `tests/test_workflow_checkout_integration_ref_audit.py`) fail on the head SHA. The reviewer says this shows the staging mechanism is not providing the expected environment or files for the `implement` phase.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0f7a54c5887d382592b37b07dedabcd5fd925f382d8bd4ae62e85e3d2fb81a2c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8739,
+    "run_id": "41608204849",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41608204849",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103093531_0940c540d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8739,
+    "run_id": "41608204849"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T09:35:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
