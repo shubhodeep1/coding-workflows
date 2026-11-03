@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-02T15:53:33Z",
+  "tick_at": "2026-11-03T13:31:14Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,18 +11,18 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 6
+    "tracking_issues": 8
   },
   "tracking_issues": [
     {
-      "current_wave": 2,
-      "integration_ahead_by": "73",
+      "current_wave": 5,
+      "integration_ahead_by": "88",
       "issue_counts": {
         "closed": 0,
-        "done": 0,
+        "done": 3,
         "implementation_failed": 0,
-        "in_progress": 1,
-        "merged": 2,
+        "in_progress": 0,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -116,8 +116,7 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "2",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -125,7 +124,7 @@
         "in_progress": 0,
         "merged": 0,
         "not_created": 0,
-        "ready_to_merge": 2,
+        "ready_to_merge": 0,
         "review_blocked": 0,
         "skipped": 0
       },
@@ -133,7 +132,48 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] [E2E Orchestrate Smoke 41445772297] Parallel canary file updates",
-      "total_waves": 1,
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 0,
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8723,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply analysis recommendations from workflow-optimization-2026-09-30.md",
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "0",
+      "issue_counts": {
+        "closed": 0,
+        "done": 2,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8744,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply workflow-optimization-2026-09-30-2 recommendations (resolver scope reason code, label-sync hardening) and close out the doc",
+      "total_waves": 2,
       "wave_complete": false
     }
   ]
