@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8777,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8777\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8778\",\"pr_number\":8778,\"branch\":\"ai/issue-8777\",\"run_id\":\"41732692713\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/41732692713\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/8777-ci-release-heavy-steps-to-poll-groups.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "2180f9fdbb39a0f32e572eeb72fb88ff671afc156ad1f530a1a3d95764499100",
+  "lineage": {
+    "issue_number": 8777,
+    "parent_ids": [],
+    "pr_number": 8778,
+    "run_id": "41732692713",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41732692713",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8778"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261103231441_9f87030fe8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8777,
+    "level": "run",
+    "pr_number": 8778,
+    "run_id": "41732692713"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8777: https://github.com/shubhodeep1/coding-workflows/pull/8778",
+  "timestamps": {
+    "created_at": "2026-11-03T23:14:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
