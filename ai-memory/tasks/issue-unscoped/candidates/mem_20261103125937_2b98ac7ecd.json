@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_labels.py:590-607 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The per-label GET fallback catches `http.client.HTTPException` and logs the exception class name or string directly, which may be opaque when `str(exc)` is empty.\n  WHY: The reviewer says the error log may be vague, though it is an improvement over the earlier state. The source gave no severity, so low is assigned.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Validate locally before reads. In `cmd_sync_labels`, run `_label_sync_validation_error(expected_metadata)` right after the name-validation check and before any GitHub read.\"\n  expected_change_site: scripts/ai_labels.py, `cmd_sync_labels`, before `_prefetch_repo_labels(repo)`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: `_prefetch_repo_labels(repo)` runs at lines 532-541 (reported as 532, 532-534 and 534) before the label loop, while description validation runs inside the loop (lines 543-560 / 559-569). An invalid description therefore still triggers a GitHub label-list read before the `validate` error is reported. Severity disagreement: MAJOR (google_gemini-3_1-flash-lite), NIT (anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna), unstated (z-ai_glm-5_3-flash). anthropic_claude-sonnet-5_5 rated it a non-blocking nit with confidence 2. It said the issue also asks for a single shared prefetch \"before the loop\", no per-label GET is issued for an invalid label, and earlier autofix rounds accepted this.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Run `_label_sync_validation_error(expected_metadata)` right after the name-validation check and before any GitHub read.\"\n  Expected change site: `scripts/ai_labels.py`, `cmd_sync_labels`, before `_prefetch_repo_labels(repo)`.\n  Evidence of absence: The prefetch (lines 532-541) runs before the loop. The description check (lines 559-569) runs inside the loop. So one list GET still happens before the `validate` error is reported. The reviewer judged this not blocking: the issue also asks for a single shared prefetch \"before the loop\", no per-label GET is issued for an invalid label (a test covers it), and two earlier autofix rounds accepted it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ai_labels.py:590-607 | confidence=2\n  PROBLEM: The fallback per-label GET now catches `http.client.HTTPException`, but it logs the exception class name or string representation directly into the error metadata.\n  WHY: If `str(exc)` is empty and `type(exc).__name__` is not descriptive, the error log might be opaque. This is improved from the previous state but still relies on potentially vague exception info.\n\nTASK_GAP:\n- Requirement: \"Validate locally before reads. In `cmd_sync_labels`, run `_label_sync_validation_error(expected_metadata)` right after the name-validation check and before any GitHub read.\"\n  Expected change site: scripts/ai_labels.py, cmd_sync_labels\n  Evidence of absence: `_prefetch_repo_labels(repo)` is called at line 532 before `label_items` is iterated and validated. If any label has an invalid description, the prefetch still occurs before the validation error is caught and recorded.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Validate locally before reads. In `cmd_sync_labels`, run `_label_sync_validation_error(expected_metadata)` right after the name-validation check and before any GitHub read.\"\n  Expected change site: scripts/ai_labels.py \u2014 `cmd_sync_labels`, the description-validation call (`_label_sync_validation_error(expected_metadata)`) must run before `_prefetch_repo_labels(repo)` is invoked.\n  Evidence of absence: `prefetched_labels, prefetch_failure_reason = _prefetch_repo_labels(repo)` runs before the per-label `for` loop and issues one to twenty `GET repos/{repo}/labels?per_page=100&page=N` calls. The `_label_sync_validation_error(expected_metadata)` check is inside the loop, so an over-limit description still triggers at least one GitHub read before the label is rejected with `action=\"validate\"`. The issue text says \"before any GitHub read\" and does not except the prefetch. The earlier autofix rounds' \"before the loop\" reading covers requirement 2, not this one. The last run's diff did not touch this ordering. Net cost is 1 wasted read per invalid contract instead of about 59 per-label GETs, which is an improvement but still short of the requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Run `_label_sync_validation_error(expected_metadata)` right after the name-validation check and before any GitHub read.\"\n  Expected change site: `scripts/ai_labels.py`, `cmd_sync_labels`, before `_prefetch_repo_labels(repo)`.\n  Evidence of absence: `cmd_sync_labels` calls `_prefetch_repo_labels(repo)` at lines 532\u2013534, before the label loop and its description validation at lines 543\u2013560. An invalid description therefore still triggers a GitHub label-list read before it is reported. The per-label GET is skipped, but validation-before-any-read is not met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: validation must happen before any GitHub read (`_label_sync_validation_error(expected_metadata)` before GitHub reads).\n  Expected change site: `cmd_sync_labels` in scripts/ai_labels.py, before `_prefetch_repo_labels(repo)`.\n  Evidence of absence: `_prefetch_repo_labels(repo)` runs at line 534, before the label loop at line 543. The name check is at 545 and `_label_sync_validation_error(expected_metadata)` at 559. The GitHub path/API request is at 570. The prefetch is a GitHub read, so description validation is only reached after it. The reviewer verified this and changed no code.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "350bb2eb42438a85394c639d5b8a73a86c6c00ca2e4551008b6210074eb6a953",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8748,
+    "run_id": "41637256471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41637256471",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103125937_2b98ac7ecd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8748,
+    "run_id": "41637256471"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-03T12:59:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
