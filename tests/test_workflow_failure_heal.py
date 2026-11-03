@@ -10158,6 +10158,10 @@ def test_phase_failure_fingerprint_cli_prints_key_values_and_fails_open(tmp_path
 	for path in (tmp_path / "missing.json", not_list, garbled):
 		rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(path))
 		assert rc == 0 and fields["reason"] == "annotations_unavailable" and fields["marker"] == "" and fields["fp"] == "", path
+	# No job matched the runner, so the workflow never wrote the annotations
+	# file: the reason names the unknown step, not an annotations outage.
+	rc, fields = _pff_cli(tmp_path, "--phase", "plan", "--run-id", "555", "--runner-name", "someone else", "--jobs-json", str(jobs), "--annotations-json", str(tmp_path / "missing.json"))
+	assert rc == 0 and fields["reason"] == "step_unknown" and fields["marker"] == ""
 	empty = tmp_path / "ann_empty.json"
 	empty.write_text("[]", encoding="utf-8")
 	rc, fields = _pff_cli(tmp_path, *base, str(jobs), "--annotations-json", str(empty))

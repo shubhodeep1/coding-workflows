@@ -7168,7 +7168,9 @@ def _cmd_phase_failure_fingerprint(args: argparse.Namespace) -> int:
 		except (OSError, ValueError):
 			annotations = None
 		if not isinstance(annotations, list):
-			reason = "annotations_unavailable"
+			# No annotations file is written when the job lookup found no job,
+			# so name the real cause rather than an annotations outage.
+			reason = "annotations_unavailable" if _phase_failure_failed_step(jobs, args.runner_name) else "step_unknown"
 	if reason:
 		result = {"marker": "", "fp": "", "reason": reason, "error_present": False}
 	else:
@@ -8449,7 +8451,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--run-id", required=True)
 	p.add_argument("--runner-name", required=True)
 	p.add_argument("--jobs-json", required=True, help="jobs API response of the current run attempt")
-	p.add_argument("--annotations-json", default="", help="check-run annotations of the current job; missing or unreadable is []")
+	p.add_argument("--annotations-json", default="", help="check-run annotations of the current job; omitted is []; a supplied file that is missing, unreadable or not a list gives reason=annotations_unavailable (step_unknown when no failed step is found) and no marker")
 	p.set_defaults(func=_cmd_phase_failure_fingerprint)
 
 	p = sub.add_parser("autofix-failure-streak", help="Count trailing review/autofix failure comments on a PR")
