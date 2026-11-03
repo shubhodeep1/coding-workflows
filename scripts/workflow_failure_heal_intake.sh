@@ -2291,6 +2291,14 @@ case "${ACTION}" in
 				fi
 			else
 				log "warn occurrence_throttle_unavailable existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
+				# The filed-issue window needs no comment read: check it alone.
+				if printf '[]\n' > "${BLOCKER_THROTTLE_COMMENTS}" 2>/dev/null \
+					&& python3 "${HEAL_PY}" occurrence-throttle --comments-json "${BLOCKER_THROTTLE_COMMENTS}" --throttle-secs "${OCCURRENCE_THROTTLE_SECS}" \
+						--trusted-login "${BLOCKER_THROTTLE_LOGIN}" --issue-json "${BLOCKER_THROTTLE_ISSUE}" > "${BLOCKER_THROTTLE_RESULT}" 2>/dev/null \
+					&& [ "$(jq -r '.throttled' "${BLOCKER_THROTTLE_RESULT}" 2>/dev/null)" = "true" ]; then
+					log "duplicate_throttled existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} age=$(jq -r '.age_secs // ""' "${BLOCKER_THROTTLE_RESULT}" | tr -cd '0-9') throttle=${OCCURRENCE_THROTTLE_SECS} source=${SOURCE_LABEL}"
+					exit 0
+				fi
 			fi
 		fi
 		OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence.md"
