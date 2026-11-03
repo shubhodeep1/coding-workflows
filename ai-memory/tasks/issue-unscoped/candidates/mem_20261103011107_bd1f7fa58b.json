@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:(no line given) | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test suite uses hardcoded canary content (`_SMOKE_CANARY_SPEC`, written via `(host / \"tests/e2e_smoke_canary.txt\").write_text(_SMOKE_CANARY_SPEC)`) that conflicts with the canary update in this PR.\n  WHY: The test suite fails (pre-push gate failure) because it expects the old canary content. The source gave no severity for this finding, so \"high\" is inferred from the reviewer's BLOCKER label on the related task gap.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update its content so it is exactly these three lines... Overwrite the entire file.\"\n  expected_change_site: Test files with hardcoded canary expectations (e.g., `tests/test_review_autofix_review_pipeline_contract.py`)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff only includes `tests/e2e_smoke_canary.txt`, and the test suite fails because it is not synchronized with the canary update. Reviewer severity: BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_review_pipeline_contract.py:(no line given) | confidence=5\n  PROBLEM: The test suite uses hardcoded canary content (`(host / \"tests/e2e_smoke_canary.txt\").write_text(_SMOKE_CANARY_SPEC)`) that conflicts with the update in this PR.\n  WHY: The test suite fails (pre-push gate failure) because it expects the old canary content, causing regression.\n- TASK_GAP:\n  Requirement: \"Update its content so it is exactly these three lines... Overwrite the entire file.\"\n  Expected change site: Test files with hardcoded canary expectations (e.g., `tests/test_review_autofix_review_pipeline_contract.py`)\n  Evidence of absence: The PR diff only includes `tests/e2e_smoke_canary.txt`. The test suite fails because it is not synchronized with the canary update.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "be2814e2437dc5268632f5cfeaf6cf029436be76e0089b2c469b23baf246bb21",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8389,
+    "run_id": "41555252235",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "41555252235",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261103011107_bd1f7fa58b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8389,
+    "run_id": "41555252235"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-03T01:11:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
